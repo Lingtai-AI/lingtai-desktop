@@ -173,6 +173,20 @@ init_target(lingtai_desktop_core)
 target_include_directories(lingtai_desktop_core PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
+add_library(lingtai_desktop_native_shell STATIC
+    src/native_shell.cpp)
+init_target(lingtai_desktop_native_shell)
+target_include_directories(lingtai_desktop_native_shell PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(lingtai_desktop_native_shell PRIVATE
+    -Wall -Wextra -Werror -pedantic
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-unused-parameter>
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-deprecated-this-capture>
+    $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-unused-parameter>)
+target_link_libraries(lingtai_desktop_native_shell
+    PUBLIC lingtai_desktop_core
+    PRIVATE desktop-app::lib_ui)
+
 add_library(lingtai_desktop_compatibility STATIC
     src/compatibility_probe.cpp)
 init_target(lingtai_desktop_compatibility)
@@ -244,5 +258,58 @@ add_executable(lingtai_desktop_smoke
     src/crl_integration.cpp)
 init_target(lingtai_desktop_smoke)
 target_link_libraries(lingtai_desktop_smoke PRIVATE
-    lingtai_desktop_compatibility
+    lingtai_desktop_native_shell
     desktop-app::lib_ui)
+
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_test(NAME native_shell
+    COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_shell.py"
+        --executable $<TARGET_FILE:lingtai_desktop_smoke>)
+
+add_executable(lingtai_native_shell_test
+    tests/native_shell_test.cpp
+    src/crl_integration.cpp)
+init_target(lingtai_native_shell_test)
+target_compile_options(lingtai_native_shell_test PRIVATE
+    -Wall -Wextra -Werror -pedantic
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-unused-parameter>
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-deprecated-this-capture>
+    $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-unused-parameter>)
+target_link_libraries(lingtai_native_shell_test PRIVATE
+    lingtai_desktop_native_shell
+    desktop-app::lib_ui)
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    add_executable(lingtai_native_shell_sanitized_test EXCLUDE_FROM_ALL
+        tests/native_shell_test.cpp
+        src/native_shell.cpp
+        src/crl_integration.cpp)
+    init_target(lingtai_native_shell_sanitized_test)
+    target_include_directories(lingtai_native_shell_sanitized_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_compile_options(lingtai_native_shell_sanitized_test PRIVATE
+        -Wall -Wextra -Werror -pedantic
+        -fsanitize=address,undefined -fno-omit-frame-pointer
+        $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-unused-parameter>
+        $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-deprecated-this-capture>
+        $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-unused-parameter>)
+    target_link_options(lingtai_native_shell_sanitized_test PRIVATE
+        -fsanitize=address,undefined)
+    target_link_libraries(lingtai_native_shell_sanitized_test PRIVATE
+        lingtai_desktop_core
+        desktop-app::lib_ui)
+endif()
+
+file(MAKE_DIRECTORY
+    "${CMAKE_CURRENT_BINARY_DIR}/native-shell-no-write-fixture")
+add_test(NAME native_shell_behavior
+    COMMAND lingtai_native_shell_test
+        "${CMAKE_CURRENT_BINARY_DIR}/native-shell-no-write-fixture")
+if(APPLE)
+    set_tests_properties(native_shell_behavior PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
+else()
+    set_tests_properties(native_shell_behavior PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()

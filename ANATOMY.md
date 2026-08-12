@@ -6,9 +6,10 @@ cmake/desktop-app-toolkit-lock.json    exact toolkit, third-party, Qt, and blob 
 scripts/bootstrap-deps.sh              verified local source/resource bootstrap
 scripts/configure.sh                   Qt-aware CMake configure wrapper
 scripts/build.sh                       target build wrapper
-scripts/smoke.py                       bounded offscreen smoke runner
-src/main.cpp                           owned `Ui::RpWidget` executable entry point
+scripts/smoke.py                       bounded explicit native-shell smoke runner
+src/main.cpp                           persistent app entry + explicit smoke exit
 src/crl_integration.cpp                minimal parent `crl` update-stream integration
+src/native_shell.{h,cpp}               native window/sidebar/content/empty-route owner
 src/project_attachment.{h,cpp}         Qt-independent project-root containment seam
 src/workspace_selection.{h,cpp}        pure Desktop-owned workspace selection state
 src/agent_manifest_discovery.{h,cpp}   manifest discovery + roster implementation
@@ -18,7 +19,9 @@ src/agent_roster_presence_test_seam.h  keyed heartbeat and wall-clock seam
 src/compatibility_probe.{h,cpp}        Qt Core-owned read-only compatibility probe
 tests/agent_manifest_discovery_test.cpp discovery/no-write behavior contract
 tests/agent_roster_presence_test.cpp    strict role/heartbeat behavior contract
+tests/native_shell_test.cpp            native shell semantics/geometry/no-write contract
 tests/project_attachment_test.cpp      real C++ attachment/containment behavior contract
+tests/test_native_shell.py             process persistence and smoke-order contract
 tests/workspace_selection_test.cpp     workspace/Agent state behavior contract
 tests/test_project_attachment.py       dependency-free C++ contract compile/run harness
 tests/test_workspace_selection.py      dependency-free workspace contract harness
@@ -41,11 +44,19 @@ The top-level CMake graph creates the upstream dependency target names expected
 by the full pinned `lib_ui` CMake target and adds its complete source tree
 without patching it. The Qt-independent `lingtai_desktop_core` library owns the
 project-attachment seam and workspace selection state. The separate
-`lingtai_desktop_compatibility` library
-privately owns Qt Core JSON parsing, and the smoke links it with
-`desktop-app::lib_ui`.
+`lingtai_desktop_compatibility` library privately owns Qt Core JSON parsing.
+The smoke links the native shell with `desktop-app::lib_ui`.
 `src/crl_integration.cpp` supplies the bounded, no-emission parent update
 producer the smoke needs; it is owned LingTai glue, not a Telegram model.
+
+The `lingtai_desktop_native_shell` library owns one real `Ui::RpWindow`, uses
+its real `Ui::RpWidget` body, and composes a bounded sidebar with a flexible
+content region using native widget layouts. It holds one
+`WorkspaceSelectionState`; the visible “No project open” route is derived from
+that model. “Open Project…” emits one callback request and records only the
+request count; it does not choose a path, attach a project, or mutate C1 state.
+The shell uses static accessible names and object names for semantic tests, and
+its minimum/default sizing protects both layout regions during resize.
 
 `WorkspaceSelectionState` is C1's sole owner of the optional accepted active
 project, optional selected Agent directory key, and in-memory Desktop recents;
@@ -117,5 +128,9 @@ installed executable.
 
 Qt is external rather than fetched or committed. Configure resolves the exact
 Qt 6.11.1 prefix from `QT_ROOT` or the documented `$HOME/Qt/6.11.1/macos`
-default. The offscreen smoke constructs an actual `Ui::RpWidget`, processes the
-Qt event loop, emits a success marker, and exits under a timeout.
+default. Normal execution constructs and shows the native shell and schedules
+no automatic exit. Explicit `--smoke` mode shows the same real shell off-screen,
+checks the window/body/regions/empty route, emits readiness and success markers
+in that order, and exits under a timeout. On macOS the pinned `RpWindow` helper
+requires a Cocoa `NSView`, so the smoke uses Cocoa plus Qt's
+`WA_DontShowOnScreen`; other platforms use Qt's offscreen plugin.

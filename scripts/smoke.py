@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the full lib_ui target smoke under Qt's offscreen platform plugin."""
+"""Run the full native shell smoke without mapping a visible window."""
 from __future__ import annotations
 
 import os
@@ -21,11 +21,13 @@ if not (QT_ROOT / "plugins").is_dir():
     raise SystemExit(1)
 
 environment = os.environ.copy()
-environment["QT_QPA_PLATFORM"] = "offscreen"
+environment["QT_QPA_PLATFORM"] = (
+    "cocoa" if sys.platform == "darwin" else "offscreen"
+)
 environment["QT_PLUGIN_PATH"] = str(QT_ROOT / "plugins")
 try:
     result = subprocess.run(
-        [str(EXECUTABLE)],
+        [str(EXECUTABLE), "--smoke"],
         env=environment,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

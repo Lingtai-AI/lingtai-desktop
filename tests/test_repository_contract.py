@@ -44,6 +44,8 @@ class RepositoryContractTest(unittest.TestCase):
             "scripts/smoke.py",
             "src/main.cpp",
             "src/crl_integration.cpp",
+            "src/native_shell.cpp",
+            "src/native_shell.h",
             "src/agent_manifest_discovery.cpp",
             "src/agent_manifest_discovery.h",
             "src/agent_manifest_discovery_test_seam.h",
@@ -58,7 +60,9 @@ class RepositoryContractTest(unittest.TestCase):
             "tests/agent_manifest_discovery_test.cpp",
             "tests/agent_roster_presence_test.cpp",
             "tests/compatibility_probe_test.cpp",
+            "tests/native_shell_test.cpp",
             "tests/project_attachment_test.cpp",
+            "tests/test_native_shell.py",
             "tests/workspace_selection_test.cpp",
             "tests/test_project_attachment.py",
             "tests/test_workspace_selection.py",
@@ -129,6 +133,23 @@ class RepositoryContractTest(unittest.TestCase):
         )
         self.assertEqual(cmake.count("src/workspace_selection.cpp"), 1)
         self.assertTrue(
+            {"STATIC", "src/native_shell.cpp"}
+            <= arguments("add_library", "lingtai_desktop_native_shell")
+        )
+        self.assertEqual(
+            cmake.count("src/native_shell.cpp"),
+            2,
+            "production library plus focused sanitizer target",
+        )
+        self.assertEqual(
+            links("lingtai_desktop_native_shell"),
+            {
+                "PUBLIC": {"lingtai_desktop_core"},
+                "PRIVATE": {"desktop-app::lib_ui"},
+                "INTERFACE": set(),
+            },
+        )
+        self.assertTrue(
             {"STATIC", "src/compatibility_probe.cpp"}
             <= arguments("add_library", "lingtai_desktop_compatibility")
         )
@@ -194,6 +215,7 @@ class RepositoryContractTest(unittest.TestCase):
             "src/agent_manifest_discovery_test_seam.h",
             "src/agent_roster_presence.h",
             "src/agent_roster_presence_test_seam.h",
+            "src/native_shell.h",
             "src/workspace_selection.h",
         ):
             text = (ROOT / header).read_text()
@@ -212,12 +234,37 @@ class RepositoryContractTest(unittest.TestCase):
             {
                 "PUBLIC": set(),
                 "PRIVATE": {
-                    "lingtai_desktop_compatibility",
+                    "lingtai_desktop_native_shell",
                     "desktop-app::lib_ui",
                 },
                 "INTERFACE": set(),
             },
         )
+        self.assertEqual(
+            links("lingtai_native_shell_test"),
+            {
+                "PUBLIC": set(),
+                "PRIVATE": {
+                    "lingtai_desktop_native_shell",
+                    "desktop-app::lib_ui",
+                },
+                "INTERFACE": set(),
+            },
+        )
+        self.assertRegex(
+            cmake,
+            r"add_test\(NAME\s+native_shell_behavior\s+"
+            r"COMMAND\s+lingtai_native_shell_test\b",
+        )
+        shell_source = (ROOT / "src" / "native_shell.cpp").read_text()
+        for excluded in (
+            "QFileDialog",
+            "attach_project(",
+            "probe_compatibility(",
+            "discover_agent_manifests(",
+            "project_agent_roster(",
+        ):
+            self.assertNotIn(excluded, shell_source)
 
 
 if __name__ == "__main__":

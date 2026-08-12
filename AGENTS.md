@@ -40,6 +40,7 @@ ctest --test-dir build --output-on-failure -R '^compatibility_probe$'
 ctest --test-dir build --output-on-failure -R '^agent_manifest_discovery$'
 ctest --test-dir build --output-on-failure -R '^agent_roster_presence$'
 ctest --test-dir build --output-on-failure -R '^workspace_selection$'
+ctest --test-dir build --output-on-failure -R '^native_shell(_behavior)?$'
 ./scripts/smoke.py
 ```
 
