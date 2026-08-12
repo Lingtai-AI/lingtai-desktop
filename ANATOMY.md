@@ -57,10 +57,12 @@ is path-stable only, not inode-pinned: replacing the directory at that path can
 change what a later resolution observes.
 
 `discover_agent_manifests` examines only the canonical attachment root's real
-`.lingtai` directory and its immediate real child directories. A regular,
-non-symlink `.agent.json` is membership evidence: any JSON object is `Valid`,
-while a present unsafe, unreadable, nonregular, invalid, or non-object source
-stays visible with typed provenance. Missing or disappearing manifests are
+`.lingtai` directory and its immediate real child directories.
+Discovery owns a 1 MiB per-manifest source limit, enforced by streaming read rather
+than file metadata. Only a regular, non-symlink `.agent.json` within that limit can
+make any JSON object `Valid`; present unsafe, unreadable, nonregular, oversized
+(`too_large`), invalid, or non-object sources remain visible with typed provenance.
+Missing or disappearing manifests are
 omitted. Lossless child names are the stable keys; identity, role, capability,
 heartbeat, status, and lifecycle projection are deliberately not parsed. Root
 enumeration errors fail closed, results are sorted, and the scanner never
