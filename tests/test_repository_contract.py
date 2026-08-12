@@ -145,7 +145,10 @@ class RepositoryContractTest(unittest.TestCase):
             links("lingtai_desktop_native_shell"),
             {
                 "PUBLIC": {"lingtai_desktop_core"},
-                "PRIVATE": {"desktop-app::lib_ui"},
+                "PRIVATE": {
+                    "desktop-app::lib_ui",
+                    "lingtai_desktop_compatibility",
+                },
                 "INTERFACE": set(),
             },
         )
@@ -256,15 +259,33 @@ class RepositoryContractTest(unittest.TestCase):
             r"add_test\(NAME\s+native_shell_behavior\s+"
             r"COMMAND\s+lingtai_native_shell_test\b",
         )
+        self.assertEqual(
+            links("lingtai_native_shell_sanitized_test"),
+            {
+                "PUBLIC": set(),
+                "PRIVATE": {
+                    "lingtai_desktop_compatibility",
+                    "desktop-app::lib_ui",
+                },
+                "INTERFACE": set(),
+            },
+        )
         shell_source = (ROOT / "src" / "native_shell.cpp").read_text()
         for excluded in (
             "QFileDialog",
-            "attach_project(",
-            "probe_compatibility(",
             "discover_agent_manifests(",
             "project_agent_roster(",
         ):
             self.assertNotIn(excluded, shell_source)
+        self.assertIn("attach_project(", shell_source)
+        self.assertIn("probe_compatibility(", shell_source)
+        main_source = (ROOT / "src" / "main.cpp").read_text()
+        self.assertEqual(main_source.count("QFileDialog::getExistingDirectory"), 1)
+        self.assertIn("QFileDialog::ShowDirsOnly", main_source)
+        self.assertIn("selected.isEmpty()", main_source)
+        self.assertIn(".lingtai-tui/install.json", main_source)
+        self.assertNotIn("attach_project(", main_source)
+        self.assertNotIn("probe_compatibility(", main_source)
 
 
 if __name__ == "__main__":

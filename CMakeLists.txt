@@ -185,7 +185,7 @@ target_compile_options(lingtai_desktop_native_shell PRIVATE
     $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-unused-parameter>)
 target_link_libraries(lingtai_desktop_native_shell
     PUBLIC lingtai_desktop_core
-    PRIVATE desktop-app::lib_ui)
+    PRIVATE desktop-app::lib_ui lingtai_desktop_compatibility)
 
 add_library(lingtai_desktop_compatibility STATIC
     src/compatibility_probe.cpp)
@@ -297,7 +297,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_link_options(lingtai_native_shell_sanitized_test PRIVATE
         -fsanitize=address,undefined)
     target_link_libraries(lingtai_native_shell_sanitized_test PRIVATE
-        lingtai_desktop_core
+        lingtai_desktop_compatibility
         desktop-app::lib_ui)
 endif()
 

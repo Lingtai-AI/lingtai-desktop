@@ -1,8 +1,11 @@
 #include "native_shell.h"
 
+#include <QtCore/QDir>
 #include <QtCore/QTimer>
 #include <QtWidgets/QApplication>
+#include <QtWidgets/QFileDialog>
 
+#include <filesystem>
 #include <iostream>
 #include <string_view>
 
@@ -14,6 +17,21 @@ int main(int argc, char **argv) {
         && std::string_view(argv[1]) == "--offscreen");
 
     lingtai::desktop::NativeShell shell;
+    shell.set_open_project_request_handler([&shell] {
+        const auto selected = QFileDialog::getExistingDirectory(
+            QApplication::activeWindow(),
+            QStringLiteral("Open LingTai Project"),
+            QDir::homePath(),
+            QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
+        if (selected.isEmpty()) {
+            return;
+        }
+        const auto receipt = QDir(QDir::homePath()).filePath(
+            QStringLiteral(".lingtai-tui/install.json"));
+        static_cast<void>(shell.open_project(
+            std::filesystem::path(selected.toStdU16String()),
+            std::filesystem::path(receipt.toStdU16String())));
+    });
     if (offscreen_mode) {
         shell.show_offscreen();
     } else {

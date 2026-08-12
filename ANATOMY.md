@@ -52,11 +52,20 @@ producer the smoke needs; it is owned LingTai glue, not a Telegram model.
 The `lingtai_desktop_native_shell` library owns one real `Ui::RpWindow`, uses
 its real `Ui::RpWidget` body, and composes a bounded sidebar with a flexible
 content region using native widget layouts. It holds one
-`WorkspaceSelectionState`; the visible “No project open” route is derived from
-that model. “Open Project…” emits one callback request and records only the
-request count; it does not choose a path, attach a project, or mutate C1 state.
-The shell uses static accessible names and object names for semantic tests, and
-its minimum/default sizing protects both layout regions during resize.
+`WorkspaceSelectionState`; the visible empty/project routes are derived from
+that C1 model. Its Qt-free open seam accepts an explicit selected directory,
+install receipt, and optional project-relative Agent directory. It attaches
+and probes through C2, activates C1 only after safe `.lingtai` validation, and
+projects Compatible, Degraded read-only, Blocked, commands availability, and
+distinct findings. Failed opens leave any valid active project/report intact
+and show a transient error. The shell uses static accessible/object names for
+semantic tests, and its minimum/default sizing protects both layout regions.
+
+Application composition in `src/main.cpp` owns the real native directory
+picker. Cancel is a no-op; a nonempty choice is passed to the shell with the
+current user's absolute `.lingtai-tui/install.json` path and no selected Agent.
+The shell and compatibility probe perform no project, receipt, registry, or
+Desktop-state writes.
 
 `WorkspaceSelectionState` is C1's sole owner of the optional accepted active
 project, optional selected Agent directory key, and in-memory Desktop recents;
