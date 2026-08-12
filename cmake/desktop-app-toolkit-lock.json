@@ -1,0 +1,148 @@
+{
+  "schema_version": 1,
+  "qt": {
+    "version": "6.11.1",
+    "distribution": "official universal macOS",
+    "default_root": "$HOME/Qt/6.11.1/macos"
+  },
+  "evidence": {
+    "tdesktop_repository": "https://github.com/telegramdesktop/tdesktop.git",
+    "tdesktop_commit": "8e18cb71103d83d7d98994ff27f0a2bca55c489c"
+  },
+  "sources": [
+    {
+      "name": "lib_ui",
+      "kind": "git",
+      "destination": "src/lib_ui",
+      "url": "https://github.com/desktop-app/lib_ui.git",
+      "commit": "9e9e5e1fc5ba7e3f4d5407b484210db3b46aa53d"
+    },
+    {
+      "name": "lib_base",
+      "kind": "git",
+      "destination": "src/lib_base",
+      "url": "https://github.com/desktop-app/lib_base.git",
+      "commit": "82d182a275e197fd717fecc86193d9d91f4fc5b5"
+    },
+    {
+      "name": "lib_rpl",
+      "kind": "git",
+      "destination": "src/lib_rpl",
+      "url": "https://github.com/desktop-app/lib_rpl.git",
+      "commit": "c57cccffb01d85570decd7fccb88419c9a682e63"
+    },
+    {
+      "name": "lib_crl",
+      "kind": "git",
+      "destination": "src/lib_crl",
+      "url": "https://github.com/desktop-app/lib_crl.git",
+      "commit": "7a165302fed408c84b2d1c2513e35a21a141da44"
+    },
+    {
+      "name": "codegen",
+      "kind": "git",
+      "destination": "src/codegen",
+      "url": "https://github.com/desktop-app/codegen.git",
+      "commit": "51cc8c564555914f0cf2f9eba9e9ea9df339192a"
+    },
+    {
+      "name": "legal",
+      "kind": "git",
+      "destination": "src/legal",
+      "url": "https://github.com/desktop-app/legal.git",
+      "commit": "81c3a0ebf04dca9ffc49c9a06a922fea34b01892"
+    },
+    {
+      "name": "cmake_helpers",
+      "kind": "raw-files",
+      "destination": "cmake_helpers",
+      "url": "https://raw.githubusercontent.com/desktop-app/cmake_helpers/f79a0e6acdae261270391253d24f47efb54e9a7d",
+      "commit": "f79a0e6acdae261270391253d24f47efb54e9a7d",
+      "files": [
+        {
+          "path": "init_target.cmake",
+          "sha256": "791d42a41badbf8bf8dfc0033c0a334dd7c7e2ac23023101ed65dafc2718464e"
+        },
+        {
+          "path": "nice_target_sources.cmake",
+          "sha256": "36fb36d018ffeb09d7c6de6ee6da644f354e8fdc4d6256d0b2726e93ceaa87a6"
+        },
+        {
+          "path": "generate_target.cmake",
+          "sha256": "854d42350a58ca76d6477cac5e7870cb8096dbba755a2e3c224e3cb6c520a2df"
+        },
+        {
+          "path": "target_prepare_qrc.cmake",
+          "sha256": "8c0afdd7288c829e844ba52b59a73eace78c7984445da02bcff71f812b1a4b87"
+        }
+      ]
+    },
+    {
+      "name": "GSL",
+      "kind": "git",
+      "destination": "third_party/GSL",
+      "url": "https://github.com/microsoft/GSL.git",
+      "commit": "87f9d768866548b5b86e72be66c60c5abd4d9b37"
+    },
+    {
+      "name": "expected",
+      "kind": "git",
+      "destination": "third_party/expected",
+      "url": "https://github.com/TartanLlama/expected.git",
+      "commit": "292eff8bd8ee230a7df1d6a1c00c4ea0eb2f0362"
+    },
+    {
+      "name": "range-v3",
+      "kind": "git",
+      "destination": "third_party/range-v3",
+      "url": "https://github.com/ericniebler/range-v3.git",
+      "commit": "a81477931a8aa2ad025c6bda0609f38e09e4d7ec"
+    },
+    {
+      "name": "lz4",
+      "kind": "git",
+      "destination": "third_party/lz4",
+      "url": "https://github.com/lz4/lz4.git",
+      "commit": "5ff839680134437dbf4678f3d0c7b371d84f4964"
+    },
+    {
+      "name": "xxHash",
+      "kind": "git",
+      "destination": "third_party/xxHash",
+      "url": "https://github.com/Cyan4973/xxHash.git",
+      "commit": "bbb27a5efb85b92a0486cf361a8635715a53f6ba"
+    },
+    {
+      "name": "zlib",
+      "kind": "git",
+      "destination": "third_party/zlib",
+      "url": "https://github.com/madler/zlib.git",
+      "commit": "e3dc0a85b7032e98380dec011bc8f2c2ee0d8fca"
+    },
+    {
+      "name": "openssl",
+      "kind": "git",
+      "destination": "third_party/openssl",
+      "url": "https://github.com/openssl/openssl.git",
+      "commit": "a7e992847de83aa36be0c399c89db3fb827b0be2",
+      "reference": "openssl-3.2.1"
+    }
+  ],
+  "resources": [
+    {
+      "path": "Resources/icons/menu/submenu_arrow.png",
+      "url": "https://raw.githubusercontent.com/telegramdesktop/tdesktop/8e18cb71103d83d7d98994ff27f0a2bca55c489c/Telegram/Resources/icons/menu/submenu_arrow.png",
+      "git_blob_sha1": "022a5fd503fc0bf39344e34a76f4738a987fca86"
+    },
+    {
+      "path": "Resources/icons/menu/submenu_arrow@2x.png",
+      "url": "https://raw.githubusercontent.com/telegramdesktop/tdesktop/8e18cb71103d83d7d98994ff27f0a2bca55c489c/Telegram/Resources/icons/menu/submenu_arrow@2x.png",
+      "git_blob_sha1": "2b233792183491c4ce4b69e581f40d92c811bac5"
+    },
+    {
+      "path": "Resources/icons/menu/submenu_arrow@3x.png",
+      "url": "https://raw.githubusercontent.com/telegramdesktop/tdesktop/8e18cb71103d83d7d98994ff27f0a2bca55c489c/Telegram/Resources/icons/menu/submenu_arrow@3x.png",
+      "git_blob_sha1": "b63fca348d97ca9a4bb889976a96b5bae92c4bbd"
+    }
+  ]
+}

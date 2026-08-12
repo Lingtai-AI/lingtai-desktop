@@ -1,0 +1,13 @@
+# Locally bootstrapped sources, resources, and build products.
+.deps/
+build/
+cmake-build-*/
+
+# Qt SDKs are supplied externally, never committed here.
+Qt/
+
+# Python test and editor state.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store

@@ -31,7 +31,7 @@ class RepositoryContractTest(unittest.TestCase):
         actual = {item["name"]: item["commit"] for item in data["sources"]}
         for name, commit in REQUIRED_TOOLKIT.items():
             self.assertEqual(actual[name], commit)
-        for relative in (
+        required_files = (
             "LICENSE",
             "README.md",
             "AGENTS.md",
@@ -43,7 +43,8 @@ class RepositoryContractTest(unittest.TestCase):
             "scripts/smoke.py",
             "src/main.cpp",
             "src/crl_integration.cpp",
-        ):
+        )
+        for relative in required_files:
             self.assertTrue((ROOT / relative).is_file(), relative)
         subprocess.run(
             ["bash", "-n", *map(str, sorted((ROOT / "scripts").glob("*.sh")))],
@@ -52,12 +53,14 @@ class RepositoryContractTest(unittest.TestCase):
         tracked = subprocess.check_output(
             ["git", "-C", ROOT, "ls-files"], text=True
         ).splitlines()
+        self.assertTrue(set(required_files).issubset(tracked))
         forbidden = (".deps/", "build/", "Qt/", "/tmp/")
         self.assertFalse([path for path in tracked if path.startswith(forbidden)])
+        validation_root_marker = "/tmp/" + "lingtai-lib-ui-validation"
         for path in tracked:
             if (ROOT / path).is_file():
                 self.assertNotIn(
-                    "/tmp/lingtai-lib-ui-validation", (ROOT / path).read_text(errors="ignore")
+                    validation_root_marker, (ROOT / path).read_text(errors="ignore")
                 )
 
 
