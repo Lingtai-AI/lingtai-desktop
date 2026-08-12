@@ -47,11 +47,14 @@ class RepositoryContractTest(unittest.TestCase):
             "src/agent_manifest_discovery.cpp",
             "src/agent_manifest_discovery.h",
             "src/agent_manifest_discovery_test_seam.h",
+            "src/agent_roster_presence.h",
+            "src/agent_roster_presence_test_seam.h",
             "src/compatibility_probe.cpp",
             "src/compatibility_probe.h",
             "src/project_attachment.cpp",
             "src/project_attachment.h",
             "tests/agent_manifest_discovery_test.cpp",
+            "tests/agent_roster_presence_test.cpp",
             "tests/compatibility_probe_test.cpp",
             "tests/project_attachment_test.cpp",
             "tests/test_project_attachment.py",
@@ -151,6 +154,28 @@ class RepositoryContractTest(unittest.TestCase):
             r"add_test\(NAME\s+agent_manifest_discovery\s+"
             r"COMMAND\s+lingtai_agent_manifest_discovery_test\b",
         )
+        self.assertEqual(
+            links("lingtai_agent_roster_presence_test"),
+            {
+                "PUBLIC": set(),
+                "PRIVATE": {"lingtai_desktop_agent_discovery"},
+                "INTERFACE": set(),
+            },
+        )
+        self.assertRegex(
+            cmake,
+            r"add_test\(NAME\s+agent_roster_presence\s+"
+            r"COMMAND\s+lingtai_agent_roster_presence_test\b",
+        )
+        for header in (
+            "src/agent_manifest_discovery.h",
+            "src/agent_manifest_discovery_test_seam.h",
+            "src/agent_roster_presence.h",
+            "src/agent_roster_presence_test_seam.h",
+        ):
+            text = (ROOT / header).read_text()
+            self.assertNotRegex(text, r"#\s*include\s*[<\"]Qt")
+            self.assertNotIn("QT_CORE_LIB", text)
         self.assertEqual(
             links("lingtai_compatibility_probe_test"),
             {

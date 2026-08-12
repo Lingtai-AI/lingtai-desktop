@@ -209,6 +209,14 @@ target_compile_options(lingtai_agent_manifest_discovery_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_agent_manifest_discovery_test PRIVATE
     lingtai_desktop_agent_discovery)
+
+add_executable(lingtai_agent_roster_presence_test
+    tests/agent_roster_presence_test.cpp)
+init_target(lingtai_agent_roster_presence_test)
+target_compile_options(lingtai_agent_roster_presence_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_agent_roster_presence_test PRIVATE
+    lingtai_desktop_agent_discovery)
 enable_testing()
 add_test(NAME compatibility_probe
     COMMAND lingtai_compatibility_probe_test
@@ -216,6 +224,9 @@ add_test(NAME compatibility_probe
 add_test(NAME agent_manifest_discovery
     COMMAND lingtai_agent_manifest_discovery_test
         "${CMAKE_CURRENT_BINARY_DIR}/agent-manifest-discovery-fixture")
+add_test(NAME agent_roster_presence
+    COMMAND lingtai_agent_roster_presence_test
+        "${CMAKE_CURRENT_BINARY_DIR}/agent-roster-presence-fixture")
 
 add_executable(lingtai_desktop_smoke
     src/main.cpp

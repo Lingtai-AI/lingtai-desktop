@@ -10,10 +10,13 @@ scripts/smoke.py                       bounded offscreen smoke runner
 src/main.cpp                           owned `Ui::RpWidget` executable entry point
 src/crl_integration.cpp                minimal parent `crl` update-stream integration
 src/project_attachment.{h,cpp}         Qt-independent project-root containment seam
-src/agent_manifest_discovery.{h,cpp}   immediate read-only manifest discovery
+src/agent_manifest_discovery.{h,cpp}   manifest discovery + roster implementation
 src/agent_manifest_discovery_test_seam.h deterministic filesystem race/error seam
+src/agent_roster_presence.h            pure ordered role/presence projection
+src/agent_roster_presence_test_seam.h  keyed heartbeat and wall-clock seam
 src/compatibility_probe.{h,cpp}        Qt Core-owned read-only compatibility probe
 tests/agent_manifest_discovery_test.cpp discovery/no-write behavior contract
+tests/agent_roster_presence_test.cpp    strict role/heartbeat behavior contract
 tests/project_attachment_test.cpp      real C++ attachment/containment behavior contract
 tests/test_project_attachment.py       dependency-free C++ contract compile/run harness
 tests/compatibility_probe_test.cpp     compatibility behavior/no-write contract
@@ -63,11 +66,28 @@ than file metadata. Only a regular, non-symlink `.agent.json` within that limit 
 make any JSON object `Valid`; present unsafe, unreadable, nonregular, oversized
 (`too_large`), invalid, or non-object sources remain visible with typed provenance.
 Missing or disappearing manifests are
-omitted. Lossless child names are the stable keys; identity, role, capability,
-heartbeat, status, and lifecycle projection are deliberately not parsed. Root
-enumeration errors fail closed, results are sorted, and the scanner never
+omitted. Lossless child names are the stable keys. The same successfully parsed
+JSON object derives only the pure role: missing/null `admin` is human, any
+direct Boolean `true` in an `admin` object is main, and every other present
+shape is an agent; malformed or unsafe manifests remain unknown. Identity,
+capability, status, and lifecycle projection remain deliberately excluded.
+Root enumeration errors fail closed, results are sorted, and the scanner never
 writes or follows root, child-directory, or manifest symlinks. Qt JSON remains
 private to the discovery implementation.
+
+`project_agent_roster` calls accepted manifest discovery once, preserves its
+report and deterministic item order, then reads one wall-clock value for the
+whole presence projection. A valid human is `alive_human` without opening
+`.agent.heartbeat`; malformed/unsafe roles are unknown and also short-circuit.
+Main and ordinary agents use descriptor-anchored, no-follow access beneath the
+same opened `.lingtai` root, with a streaming 128-byte heartbeat ownership
+limit. A heartbeat is live only when its timestamp and `now` are finite, it is
+not future, and `0 <= now - timestamp < 5.0`; future and non-finite values are
+invalid, exact age five is stale, and display age is never negative or
+non-finite. Typed heartbeat provenance keeps absence, unsafe sources, I/O,
+container replacement, invalid numbers, and staleness independent from the
+manifest lifecycle. The snapshot reads no status, performs no writes, retry,
+process query, or repair, and retains discovery evidence if projection fails.
 
 `probe_compatibility` reads one explicitly requested relative agent directory
 and one explicitly supplied global install-receipt path below an accepted

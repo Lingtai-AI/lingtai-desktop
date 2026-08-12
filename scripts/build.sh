@@ -9,5 +9,5 @@ BUILD_DIR="${BUILD_DIR:-$ROOT/build}"
 }
 cmake --build "$BUILD_DIR" --target \
   lingtai_desktop_smoke lingtai_compatibility_probe_test \
-  lingtai_agent_manifest_discovery_test \
+  lingtai_agent_manifest_discovery_test lingtai_agent_roster_presence_test \
   --parallel "${BUILD_JOBS:-8}"

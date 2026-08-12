@@ -21,6 +21,7 @@ struct AgentManifestScanDiagnostic {
     std::filesystem::path path; std::error_code system_error; };
 
 enum class AgentManifestKind { valid, malformed, unsafe };
+enum class AgentRole { unknown, human, main, agent };
 
 enum class AgentManifestObservationState { read_this_scan,
     observed_unavailable, rejected_unsafe };
@@ -39,6 +40,7 @@ struct AgentManifestDiscoveryItem {
     std::filesystem::path directory_key;
     std::filesystem::path directory_path;
     AgentManifestKind manifest_kind = AgentManifestKind::malformed;
+    AgentRole role = AgentRole::unknown;
     AgentManifestSource manifest_source;
 };
 
