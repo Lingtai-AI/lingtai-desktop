@@ -46,10 +46,8 @@ class RepositoryContractTest(unittest.TestCase):
         )
         for relative in required_files:
             self.assertTrue((ROOT / relative).is_file(), relative)
-        subprocess.run(
-            ["bash", "-n", *map(str, sorted((ROOT / "scripts").glob("*.sh")))],
-            check=True,
-        )
+        for script in sorted((ROOT / "scripts").glob("*.sh")):
+            subprocess.run(["bash", "-n", str(script)], check=True)
         tracked = subprocess.check_output(
             ["git", "-C", ROOT, "ls-files"], text=True
         ).splitlines()

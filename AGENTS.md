@@ -26,7 +26,7 @@ From the repository root:
 ```bash
 python3 -m unittest tests.test_repository_contract
 python3 -m json.tool cmake/desktop-app-toolkit-lock.json >/dev/null
-bash -n scripts/*.sh
+for script in scripts/*.sh; do bash -n "$script"; done
 export QT_ROOT="$HOME/Qt/6.11.1/macos"
 ./scripts/bootstrap-deps.sh
 ./scripts/configure.sh
