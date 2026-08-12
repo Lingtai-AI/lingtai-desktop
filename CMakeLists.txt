@@ -167,7 +167,8 @@ add_subdirectory("${SRC}/lib_ui" lib_ui)
 target_compile_options(lib_ui PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-weak>)
 
 add_library(lingtai_desktop_core STATIC
-    src/project_attachment.cpp)
+    src/project_attachment.cpp
+    src/workspace_selection.cpp)
 init_target(lingtai_desktop_core)
 target_include_directories(lingtai_desktop_core PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -217,6 +218,13 @@ target_compile_options(lingtai_agent_roster_presence_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_agent_roster_presence_test PRIVATE
     lingtai_desktop_agent_discovery)
+add_executable(lingtai_workspace_selection_test
+    tests/workspace_selection_test.cpp)
+init_target(lingtai_workspace_selection_test)
+target_compile_options(lingtai_workspace_selection_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_workspace_selection_test PRIVATE
+    lingtai_desktop_core)
 enable_testing()
 add_test(NAME compatibility_probe
     COMMAND lingtai_compatibility_probe_test
@@ -227,6 +235,9 @@ add_test(NAME agent_manifest_discovery
 add_test(NAME agent_roster_presence
     COMMAND lingtai_agent_roster_presence_test
         "${CMAKE_CURRENT_BINARY_DIR}/agent-roster-presence-fixture")
+add_test(NAME workspace_selection
+    COMMAND lingtai_workspace_selection_test
+        "${CMAKE_CURRENT_BINARY_DIR}/workspace-selection-fixture")
 
 add_executable(lingtai_desktop_smoke
     src/main.cpp

@@ -53,11 +53,15 @@ class RepositoryContractTest(unittest.TestCase):
             "src/compatibility_probe.h",
             "src/project_attachment.cpp",
             "src/project_attachment.h",
+            "src/workspace_selection.cpp",
+            "src/workspace_selection.h",
             "tests/agent_manifest_discovery_test.cpp",
             "tests/agent_roster_presence_test.cpp",
             "tests/compatibility_probe_test.cpp",
             "tests/project_attachment_test.cpp",
+            "tests/workspace_selection_test.cpp",
             "tests/test_project_attachment.py",
+            "tests/test_workspace_selection.py",
         )
         for relative in required_files:
             self.assertTrue((ROOT / relative).is_file(), relative)
@@ -119,6 +123,11 @@ class RepositoryContractTest(unittest.TestCase):
             <= arguments("add_library", "lingtai_desktop_core")
         )
         self.assertEqual(cmake.count("src/project_attachment.cpp"), 1)
+        self.assertIn(
+            "src/workspace_selection.cpp",
+            arguments("add_library", "lingtai_desktop_core"),
+        )
+        self.assertEqual(cmake.count("src/workspace_selection.cpp"), 1)
         self.assertTrue(
             {"STATIC", "src/compatibility_probe.cpp"}
             <= arguments("add_library", "lingtai_desktop_compatibility")
@@ -167,11 +176,25 @@ class RepositoryContractTest(unittest.TestCase):
             r"add_test\(NAME\s+agent_roster_presence\s+"
             r"COMMAND\s+lingtai_agent_roster_presence_test\b",
         )
+        self.assertEqual(
+            links("lingtai_workspace_selection_test"),
+            {
+                "PUBLIC": set(),
+                "PRIVATE": {"lingtai_desktop_core"},
+                "INTERFACE": set(),
+            },
+        )
+        self.assertRegex(
+            cmake,
+            r"add_test\(NAME\s+workspace_selection\s+"
+            r"COMMAND\s+lingtai_workspace_selection_test\b",
+        )
         for header in (
             "src/agent_manifest_discovery.h",
             "src/agent_manifest_discovery_test_seam.h",
             "src/agent_roster_presence.h",
             "src/agent_roster_presence_test_seam.h",
+            "src/workspace_selection.h",
         ):
             text = (ROOT / header).read_text()
             self.assertNotRegex(text, r"#\s*include\s*[<\"]Qt")

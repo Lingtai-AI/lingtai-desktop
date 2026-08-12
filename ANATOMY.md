@@ -10,6 +10,7 @@ scripts/smoke.py                       bounded offscreen smoke runner
 src/main.cpp                           owned `Ui::RpWidget` executable entry point
 src/crl_integration.cpp                minimal parent `crl` update-stream integration
 src/project_attachment.{h,cpp}         Qt-independent project-root containment seam
+src/workspace_selection.{h,cpp}        pure Desktop-owned workspace selection state
 src/agent_manifest_discovery.{h,cpp}   manifest discovery + roster implementation
 src/agent_manifest_discovery_test_seam.h deterministic filesystem race/error seam
 src/agent_roster_presence.h            pure ordered role/presence projection
@@ -18,7 +19,9 @@ src/compatibility_probe.{h,cpp}        Qt Core-owned read-only compatibility pro
 tests/agent_manifest_discovery_test.cpp discovery/no-write behavior contract
 tests/agent_roster_presence_test.cpp    strict role/heartbeat behavior contract
 tests/project_attachment_test.cpp      real C++ attachment/containment behavior contract
+tests/workspace_selection_test.cpp     workspace/Agent state behavior contract
 tests/test_project_attachment.py       dependency-free C++ contract compile/run harness
+tests/test_workspace_selection.py      dependency-free workspace contract harness
 tests/compatibility_probe_test.cpp     compatibility behavior/no-write contract
 tests/test_repository_contract.py      focused tracked-tree and lock contract
 ```
@@ -37,11 +40,23 @@ tests/test_repository_contract.py      focused tracked-tree and lock contract
 The top-level CMake graph creates the upstream dependency target names expected
 by the full pinned `lib_ui` CMake target and adds its complete source tree
 without patching it. The Qt-independent `lingtai_desktop_core` library owns the
-project-attachment seam. The separate `lingtai_desktop_compatibility` library
+project-attachment seam and workspace selection state. The separate
+`lingtai_desktop_compatibility` library
 privately owns Qt Core JSON parsing, and the smoke links it with
 `desktop-app::lib_ui`.
 `src/crl_integration.cpp` supplies the bounded, no-emission parent update
 producer the smoke needs; it is owned LingTai glue, not a Telegram model.
+
+`WorkspaceSelectionState` is C1's sole owner of the optional accepted active
+project, optional selected Agent directory key, and in-memory Desktop recents;
+C5 may propose only typed transitions through it. Activation compares accepted
+canonical roots without filesystem access, maintains a deduplicated bounded
+MRU, preserves Agent selection for the same root, and clears it for a different
+root. Closing retains recents, while removing a recent never changes active
+state. Agent keys use discovery's safe one-component relative grammar and are
+never interpreted as identity. The model performs no compatibility or roster
+reads, persistence, registry import, or project/settings writes, and retains
+state if an accepted root is later deleted or unmounted.
 
 `ProjectAttachment` accepts an existing directory and retains its canonical
 (symlink-resolved) root path. Its `resolve` method accepts nonempty existing

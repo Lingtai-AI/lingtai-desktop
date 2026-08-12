@@ -24,9 +24,9 @@ message, media, contact, cache, or high-level UI code.
 From the repository root:
 
 ```bash
-python3 -m unittest tests.test_project_attachment tests.test_repository_contract
+python3 -m unittest tests.test_project_attachment tests.test_workspace_selection tests.test_repository_contract
 if [[ -x /usr/local/bin/g++-14 ]]; then
-  CXX=/usr/local/bin/g++-14 python3 -m unittest tests.test_project_attachment
+  CXX=/usr/local/bin/g++-14 python3 -m unittest tests.test_project_attachment tests.test_workspace_selection
 else
   printf 'GCC 14 portability gate skipped: /usr/local/bin/g++-14 absent\n'
 fi
@@ -39,6 +39,7 @@ export QT_ROOT="$HOME/Qt/6.11.1/macos"
 ctest --test-dir build --output-on-failure -R '^compatibility_probe$'
 ctest --test-dir build --output-on-failure -R '^agent_manifest_discovery$'
 ctest --test-dir build --output-on-failure -R '^agent_roster_presence$'
+ctest --test-dir build --output-on-failure -R '^workspace_selection$'
 ./scripts/smoke.py
 ```
 
