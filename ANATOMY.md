@@ -10,7 +10,10 @@ scripts/smoke.py                       bounded offscreen smoke runner
 src/main.cpp                           owned `Ui::RpWidget` executable entry point
 src/crl_integration.cpp                minimal parent `crl` update-stream integration
 src/project_attachment.{h,cpp}         Qt-independent project-root containment seam
+src/agent_manifest_discovery.{h,cpp}   immediate read-only manifest discovery
+src/agent_manifest_discovery_test_seam.h deterministic filesystem race/error seam
 src/compatibility_probe.{h,cpp}        Qt Core-owned read-only compatibility probe
+tests/agent_manifest_discovery_test.cpp discovery/no-write behavior contract
 tests/project_attachment_test.cpp      real C++ attachment/containment behavior contract
 tests/test_project_attachment.py       dependency-free C++ contract compile/run harness
 tests/compatibility_probe_test.cpp     compatibility behavior/no-write contract
@@ -52,6 +55,17 @@ safe-to-create. Path canonicalization cannot detect that an in-project hard
 link shares an inode with a file outside the project. The stored canonical root
 is path-stable only, not inode-pinned: replacing the directory at that path can
 change what a later resolution observes.
+
+`discover_agent_manifests` examines only the canonical attachment root's real
+`.lingtai` directory and its immediate real child directories. A regular,
+non-symlink `.agent.json` is membership evidence: any JSON object is `Valid`,
+while a present unsafe, unreadable, nonregular, invalid, or non-object source
+stays visible with typed provenance. Missing or disappearing manifests are
+omitted. Lossless child names are the stable keys; identity, role, capability,
+heartbeat, status, and lifecycle projection are deliberately not parsed. Root
+enumeration errors fail closed, results are sorted, and the scanner never
+writes or follows root, child-directory, or manifest symlinks. Qt JSON remains
+private to the discovery implementation.
 
 `probe_compatibility` reads one explicitly requested relative agent directory
 and one explicitly supplied global install-receipt path below an accepted

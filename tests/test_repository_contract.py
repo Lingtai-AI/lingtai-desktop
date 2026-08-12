@@ -44,10 +44,14 @@ class RepositoryContractTest(unittest.TestCase):
             "scripts/smoke.py",
             "src/main.cpp",
             "src/crl_integration.cpp",
+            "src/agent_manifest_discovery.cpp",
+            "src/agent_manifest_discovery.h",
+            "src/agent_manifest_discovery_test_seam.h",
             "src/compatibility_probe.cpp",
             "src/compatibility_probe.h",
             "src/project_attachment.cpp",
             "src/project_attachment.h",
+            "tests/agent_manifest_discovery_test.cpp",
             "tests/compatibility_probe_test.cpp",
             "tests/project_attachment_test.cpp",
             "tests/test_project_attachment.py",
@@ -120,6 +124,33 @@ class RepositoryContractTest(unittest.TestCase):
         compatibility = links("lingtai_desktop_compatibility")
         self.assertEqual(scopes(compatibility, "lingtai_desktop_core"), {"PUBLIC"})
         self.assertEqual(scopes(compatibility, "Qt6::Core"), {"PRIVATE"})
+        self.assertTrue(
+            {"STATIC", "src/agent_manifest_discovery.cpp"}
+            <= arguments("add_library", "lingtai_desktop_agent_discovery")
+        )
+        self.assertEqual(cmake.count("src/agent_manifest_discovery.cpp"), 1)
+        discovery = links("lingtai_desktop_agent_discovery")
+        self.assertEqual(
+            discovery,
+            {
+                "PUBLIC": {"lingtai_desktop_core"},
+                "PRIVATE": {"Qt6::Core"},
+                "INTERFACE": set(),
+            },
+        )
+        self.assertEqual(
+            links("lingtai_agent_manifest_discovery_test"),
+            {
+                "PUBLIC": set(),
+                "PRIVATE": {"lingtai_desktop_agent_discovery"},
+                "INTERFACE": set(),
+            },
+        )
+        self.assertRegex(
+            cmake,
+            r"add_test\(NAME\s+agent_manifest_discovery\s+"
+            r"COMMAND\s+lingtai_agent_manifest_discovery_test\b",
+        )
         self.assertEqual(
             links("lingtai_compatibility_probe_test"),
             {

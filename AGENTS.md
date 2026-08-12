@@ -37,6 +37,7 @@ export QT_ROOT="$HOME/Qt/6.11.1/macos"
 ./scripts/configure.sh
 ./scripts/build.sh
 ctest --test-dir build --output-on-failure -R '^compatibility_probe$'
+ctest --test-dir build --output-on-failure -R '^agent_manifest_discovery$'
 ./scripts/smoke.py
 ```
 
