@@ -8,6 +8,7 @@
 #include <string>
 
 namespace Ui {
+class RpWidget;
 class RpWindow;
 } // namespace Ui
 
@@ -53,6 +54,7 @@ private:
 
     WorkspaceSelectionState selection_state_;
     std::unique_ptr<Ui::RpWindow> window_;
+    Ui::RpWidget *empty_route_ = nullptr;
     OpenProjectRequestHandler open_project_request_handler_;
     std::size_t open_project_request_count_ = 0;
 };

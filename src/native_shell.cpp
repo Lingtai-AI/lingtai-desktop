@@ -4,14 +4,13 @@
 #include "ui/widgets/rp_window.h"
 
 #include <QtCore/QString>
-#include <QtGui/QColor>
 #include <QtGui/QFont>
-#include <QtGui/QPalette>
 #include <QtWidgets/QBoxLayout>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QSizePolicy>
 
+#include <type_traits>
 #include <utility>
 
 namespace lingtai::desktop {
@@ -22,13 +21,6 @@ constexpr auto kMinimumWindowWidth = 720;
 constexpr auto kMinimumWindowHeight = 480;
 constexpr auto kDefaultWindowWidth = 1100;
 constexpr auto kDefaultWindowHeight = 720;
-
-void set_background(QWidget &widget, const QColor &color) {
-    auto palette = widget.palette();
-    palette.setColor(QPalette::Window, color);
-    widget.setAutoFillBackground(true);
-    widget.setPalette(palette);
-}
 
 QLabel *make_label(
         QWidget *parent,
@@ -64,7 +56,6 @@ NativeShell::NativeShell()
     auto *body = window_->body().get();
     body->setObjectName("lingtai_desktop_body");
     body->setAccessibleName(QStringLiteral("LingTai Desktop workspace"));
-    set_background(*body, QColor(QStringLiteral("#F7F8FA")));
 
     auto *shell_layout = new QHBoxLayout(body);
     shell_layout->setContentsMargins(0, 0, 0, 0);
@@ -74,7 +65,6 @@ NativeShell::NativeShell()
     sidebar->setObjectName("lingtai_desktop_sidebar");
     sidebar->setAccessibleName(QStringLiteral("Workspace navigation"));
     sidebar->setFixedWidth(kSidebarWidth);
-    set_background(*sidebar, QColor(QStringLiteral("#E9EDF3")));
     shell_layout->addWidget(sidebar);
 
     auto *sidebar_layout = new QVBoxLayout(sidebar);
@@ -103,7 +93,6 @@ NativeShell::NativeShell()
     content->setObjectName("lingtai_desktop_content");
     content->setAccessibleName(QStringLiteral("Workspace content"));
     content->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    set_background(*content, QColor(QStringLiteral("#FFFFFF")));
     shell_layout->addWidget(content, 1);
 
     auto *content_layout = new QVBoxLayout(content);
@@ -126,28 +115,29 @@ NativeShell::NativeShell()
     content_layout->addWidget(purpose);
     content_layout->addSpacing(40);
 
-    auto *empty_route = new Ui::RpWidget(content);
-    empty_route->setObjectName("lingtai_empty_workspace_route");
-    empty_route->setAccessibleName(QStringLiteral("No project open"));
-    empty_route->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    content_layout->addWidget(empty_route, 1);
+    empty_route_ = new Ui::RpWidget(content);
+    empty_route_->setObjectName("lingtai_empty_workspace_route");
+    empty_route_->setAccessibleName(QStringLiteral("No project open"));
+    empty_route_->setSizePolicy(
+        QSizePolicy::Expanding, QSizePolicy::Expanding);
+    content_layout->addWidget(empty_route_, 1);
 
-    auto *empty_layout = new QVBoxLayout(empty_route);
+    auto *empty_layout = new QVBoxLayout(empty_route_);
     empty_layout->setContentsMargins(0, 0, 0, 0);
     empty_layout->setSpacing(12);
     auto *empty_title = make_label(
-        empty_route,
+        empty_route_,
         QStringLiteral("No project open"),
         "lingtai_no_project_title",
         18,
         QFont::DemiBold);
     auto *empty_detail = make_label(
-        empty_route,
+        empty_route_,
         QStringLiteral("Open a LingTai project to inspect its Agents."),
         "lingtai_no_project_detail",
         12);
     auto *open_button = new QPushButton(
-        QStringLiteral("Open Project\u2026"), empty_route);
+        QStringLiteral("Open Project\u2026"), empty_route_);
     open_button->setObjectName("lingtai_open_project_button");
     open_button->setAccessibleName(QStringLiteral("Open Project"));
     open_button->setAccessibleDescription(QStringLiteral(
@@ -201,13 +191,12 @@ std::size_t NativeShell::open_project_request_count() const noexcept {
 }
 
 NativeShellSnapshot NativeShell::snapshot() const {
+    static_assert(std::is_same_v<decltype(*window_), Ui::RpWindow &>);
     const auto *body = window_->body().get();
     const auto *sidebar = window_->findChild<Ui::RpWidget *>(
         "lingtai_desktop_sidebar");
     const auto *content = window_->findChild<Ui::RpWidget *>(
         "lingtai_desktop_content");
-    const auto *empty_route = window_->findChild<Ui::RpWidget *>(
-        "lingtai_empty_workspace_route");
     return {
         .window_class = "Ui::RpWindow",
         .window_object = window_->objectName().toStdString(),
@@ -215,7 +204,7 @@ NativeShellSnapshot NativeShell::snapshot() const {
         .sidebar_object = sidebar ? sidebar->objectName().toStdString() : "",
         .content_object = content ? content->objectName().toStdString() : "",
         .shown = window_->isVisible(),
-        .empty_route_visible = empty_route && empty_route->isVisible(),
+        .empty_route_visible = empty_route_ && empty_route_->isVisible(),
         .positioned_offscreen = window_->testAttribute(
             Qt::WA_DontShowOnScreen),
     };
@@ -229,9 +218,10 @@ void NativeShell::request_open_project() {
 }
 
 void NativeShell::refresh_route() {
-    auto *empty_route = window_->findChild<Ui::RpWidget *>(
-        "lingtai_empty_workspace_route");
-    empty_route->setVisible(!selection_state_.active_project().has_value());
+    if (empty_route_) {
+        empty_route_->setVisible(
+            !selection_state_.active_project().has_value());
+    }
 }
 
 } // namespace lingtai::desktop

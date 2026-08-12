@@ -5,6 +5,8 @@
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QString>
+#include <QtGui/QColor>
+#include <QtGui/QPalette>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QPushButton>
@@ -25,6 +27,25 @@ void require(bool condition, const std::string &message) {
     }
 }
 
+class ScopedApplicationPalette final {
+public:
+    explicit ScopedApplicationPalette(const QPalette &palette)
+    : original_(QApplication::palette()) {
+        QApplication::setPalette(palette);
+    }
+
+    ~ScopedApplicationPalette() {
+        QApplication::setPalette(original_);
+    }
+
+    ScopedApplicationPalette(const ScopedApplicationPalette &) = delete;
+    ScopedApplicationPalette &operator=(
+        const ScopedApplicationPalette &) = delete;
+
+private:
+    QPalette original_;
+};
+
 template <typename Widget>
 Widget *required_child(QWidget &root, const char *object_name) {
     auto *result = root.findChild<Widget *>(object_name);
@@ -43,6 +64,56 @@ std::vector<std::string> project_tree(
     }
     std::ranges::sort(result);
     return result;
+}
+
+void verify_dark_application_palette_inheritance() {
+    const auto window_surface = QColor(QStringLiteral("#121820"));
+    const auto window_ink = QColor(QStringLiteral("#F1F5F9"));
+    const auto text_surface = QColor(QStringLiteral("#0B1118"));
+    const auto text_ink = QColor(QStringLiteral("#E2E8F0"));
+    const auto button_surface = QColor(QStringLiteral("#263241"));
+    const auto button_ink = QColor(QStringLiteral("#F8FAFC"));
+    auto dark_palette = QApplication::palette();
+    dark_palette.setColor(QPalette::Window, window_surface);
+    dark_palette.setColor(QPalette::WindowText, window_ink);
+    dark_palette.setColor(QPalette::Base, text_surface);
+    dark_palette.setColor(QPalette::Text, text_ink);
+    dark_palette.setColor(QPalette::Button, button_surface);
+    dark_palette.setColor(QPalette::ButtonText, button_ink);
+
+    const auto palette_scope = ScopedApplicationPalette(dark_palette);
+    lingtai::desktop::NativeShell shell;
+    auto &window = shell.window();
+    auto *body = window.body().get();
+    auto *sidebar = required_child<Ui::RpWidget>(
+        window, "lingtai_desktop_sidebar");
+    auto *content = required_child<Ui::RpWidget>(
+        window, "lingtai_desktop_content");
+    auto *empty_route = required_child<Ui::RpWidget>(
+        window, "lingtai_empty_workspace_route");
+    const auto labels = std::vector<QLabel *>{
+        required_child<QLabel>(window, "lingtai_sidebar_brand"),
+        required_child<QLabel>(window, "lingtai_sidebar_workspace_label"),
+        required_child<QLabel>(window, "lingtai_product_title"),
+        required_child<QLabel>(window, "lingtai_product_purpose"),
+        required_child<QLabel>(window, "lingtai_no_project_title"),
+        required_child<QLabel>(window, "lingtai_no_project_detail"),
+    };
+    auto *open_button = required_child<QPushButton>(
+        window, "lingtai_open_project_button");
+
+    for (const auto *surface : { body, sidebar, content, empty_route }) {
+        require(surface->palette().color(QPalette::Window) == window_surface,
+            "dark application Window role must reach every shell surface");
+    }
+    for (const auto *label : labels) {
+        require(label->palette().color(QPalette::WindowText) == window_ink,
+            "dark application WindowText role must reach every shell label");
+    }
+    require(open_button->palette().color(QPalette::Button) == button_surface,
+        "dark application Button role must reach the open affordance");
+    require(open_button->palette().color(QPalette::ButtonText) == button_ink,
+        "dark application ButtonText role must reach the open affordance");
 }
 
 void verify_semantics_and_request(
@@ -171,6 +242,10 @@ int main(int argc, char **argv) {
         const auto project_root = std::filesystem::canonical(argv[1]);
         std::filesystem::current_path(project_root);
         QApplication application(argc, argv);
+        const auto original_palette = QApplication::palette();
+        verify_dark_application_palette_inheritance();
+        require(QApplication::palette() == original_palette,
+            "dark palette test must restore the application palette");
         lingtai::desktop::NativeShell shell;
         shell.show_offscreen();
         QCoreApplication::processEvents();
