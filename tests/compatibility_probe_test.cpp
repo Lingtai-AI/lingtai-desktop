@@ -1,10 +1,14 @@
 #if __has_include("compatibility_probe.h")
+#ifdef QT_CORE_LIB
+#error "Qt Core usage requirements must not propagate to this test consumer"
+#endif
 #include "compatibility_probe.h"
 #include "project_attachment.h"
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <iostream>
 #include <iterator>
 #include <map>
@@ -45,13 +49,48 @@ bool has(const CompatibilityReport &report, CompatibilityFindingKind kind) {
         return finding.kind == kind;
     });
 }
+void expect_findings(
+        const CompatibilityReport &report,
+        std::initializer_list<CompatibilityFindingKind> expected,
+        const std::string &label) {
+    expect(
+        report.findings.size() == expected.size()
+            && std::ranges::all_of(expected, [&](const auto kind) {
+                return has(report, kind);
+            }),
+        label + " has exactly its intended findings");
+}
 struct Fixture {
     fs::path root, project, agent, receipt;
+    void write_fresh_config(
+            std::string_view init_contents,
+            std::string_view resolved_contents = kResolved) const {
+        const auto init_path = agent / "init.json";
+        const auto resolved_path = agent / "system/manifest.resolved.json";
+        write_file(init_path, init_contents);
+        write_file(resolved_path, resolved_contents);
+        const auto resolved_time = fs::file_time_type::clock::now();
+        std::error_code init_error;
+        std::error_code resolved_error;
+        fs::last_write_time(
+            init_path, resolved_time - std::chrono::seconds(2), init_error);
+        fs::last_write_time(resolved_path, resolved_time, resolved_error);
+        expect(!init_error && !resolved_error,
+            "fixture config timestamps are set");
+        if (!init_error && !resolved_error) {
+            const auto init_time = fs::last_write_time(init_path, init_error);
+            const auto actual_resolved_time =
+                fs::last_write_time(resolved_path, resolved_error);
+            expect(
+                !init_error && !resolved_error
+                    && actual_resolved_time > init_time,
+                "fixture resolved manifest is strictly newer than init");
+        }
+    }
     Fixture(const fs::path &base, std::string_view name)
     : root(base / name), project(root / "project"),
       agent(project / "agent"), receipt(root / "global" / "install.json") {
-        write_file(agent / "init.json", kInit);
-        write_file(agent / "system/manifest.resolved.json", kResolved);
+        write_fresh_config(kInit);
         write_file(receipt, kReceipt);
     }
     CompatibilityReport run(
@@ -210,17 +249,31 @@ void test_init_findings(const fs::path &base) {
         Fixture fixture(base, std::string("init-") + item.name);
         const auto path = fixture.agent / "init.json";
         if (item.json) {
-            write_file(path, item.json);
+            fixture.write_fresh_config(item.json);
         } else {
             fs::remove(path);
         }
-        expect_disabled(fixture.run(), D::blocked, item.finding, item.name);
+        const auto report = fixture.run();
+        expect_disabled(report, D::blocked, item.finding, item.name);
+        if (item.json) {
+            expect_findings(report, {item.finding}, item.name);
+            expect(report.resolved_manifest && report.resolved_manifest->fresh,
+                std::string(item.name) + " keeps fresh resolved facts");
+        } else {
+            expect_findings(report,
+                {item.finding, K::resolved_freshness_unavailable}, item.name);
+            expect(!report.resolved_manifest,
+                std::string(item.name) + " cannot establish freshness");
+        }
     }
     Fixture unreadable(base, "init-unreadable");
     fs::remove(unreadable.agent / "init.json");
     fs::create_directory(unreadable.agent / "init.json");
     const auto report = unreadable.run();
     expect_disabled(report, D::blocked, K::init_unreadable, "unreadable init");
+    expect_findings(report,
+        {K::init_unreadable, K::resolved_freshness_unavailable},
+        "unreadable init");
     expect(!report.raw_init && !report.resolved_manifest,
         "unreadable init cannot authorize resolved config");
 }
@@ -239,9 +292,17 @@ void test_capability_aliases(const fs::path &base) {
     };
     for (const auto &item : cases) {
         Fixture fixture(base, std::string("capability-") + item.name);
-        write_file(fixture.agent / "init.json", item.json);
+        fixture.write_fresh_config(item.json);
         const auto report = fixture.run();
         expect_disabled(report, item.disposition, item.finding, item.name);
+        expect_findings(report, {item.finding}, item.name);
+        expect(
+            report.install_receipt.has_value()
+                && report.raw_init.has_value()
+                && report.resolved_manifest.has_value()
+                && report.resolved_manifest->fresh,
+            std::string(item.name)
+                + " has recognized receipt, raw init, and fresh resolved facts");
         expect(
             report.raw_init && report.raw_init->capability_alias == item.alias,
             std::string(item.name) + " is observed without rewriting raw init");
@@ -262,29 +323,33 @@ void test_fail_closed_and_no_write(const fs::path &base) {
         "requested absent agent retains typed missing config findings");
     Fixture independent(base, "independent-findings");
     write_file(independent.receipt, R"({"schema":"other","schema_version":true})");
-    write_file(independent.agent / "system/manifest.resolved.json",
+    independent.write_fresh_config(
+        R"({"manifest":{"capabilities":{"bash":1,"shell":true}}})",
         R"({"schema":"other","schema_version":true,"source":"desktop","manifest":[]})");
-    write_file(
-        independent.agent / "init.json",
-        R"({"manifest":{"capabilities":{"bash":1,"shell":true}}})");
     const auto combined = independent.run();
-    expect(
-        has(combined, K::receipt_schema_unsupported)
-            && has(combined, K::receipt_version_unsupported)
-            && has(combined, K::resolved_schema_unsupported)
-            && has(combined, K::resolved_version_unsupported)
-            && has(combined, K::resolved_source_unsupported)
-            && has(combined, K::resolved_manifest_invalid)
-            && has(combined, K::capability_conflict),
-        "all independent findings survive Blocked aggregation");
+    expect_disabled(combined, D::blocked, K::capability_conflict,
+        "independent findings");
+    expect_findings(combined,
+        {K::receipt_schema_unsupported, K::receipt_version_unsupported,
+         K::resolved_schema_unsupported, K::resolved_version_unsupported,
+         K::resolved_source_unsupported, K::resolved_manifest_invalid,
+         K::capability_conflict},
+        "independent findings");
     Fixture unchanged(base, "no-write");
-    write_file(unchanged.agent / "init.json",
+    unchanged.write_fresh_config(
         R"({"manifest":{"capabilities":{"bash":{"x":1}}}})");
     const auto before = snapshot(unchanged.root);
     const auto first = unchanged.run();
     const auto second = unchanged.run();
     expect(has(first, K::legacy_bash_alias) && has(second, K::legacy_bash_alias),
         "repeated probe observes but never rewrites legacy alias");
+    expect_findings(first, {K::legacy_bash_alias}, "first no-write probe");
+    expect_findings(second, {K::legacy_bash_alias}, "second no-write probe");
+    expect(
+        first.install_receipt && first.raw_init && first.resolved_manifest
+            && second.install_receipt && second.raw_init
+            && second.resolved_manifest,
+        "no-write probes retain recognized receipt, raw init, and resolved facts");
     expect(snapshot(unchanged.root) == before, "repeated probing preserves all bytes and paths");
 
     Fixture absent(base, "no-create");

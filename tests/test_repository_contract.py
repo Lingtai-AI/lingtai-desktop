@@ -70,30 +70,74 @@ class RepositoryContractTest(unittest.TestCase):
                 )
 
         cmake = (ROOT / "CMakeLists.txt").read_text()
-        commands = {
-            (match[1], match[2]): set(match[3].split())
-            for match in re.finditer(
-                r"(add_library|target_link_libraries)\s*\(\s*(\S+)([^)]*)\)",
-                cmake,
+        commands: dict[tuple[str, str], list[list[str]]] = {}
+        for match in re.finditer(
+            r"(?m)^[ \t]*(add_library|target_link_libraries)"
+            r"\s*\(\s*([^\s()]+)([^)]*)\)",
+            cmake,
+        ):
+            commands.setdefault((match[1], match[2]), []).append(
+                match[3].split()
             )
-        }
+
+        def arguments(command: str, target: str) -> set[str]:
+            calls = commands.get((command, target), [])
+            self.assertEqual(
+                len(calls), 1, f"expected one {command}({target} ...) call"
+            )
+            return set(calls[0]) if calls else set()
+
+        def links(target: str) -> dict[str, set[str]]:
+            calls = commands.get(("target_link_libraries", target), [])
+            self.assertTrue(calls, f"missing target_link_libraries({target} ...)")
+            result = {scope: set() for scope in ("PUBLIC", "PRIVATE", "INTERFACE")}
+            for call in calls:
+                scope = None
+                for argument in call:
+                    if argument in result:
+                        scope = argument
+                    elif scope is None:
+                        self.fail(
+                            f"{target} dependency {argument!r} has no link visibility"
+                        )
+                    else:
+                        result[scope].add(argument)
+            return result
+
+        def scopes(sections: dict[str, set[str]], dependency: str) -> set[str]:
+            return {scope for scope, items in sections.items() if dependency in items}
+
         self.assertTrue(
             {"STATIC", "src/project_attachment.cpp"}
-            <= commands[("add_library", "lingtai_desktop_core")]
+            <= arguments("add_library", "lingtai_desktop_core")
         )
         self.assertEqual(cmake.count("src/project_attachment.cpp"), 1)
         self.assertTrue(
             {"STATIC", "src/compatibility_probe.cpp"}
-            <= commands[("add_library", "lingtai_desktop_compatibility")]
+            <= arguments("add_library", "lingtai_desktop_compatibility")
         )
         self.assertEqual(cmake.count("src/compatibility_probe.cpp"), 1)
-        self.assertTrue(
-            {"lingtai_desktop_core", "Qt6::Core"}
-            <= commands[("target_link_libraries", "lingtai_desktop_compatibility")]
+        compatibility = links("lingtai_desktop_compatibility")
+        self.assertEqual(scopes(compatibility, "lingtai_desktop_core"), {"PUBLIC"})
+        self.assertEqual(scopes(compatibility, "Qt6::Core"), {"PRIVATE"})
+        self.assertEqual(
+            links("lingtai_compatibility_probe_test"),
+            {
+                "PUBLIC": set(),
+                "PRIVATE": {"lingtai_desktop_compatibility"},
+                "INTERFACE": set(),
+            },
         )
-        self.assertTrue(
-            {"lingtai_desktop_compatibility", "desktop-app::lib_ui"}
-            <= commands[("target_link_libraries", "lingtai_desktop_smoke")]
+        self.assertEqual(
+            links("lingtai_desktop_smoke"),
+            {
+                "PUBLIC": set(),
+                "PRIVATE": {
+                    "lingtai_desktop_compatibility",
+                    "desktop-app::lib_ui",
+                },
+                "INTERFACE": set(),
+            },
         )
 
 
