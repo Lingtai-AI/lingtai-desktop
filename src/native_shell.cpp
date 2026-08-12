@@ -39,6 +39,7 @@ QLabel *make_label(
         QFont::Weight weight = QFont::Normal) {
     auto *label = new QLabel(text, parent);
     label->setObjectName(object_name);
+    label->setTextFormat(Qt::PlainText);
     label->setAccessibleName(text);
     label->setWordWrap(true);
     auto font = label->font();
@@ -215,6 +216,16 @@ QString scan_text(AgentManifestScanState state) {
     case State::root_io_error: return QStringLiteral("root I/O error");
     }
     return QStringLiteral("root I/O error");
+}
+
+QString scan_diagnostic_text(AgentManifestScanDiagnosticKind kind) {
+    using Kind = AgentManifestScanDiagnosticKind;
+    switch (kind) {
+    case Kind::child_unsafe_symlink: return QStringLiteral("child_unsafe_symlink");
+    case Kind::child_unreadable: return QStringLiteral("child_unreadable");
+    case Kind::child_io_error: return QStringLiteral("child_io_error");
+    }
+    return QStringLiteral("child_io_error");
 }
 
 const AgentManifestDiscoveryItem *selectable_item(
@@ -666,16 +677,25 @@ void NativeShell::render_roster() {
     }
 
     const auto scan = scan_text(roster_.discovery.scan.state);
+    auto status = QString();
     if (!roster_.projection_complete) {
-        state->setText(QStringLiteral("Roster incomplete — scan: %1").arg(scan));
+        status = QStringLiteral("Roster incomplete — scan: %1").arg(scan);
     } else if (roster_.discovery.scan.state != AgentManifestScanState::complete) {
-        state->setText(QStringLiteral("Roster unavailable — scan: %1").arg(scan));
+        status = QStringLiteral("Roster unavailable — scan: %1").arg(scan);
     } else if (roster_.discovery.items.empty()) {
-        state->setText(QStringLiteral("No Agents found — scan complete"));
+        status = QStringLiteral("No Agents found — scan complete");
     } else {
-        state->setText(QStringLiteral("%1 Agent(s) — projection complete")
-            .arg(roster_.discovery.items.size()));
+        status = QStringLiteral("%1 Agent(s) — projection complete")
+            .arg(roster_.discovery.items.size());
     }
+    for (const auto &diagnostic : roster_.discovery.scan_diagnostics) {
+        status += QStringLiteral(
+            "\nchild scan diagnostic: %1; key: %2; path: %3")
+            .arg(scan_diagnostic_text(diagnostic.kind),
+                path_text(diagnostic.path.filename()),
+                path_text(diagnostic.path));
+    }
+    state->setText(status);
 
     const auto selected = selection_state_.selected_agent_directory_key();
     const auto parallel = roster_.projection_complete

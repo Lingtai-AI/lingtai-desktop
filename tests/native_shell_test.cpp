@@ -251,6 +251,8 @@ void verify_dark_application_palette_inheritance(const fs::path &sandbox) {
     for (const auto *label : labels) {
         require(label->palette().color(QPalette::WindowText) == window_ink,
             "dark application WindowText role must reach every shell label");
+        require(label->textFormat() == Qt::PlainText,
+            "every LingTai label surface must render explicit plain text");
     }
     require(open_button->palette().color(QPalette::Button) == button_surface,
         "dark application Button role must reach the open affordance");
@@ -315,13 +317,32 @@ void verify_open_project_behavior(
     write_file(roster.project / ".lingtai/e-invalid/.agent.heartbeat",
         "0x1.8p+6");
     write_file(roster.project / ".lingtai/malformed/.agent.json", "{");
+    constexpr auto markup_key = "<img src=x>";
+    write_file(roster.project / ".lingtai" / markup_key / ".agent.json",
+        R"({"admin":{}})");
     fs::create_directories(roster.project / ".lingtai/no-manifest");
+    const auto project_marker = roster.project / "project-marker";
+    const auto unsafe_outside = roster.root / "outside-agent";
+    const auto outside_marker = unsafe_outside / "marker";
+    write_file(project_marker, "project-marker-bytes");
+    write_file(unsafe_outside / ".agent.json", R"({"admin":{"manage":true}})");
+    write_file(outside_marker, "outside-marker-bytes");
+    const auto unsafe_child = roster.project / ".lingtai/unsafe-child-link";
+    std::error_code unsafe_link_error;
+    fs::create_directory_symlink(
+        unsafe_outside, unsafe_child, unsafe_link_error);
+    require(!unsafe_link_error,
+        "unsafe child-directory symlink fixture must be created");
+    const auto outside_before = tree_snapshot(unsafe_outside);
+    const auto project_marker_type = fs::symlink_status(project_marker).type();
+    const auto outside_marker_type = fs::symlink_status(outside_marker).type();
     const auto roster_outcome = open_without_writes(
         shell, roster, std::nullopt, roster.receipt);
     require(roster_outcome.disposition == ProjectOpenDisposition::degraded,
         "roster fixture must open through the existing no-Agent API");
     required_child<Ui::RpWidget>(window, "lingtai_agent_roster");
     const auto expected_rows = std::vector<std::pair<std::string, std::string>>{
+        {markup_key, "valid — agent — missing"},
         {"a-human", "valid — human — alive_human"},
         {"agent", "valid — agent — alive"},
         {"b-main", "valid — main — alive"},
@@ -348,20 +369,31 @@ void verify_open_project_behavior(
         }
     }
     require(visible_keys == std::vector<std::string>{
-            "a-human", "agent", "b-main", "c-stale", "d-missing",
-            "e-invalid", "malformed"},
+            markup_key, "a-human", "agent", "b-main", "c-stale",
+            "d-missing", "e-invalid", "malformed"},
         "native rows must preserve deterministic C3 order");
     require(agent_row(window, "malformed")->text().contains("invalid JSON"),
         "a malformed row must expose its typed repair diagnostic");
     require(std::ranges::none_of(window.findChildren<QPushButton *>(),
             [](const auto *row) {
-                return row->property("directory_key").toString()
-                    == "no-manifest";
+                const auto key = row->property("directory_key").toString();
+                return key == "no-manifest" || key == "unsafe-child-link";
             }),
-        "an absent manifest must not create a roster row");
-    require(label_text(window, "lingtai_agent_roster_state")
-            .contains("projection complete"),
-        "a complete nonempty roster must be visibly complete");
+        "absent manifests and unsafe child directories must not create rows");
+    const auto roster_status = label_text(window, "lingtai_agent_roster_state");
+    const auto expected_unsafe_diagnostic = QStringLiteral(
+        "child scan diagnostic: child_unsafe_symlink; key: %1; path: %2")
+        .arg(QString::fromUtf8("unsafe-child-link"),
+            QString::fromStdString(unsafe_child.string()));
+    require(roster_status.contains("projection complete")
+            && roster_status.contains(expected_unsafe_diagnostic),
+        "a complete roster must visibly retain the typed unsafe child diagnostic");
+    require(tree_snapshot(unsafe_outside) == outside_before
+            && fs::symlink_status(project_marker).type() == project_marker_type
+            && read_file(project_marker) == "project-marker-bytes"
+            && fs::symlink_status(outside_marker).type() == outside_marker_type
+            && read_file(outside_marker) == "outside-marker-bytes",
+        "unsafe child scanning must preserve project/outside marker types and bytes");
 
     const auto no_agent_title = label_text(
         window, "lingtai_compatibility_title");
@@ -378,6 +410,20 @@ void verify_open_project_behavior(
 
     const auto roster_before_selection = tree_snapshot(roster.project);
     const auto receipt_before_selection = read_file(roster.receipt);
+    auto *markup_row = agent_row(window, markup_key);
+    const auto markup_text = QString::fromUtf8(markup_key);
+    require(markup_row->property("directory_key").toString() == markup_text,
+        "markup-like row property must retain the exact lossless directory key");
+    const auto markup_selected = shell.select_agent(markup_key);
+    QCoreApplication::processEvents();
+    require(markup_selected.disposition
+                == lingtai::desktop::AgentSelectionDisposition::selected
+            && shell.selection_state().selected_agent_directory_key()
+                == std::optional<fs::path>(markup_key)
+            && label_text(window, "lingtai_selected_agent_key") == markup_text
+            && required_child<QLabel>(window, "lingtai_selected_agent_key")
+                ->textFormat() == Qt::PlainText,
+        "markup-like Agent selection must remain exact C1/plain-text detail truth");
     const auto selected = shell.select_agent("agent");
     QCoreApplication::processEvents();
     require(selected.disposition
@@ -394,7 +440,8 @@ void verify_open_project_behavior(
                 == "Commands available: Yes",
         "selected Agent must replace the prior no-Agent compatibility report");
     require(tree_snapshot(roster.project) == roster_before_selection
-            && read_file(roster.receipt) == receipt_before_selection,
+            && read_file(roster.receipt) == receipt_before_selection
+            && tree_snapshot(unsafe_outside) == outside_before,
         "selection and selected-Agent re-probe must preserve project and receipt");
 
     agent_row(window, "b-main")->click();
