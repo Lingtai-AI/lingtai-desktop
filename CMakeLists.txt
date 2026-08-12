@@ -168,6 +168,7 @@ target_compile_options(lib_ui PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-weak>)
 
 add_executable(lingtai_desktop_smoke
     src/main.cpp
-    src/crl_integration.cpp)
+    src/crl_integration.cpp
+    src/project_attachment.cpp)
 init_target(lingtai_desktop_smoke)
 target_link_libraries(lingtai_desktop_smoke PRIVATE desktop-app::lib_ui)

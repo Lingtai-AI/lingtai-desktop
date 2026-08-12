@@ -9,6 +9,9 @@ scripts/build.sh                       target build wrapper
 scripts/smoke.py                       bounded offscreen smoke runner
 src/main.cpp                           owned `Ui::RpWidget` executable entry point
 src/crl_integration.cpp                minimal parent `crl` update-stream integration
+src/project_attachment.{h,cpp}         Qt-independent project-root containment seam
+tests/project_attachment_test.cpp      real C++ attachment/containment behavior contract
+tests/test_project_attachment.py       dependency-free C++ contract compile/run harness
 tests/test_repository_contract.py      focused tracked-tree and lock contract
 ```
 
@@ -28,6 +31,14 @@ by the full pinned `lib_ui` CMake target, adds its complete source tree without
 patching it, and links `lingtai_desktop_smoke` to `desktop-app::lib_ui`.
 `src/crl_integration.cpp` supplies the bounded, no-emission parent update
 producer the smoke needs; it is owned LingTai glue, not a Telegram model.
+
+`ProjectAttachment` accepts an existing directory and retains its canonical
+(symlink-resolved) root. Its `resolve` method accepts existing relative paths
+only, rejects absolute paths and every `..` component, canonicalizes the target,
+and verifies component-wise containment so an in-project symlink cannot escape.
+Both attachment and resolution return `ProjectPathFailure` plus any underlying
+filesystem error; their `noexcept` API performs no project-tree writes and has
+no Qt or Telegram dependency.
 
 Qt is external rather than fetched or committed. Configure resolves the exact
 Qt 6.11.1 prefix from `QT_ROOT` or the documented `$HOME/Qt/6.11.1/macos`
