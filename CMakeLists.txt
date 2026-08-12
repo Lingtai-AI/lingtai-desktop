@@ -172,10 +172,33 @@ init_target(lingtai_desktop_core)
 target_include_directories(lingtai_desktop_core PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
+add_library(lingtai_desktop_compatibility STATIC
+    src/compatibility_probe.cpp)
+init_target(lingtai_desktop_compatibility)
+target_include_directories(lingtai_desktop_compatibility PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(lingtai_desktop_compatibility PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_desktop_compatibility
+    PUBLIC lingtai_desktop_core
+    PRIVATE Qt6::Core)
+
+add_executable(lingtai_compatibility_probe_test
+    tests/compatibility_probe_test.cpp)
+init_target(lingtai_compatibility_probe_test)
+target_compile_options(lingtai_compatibility_probe_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_compatibility_probe_test PRIVATE
+    lingtai_desktop_compatibility)
+enable_testing()
+add_test(NAME compatibility_probe
+    COMMAND lingtai_compatibility_probe_test
+        "${CMAKE_CURRENT_BINARY_DIR}/compatibility-probe-fixture")
+
 add_executable(lingtai_desktop_smoke
     src/main.cpp
     src/crl_integration.cpp)
 init_target(lingtai_desktop_smoke)
 target_link_libraries(lingtai_desktop_smoke PRIVATE
-    lingtai_desktop_core
+    lingtai_desktop_compatibility
     desktop-app::lib_ui)

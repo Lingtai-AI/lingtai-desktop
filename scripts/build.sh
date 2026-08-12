@@ -7,4 +7,6 @@ BUILD_DIR="${BUILD_DIR:-$ROOT/build}"
   printf 'build: no configured build tree at %s; run scripts/configure.sh first\n' "$BUILD_DIR" >&2
   exit 1
 }
-cmake --build "$BUILD_DIR" --target lingtai_desktop_smoke --parallel "${BUILD_JOBS:-8}"
+cmake --build "$BUILD_DIR" --target \
+  lingtai_desktop_smoke lingtai_compatibility_probe_test \
+  --parallel "${BUILD_JOBS:-8}"

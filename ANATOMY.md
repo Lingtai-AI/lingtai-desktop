@@ -10,8 +10,10 @@ scripts/smoke.py                       bounded offscreen smoke runner
 src/main.cpp                           owned `Ui::RpWidget` executable entry point
 src/crl_integration.cpp                minimal parent `crl` update-stream integration
 src/project_attachment.{h,cpp}         Qt-independent project-root containment seam
+src/compatibility_probe.{h,cpp}        Qt Core-owned read-only compatibility probe
 tests/project_attachment_test.cpp      real C++ attachment/containment behavior contract
 tests/test_project_attachment.py       dependency-free C++ contract compile/run harness
+tests/compatibility_probe_test.cpp     compatibility behavior/no-write contract
 tests/test_repository_contract.py      focused tracked-tree and lock contract
 ```
 
@@ -29,7 +31,8 @@ tests/test_repository_contract.py      focused tracked-tree and lock contract
 The top-level CMake graph creates the upstream dependency target names expected
 by the full pinned `lib_ui` CMake target and adds its complete source tree
 without patching it. The Qt-independent `lingtai_desktop_core` library owns the
-project-attachment seam; `lingtai_desktop_smoke` links that owned target and
+project-attachment seam. The separate `lingtai_desktop_compatibility` library
+privately owns Qt Core JSON parsing, and the smoke links it with
 `desktop-app::lib_ui`.
 `src/crl_integration.cpp` supplies the bounded, no-emission parent update
 producer the smoke needs; it is owned LingTai glue, not a Telegram model.
@@ -49,6 +52,17 @@ safe-to-create. Path canonicalization cannot detect that an in-project hard
 link shares an inode with a file outside the project. The stored canonical root
 is path-stable only, not inode-pinned: replacing the directory at that path can
 change what a later resolution observes.
+
+`probe_compatibility` reads one explicitly requested relative agent directory
+and one explicitly supplied global install-receipt path below an accepted
+attachment; it never infers `$HOME` or a project receipt. It recognizes only
+the current machine receipt and kernel-resolved-manifest envelopes, reports raw
+`init.json` structure and the `bash`/`shell` alias case without rewriting it,
+and retains independent typed findings. No requested agent is explicitly
+`Degraded`; commands are allowed only for a finding-free requested agent with a
+recognized receipt, fresh resolved manifest, and structurally usable raw init.
+The probe does not implement the kernel's full raw-init semantics or verify an
+installed executable.
 
 Qt is external rather than fetched or committed. Configure resolves the exact
 Qt 6.11.1 prefix from `QT_ROOT` or the documented `$HOME/Qt/6.11.1/macos`

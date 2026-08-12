@@ -40,9 +40,9 @@ local roots such as `--local-toolkit-root /path/to/toolkit` and
 `--local-third-party-root /path/to/third-party`; the script validates source
 remotes, commits, and cleanliness before cloning those selected checkouts.
 
-The build target is `lingtai_desktop_smoke`. The smoke runner sets Qt's offscreen
-platform plugin and requires the executable's `LINGTAI_LIB_UI_FULL_TARGET_SMOKE_OK`
-marker.
+The build wrapper builds `lingtai_desktop_smoke` and its focused compatibility
+contract. The smoke runner sets Qt's offscreen platform plugin and requires the
+executable's `LINGTAI_LIB_UI_FULL_TARGET_SMOKE_OK` marker.
 
 ## Dependency boundary
 

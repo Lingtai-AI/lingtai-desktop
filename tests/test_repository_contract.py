@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import unittest
 from pathlib import Path
@@ -43,8 +44,11 @@ class RepositoryContractTest(unittest.TestCase):
             "scripts/smoke.py",
             "src/main.cpp",
             "src/crl_integration.cpp",
+            "src/compatibility_probe.cpp",
+            "src/compatibility_probe.h",
             "src/project_attachment.cpp",
             "src/project_attachment.h",
+            "tests/compatibility_probe_test.cpp",
             "tests/project_attachment_test.cpp",
             "tests/test_project_attachment.py",
         )
@@ -66,17 +70,30 @@ class RepositoryContractTest(unittest.TestCase):
                 )
 
         cmake = (ROOT / "CMakeLists.txt").read_text()
-        self.assertIn(
-            "add_library(lingtai_desktop_core STATIC\n"
-            "    src/project_attachment.cpp)",
-            cmake,
+        commands = {
+            (match[1], match[2]): set(match[3].split())
+            for match in re.finditer(
+                r"(add_library|target_link_libraries)\s*\(\s*(\S+)([^)]*)\)",
+                cmake,
+            )
+        }
+        self.assertTrue(
+            {"STATIC", "src/project_attachment.cpp"}
+            <= commands[("add_library", "lingtai_desktop_core")]
         )
         self.assertEqual(cmake.count("src/project_attachment.cpp"), 1)
-        self.assertIn(
-            "target_link_libraries(lingtai_desktop_smoke PRIVATE\n"
-            "    lingtai_desktop_core\n"
-            "    desktop-app::lib_ui)",
-            cmake,
+        self.assertTrue(
+            {"STATIC", "src/compatibility_probe.cpp"}
+            <= commands[("add_library", "lingtai_desktop_compatibility")]
+        )
+        self.assertEqual(cmake.count("src/compatibility_probe.cpp"), 1)
+        self.assertTrue(
+            {"lingtai_desktop_core", "Qt6::Core"}
+            <= commands[("target_link_libraries", "lingtai_desktop_compatibility")]
+        )
+        self.assertTrue(
+            {"lingtai_desktop_compatibility", "desktop-app::lib_ui"}
+            <= commands[("target_link_libraries", "lingtai_desktop_smoke")]
         )
 
 

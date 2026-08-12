@@ -36,6 +36,7 @@ export QT_ROOT="$HOME/Qt/6.11.1/macos"
 ./scripts/bootstrap-deps.sh
 ./scripts/configure.sh
 ./scripts/build.sh
+ctest --test-dir build --output-on-failure -R '^compatibility_probe$'
 ./scripts/smoke.py
 ```
 
