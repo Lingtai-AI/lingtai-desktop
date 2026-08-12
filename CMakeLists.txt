@@ -166,9 +166,16 @@ add_subdirectory("${SRC}/codegen/codegen/style" codegen_style)
 add_subdirectory("${SRC}/lib_ui" lib_ui)
 target_compile_options(lib_ui PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-weak>)
 
+add_library(lingtai_desktop_core STATIC
+    src/project_attachment.cpp)
+init_target(lingtai_desktop_core)
+target_include_directories(lingtai_desktop_core PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+
 add_executable(lingtai_desktop_smoke
     src/main.cpp
-    src/crl_integration.cpp
-    src/project_attachment.cpp)
+    src/crl_integration.cpp)
 init_target(lingtai_desktop_smoke)
-target_link_libraries(lingtai_desktop_smoke PRIVATE desktop-app::lib_ui)
+target_link_libraries(lingtai_desktop_smoke PRIVATE
+    lingtai_desktop_core
+    desktop-app::lib_ui)

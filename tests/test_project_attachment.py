@@ -12,13 +12,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ProjectAttachmentTest(unittest.TestCase):
-    def test_cpp_project_attachment_contract(self) -> None:
+    def compile_and_run_contract(self, compiler: str) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             temporary_path = Path(temporary)
             executable = temporary_path / "project_attachment_test"
             compile_result = subprocess.run(
                 [
-                    os.environ.get("CXX", "c++"),
+                    compiler,
                     "-std=c++20",
                     "-Wall",
                     "-Wextra",
@@ -50,6 +50,15 @@ class ProjectAttachmentTest(unittest.TestCase):
                 run_result.stdout + run_result.stderr,
             )
             self.assertIn("PROJECT_ATTACHMENT_CONTRACT_OK", run_result.stdout)
+
+    def test_cpp_project_attachment_contract(self) -> None:
+        self.compile_and_run_contract(os.environ.get("CXX", "c++"))
+
+    def test_gcc_14_portability(self) -> None:
+        compiler = Path("/usr/local/bin/g++-14")
+        if not compiler.is_file():
+            self.skipTest(f"exact GCC portability compiler absent: {compiler}")
+        self.compile_and_run_contract(str(compiler))
 
 
 if __name__ == "__main__":

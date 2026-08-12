@@ -10,9 +10,11 @@ enum class ProjectPathFailure {
     none,
     selection_not_found,
     selection_not_directory,
+    invalid_relative_path,
     absolute_path_forbidden,
     parent_traversal_forbidden,
     target_not_found,
+    target_not_directory,
     outside_project,
     filesystem_error,
 };

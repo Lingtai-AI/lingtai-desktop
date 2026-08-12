@@ -27,18 +27,28 @@ tests/test_repository_contract.py      focused tracked-tree and lock contract
   parent resource blobs needed by this pinned `lib_ui` build.
 
 The top-level CMake graph creates the upstream dependency target names expected
-by the full pinned `lib_ui` CMake target, adds its complete source tree without
-patching it, and links `lingtai_desktop_smoke` to `desktop-app::lib_ui`.
+by the full pinned `lib_ui` CMake target and adds its complete source tree
+without patching it. The Qt-independent `lingtai_desktop_core` library owns the
+project-attachment seam; `lingtai_desktop_smoke` links that owned target and
+`desktop-app::lib_ui`.
 `src/crl_integration.cpp` supplies the bounded, no-emission parent update
 producer the smoke needs; it is owned LingTai glue, not a Telegram model.
 
 `ProjectAttachment` accepts an existing directory and retains its canonical
-(symlink-resolved) root. Its `resolve` method accepts existing relative paths
-only, rejects absolute paths and every `..` component, canonicalizes the target,
-and verifies component-wise containment so an in-project symlink cannot escape.
-Both attachment and resolution return `ProjectPathFailure` plus any underlying
-filesystem error; their `noexcept` API performs no project-tree writes and has
-no Qt or Telegram dependency.
+(symlink-resolved) root path. Its `resolve` method accepts nonempty existing
+relative paths only; empty and dot-only input is invalid. It rejects absolute
+paths and every `..` component, canonicalizes the target, and verifies
+component-wise containment so an in-project symlink cannot escape. A path below
+a regular file is reported separately from a missing target. Both attachment
+and resolution return `ProjectPathFailure` plus any underlying filesystem
+error; their `noexcept` API performs no project-tree writes and has no Qt or
+Telegram dependency.
+
+`target_not_found` is not a containment verdict and must never be treated as
+safe-to-create. Path canonicalization cannot detect that an in-project hard
+link shares an inode with a file outside the project. The stored canonical root
+is path-stable only, not inode-pinned: replacing the directory at that path can
+change what a later resolution observes.
 
 Qt is external rather than fetched or committed. Configure resolves the exact
 Qt 6.11.1 prefix from `QT_ROOT` or the documented `$HOME/Qt/6.11.1/macos`

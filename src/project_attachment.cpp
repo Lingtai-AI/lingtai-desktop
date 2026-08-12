@@ -7,9 +7,24 @@ namespace {
 
 namespace fs = std::filesystem;
 
-bool is_missing(const std::error_code &error) {
-    return error == std::errc::no_such_file_or_directory
-        || error == std::errc::not_a_directory;
+ProjectPathFailure resolution_failure(const std::error_code &error) {
+    if (error == std::errc::no_such_file_or_directory) {
+        return ProjectPathFailure::target_not_found;
+    }
+    if (error == std::errc::not_a_directory) {
+        return ProjectPathFailure::target_not_directory;
+    }
+    return ProjectPathFailure::filesystem_error;
+}
+
+ProjectPathFailure attachment_failure_type(const std::error_code &error) {
+    if (error == std::errc::no_such_file_or_directory) {
+        return ProjectPathFailure::selection_not_found;
+    }
+    if (error == std::errc::not_a_directory) {
+        return ProjectPathFailure::selection_not_directory;
+    }
+    return ProjectPathFailure::filesystem_error;
 }
 
 bool is_contained(const fs::path &candidate, const fs::path &root) {
@@ -57,31 +72,41 @@ const fs::path &ProjectAttachment::root() const noexcept {
 ProjectPathResult ProjectAttachment::resolve(
         const fs::path &relative_path) const noexcept {
     try {
+        if (relative_path.empty()) {
+            return path_failure(ProjectPathFailure::invalid_relative_path);
+        }
         if (relative_path.is_absolute()
             || relative_path.has_root_name()
             || relative_path.has_root_directory()) {
             return path_failure(ProjectPathFailure::absolute_path_forbidden);
         }
+        auto has_target_component = false;
         for (const auto &part : relative_path) {
             if (part == "..") {
                 return path_failure(
                     ProjectPathFailure::parent_traversal_forbidden);
             }
+            if (part != "." && !part.empty()) {
+                has_target_component = true;
+            }
+        }
+        if (!has_target_component) {
+            return path_failure(ProjectPathFailure::invalid_relative_path);
         }
 
         std::error_code error;
         const auto resolved = fs::canonical(root_ / relative_path, error);
         if (error) {
-            return path_failure(
-                is_missing(error)
-                    ? ProjectPathFailure::target_not_found
-                    : ProjectPathFailure::filesystem_error,
-                error);
+            return path_failure(resolution_failure(error), error);
         }
         if (!is_contained(resolved, root_)) {
             return path_failure(ProjectPathFailure::outside_project);
         }
-        return {.path = resolved};
+        return {
+            .path = resolved,
+            .failure = ProjectPathFailure::none,
+            .system_error = {},
+        };
     } catch (const fs::filesystem_error &error) {
         return path_failure(ProjectPathFailure::filesystem_error, error.code());
     } catch (...) {
@@ -96,12 +121,12 @@ ProjectAttachmentResult attach_project(
     try {
         std::error_code error;
         const auto status = fs::status(selected_directory, error);
-        if (error || !fs::exists(status)) {
+        if (error) {
+            return attachment_failure(attachment_failure_type(error), error);
+        }
+        if (!fs::exists(status)) {
             return attachment_failure(
-                is_missing(error) || !fs::exists(status)
-                    ? ProjectPathFailure::selection_not_found
-                    : ProjectPathFailure::filesystem_error,
-                error);
+                ProjectPathFailure::selection_not_found);
         }
         if (!fs::is_directory(status)) {
             return attachment_failure(
@@ -110,11 +135,7 @@ ProjectAttachmentResult attach_project(
 
         auto root = fs::canonical(selected_directory, error);
         if (error) {
-            return attachment_failure(
-                is_missing(error)
-                    ? ProjectPathFailure::selection_not_found
-                    : ProjectPathFailure::filesystem_error,
-                error);
+            return attachment_failure(attachment_failure_type(error), error);
         }
         return {
             .attachment = ProjectAttachment(std::move(root)),

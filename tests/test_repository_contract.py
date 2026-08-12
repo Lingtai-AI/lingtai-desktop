@@ -43,6 +43,10 @@ class RepositoryContractTest(unittest.TestCase):
             "scripts/smoke.py",
             "src/main.cpp",
             "src/crl_integration.cpp",
+            "src/project_attachment.cpp",
+            "src/project_attachment.h",
+            "tests/project_attachment_test.cpp",
+            "tests/test_project_attachment.py",
         )
         for relative in required_files:
             self.assertTrue((ROOT / relative).is_file(), relative)
@@ -60,6 +64,20 @@ class RepositoryContractTest(unittest.TestCase):
                 self.assertNotIn(
                     validation_root_marker, (ROOT / path).read_text(errors="ignore")
                 )
+
+        cmake = (ROOT / "CMakeLists.txt").read_text()
+        self.assertIn(
+            "add_library(lingtai_desktop_core STATIC\n"
+            "    src/project_attachment.cpp)",
+            cmake,
+        )
+        self.assertEqual(cmake.count("src/project_attachment.cpp"), 1)
+        self.assertIn(
+            "target_link_libraries(lingtai_desktop_smoke PRIVATE\n"
+            "    lingtai_desktop_core\n"
+            "    desktop-app::lib_ui)",
+            cmake,
+        )
 
 
 if __name__ == "__main__":
