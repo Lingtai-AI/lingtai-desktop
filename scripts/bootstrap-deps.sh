@@ -161,6 +161,7 @@ PY
 }
 
 mkdir -p "$DEPS_ROOT"
+lock_rows="$(emit_lock_rows)"
 while IFS=$'\t' read -r kind one two three four five; do
   [[ -n "$kind" ]] || continue
   case "$kind" in
@@ -189,7 +190,7 @@ while IFS=$'\t' read -r kind one two three four five; do
       ;;
     *) die "unsupported lock row kind: $kind" ;;
   esac
-done < <(emit_lock_rows)
+done <<<"$lock_rows"
 
 build_openssl() {
   [[ "$(uname -s)" == "Darwin" ]] || die "the locked universal OpenSSL build currently requires macOS"
