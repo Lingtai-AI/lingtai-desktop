@@ -56,6 +56,126 @@ QString path_text(const fs::path &path) {
         static_cast<qsizetype>(bytes.size()));
 }
 
+QString source_path_text(const fs::path &path) {
+    return path.empty() ? QStringLiteral("unavailable") : path_text(path);
+}
+
+QString value_text(const std::optional<std::string> &value) {
+    return value ? QString::fromStdString(*value) : QStringLiteral("unavailable");
+}
+
+QString value_text(const std::optional<std::int64_t> &value) {
+    return value ? QString::number(*value) : QStringLiteral("unavailable");
+}
+
+QString value_text(const std::optional<double> &value) {
+    return value ? QString::number(*value, 'g', 15)
+                 : QStringLiteral("unavailable");
+}
+
+QString value_text(const std::optional<bool> &value) {
+    return value ? (*value ? QStringLiteral("true") : QStringLiteral("false"))
+                 : QStringLiteral("unavailable");
+}
+
+QString joined_names(const std::vector<std::string> &names) {
+    auto text = QStringList();
+    for (const auto &name : names) text.push_back(QString::fromStdString(name));
+    return names.empty() ? QStringLiteral("none") : text.join(QStringLiteral(", "));
+}
+
+QString capability_evidence_text(AgentManifestCapabilityEvidenceKind kind) {
+    using Kind = AgentManifestCapabilityEvidenceKind;
+    switch (kind) {
+    case Kind::absent: return QStringLiteral("absent");
+    case Kind::parsed: return QStringLiteral("parsed");
+    case Kind::partially_parsed: return QStringLiteral("partially parsed");
+    case Kind::invalid: return QStringLiteral("invalid");
+    }
+    return QStringLiteral("invalid");
+}
+
+QString manifest_observation_text(AgentManifestObservationState state) {
+    using State = AgentManifestObservationState;
+    switch (state) {
+    case State::read_this_scan: return QStringLiteral("read this observation");
+    case State::observed_unavailable: return QStringLiteral("observed unavailable");
+    case State::rejected_unsafe: return QStringLiteral("rejected unsafe");
+    }
+    return QStringLiteral("observed unavailable");
+}
+
+QString status_observation_text(AgentStatusObservationState state) {
+    using State = AgentStatusObservationState;
+    switch (state) {
+    case State::read_this_scan: return QStringLiteral("read this observation");
+    case State::absent: return QStringLiteral("absent");
+    case State::rejected_unsafe: return QStringLiteral("rejected unsafe");
+    case State::observed_unavailable: return QStringLiteral("observed unavailable");
+    }
+    return QStringLiteral("observed unavailable");
+}
+
+QString status_diagnostic_text(AgentStatusDiagnosticKind diagnostic) {
+    using Kind = AgentStatusDiagnosticKind;
+    switch (diagnostic) {
+    case Kind::none: return QStringLiteral("none");
+    case Kind::unsafe_symlink: return QStringLiteral("unsafe symlink");
+    case Kind::not_regular: return QStringLiteral("not a regular file");
+    case Kind::unreadable: return QStringLiteral("unreadable");
+    case Kind::io_error: return QStringLiteral("I/O error");
+    case Kind::too_large: return QStringLiteral("source exceeds size limit");
+    case Kind::container_unavailable: return QStringLiteral("Agent unavailable");
+    case Kind::container_changed: return QStringLiteral("Agent changed during observation");
+    case Kind::source_changed: return QStringLiteral("source changed during observation");
+    case Kind::invalid_json: return QStringLiteral("invalid JSON");
+    case Kind::not_object: return QStringLiteral("JSON root is not an object");
+    }
+    return QStringLiteral("I/O error");
+}
+
+QString mtime_order_text(AgentManifestStatusMtimeOrder order) {
+    using Order = AgentManifestStatusMtimeOrder;
+    switch (order) {
+    case Order::status_newer: return QStringLiteral("status newer");
+    case Order::manifest_newer: return QStringLiteral("manifest newer");
+    case Order::same_time: return QStringLiteral("same time");
+    case Order::unassessable: return QStringLiteral("unassessable");
+    }
+    return QStringLiteral("unassessable");
+}
+
+QString agreement_text(AgentManifestStatusAgreement agreement) {
+    using Agreement = AgentManifestStatusAgreement;
+    switch (agreement) {
+    case Agreement::agree: return QStringLiteral("agree");
+    case Agreement::disagree: return QStringLiteral("disagree");
+    case Agreement::unassessable: return QStringLiteral("unassessable");
+    }
+    return QStringLiteral("unassessable");
+}
+
+QString raw_mtime_comparison(
+        const std::optional<double> &manifest,
+        const std::optional<double> &status) {
+    if (!manifest || !status) return QStringLiteral("unassessable");
+    return *status > *manifest
+        ? QStringLiteral("status timestamp is later")
+        : *manifest > *status
+            ? QStringLiteral("manifest timestamp is later")
+            : QStringLiteral("timestamps are the same");
+}
+
+QString byte_count_text(const std::optional<std::size_t> &value) {
+    return value ? QString::number(*value) : QStringLiteral("unavailable");
+}
+
+QString system_error_text(const std::error_code &error) {
+    return error ? QStringLiteral("%1 (%2)")
+        .arg(QString::fromStdString(error.message())).arg(error.value())
+        : QStringLiteral("none");
+}
+
 QString finding_text(CompatibilityFindingKind kind) {
     using Kind = CompatibilityFindingKind;
     switch (kind) {
@@ -452,6 +572,48 @@ NativeShell::NativeShell()
         detail, QString(), "lingtai_selected_agent_key", 12, QFont::Medium);
     detail_key->setAccessibleName(QStringLiteral("Selected Agent key"));
     detail_layout->addWidget(detail_key);
+    auto *presentation_name = make_label(
+        detail, QString(), "lingtai_selected_agent_presentation_name", 12,
+        QFont::Medium);
+    presentation_name->setAccessibleName(
+        QStringLiteral("Selected Agent presentation name"));
+    detail_layout->addWidget(presentation_name);
+    auto *manifest_identity = make_label(
+        detail, QString(), "lingtai_selected_agent_manifest_identity", 11);
+    manifest_identity->setAccessibleName(QStringLiteral("Manifest identity"));
+    detail_layout->addWidget(manifest_identity);
+    auto *manifest_llm = make_label(
+        detail, QString(), "lingtai_selected_agent_manifest_llm", 11);
+    manifest_llm->setAccessibleName(QStringLiteral("Manifest live LLM"));
+    detail_layout->addWidget(manifest_llm);
+    auto *manifest_capabilities = make_label(
+        detail, QString(), "lingtai_selected_agent_manifest_capabilities", 11);
+    manifest_capabilities->setAccessibleName(
+        QStringLiteral("Manifest capabilities"));
+    detail_layout->addWidget(manifest_capabilities);
+    auto *status_activity = make_label(
+        detail, QString(), "lingtai_selected_agent_status_activity", 11);
+    status_activity->setAccessibleName(QStringLiteral("Status activity"));
+    detail_layout->addWidget(status_activity);
+    auto *status_context = make_label(
+        detail, QString(), "lingtai_selected_agent_status_context", 11);
+    status_context->setAccessibleName(QStringLiteral("Status context"));
+    detail_layout->addWidget(status_context);
+    auto *source_relation = make_label(
+        detail, QString(), "lingtai_selected_agent_source_relation", 11);
+    source_relation->setAccessibleName(
+        QStringLiteral("Manifest and status source relation"));
+    detail_layout->addWidget(source_relation);
+    auto *manifest_provenance = make_label(
+        detail, QString(), "lingtai_selected_agent_manifest_provenance", 10);
+    manifest_provenance->setAccessibleName(
+        QStringLiteral("Manifest source provenance"));
+    detail_layout->addWidget(manifest_provenance);
+    auto *status_provenance = make_label(
+        detail, QString(), "lingtai_selected_agent_status_provenance", 10);
+    status_provenance->setAccessibleName(
+        QStringLiteral("Status source provenance"));
+    detail_layout->addWidget(status_provenance);
     auto *detail_facts = make_label(
         detail, QString(), "lingtai_selected_agent_facts", 11);
     detail_facts->setAccessibleName(QStringLiteral("Selected Agent facts"));
@@ -539,7 +701,8 @@ ProjectOpenOutcome NativeShell::open_project(
             "The selected project's .lingtai directory is not safely contained.");
     }
 
-    auto roster = project_agent_roster(*attached.attachment);
+    auto identity_status = project_agent_identity_status(*attached.attachment);
+    const auto &roster = identity_status.roster;
     const auto canonical_root = attached.attachment->root();
     const auto same_root = selection_state_.active_project()
         && selection_state_.active_project()->root() == canonical_root;
@@ -562,7 +725,7 @@ ProjectOpenOutcome NativeShell::open_project(
     if (selected_key) {
         static_cast<void>(selection_state_.select_agent(*selected_key));
     }
-    roster_ = std::move(roster);
+    identity_status_ = std::move(identity_status);
     install_receipt_path_ = install_receipt_path;
     const auto selected_relative = selected_key
         ? std::optional<fs::path>(fs::path(".lingtai") / *selected_key)
@@ -658,14 +821,37 @@ void NativeShell::render_compatibility(const CompatibilityReport &report) {
 }
 
 void NativeShell::render_roster() {
+    const auto &roster_ = identity_status_.roster;
     auto *state = window_->findChild<QLabel *>("lingtai_agent_roster_state");
     auto *selected_key = window_->findChild<QLabel *>(
         "lingtai_selected_agent_key");
+    auto *presentation_name = window_->findChild<QLabel *>(
+        "lingtai_selected_agent_presentation_name");
+    auto *manifest_identity = window_->findChild<QLabel *>(
+        "lingtai_selected_agent_manifest_identity");
+    auto *manifest_llm = window_->findChild<QLabel *>(
+        "lingtai_selected_agent_manifest_llm");
+    auto *manifest_capabilities = window_->findChild<QLabel *>(
+        "lingtai_selected_agent_manifest_capabilities");
+    auto *status_activity = window_->findChild<QLabel *>(
+        "lingtai_selected_agent_status_activity");
+    auto *status_context = window_->findChild<QLabel *>(
+        "lingtai_selected_agent_status_context");
+    auto *source_relation = window_->findChild<QLabel *>(
+        "lingtai_selected_agent_source_relation");
+    auto *manifest_provenance = window_->findChild<QLabel *>(
+        "lingtai_selected_agent_manifest_provenance");
+    auto *status_provenance = window_->findChild<QLabel *>(
+        "lingtai_selected_agent_status_provenance");
     auto *selected_facts = window_->findChild<QLabel *>(
         "lingtai_selected_agent_facts");
     auto *selected_diagnostic = window_->findChild<QLabel *>(
         "lingtai_selected_agent_diagnostic");
-    if (!state || !selected_key || !selected_facts || !selected_diagnostic
+    if (!state || !selected_key || !presentation_name || !manifest_identity
+        || !manifest_llm || !manifest_capabilities || !status_activity
+        || !status_context || !source_relation || !manifest_provenance
+        || !status_provenance
+        || !selected_facts || !selected_diagnostic
         || !roster_rows_ || !roster_rows_->layout()) {
         return;
     }
@@ -702,6 +888,10 @@ void NativeShell::render_roster() {
         && roster_.presence_by_item.size() == roster_.discovery.items.size();
     const AgentManifestDiscoveryItem *detail_item = nullptr;
     const AgentRosterPresenceItem *detail_presence = nullptr;
+    const AgentIdentityStatusItem *detail_status = nullptr;
+    const auto detail_parallel = identity_status_.projection_complete
+        && identity_status_.detail_by_item.size()
+            == roster_.discovery.items.size();
     for (auto index = std::size_t{0};
          index != roster_.discovery.items.size(); ++index) {
         const auto &item = roster_.discovery.items[index];
@@ -736,18 +926,156 @@ void NativeShell::render_roster() {
         if (row->isChecked()) {
             detail_item = &item;
             detail_presence = presence;
+            detail_status = detail_parallel
+                ? &identity_status_.detail_by_item[index] : nullptr;
         }
     }
     if (auto *box = qobject_cast<QBoxLayout *>(layout)) box->addStretch();
 
     if (!detail_item) {
         selected_key->setText(QStringLiteral("No Agent selected"));
+        presentation_name->clear();
+        manifest_identity->clear();
+        manifest_llm->clear();
+        manifest_capabilities->clear();
+        status_activity->clear();
+        status_context->clear();
+        source_relation->clear();
+        manifest_provenance->clear();
+        status_provenance->clear();
         selected_facts->setText(QStringLiteral(
             "Choose a valid manifest row to inspect compatibility."));
         selected_diagnostic->clear();
         return;
     }
     selected_key->setText(path_text(detail_item->directory_key));
+    const auto &identity = detail_item->identity;
+    presentation_name->setText(identity && identity->nickname
+            ? QString::fromStdString(*identity->nickname)
+        : identity && identity->true_name
+            ? QString::fromStdString(*identity->true_name)
+            : path_text(detail_item->directory_key));
+    if (identity) {
+        manifest_identity->setText(QStringLiteral(
+            "Manifest identity\ntrue name: %1\naddress: %2\nagent ID: %3\nstate: %4")
+            .arg(value_text(identity->true_name), value_text(identity->address),
+                value_text(identity->agent_id), value_text(identity->state)));
+        manifest_llm->setText(QStringLiteral(
+            "Manifest live LLM\nprovider: %1\nmodel: %2\nbase URL: %3\n"
+            "API compatibility: %4\ncontext limit: %5")
+            .arg(value_text(identity->llm.provider), value_text(identity->llm.model),
+                value_text(identity->llm.base_url),
+                value_text(identity->llm.api_compat),
+                value_text(identity->llm.context_limit)));
+        manifest_capabilities->setText(QStringLiteral(
+            "Manifest capabilities\nraw evidence: %1\nraw names: %2\n"
+            "display names: %3")
+            .arg(capability_evidence_text(identity->capabilities.evidence),
+                joined_names(identity->capabilities.manifest_names),
+                joined_names(identity->capabilities.display_names)));
+    } else {
+        manifest_identity->setText(QStringLiteral("Manifest identity unavailable"));
+        manifest_llm->setText(QStringLiteral("Manifest live LLM unavailable"));
+        manifest_capabilities->setText(
+            QStringLiteral("Manifest capabilities unavailable"));
+    }
+    if (detail_status && detail_status->status) {
+        const auto &status = *detail_status->status;
+        const auto active = status.active_turn
+            ? &*status.active_turn : nullptr;
+        status_activity->setText(QStringLiteral(
+            "Status activity\nstate: %1\nrunning: %2\nPID: %3\n"
+            "state changed at: %4\nlast progress at: %5\n"
+            "no progress seconds: %6\nactive turn kind: %7\n"
+            "active turn ID: %8\nactive turn started at: %9\n"
+            "active turn elapsed seconds: %10")
+            .arg(value_text(status.runtime.state),
+                value_text(status.runtime.running), value_text(status.runtime.pid),
+                value_text(status.runtime.state_changed_at),
+                value_text(status.runtime.last_progress_at),
+                value_text(status.runtime.no_progress_seconds),
+                active ? value_text(active->kind) : QStringLiteral("unavailable"),
+                active ? value_text(active->id) : QStringLiteral("unavailable"),
+                active ? value_text(active->started_at) : QStringLiteral("unavailable"),
+                active ? value_text(active->elapsed_seconds)
+                       : QStringLiteral("unavailable")));
+        if (status.context) {
+            const auto &context = *status.context;
+            status_context->setText(QStringLiteral(
+                "Status context (source values)\nwindow size: %1\n"
+                "system tokens: %2\ntools tokens: %3\nhistory tokens: %4\n"
+                "total tokens: %5\nusage_percent (source usage_pct): %6\n"
+                "fixed tokens: %7\ngrowing tokens: %8")
+                .arg(QString::number(context.window_size),
+                    value_text(context.system_tokens),
+                    value_text(context.tools_tokens),
+                    value_text(context.history_tokens),
+                    value_text(context.total_tokens),
+                    value_text(context.usage_percent),
+                    value_text(context.fixed_tokens),
+                    value_text(context.growing_tokens)));
+        } else {
+            status_context->setText(QStringLiteral(
+                "Status context unavailable (no valid positive window projected)"));
+        }
+    } else {
+        status_activity->setText(QStringLiteral(
+            "Status activity unavailable from status source"));
+        status_context->setText(QStringLiteral(
+            "Status context unavailable (no valid positive window projected)"));
+    }
+    const auto unavailable_detail = AgentIdentityStatusItem();
+    const auto &detail = detail_status ? *detail_status : unavailable_detail;
+    const auto status_facts = detail.status ? &*detail.status : nullptr;
+    const auto manifest_id = identity
+        ? value_text(identity->agent_id) : QStringLiteral("unavailable");
+    const auto manifest_state = identity
+        ? value_text(identity->state) : QStringLiteral("unavailable");
+    const auto status_id = status_facts
+        ? value_text(status_facts->agent_id) : QStringLiteral("unavailable");
+    const auto status_state = status_facts
+        ? value_text(status_facts->runtime.state) : QStringLiteral("unavailable");
+    source_relation->setText(QStringLiteral(
+        "Source relation (independent observations; no winner/current-source claim)\n"
+        "projected modified-time relation: %1\nraw modified-time comparison: %2\n"
+        "agent ID agreement: %3\nmanifest agent ID: %4\nstatus agent ID: %5\n"
+        "state agreement: %6\nmanifest state: %7\nstatus state: %8")
+        .arg(mtime_order_text(detail.relation.mtime_order),
+            raw_mtime_comparison(
+                detail_item->manifest_source.modified_at_seconds,
+                detail.status_source.modified_at_seconds),
+            agreement_text(detail.relation.agent_id), manifest_id, status_id,
+            agreement_text(detail.relation.state), manifest_state, status_state));
+    const auto &manifest_source = detail_item->manifest_source;
+    const auto manifest_diagnostic = manifest_source.diagnostic
+            == AgentManifestDiagnosticKind::none
+        ? QStringLiteral("none")
+        : manifest_diagnostic_text(manifest_source.diagnostic);
+    manifest_provenance->setText(QStringLiteral(
+        "Manifest source observation (not a current-source claim)\n"
+        "relative path: %1\nmodified at (source Unix seconds): %2\n"
+        "observed/read at (shared Unix seconds): %3\nbytes: %4\n"
+        "read result: %5\nparse result: %6\ndiagnostic: %7\nsystem error: %8")
+        .arg(source_path_text(manifest_source.relative_path),
+            value_text(manifest_source.modified_at_seconds),
+            value_text(manifest_source.observed_at_seconds),
+            byte_count_text(manifest_source.byte_count),
+            manifest_observation_text(manifest_source.observation),
+            manifest_text(detail_item->manifest_kind), manifest_diagnostic,
+            system_error_text(manifest_source.system_error)));
+    status_provenance->setText(QStringLiteral(
+        "Status source observation (not a current-source claim)\n"
+        "relative path: %1\nmodified at (source Unix seconds): %2\n"
+        "observed/read at (shared Unix seconds): %3\nbytes: %4\n"
+        "read result: %5\nparse result: %6\ndiagnostic: %7\nsystem error: %8")
+        .arg(source_path_text(detail.status_source.relative_path),
+            value_text(detail.status_source.modified_at_seconds),
+            value_text(detail.status_source.observed_at_seconds),
+            byte_count_text(detail.status_source.byte_count),
+            status_observation_text(detail.status_source.observation),
+            status_facts ? QStringLiteral("parsed") : QStringLiteral("unavailable"),
+            status_diagnostic_text(detail.status_source.diagnostic),
+            system_error_text(detail.status_source.system_error)));
     selected_facts->setText(QStringLiteral("manifest: %1\nrole: %2\npresence: %3")
         .arg(manifest_text(detail_item->manifest_kind),
             role_text(detail_item->role),
@@ -763,7 +1091,7 @@ void NativeShell::render_roster() {
 AgentSelectionOutcome NativeShell::handle_agent_selection(
         const fs::path &directory_key) {
     auto *error = window_->findChild<QLabel *>("lingtai_agent_selection_error");
-    const auto *item = selectable_item(roster_, directory_key);
+    const auto *item = selectable_item(identity_status_.roster, directory_key);
     if (!item) {
         if (error) {
             error->setText(QStringLiteral(

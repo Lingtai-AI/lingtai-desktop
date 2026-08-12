@@ -10,6 +10,7 @@
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLayout>
+#include <QtWidgets/QProgressBar>
 #include <QtWidgets/QPushButton>
 
 #include <algorithm>
@@ -25,6 +26,8 @@
 #include <string_view>
 #include <type_traits>
 #include <vector>
+
+#include <sys/stat.h>
 
 namespace {
 
@@ -171,6 +174,30 @@ QString label_text(QWidget &window, const char *object_name) {
     return required_child<QLabel>(window, object_name)->text();
 }
 
+double modified_at_seconds(const fs::path &path) {
+    struct stat status {};
+    require(::stat(path.c_str(), &status) == 0,
+        "fixture source timestamp must be readable: " + path.string());
+#if defined(__APPLE__)
+    return static_cast<double>(status.st_mtimespec.tv_sec)
+        + static_cast<double>(status.st_mtimespec.tv_nsec) / 1'000'000'000.0;
+#else
+    return static_cast<double>(status.st_mtim.tv_sec)
+        + static_cast<double>(status.st_mtim.tv_nsec) / 1'000'000'000.0;
+#endif
+}
+
+QString decimal_text(double value) {
+    return QString::number(value, 'g', 15);
+}
+
+QString labelled_line(const QString &block, const QString &prefix) {
+    for (const auto &line : block.split(QLatin1Char('\n'))) {
+        if (line.startsWith(prefix)) return line;
+    }
+    throw std::runtime_error("missing labelled line: " + prefix.toStdString());
+}
+
 QPushButton *agent_row(QWidget &window, std::string_view key) {
     const auto expected = QString::fromUtf8(key.data(), key.size());
     for (auto *row : window.findChildren<QPushButton *>()) {
@@ -236,6 +263,15 @@ void verify_dark_application_palette_inheritance(const fs::path &sandbox) {
         required_child<QLabel>(window, "lingtai_agent_roster_state"),
         required_child<QLabel>(window, "lingtai_agent_detail_heading"),
         required_child<QLabel>(window, "lingtai_selected_agent_key"),
+        required_child<QLabel>(window, "lingtai_selected_agent_presentation_name"),
+        required_child<QLabel>(window, "lingtai_selected_agent_manifest_identity"),
+        required_child<QLabel>(window, "lingtai_selected_agent_manifest_llm"),
+        required_child<QLabel>(window, "lingtai_selected_agent_manifest_capabilities"),
+        required_child<QLabel>(window, "lingtai_selected_agent_status_activity"),
+        required_child<QLabel>(window, "lingtai_selected_agent_status_context"),
+        required_child<QLabel>(window, "lingtai_selected_agent_source_relation"),
+        required_child<QLabel>(window, "lingtai_selected_agent_manifest_provenance"),
+        required_child<QLabel>(window, "lingtai_selected_agent_status_provenance"),
         required_child<QLabel>(window, "lingtai_selected_agent_facts"),
         required_child<QLabel>(window, "lingtai_selected_agent_diagnostic"),
     };
@@ -296,36 +332,75 @@ void verify_open_project_behavior(
         "an empty complete roster must be distinct and read-only");
 
     CompatibilityFixture roster(sandbox, "roster-red");
-    write_file(roster.agent / ".agent.json", R"({"admin":{}})");
+    write_file(roster.agent / ".agent.json", R"({
+        "agent_id":"manifest-agent-id",
+        "agent_name":"Immutable Agent Name",
+        "nickname":"Research Nickname",
+        "address":"agent@example.test",
+        "state":"manifest-ready",
+        "llm":{"provider":"openai","model":"gpt-test",
+            "base_url":"https://api.example.test/v1",
+            "api_compat":"openai","context_limit":200000},
+        "capabilities":["shell",["calendar",{}],"shell",42],
+        "admin":{}
+    })");
+    write_file(roster.agent / ".status.json", R"({
+        "identity":{"agent_id":"status-agent-id"},
+        "runtime":{"state":"status-working","running":true,"pid":4242,
+            "state_changed_at":1700000001,"last_progress_at":1700000002,
+            "no_progress_seconds":7.25},
+        "active_turn":{"kind":"analysis","id":"turn-42",
+            "started_at":1700000003,"elapsed_seconds":9.5},
+        "tokens":{"context":{"system_tokens":10,"tools_tokens":11,
+            "history_tokens":39,"total_tokens":60,"window_size":1000,
+            "usage_pct":41.5,"fixed_tokens":20,"growing_tokens":40}}
+    })");
     write_file(roster.agent / ".agent.heartbeat", std::to_string(
         std::chrono::duration<double>(
             std::chrono::system_clock::now().time_since_epoch()).count()));
-    write_file(roster.project / ".lingtai/a-human/.agent.json",
-        R"({"admin":null})");
-    write_file(roster.project / ".lingtai/b-main/.agent.json",
-        R"({"admin":{"manage":true}})");
+    const auto human_agent = roster.project / ".lingtai/a-human";
+    write_file(human_agent / ".agent.json", R"({"admin":null})");
+    write_file(human_agent / ".status.json",
+        R"({"runtime":{"state":"human-idle","running":false}})");
+    const auto main_agent = roster.project / ".lingtai/b-main";
+    write_file(main_agent / ".agent.json",
+        R"({"agent_id":"main-id","state":"manifest-main","admin":{"manage":true}})");
+    write_file(main_agent / ".status.json", R"({
+        "identity":{"agent_id":"main-id"},
+        "runtime":{"state":"manifest-main","running":false},
+        "tokens":{"context":{"system_tokens":-3,"tools_tokens":-4,
+            "history_tokens":-5,"total_tokens":-12,"window_size":100,
+            "usage_pct":-7.5,"fixed_tokens":-8,"growing_tokens":-9}}
+    })");
     write_file(roster.project / ".lingtai/b-main/.agent.heartbeat",
         std::to_string(std::chrono::duration<double>(
             std::chrono::system_clock::now().time_since_epoch()).count()));
     write_file(roster.project / ".lingtai/c-stale/.agent.json",
         R"({"admin":{}})");
     write_file(roster.project / ".lingtai/c-stale/.agent.heartbeat", "0");
+    write_file(roster.project / ".lingtai/c-stale/.status.json",
+        R"({"tokens":{"context":{"total_tokens":60,"window_size":"invalid","usage_pct":88}}})");
     write_file(roster.project / ".lingtai/d-missing/.agent.json",
         R"({"admin":{}})");
     write_file(roster.project / ".lingtai/e-invalid/.agent.json",
         R"({"admin":{}})");
     write_file(roster.project / ".lingtai/e-invalid/.agent.heartbeat",
         "0x1.8p+6");
+    const auto malformed_status_agent = roster.project / ".lingtai/e-invalid";
+    write_file(malformed_status_agent / ".status.json", "{");
     write_file(roster.project / ".lingtai/malformed/.agent.json", "{");
     constexpr auto markup_key = "<img src=x>";
-    write_file(roster.project / ".lingtai" / markup_key / ".agent.json",
-        R"({"admin":{}})");
+    const auto markup_agent = roster.project / ".lingtai" / markup_key;
+    write_file(markup_agent / ".agent.json", R"({"admin":{}})");
     constexpr auto ampersand_key = "A&B-agent";
     constexpr auto plain_neighbor_key = "AB-agent";
     const auto ampersand_agent = roster.project / ".lingtai" / ampersand_key;
     write_file(ampersand_agent / ".agent.json", R"({"admin":{}})");
-    write_file(roster.project / ".lingtai" / plain_neighbor_key / ".agent.json",
-        R"({"admin":{}})");
+    const auto plain_neighbor_agent =
+        roster.project / ".lingtai" / plain_neighbor_key;
+    write_file(plain_neighbor_agent / ".agent.json", R"({"admin":{}})");
+    write_file(plain_neighbor_agent / ".status.json",
+        R"({"tokens":{"context":{"total_tokens":60,"window_size":0,"usage_pct":99}}})");
     const auto ampersand_init = ampersand_agent / "init.json";
     const auto ampersand_resolved =
         ampersand_agent / "system/manifest.resolved.json";
@@ -348,6 +423,7 @@ void verify_open_project_behavior(
     const auto outside_marker = unsafe_outside / "marker";
     write_file(project_marker, "project-marker-bytes");
     write_file(unsafe_outside / ".agent.json", R"({"admin":{"manage":true}})");
+    write_file(unsafe_outside / "status.json", R"({"runtime":{"state":"outside"}})");
     write_file(outside_marker, "outside-marker-bytes");
     const auto unsafe_child = roster.project / ".lingtai/unsafe-child-link";
     std::error_code unsafe_link_error;
@@ -355,6 +431,39 @@ void verify_open_project_behavior(
         unsafe_outside, unsafe_child, unsafe_link_error);
     require(!unsafe_link_error,
         "unsafe child-directory symlink fixture must be created");
+    std::error_code unsafe_status_error;
+    fs::create_symlink(
+        unsafe_outside / "status.json", markup_agent / ".status.json",
+        unsafe_status_error);
+    require(!unsafe_status_error,
+        "unsafe status-source symlink fixture must be created");
+    const auto pair_time = fs::file_time_type::clock::now()
+        - std::chrono::seconds(120);
+    std::error_code pair_time_error;
+    fs::last_write_time(roster.agent / ".agent.json", pair_time, pair_time_error);
+    require(!pair_time_error, "status-newer manifest time must be set");
+    fs::last_write_time(
+        roster.agent / ".status.json", pair_time + std::chrono::seconds(10),
+        pair_time_error);
+    require(!pair_time_error, "status-newer status time must be set");
+    fs::last_write_time(
+        main_agent / ".status.json", pair_time, pair_time_error);
+    require(!pair_time_error, "manifest-newer status time must be set");
+    fs::last_write_time(
+        main_agent / ".agent.json", pair_time + std::chrono::seconds(20),
+        pair_time_error);
+    require(!pair_time_error, "manifest-newer manifest time must be set");
+    fs::last_write_time(human_agent / ".agent.json", pair_time, pair_time_error);
+    require(!pair_time_error, "same-time manifest time must be set");
+    fs::last_write_time(human_agent / ".status.json", pair_time, pair_time_error);
+    require(!pair_time_error, "same-time status time must be set");
+    fs::last_write_time(
+        malformed_status_agent / ".agent.json", pair_time, pair_time_error);
+    require(!pair_time_error, "malformed-status manifest time must be set");
+    fs::last_write_time(
+        malformed_status_agent / ".status.json",
+        pair_time + std::chrono::seconds(30), pair_time_error);
+    require(!pair_time_error, "malformed status raw newer time must be set");
     const auto outside_before = tree_snapshot(unsafe_outside);
     const auto project_marker_type = fs::symlink_status(project_marker).type();
     const auto outside_marker_type = fs::symlink_status(outside_marker).type();
@@ -491,6 +600,96 @@ void verify_open_project_behavior(
             && agent_row(window, "agent")->isChecked()
             && label_text(window, "lingtai_selected_agent_key") == "agent",
         "detail and highlight must derive from sole C1 selected-key truth");
+    require(label_text(window, "lingtai_selected_agent_presentation_name")
+            == QStringLiteral("Research Nickname"),
+        "selected detail must prefer the manifest nickname as its presentation name");
+    require(label_text(window, "lingtai_selected_agent_manifest_identity")
+            == QStringLiteral("Manifest identity\ntrue name: Immutable Agent Name\n"
+                "address: agent@example.test\nagent ID: manifest-agent-id\n"
+                "state: manifest-ready"),
+        "manifest identity must retain true name, address, ID, and state without status reconciliation");
+    require(label_text(window, "lingtai_selected_agent_manifest_llm")
+            == QStringLiteral("Manifest live LLM\nprovider: openai\nmodel: gpt-test\n"
+                "base URL: https://api.example.test/v1\nAPI compatibility: openai\n"
+                "context limit: 200000"),
+        "manifest live LLM fields must remain source-labelled and exact");
+    require(label_text(window, "lingtai_selected_agent_manifest_capabilities")
+            == QStringLiteral("Manifest capabilities\nraw evidence: partially parsed\n"
+                "raw names: shell, calendar, shell\ndisplay names: system, soul, email, "
+                "psyche, shell, calendar"),
+        "manifest capability evidence and display projection must remain distinct");
+    require(label_text(window, "lingtai_selected_agent_status_activity")
+            == QStringLiteral("Status activity\nstate: status-working\nrunning: true\n"
+                "PID: 4242\nstate changed at: 1700000001\n"
+                "last progress at: 1700000002\nno progress seconds: 7.25\n"
+                "active turn kind: analysis\nactive turn ID: turn-42\n"
+                "active turn started at: 1700000003\n"
+                "active turn elapsed seconds: 9.5"),
+        "status activity and active turn must remain independent projected evidence");
+    require(label_text(window, "lingtai_selected_agent_status_context")
+            == QStringLiteral("Status context (source values)\nwindow size: 1000\n"
+                "system tokens: 10\ntools tokens: 11\nhistory tokens: 39\n"
+                "total tokens: 60\nusage_percent (source usage_pct): 41.5\n"
+                "fixed tokens: 20\ngrowing tokens: 40"),
+        "status context must display source usage_pct rather than recomputing 6 percent");
+    const auto agent_relation = label_text(
+        window, "lingtai_selected_agent_source_relation");
+    require(agent_relation.contains("projected modified-time relation: status newer")
+            && agent_relation.contains(
+                "raw modified-time comparison: status timestamp is later")
+            && agent_relation.contains("agent ID agreement: disagree")
+            && agent_relation.contains("manifest agent ID: manifest-agent-id")
+            && agent_relation.contains("status agent ID: status-agent-id")
+            && agent_relation.contains("state agreement: disagree")
+            && agent_relation.contains("manifest state: manifest-ready")
+            && agent_relation.contains("status state: status-working")
+            && agent_relation.contains("no winner/current-source claim"),
+        "status-newer disagreement must preserve both source values without a winner");
+    const auto agent_manifest_provenance = label_text(
+        window, "lingtai_selected_agent_manifest_provenance");
+    const auto agent_status_provenance = label_text(
+        window, "lingtai_selected_agent_status_provenance");
+    require(agent_manifest_provenance.contains("Manifest source observation")
+            && agent_manifest_provenance.contains("relative path: agent/.agent.json")
+            && agent_manifest_provenance.contains(
+                "modified at (source Unix seconds): "
+                + decimal_text(modified_at_seconds(roster.agent / ".agent.json")))
+            && agent_manifest_provenance.contains("read result: read this observation")
+            && agent_manifest_provenance.contains("parse result: valid")
+            && agent_manifest_provenance.contains("diagnostic: none")
+            && agent_manifest_provenance.contains("not a current-source claim"),
+        "manifest provenance must label path, raw mtime, read, parse, and diagnostic");
+    require(agent_status_provenance.contains("Status source observation")
+            && agent_status_provenance.contains("relative path: agent/.status.json")
+            && agent_status_provenance.contains(
+                "modified at (source Unix seconds): "
+                + decimal_text(modified_at_seconds(roster.agent / ".status.json")))
+            && agent_status_provenance.contains("read result: read this observation")
+            && agent_status_provenance.contains("parse result: parsed")
+            && agent_status_provenance.contains("diagnostic: none")
+            && agent_status_provenance.contains("not a current-source claim"),
+        "status provenance must label path, raw mtime, read, parse, and diagnostic");
+    require(labelled_line(agent_manifest_provenance,
+                "observed/read at (shared Unix seconds): ")
+            == labelled_line(agent_status_provenance,
+                "observed/read at (shared Unix seconds): "),
+        "manifest and status provenance must expose their shared observation time");
+    require(required_child<QLabel>(window,
+                "lingtai_selected_agent_manifest_provenance")->accessibleName()
+                == QStringLiteral("Manifest source provenance")
+            && required_child<QLabel>(window,
+                "lingtai_selected_agent_manifest_identity")->accessibleName()
+                == QStringLiteral("Manifest identity")
+            && required_child<QLabel>(window,
+                "lingtai_selected_agent_status_activity")->accessibleName()
+                == QStringLiteral("Status activity")
+            && required_child<QLabel>(window,
+                "lingtai_selected_agent_status_provenance")->accessibleName()
+                == QStringLiteral("Status source provenance")
+            && required_child<QLabel>(window,
+                "lingtai_selected_agent_source_relation")->accessibleName()
+                == QStringLiteral("Manifest and status source relation"),
+        "semantic source labels must retain stable accessibility names");
     require(label_text(window, "lingtai_compatibility_title") == "Compatible"
             && label_text(window, "lingtai_commands_availability")
                 == "Commands available: Yes",
@@ -499,6 +698,85 @@ void verify_open_project_behavior(
             && read_file(roster.receipt) == receipt_before_selection
             && tree_snapshot(unsafe_outside) == outside_before,
         "selection and selected-Agent re-probe must preserve project and receipt");
+
+    static_cast<void>(shell.select_agent("b-main"));
+    require(label_text(window, "lingtai_selected_agent_source_relation")
+                .contains("projected modified-time relation: manifest newer")
+            && label_text(window, "lingtai_selected_agent_source_relation")
+                .contains("raw modified-time comparison: manifest timestamp is later")
+            && label_text(window, "lingtai_selected_agent_status_context")
+                == QStringLiteral("Status context (source values)\nwindow size: 100\n"
+                    "system tokens: -3\ntools tokens: -4\nhistory tokens: -5\n"
+                    "total tokens: -12\nusage_percent (source usage_pct): -7.5\n"
+                    "fixed tokens: -8\ngrowing tokens: -9")
+            && window.findChildren<QProgressBar *>().empty(),
+        "manifest-newer and odd negative context must remain plain source evidence without a gauge");
+
+    static_cast<void>(shell.select_agent("a-human"));
+    require(label_text(window, "lingtai_selected_agent_source_relation")
+            .contains("projected modified-time relation: same time"),
+        "same-time source relation must be explicit");
+
+    static_cast<void>(shell.select_agent("d-missing"));
+    require(label_text(window, "lingtai_selected_agent_status_activity")
+                == QStringLiteral("Status activity unavailable from status source")
+            && label_text(window, "lingtai_selected_agent_status_provenance")
+                .contains("read result: absent")
+            && label_text(window, "lingtai_selected_agent_status_provenance")
+                .contains("modified at (source Unix seconds): unavailable")
+            && label_text(window, "lingtai_selected_agent_source_relation")
+                .contains("projected modified-time relation: unassessable"),
+        "absent status must remain explicit source-labelled unavailable evidence");
+
+    static_cast<void>(shell.select_agent("e-invalid"));
+    const auto malformed_relation = label_text(
+        window, "lingtai_selected_agent_source_relation");
+    const auto malformed_manifest_provenance = label_text(
+        window, "lingtai_selected_agent_manifest_provenance");
+    const auto malformed_status_provenance = label_text(
+        window, "lingtai_selected_agent_status_provenance");
+    require(malformed_relation.contains(
+                "projected modified-time relation: unassessable")
+            && malformed_relation.contains(
+                "raw modified-time comparison: status timestamp is later")
+            && malformed_manifest_provenance.contains(
+                "modified at (source Unix seconds): "
+                + decimal_text(modified_at_seconds(
+                    malformed_status_agent / ".agent.json")))
+            && malformed_status_provenance.contains(
+                "modified at (source Unix seconds): "
+                + decimal_text(modified_at_seconds(
+                    malformed_status_agent / ".status.json")))
+            && malformed_status_provenance.contains("parse result: unavailable")
+            && malformed_status_provenance.contains("diagnostic: invalid JSON")
+            && labelled_line(malformed_manifest_provenance,
+                "observed/read at (shared Unix seconds): ")
+                == labelled_line(malformed_status_provenance,
+                    "observed/read at (shared Unix seconds): "),
+        "NB-5 malformed status must retain both raw mismatched mtimes and parse error");
+
+    static_cast<void>(shell.select_agent(markup_key));
+    require(label_text(window, "lingtai_selected_agent_status_provenance")
+                .contains("read result: rejected unsafe")
+            && label_text(window, "lingtai_selected_agent_status_provenance")
+                .contains("diagnostic: unsafe symlink"),
+        "status read rejection must remain direct source-labelled evidence");
+
+    static_cast<void>(shell.select_agent(plain_neighbor_key));
+    require(label_text(window, "lingtai_selected_agent_status_context")
+                == QStringLiteral(
+                    "Status context unavailable (no valid positive window projected)")
+            && !label_text(window, "lingtai_selected_agent_status_context")
+                .contains("99"),
+        "zero window must suppress the whole unprojected context without arithmetic");
+    static_cast<void>(shell.select_agent("c-stale"));
+    require(label_text(window, "lingtai_selected_agent_status_context")
+                == QStringLiteral(
+                    "Status context unavailable (no valid positive window projected)")
+            && !label_text(window, "lingtai_selected_agent_status_context")
+                .contains("88"),
+        "invalid window must suppress the whole unprojected context");
+    static_cast<void>(shell.select_agent("agent"));
 
     agent_row(window, "b-main")->click();
     require(shell.selection_state().selected_agent_directory_key()
@@ -521,7 +799,9 @@ void verify_open_project_behavior(
             && !shell.selection_state().selected_agent_directory_key()
             && !agent_row(window, "agent")->isEnabled()
             && label_text(window, "lingtai_compatibility_findings")
-                .contains("Select an Agent"),
+                .contains("Select an Agent")
+            && label_text(window, "lingtai_selected_agent_presentation_name").isEmpty()
+            && label_text(window, "lingtai_selected_agent_source_relation").isEmpty(),
         "same-root refresh must clear a selected key that became malformed");
     require(tree_snapshot(roster.project) == malformed_before_refresh,
         "same-root repair refresh must remain read-only");

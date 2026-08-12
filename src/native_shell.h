@@ -1,6 +1,6 @@
 #pragma once
 
-#include "agent_roster_presence.h"
+#include "agent_identity_status.h"
 #include "workspace_selection.h"
 
 #include <cstddef>
@@ -105,7 +105,7 @@ private:
     Ui::RpWidget *project_route_ = nullptr;
     Ui::RpWidget *open_error_surface_ = nullptr;
     Ui::RpWidget *roster_rows_ = nullptr;
-    AgentRosterSnapshot roster_;
+    AgentIdentityStatusSnapshot identity_status_;
     std::optional<std::filesystem::path> install_receipt_path_;
     OpenProjectRequestHandler open_project_request_handler_;
     std::size_t open_project_request_count_ = 0;

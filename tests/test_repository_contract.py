@@ -296,11 +296,12 @@ class RepositoryContractTest(unittest.TestCase):
         for excluded in (
             "QFileDialog",
             "discover_agent_manifests(",
+            "project_agent_roster(",
         ):
             self.assertNotIn(excluded, shell_source)
         self.assertIn("attach_project(", shell_source)
         self.assertIn("probe_compatibility(", shell_source)
-        self.assertIn("project_agent_roster(", shell_source)
+        self.assertEqual(shell_source.count("project_agent_identity_status("), 1)
         self.assertRegex(
             cmake,
             r"add_executable\(lingtai_native_shell_sanitized_test\s+"
