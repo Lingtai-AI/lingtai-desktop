@@ -14,10 +14,11 @@
 #include <cerrno>
 #include <chrono>
 #include <cmath>
-#include <cstdlib>
 #include <dirent.h>
 #include <fcntl.h>
 #include <map>
+#include <locale>
+#include <sstream>
 #include <sys/stat.h>
 #include <string_view>
 #include <type_traits>
@@ -670,6 +671,63 @@ std::string_view trim_ascii(const std::string &bytes) {
     return std::string_view(bytes).substr(first, last - first);
 }
 
+enum class DecimalParseState { valid, invalid, nonfinite };
+struct ParsedDecimal { DecimalParseState state; double value = 0.0; };
+
+bool ascii_digit(char value) { return value >= '0' && value <= '9'; }
+
+ParsedDecimal parse_decimal(std::string_view token) {
+    auto lower = std::string(token);
+    std::ranges::transform(lower, lower.begin(), [](char value) {
+        return value >= 'A' && value <= 'Z'
+            ? static_cast<char>(value + ('a' - 'A')) : value;
+    });
+    if (lower == "nan" || lower == "+nan" || lower == "-nan"
+        || lower == "inf" || lower == "+inf" || lower == "-inf"
+        || lower == "infinity" || lower == "+infinity"
+        || lower == "-infinity") {
+        return {DecimalParseState::nonfinite, 0.0};
+    }
+
+    auto index = std::size_t{0};
+    if (index < token.size() && (token[index] == '+' || token[index] == '-')) {
+        ++index;
+    }
+    auto digits = std::size_t{0};
+    while (index < token.size() && ascii_digit(token[index])) ++index, ++digits;
+    if (index < token.size() && token[index] == '.') {
+        ++index;
+        while (index < token.size() && ascii_digit(token[index])) {
+            ++index;
+            ++digits;
+        }
+    }
+    if (digits == 0) return {DecimalParseState::invalid, 0.0};
+    if (index < token.size() && (token[index] == 'e' || token[index] == 'E')) {
+        ++index;
+        if (index < token.size()
+            && (token[index] == '+' || token[index] == '-')) {
+            ++index;
+        }
+        const auto exponent_start = index;
+        while (index < token.size() && ascii_digit(token[index])) ++index;
+        if (index == exponent_start) {
+            return {DecimalParseState::invalid, 0.0};
+        }
+    }
+    if (index != token.size()) return {DecimalParseState::invalid, 0.0};
+
+    auto stream = std::istringstream(std::string(token));
+    stream.imbue(std::locale::classic());
+    stream >> std::noskipws;
+    auto value = 0.0;
+    stream >> value;
+    if (stream.fail() || !stream.eof() || !std::isfinite(value)) {
+        return {DecimalParseState::invalid, 0.0};
+    }
+    return {DecimalParseState::valid, value};
+}
+
 AgentRosterPresenceItem unavailable_presence(const fs::path &path,
         AgentHeartbeatObservationState observation,
         AgentHeartbeatDiagnosticKind diagnostic,
@@ -722,21 +780,18 @@ AgentRosterPresenceItem classify_heartbeat(const AgentHeartbeatFileRead &read,
     }
 
     const auto token = trim_ascii(read.bytes);
-    std::string terminated(token);
-    char *end = nullptr;
-    errno = 0;
-    const auto timestamp = std::strtod(terminated.c_str(), &end);
-    if (terminated.empty() || end == terminated.c_str()
-        || end != terminated.c_str() + terminated.size()) {
+    const auto parsed = parse_decimal(token);
+    if (parsed.state == DecimalParseState::invalid) {
         return {AgentPresenceKind::invalid, std::nullopt, std::nullopt,
             {path, AgentHeartbeatObservationState::read_this_scan,
                 AgentHeartbeatDiagnosticKind::invalid_number, {}}};
     }
-    if (!std::isfinite(timestamp) || !std::isfinite(now)) {
+    if (parsed.state == DecimalParseState::nonfinite || !std::isfinite(now)) {
         return {AgentPresenceKind::invalid, std::nullopt, std::nullopt,
             {path, AgentHeartbeatObservationState::read_this_scan,
                 AgentHeartbeatDiagnosticKind::nonfinite, {}}};
     }
+    const auto timestamp = parsed.value;
     if (timestamp > now) {
         return {AgentPresenceKind::invalid, timestamp, 0.0,
             {path, AgentHeartbeatObservationState::read_this_scan,

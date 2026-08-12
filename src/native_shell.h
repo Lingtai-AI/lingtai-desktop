@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agent_roster_presence.h"
 #include "workspace_selection.h"
 
 #include <cstddef>
@@ -15,6 +16,8 @@ class RpWindow;
 } // namespace Ui
 
 namespace lingtai::desktop {
+
+struct CompatibilityReport;
 
 struct NativeShellSnapshot {
     std::string window_class;
@@ -40,6 +43,20 @@ struct ProjectOpenOutcome {
     ProjectPathFailure failure = ProjectPathFailure::none;
 };
 
+enum class AgentSelectionDisposition {
+    selected,
+    not_selectable,
+    rejected,
+};
+
+struct AgentSelectionOutcome {
+    AgentSelectionDisposition disposition =
+        AgentSelectionDisposition::rejected;
+    AgentSelectionResult state_result =
+        AgentSelectionResult::invalid_directory_key;
+    bool commands_allowed = false;
+};
+
 // C5-owned native composition. C1's WorkspaceSelectionState remains the only
 // active project/Agent truth; an open request proposes no state transition.
 class NativeShell final {
@@ -60,6 +77,9 @@ public:
         const std::filesystem::path &install_receipt_path,
         const std::optional<std::filesystem::path> &agent_relative_directory
             = std::nullopt);
+    // Public test/composition seam; row clicks use this same handler.
+    [[nodiscard]] AgentSelectionOutcome select_agent(
+        const std::filesystem::path &directory_key);
 
     [[nodiscard]] Ui::RpWindow &window() noexcept;
     [[nodiscard]] const Ui::RpWindow &window() const noexcept;
@@ -71,6 +91,10 @@ public:
 private:
     void request_open_project();
     void refresh_route();
+    void render_roster();
+    void render_compatibility(const CompatibilityReport &report);
+    [[nodiscard]] AgentSelectionOutcome handle_agent_selection(
+        const std::filesystem::path &directory_key);
     [[nodiscard]] ProjectOpenOutcome show_open_error(
         ProjectPathFailure failure,
         std::string message);
@@ -80,6 +104,9 @@ private:
     Ui::RpWidget *empty_route_ = nullptr;
     Ui::RpWidget *project_route_ = nullptr;
     Ui::RpWidget *open_error_surface_ = nullptr;
+    Ui::RpWidget *roster_rows_ = nullptr;
+    AgentRosterSnapshot roster_;
+    std::optional<std::filesystem::path> install_receipt_path_;
     OpenProjectRequestHandler open_project_request_handler_;
     std::size_t open_project_request_count_ = 0;
 };

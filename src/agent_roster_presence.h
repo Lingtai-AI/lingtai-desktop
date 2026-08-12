@@ -2,7 +2,10 @@
 
 #include "agent_manifest_discovery.h"
 
+#include <filesystem>
 #include <optional>
+#include <system_error>
+#include <vector>
 
 namespace lingtai::desktop {
 class ProjectAttachment;
@@ -37,6 +40,7 @@ struct AgentRosterPresenceItem {
 
 struct AgentRosterSnapshot {
     AgentManifestDiscoveryReport discovery;
+    // Index-parallel to discovery.items if and only if projection_complete.
     std::vector<AgentRosterPresenceItem> presence_by_item;
     bool projection_complete = false;
 };

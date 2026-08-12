@@ -8,6 +8,7 @@
 #include "project_attachment.h"
 
 #include <algorithm>
+#include <clocale>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -240,8 +241,13 @@ void test_strict_clock_matrix(const fs::path &base) {
         {"above", {AgentHeartbeatFileReadKind::read, "94.999", {}}},
         {"absent", {AgentHeartbeatFileReadKind::absent, {}, {}}},
         {"whitespace", {AgentHeartbeatFileReadKind::read, " \t99.5\r\n", {}}},
+        {"leading-dot", {AgentHeartbeatFileReadKind::read, ".995e2", {}}},
+        {"trailing-dot", {AgentHeartbeatFileReadKind::read, "99.", {}}},
+        {"plus", {AgentHeartbeatFileReadKind::read, "+99.5", {}}},
         {"nonnumeric", {AgentHeartbeatFileReadKind::read, "soon", {}}},
         {"trailing", {AgentHeartbeatFileReadKind::read, "99x", {}}},
+        {"hex", {AgentHeartbeatFileReadKind::read, "0x1.8p+6", {}}},
+        {"overflow", {AgentHeartbeatFileReadKind::read, "1e9999", {}}},
         {"empty", {AgentHeartbeatFileReadKind::read, " \n", {}}},
         {"nan", {AgentHeartbeatFileReadKind::read, "NaN", {}}},
         {"plus-inf", {AgentHeartbeatFileReadKind::read, "+Inf", {}}},
@@ -257,7 +263,9 @@ void test_strict_clock_matrix(const fs::path &base) {
     TestClock clock;
     const auto result = scan(project, clock, &filesystem);
     expect(clock.calls == 1, "strict matrix shares exactly one now");
-    for (const auto key : {"zero", "below", "whitespace"}) {
+    for (const auto key : {
+            "zero", "below", "whitespace", "leading-dot", "trailing-dot",
+            "plus"}) {
         expect_presence(result, key, AgentPresenceKind::alive,
             AgentHeartbeatObservationState::read_this_scan,
             AgentHeartbeatDiagnosticKind::none);
@@ -270,7 +278,8 @@ void test_strict_clock_matrix(const fs::path &base) {
     expect_presence(result, "absent", AgentPresenceKind::missing,
         AgentHeartbeatObservationState::absent,
         AgentHeartbeatDiagnosticKind::none);
-    for (const auto key : {"nonnumeric", "trailing", "empty"}) {
+    for (const auto key : {
+            "nonnumeric", "trailing", "hex", "overflow", "empty"}) {
         expect_presence(result, key, AgentPresenceKind::invalid,
             AgentHeartbeatObservationState::read_this_scan,
             AgentHeartbeatDiagnosticKind::invalid_number);
@@ -307,6 +316,46 @@ void test_strict_clock_matrix(const fs::path &base) {
     const auto nonfinite = presence(nonfinite_now, "zero");
     expect(nonfinite && !nonfinite->age_seconds,
         "a nonfinite clock never exposes nonfinite age");
+}
+
+void test_locale_independent_decimal(const fs::path &base) {
+    const auto original = std::string(std::setlocale(LC_NUMERIC, nullptr));
+    const char *selected = nullptr;
+    for (const auto candidate : {
+            "fr_FR.UTF-8", "de_DE.UTF-8", "fr_FR", "de_DE"}) {
+        if (std::setlocale(LC_NUMERIC, candidate)
+            && std::localeconv()->decimal_point[0] == ',') {
+            selected = candidate;
+            break;
+        }
+    }
+    if (!selected) {
+        std::cout << "SKIP: comma-decimal LC_NUMERIC locale unavailable\n";
+        std::setlocale(LC_NUMERIC, original.c_str());
+        return;
+    }
+
+    const auto project = base / "locale/project";
+    fs::create_directories(project);
+    FakeFilesystem filesystem;
+    filesystem.entries = {"decimal", "hex"};
+    for (const auto &key : filesystem.entries) {
+        filesystem.manifests[key] = {
+            AgentManifestFileReadKind::read, R"({"admin":{}})", {}};
+    }
+    filesystem.heartbeats["decimal"] = {
+        AgentHeartbeatFileReadKind::read, "99.5", {}};
+    filesystem.heartbeats["hex"] = {
+        AgentHeartbeatFileReadKind::read, "0x1.8p+6", {}};
+    TestClock clock;
+    const auto result = scan(project, clock, &filesystem);
+    std::setlocale(LC_NUMERIC, original.c_str());
+    expect_presence(result, "decimal", AgentPresenceKind::alive,
+        AgentHeartbeatObservationState::read_this_scan,
+        AgentHeartbeatDiagnosticKind::none);
+    expect_presence(result, "hex", AgentPresenceKind::invalid,
+        AgentHeartbeatObservationState::read_this_scan,
+        AgentHeartbeatDiagnosticKind::invalid_number);
 }
 
 void test_default_reader_and_no_write(const fs::path &base) {
@@ -473,6 +522,7 @@ int main(int argc, char **argv) {
     expect(!error, "test sandbox has a canonical path");
     test_role_matrix_and_short_circuit(base);
     test_strict_clock_matrix(base);
+    test_locale_independent_decimal(base);
     test_default_reader_and_no_write(base);
     test_real_container_races(base);
     test_sibling_independence(base);

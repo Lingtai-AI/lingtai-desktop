@@ -7,12 +7,16 @@
 
 #include <QtCore/QString>
 #include <QtCore/QStringList>
+#include <QtCore/QVariant>
 #include <QtGui/QFont>
 #include <QtWidgets/QBoxLayout>
 #include <QtWidgets/QLabel>
+#include <QtWidgets/QLayout>
 #include <QtWidgets/QPushButton>
+#include <QtWidgets/QScrollArea>
 #include <QtWidgets/QSizePolicy>
 
+#include <algorithm>
 #include <type_traits>
 #include <utility>
 
@@ -124,6 +128,103 @@ ProjectOpenDisposition open_disposition(CompatibilityDisposition disposition) {
         return ProjectOpenDisposition::blocked;
     }
     return ProjectOpenDisposition::blocked;
+}
+
+QString manifest_text(AgentManifestKind kind) {
+    switch (kind) {
+    case AgentManifestKind::valid: return QStringLiteral("valid");
+    case AgentManifestKind::malformed: return QStringLiteral("malformed");
+    case AgentManifestKind::unsafe: return QStringLiteral("unsafe");
+    }
+    return QStringLiteral("malformed");
+}
+
+QString role_text(AgentRole role) {
+    switch (role) {
+    case AgentRole::unknown: return QStringLiteral("unknown");
+    case AgentRole::human: return QStringLiteral("human");
+    case AgentRole::main: return QStringLiteral("main");
+    case AgentRole::agent: return QStringLiteral("agent");
+    }
+    return QStringLiteral("unknown");
+}
+
+QString presence_text(AgentPresenceKind presence) {
+    switch (presence) {
+    case AgentPresenceKind::unknown: return QStringLiteral("unknown");
+    case AgentPresenceKind::alive_human: return QStringLiteral("alive_human");
+    case AgentPresenceKind::alive: return QStringLiteral("alive");
+    case AgentPresenceKind::stale: return QStringLiteral("stale");
+    case AgentPresenceKind::missing: return QStringLiteral("missing");
+    case AgentPresenceKind::invalid: return QStringLiteral("invalid");
+    case AgentPresenceKind::unavailable: return QStringLiteral("unavailable");
+    }
+    return QStringLiteral("unknown");
+}
+
+QString manifest_diagnostic_text(AgentManifestDiagnosticKind diagnostic) {
+    using Kind = AgentManifestDiagnosticKind;
+    switch (diagnostic) {
+    case Kind::none: return QStringLiteral("read this scan");
+    case Kind::unsafe_symlink: return QStringLiteral("unsafe symlink");
+    case Kind::not_regular: return QStringLiteral("not a regular file");
+    case Kind::unreadable: return QStringLiteral("unreadable");
+    case Kind::io_error: return QStringLiteral("I/O error");
+    case Kind::invalid_json: return QStringLiteral("invalid JSON");
+    case Kind::not_object: return QStringLiteral("JSON root is not an object");
+    case Kind::too_large: return QStringLiteral("source exceeds size limit");
+    }
+    return QStringLiteral("unavailable");
+}
+
+QString heartbeat_diagnostic_text(const AgentRosterPresenceItem *presence) {
+    if (!presence) return QStringLiteral("projection unavailable");
+    using Kind = AgentHeartbeatDiagnosticKind;
+    switch (presence->heartbeat_source.diagnostic) {
+    case Kind::none:
+        return presence->heartbeat_source.observation
+                == AgentHeartbeatObservationState::not_applicable
+            ? QStringLiteral("not applicable")
+            : presence->heartbeat_source.observation
+                    == AgentHeartbeatObservationState::absent
+                ? QStringLiteral("absent")
+                : QStringLiteral("read this scan");
+    case Kind::invalid_number: return QStringLiteral("invalid decimal");
+    case Kind::nonfinite: return QStringLiteral("non-finite number");
+    case Kind::future: return QStringLiteral("future timestamp");
+    case Kind::unsafe_symlink: return QStringLiteral("unsafe symlink");
+    case Kind::not_regular: return QStringLiteral("not a regular file");
+    case Kind::unreadable: return QStringLiteral("unreadable");
+    case Kind::io_error: return QStringLiteral("I/O error");
+    case Kind::too_large: return QStringLiteral("source exceeds size limit");
+    case Kind::container_unavailable: return QStringLiteral("Agent unavailable");
+    case Kind::container_changed: return QStringLiteral("Agent changed during scan");
+    case Kind::source_changed: return QStringLiteral("source changed during scan");
+    }
+    return QStringLiteral("unavailable");
+}
+
+QString scan_text(AgentManifestScanState state) {
+    using State = AgentManifestScanState;
+    switch (state) {
+    case State::complete: return QStringLiteral("complete");
+    case State::root_missing: return QStringLiteral("root missing");
+    case State::root_not_directory: return QStringLiteral("root is not a directory");
+    case State::root_unsafe_symlink: return QStringLiteral("root is an unsafe symlink");
+    case State::root_unreadable: return QStringLiteral("root is unreadable");
+    case State::root_io_error: return QStringLiteral("root I/O error");
+    }
+    return QStringLiteral("root I/O error");
+}
+
+const AgentManifestDiscoveryItem *selectable_item(
+        const AgentRosterSnapshot &roster, const fs::path &key) {
+    const auto found = std::ranges::find_if(roster.discovery.items,
+        [&](const auto &item) {
+            return item.directory_key == key
+                && item.manifest_kind == AgentManifestKind::valid;
+        });
+    return found == roster.discovery.items.end() ? nullptr : &*found;
 }
 
 } // namespace
@@ -282,9 +383,77 @@ NativeShell::NativeShell()
         QFont::Medium));
     project_layout->addWidget(make_label(
         project_route_, QString(), "lingtai_compatibility_findings", 12));
-    project_layout->addStretch();
+    auto *selection_error = make_label(
+        project_route_, QString(), "lingtai_agent_selection_error", 11,
+        QFont::Medium);
+    selection_error->setAccessibleName(QStringLiteral("Agent selection error"));
+    selection_error->hide();
+    project_layout->addWidget(selection_error);
+
+    auto *directory = new Ui::RpWidget(project_route_);
+    directory->setObjectName("lingtai_agent_directory");
+    directory->setAccessibleName(QStringLiteral("Agent directory"));
+    directory->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    project_layout->addWidget(directory, 1);
+    auto *directory_layout = new QHBoxLayout(directory);
+    directory_layout->setContentsMargins(0, 12, 0, 0);
+    directory_layout->setSpacing(20);
+
+    auto *roster = new Ui::RpWidget(directory);
+    roster->setObjectName("lingtai_agent_roster");
+    roster->setAccessibleName(QStringLiteral("Agent roster"));
+    roster->setMinimumWidth(180);
+    directory_layout->addWidget(roster, 1);
+    auto *roster_layout = new QVBoxLayout(roster);
+    roster_layout->setContentsMargins(0, 0, 0, 0);
+    roster_layout->setSpacing(8);
+    roster_layout->addWidget(make_label(
+        roster, QStringLiteral("Agents"), "lingtai_agent_roster_heading", 14,
+        QFont::DemiBold));
+    auto *roster_state = make_label(
+        roster, QString(), "lingtai_agent_roster_state", 10);
+    roster_state->setAccessibleName(QStringLiteral("Agent roster status"));
+    roster_layout->addWidget(roster_state);
+    auto *roster_scroll = new QScrollArea(roster);
+    roster_scroll->setObjectName("lingtai_agent_roster_scroll");
+    roster_scroll->setAccessibleName(QStringLiteral("Agent roster rows"));
+    roster_scroll->setWidgetResizable(true);
+    roster_layout->addWidget(roster_scroll, 1);
+    roster_rows_ = new Ui::RpWidget(roster_scroll);
+    roster_rows_->setObjectName("lingtai_agent_roster_rows");
+    roster_rows_->setAccessibleName(QStringLiteral("Agent roster rows"));
+    auto *rows_layout = new QVBoxLayout(roster_rows_);
+    rows_layout->setContentsMargins(0, 0, 0, 0);
+    rows_layout->setSpacing(6);
+    roster_scroll->setWidget(roster_rows_);
+
+    auto *detail = new Ui::RpWidget(directory);
+    detail->setObjectName("lingtai_agent_detail");
+    detail->setAccessibleName(QStringLiteral("Selected Agent detail"));
+    directory_layout->addWidget(detail, 2);
+    auto *detail_layout = new QVBoxLayout(detail);
+    detail_layout->setContentsMargins(0, 0, 0, 0);
+    detail_layout->setSpacing(8);
+    detail_layout->addWidget(make_label(
+        detail, QStringLiteral("Selected Agent"),
+        "lingtai_agent_detail_heading", 14, QFont::DemiBold));
+    auto *detail_key = make_label(
+        detail, QString(), "lingtai_selected_agent_key", 12, QFont::Medium);
+    detail_key->setAccessibleName(QStringLiteral("Selected Agent key"));
+    detail_layout->addWidget(detail_key);
+    auto *detail_facts = make_label(
+        detail, QString(), "lingtai_selected_agent_facts", 11);
+    detail_facts->setAccessibleName(QStringLiteral("Selected Agent facts"));
+    detail_layout->addWidget(detail_facts);
+    auto *detail_diagnostic = make_label(
+        detail, QString(), "lingtai_selected_agent_diagnostic", 10);
+    detail_diagnostic->setAccessibleName(
+        QStringLiteral("Selected Agent source diagnostics"));
+    detail_layout->addWidget(detail_diagnostic);
+    detail_layout->addStretch();
 
     refresh_route();
+    render_roster();
 }
 
 NativeShell::~NativeShell() = default;
@@ -359,33 +528,45 @@ ProjectOpenOutcome NativeShell::open_project(
             "The selected project's .lingtai directory is not safely contained.");
     }
 
-    const auto report = probe_compatibility(
-        *attached.attachment, agent_relative_directory, install_receipt_path);
-    auto findings = QStringList();
-    for (const auto &finding : report.findings) {
-        findings.push_back(finding_text(finding.kind));
-    }
-    const auto title = report.disposition == CompatibilityDisposition::compatible
-        ? QStringLiteral("Compatible")
-        : report.disposition == CompatibilityDisposition::degraded
-            ? QStringLiteral("Degraded — read-only")
-            : QStringLiteral("Blocked");
-    const auto commands = report.commands_allowed
-        ? QStringLiteral("Commands available: Yes")
-        : QStringLiteral("Commands available: No");
-    const auto detail = findings.empty()
-        ? QStringLiteral("No compatibility findings.")
-        : findings.join(QLatin1Char('\n'));
-
+    auto roster = project_agent_roster(*attached.attachment);
     const auto canonical_root = attached.attachment->root();
+    const auto same_root = selection_state_.active_project()
+        && selection_state_.active_project()->root() == canonical_root;
+    auto selected_key = std::optional<fs::path>();
+    if (agent_relative_directory) {
+        const auto &relative = *agent_relative_directory;
+        if (relative.parent_path() == fs::path(".lingtai")
+            && selectable_item(roster, relative.filename())) {
+            selected_key = relative.filename();
+        }
+    } else if (same_root
+            && selection_state_.selected_agent_directory_key()
+            && selectable_item(roster,
+                *selection_state_.selected_agent_directory_key())) {
+        selected_key = selection_state_.selected_agent_directory_key();
+    }
+
     selection_state_.activate_project(std::move(*attached.attachment));
+    selection_state_.clear_agent_selection();
+    if (selected_key) {
+        static_cast<void>(selection_state_.select_agent(*selected_key));
+    }
+    roster_ = std::move(roster);
+    install_receipt_path_ = install_receipt_path;
+    const auto selected_relative = selected_key
+        ? std::optional<fs::path>(fs::path(".lingtai") / *selected_key)
+        : std::nullopt;
+    const auto report = probe_compatibility(
+        *selection_state_.active_project(), selected_relative,
+        *install_receipt_path_);
     window_->findChild<QLabel *>("lingtai_project_root")
         ->setText(path_text(canonical_root));
-    window_->findChild<QLabel *>("lingtai_compatibility_title")->setText(title);
-    window_->findChild<QLabel *>("lingtai_commands_availability")
-        ->setText(commands);
-    window_->findChild<QLabel *>("lingtai_compatibility_findings")
-        ->setText(detail);
+    render_compatibility(report);
+    render_roster();
+    auto *selection_error = window_->findChild<QLabel *>(
+        "lingtai_agent_selection_error");
+    selection_error->clear();
+    selection_error->hide();
     window_->findChild<QLabel *>("lingtai_project_open_error")->clear();
     open_error_surface_->hide();
     refresh_route();
@@ -394,6 +575,11 @@ ProjectOpenOutcome NativeShell::open_project(
         .commands_allowed = report.commands_allowed,
         .failure = ProjectPathFailure::none,
     };
+}
+
+AgentSelectionOutcome NativeShell::select_agent(
+        const fs::path &directory_key) {
+    return handle_agent_selection(directory_key);
 }
 
 Ui::RpWindow &NativeShell::window() noexcept {
@@ -437,6 +623,165 @@ void NativeShell::request_open_project() {
     if (open_project_request_handler_) {
         open_project_request_handler_();
     }
+}
+
+void NativeShell::render_compatibility(const CompatibilityReport &report) {
+    auto findings = QStringList();
+    for (const auto &finding : report.findings) {
+        findings.push_back(finding_text(finding.kind));
+    }
+    const auto title = report.disposition == CompatibilityDisposition::compatible
+        ? QStringLiteral("Compatible")
+        : report.disposition == CompatibilityDisposition::degraded
+            ? QStringLiteral("Degraded — read-only")
+            : QStringLiteral("Blocked");
+    window_->findChild<QLabel *>("lingtai_compatibility_title")
+        ->setText(title);
+    window_->findChild<QLabel *>("lingtai_commands_availability")->setText(
+        report.commands_allowed
+            ? QStringLiteral("Commands available: Yes")
+            : QStringLiteral("Commands available: No"));
+    window_->findChild<QLabel *>("lingtai_compatibility_findings")->setText(
+        findings.empty() ? QStringLiteral("No compatibility findings.")
+                         : findings.join(QLatin1Char('\n')));
+}
+
+void NativeShell::render_roster() {
+    auto *state = window_->findChild<QLabel *>("lingtai_agent_roster_state");
+    auto *selected_key = window_->findChild<QLabel *>(
+        "lingtai_selected_agent_key");
+    auto *selected_facts = window_->findChild<QLabel *>(
+        "lingtai_selected_agent_facts");
+    auto *selected_diagnostic = window_->findChild<QLabel *>(
+        "lingtai_selected_agent_diagnostic");
+    if (!state || !selected_key || !selected_facts || !selected_diagnostic
+        || !roster_rows_ || !roster_rows_->layout()) {
+        return;
+    }
+
+    auto *layout = roster_rows_->layout();
+    while (auto *child = layout->takeAt(0)) {
+        delete child->widget();
+        delete child;
+    }
+
+    const auto scan = scan_text(roster_.discovery.scan.state);
+    if (!roster_.projection_complete) {
+        state->setText(QStringLiteral("Roster incomplete — scan: %1").arg(scan));
+    } else if (roster_.discovery.scan.state != AgentManifestScanState::complete) {
+        state->setText(QStringLiteral("Roster unavailable — scan: %1").arg(scan));
+    } else if (roster_.discovery.items.empty()) {
+        state->setText(QStringLiteral("No Agents found — scan complete"));
+    } else {
+        state->setText(QStringLiteral("%1 Agent(s) — projection complete")
+            .arg(roster_.discovery.items.size()));
+    }
+
+    const auto selected = selection_state_.selected_agent_directory_key();
+    const auto parallel = roster_.projection_complete
+        && roster_.presence_by_item.size() == roster_.discovery.items.size();
+    const AgentManifestDiscoveryItem *detail_item = nullptr;
+    const AgentRosterPresenceItem *detail_presence = nullptr;
+    for (auto index = std::size_t{0};
+         index != roster_.discovery.items.size(); ++index) {
+        const auto &item = roster_.discovery.items[index];
+        const auto *presence = parallel ? &roster_.presence_by_item[index] : nullptr;
+        const auto facts = QStringLiteral("%1 — %2 — %3")
+            .arg(manifest_text(item.manifest_kind), role_text(item.role),
+                presence_text(presence ? presence->presence
+                                       : AgentPresenceKind::unknown));
+        auto *row = new QPushButton(
+            QStringLiteral("%1\n%2\nmanifest: %3; heartbeat: %4")
+                .arg(path_text(item.directory_key), facts,
+                    manifest_diagnostic_text(item.manifest_source.diagnostic),
+                    heartbeat_diagnostic_text(presence)),
+            roster_rows_);
+        row->setObjectName(
+            QStringLiteral("lingtai_agent_row_%1").arg(index));
+        row->setAccessibleName(
+            QStringLiteral("Agent %1").arg(path_text(item.directory_key)));
+        row->setAccessibleDescription(facts);
+        row->setProperty("directory_key", path_text(item.directory_key));
+        row->setCheckable(true);
+        row->setChecked(selected && *selected == item.directory_key);
+        row->setEnabled(item.manifest_kind == AgentManifestKind::valid);
+        row->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        const auto key = item.directory_key;
+        QObject::connect(row, &QPushButton::clicked, [this, key] {
+            static_cast<void>(handle_agent_selection(key));
+        });
+        layout->addWidget(row);
+        if (row->isChecked()) {
+            detail_item = &item;
+            detail_presence = presence;
+        }
+    }
+    if (auto *box = qobject_cast<QBoxLayout *>(layout)) box->addStretch();
+
+    if (!detail_item) {
+        selected_key->setText(QStringLiteral("No Agent selected"));
+        selected_facts->setText(QStringLiteral(
+            "Choose a valid manifest row to inspect compatibility."));
+        selected_diagnostic->clear();
+        return;
+    }
+    selected_key->setText(path_text(detail_item->directory_key));
+    selected_facts->setText(QStringLiteral("manifest: %1\nrole: %2\npresence: %3")
+        .arg(manifest_text(detail_item->manifest_kind),
+            role_text(detail_item->role),
+            presence_text(detail_presence ? detail_presence->presence
+                                          : AgentPresenceKind::unknown)));
+    selected_diagnostic->setText(QStringLiteral(
+        "manifest source: %1\nheartbeat source: %2")
+        .arg(manifest_diagnostic_text(
+                detail_item->manifest_source.diagnostic),
+            heartbeat_diagnostic_text(detail_presence)));
+}
+
+AgentSelectionOutcome NativeShell::handle_agent_selection(
+        const fs::path &directory_key) {
+    auto *error = window_->findChild<QLabel *>("lingtai_agent_selection_error");
+    const auto *item = selectable_item(roster_, directory_key);
+    if (!item) {
+        if (error) {
+            error->setText(QStringLiteral(
+                "This roster item cannot be selected for compatibility."));
+            error->show();
+        }
+        return {
+            .disposition = AgentSelectionDisposition::not_selectable,
+            .state_result = AgentSelectionResult::invalid_directory_key,
+            .commands_allowed = false,
+        };
+    }
+    const auto result = selection_state_.select_agent(item->directory_key);
+    if (result != AgentSelectionResult::selected
+        || !selection_state_.active_project() || !install_receipt_path_) {
+        if (error) {
+            error->setText(QStringLiteral("Agent selection was rejected."));
+            error->show();
+        }
+        return {
+            .disposition = AgentSelectionDisposition::rejected,
+            .state_result = result,
+            .commands_allowed = false,
+        };
+    }
+    const auto report = probe_compatibility(
+        *selection_state_.active_project(),
+        fs::path(".lingtai") / item->directory_key,
+        *install_receipt_path_);
+    render_compatibility(report);
+    render_roster();
+    if (error) {
+        error->clear();
+        error->hide();
+    }
+    return {
+        .disposition = AgentSelectionDisposition::selected,
+        .state_result = result,
+        .commands_allowed = report.commands_allowed,
+    };
 }
 
 ProjectOpenOutcome NativeShell::show_open_error(

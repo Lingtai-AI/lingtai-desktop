@@ -9,7 +9,7 @@ scripts/build.sh                       target build wrapper
 scripts/smoke.py                       bounded explicit native-shell smoke runner
 src/main.cpp                           persistent app entry + explicit smoke exit
 src/crl_integration.cpp                minimal parent `crl` update-stream integration
-src/native_shell.{h,cpp}               native window/sidebar/content/empty-route owner
+src/native_shell.{h,cpp}               native project/Agent roster selection route owner
 src/project_attachment.{h,cpp}         Qt-independent project-root containment seam
 src/workspace_selection.{h,cpp}        pure Desktop-owned workspace selection state
 src/agent_manifest_discovery.{h,cpp}   manifest discovery + roster implementation
@@ -55,11 +55,16 @@ content region using native widget layouts. It holds one
 `WorkspaceSelectionState`; the visible empty/project routes are derived from
 that C1 model. Its Qt-free open seam accepts an explicit selected directory,
 install receipt, and optional project-relative Agent directory. It attaches
-and probes through C2, activates C1 only after safe `.lingtai` validation, and
-projects Compatible, Degraded read-only, Blocked, commands availability, and
-distinct findings. Failed opens leave any valid active project/report intact
-and show a transient error. The shell uses static accessible/object names for
-semantic tests, and its minimum/default sizing protects both layout regions.
+and probes through C2, activates C1 only after safe `.lingtai` validation, then
+reads one C3 roster snapshot. Valid and malformed rows retain ordered manifest,
+role, presence, completeness, and diagnostic truth. Only valid rows propose
+selection through C1; row clicks and the public seam share one handler, and
+highlight/detail are re-derived from C1. A successful selection re-probes C2
+at `.lingtai/<directory_key>` using the retained in-memory receipt path.
+Same-root refresh preserves only a still-valid selected key; failed opens leave
+the prior project, receipt, roster, selection, and compatibility report intact
+while showing a transient error. The shell uses static accessible/object names
+for semantic tests, and its minimum/default sizing protects both layout regions.
 
 Application composition in `src/main.cpp` owns the real native directory
 picker. Cancel is a no-op; a nonempty choice is passed to the shell with the
@@ -123,6 +128,10 @@ non-finite. Typed heartbeat provenance keeps absence, unsafe sources, I/O,
 container replacement, invalid numbers, and staleness independent from the
 manifest lifecycle. The snapshot reads no status, performs no writes, retry,
 process query, or repair, and retains discovery evidence if projection fails.
+Heartbeat content is accepted only by an exact decimal grammar and converted
+through the classic C++ locale. This keeps parsing independent of `LC_NUMERIC`,
+rejects hexadecimal floats and range failures, and preserves the typed
+non-finite/future policy.
 
 `probe_compatibility` reads one explicitly requested relative agent directory
 and one explicitly supplied global install-receipt path below an accepted

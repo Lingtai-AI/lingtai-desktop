@@ -148,6 +148,7 @@ class RepositoryContractTest(unittest.TestCase):
                 "PRIVATE": {
                     "desktop-app::lib_ui",
                     "lingtai_desktop_compatibility",
+                    "lingtai_desktop_agent_discovery",
                 },
                 "INTERFACE": set(),
             },
@@ -164,7 +165,10 @@ class RepositoryContractTest(unittest.TestCase):
             {"STATIC", "src/agent_manifest_discovery.cpp"}
             <= arguments("add_library", "lingtai_desktop_agent_discovery")
         )
-        self.assertEqual(cmake.count("src/agent_manifest_discovery.cpp"), 1)
+        self.assertEqual(
+            cmake.count("src/agent_manifest_discovery.cpp"), 2,
+            "production library plus focused native-shell sanitizer target",
+        )
         discovery = links("lingtai_desktop_agent_discovery")
         self.assertEqual(
             discovery,
@@ -274,11 +278,17 @@ class RepositoryContractTest(unittest.TestCase):
         for excluded in (
             "QFileDialog",
             "discover_agent_manifests(",
-            "project_agent_roster(",
         ):
             self.assertNotIn(excluded, shell_source)
         self.assertIn("attach_project(", shell_source)
         self.assertIn("probe_compatibility(", shell_source)
+        self.assertIn("project_agent_roster(", shell_source)
+        self.assertRegex(
+            cmake,
+            r"add_executable\(lingtai_native_shell_sanitized_test\s+"
+            r"EXCLUDE_FROM_ALL[\s\S]*?src/agent_manifest_discovery\.cpp"
+            r"[\s\S]*?\)",
+        )
         main_source = (ROOT / "src" / "main.cpp").read_text()
         self.assertEqual(main_source.count("QFileDialog::getExistingDirectory"), 1)
         self.assertIn("QFileDialog::ShowDirsOnly", main_source)

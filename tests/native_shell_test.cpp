@@ -9,6 +9,7 @@
 #include <QtGui/QPalette>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QLabel>
+#include <QtWidgets/QLayout>
 #include <QtWidgets/QPushButton>
 
 #include <algorithm>
@@ -126,6 +127,7 @@ struct CompatibilityFixture {
     , agent(project / ".lingtai" / "agent")
     , receipt(root / "install.json") {
         write_fresh_config(kInit, kResolved);
+        write_file(agent / ".agent.json", R"({"admin":{}})");
         write_file(receipt, kReceipt);
     }
 
@@ -169,7 +171,15 @@ QString label_text(QWidget &window, const char *object_name) {
     return required_child<QLabel>(window, object_name)->text();
 }
 
-void verify_dark_application_palette_inheritance() {
+QPushButton *agent_row(QWidget &window, std::string_view key) {
+    const auto expected = QString::fromUtf8(key.data(), key.size());
+    for (auto *row : window.findChildren<QPushButton *>()) {
+        if (row->property("directory_key").toString() == expected) return row;
+    }
+    throw std::runtime_error("missing Agent row: " + std::string(key));
+}
+
+void verify_dark_application_palette_inheritance(const fs::path &sandbox) {
     const auto window_surface = QColor(QStringLiteral("#121820"));
     const auto window_ink = QColor(QStringLiteral("#F1F5F9"));
     const auto text_surface = QColor(QStringLiteral("#0B1118"));
@@ -198,6 +208,16 @@ void verify_dark_application_palette_inheritance() {
         window, "lingtai_project_open_error_surface");
     auto *project_route = required_child<Ui::RpWidget>(
         window, "lingtai_project_compatibility_route");
+    auto *directory = required_child<Ui::RpWidget>(
+        window, "lingtai_agent_directory");
+    auto *roster = required_child<Ui::RpWidget>(
+        window, "lingtai_agent_roster");
+    auto *rows = required_child<Ui::RpWidget>(
+        window, "lingtai_agent_roster_rows");
+    auto *roster_scroll = required_child<QWidget>(
+        window, "lingtai_agent_roster_scroll");
+    auto *detail = required_child<Ui::RpWidget>(
+        window, "lingtai_agent_detail");
     const auto labels = std::vector<QLabel *>{
         required_child<QLabel>(window, "lingtai_sidebar_brand"),
         required_child<QLabel>(window, "lingtai_sidebar_workspace_label"),
@@ -211,13 +231,20 @@ void verify_dark_application_palette_inheritance() {
         required_child<QLabel>(window, "lingtai_compatibility_title"),
         required_child<QLabel>(window, "lingtai_commands_availability"),
         required_child<QLabel>(window, "lingtai_compatibility_findings"),
+        required_child<QLabel>(window, "lingtai_agent_selection_error"),
+        required_child<QLabel>(window, "lingtai_agent_roster_heading"),
+        required_child<QLabel>(window, "lingtai_agent_roster_state"),
+        required_child<QLabel>(window, "lingtai_agent_detail_heading"),
+        required_child<QLabel>(window, "lingtai_selected_agent_key"),
+        required_child<QLabel>(window, "lingtai_selected_agent_facts"),
+        required_child<QLabel>(window, "lingtai_selected_agent_diagnostic"),
     };
     auto *open_button = required_child<QPushButton>(
         window, "lingtai_open_project_button");
 
     for (const auto *surface : {
              body, sidebar, content, empty_route, error_surface,
-             project_route }) {
+             project_route, directory, roster, rows, detail }) {
         require(surface->palette().color(QPalette::Window) == window_surface,
             "dark application Window role must reach every shell surface");
     }
@@ -229,6 +256,19 @@ void verify_dark_application_palette_inheritance() {
         "dark application Button role must reach the open affordance");
     require(open_button->palette().color(QPalette::ButtonText) == button_ink,
         "dark application ButtonText role must reach the open affordance");
+    require(roster_scroll->palette().color(QPalette::Base) == text_surface,
+        "dark application Base role must reach the roster scroll surface");
+
+    CompatibilityFixture fixture(sandbox, "palette");
+    static_cast<void>(shell.open_project(
+        fixture.project, fixture.receipt, std::nullopt));
+    auto *row = agent_row(window, "agent");
+    require(row->palette().color(QPalette::Button) == button_surface
+            && row->palette().color(QPalette::ButtonText) == button_ink,
+        "dark application button roles must reach Agent selection rows");
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "palette fixture must be removed");
 }
 
 void verify_open_project_behavior(
@@ -241,6 +281,147 @@ void verify_open_project_behavior(
         window, "lingtai_project_compatibility_route");
     auto *error_surface = required_child<Ui::RpWidget>(
         window, "lingtai_project_open_error_surface");
+
+    const auto empty_root = sandbox / "empty-roster/project";
+    const auto empty_receipt = sandbox / "empty-roster/install.json";
+    fs::create_directories(empty_root / ".lingtai");
+    write_file(empty_receipt, kReceipt);
+    const auto empty_before = tree_snapshot(empty_root);
+    static_cast<void>(shell.open_project(empty_root, empty_receipt));
+    require(label_text(window, "lingtai_agent_roster_state")
+            .contains("No Agents found — scan complete")
+            && tree_snapshot(empty_root) == empty_before,
+        "an empty complete roster must be distinct and read-only");
+
+    CompatibilityFixture roster(sandbox, "roster-red");
+    write_file(roster.agent / ".agent.json", R"({"admin":{}})");
+    write_file(roster.agent / ".agent.heartbeat", std::to_string(
+        std::chrono::duration<double>(
+            std::chrono::system_clock::now().time_since_epoch()).count()));
+    write_file(roster.project / ".lingtai/a-human/.agent.json",
+        R"({"admin":null})");
+    write_file(roster.project / ".lingtai/b-main/.agent.json",
+        R"({"admin":{"manage":true}})");
+    write_file(roster.project / ".lingtai/b-main/.agent.heartbeat",
+        std::to_string(std::chrono::duration<double>(
+            std::chrono::system_clock::now().time_since_epoch()).count()));
+    write_file(roster.project / ".lingtai/c-stale/.agent.json",
+        R"({"admin":{}})");
+    write_file(roster.project / ".lingtai/c-stale/.agent.heartbeat", "0");
+    write_file(roster.project / ".lingtai/d-missing/.agent.json",
+        R"({"admin":{}})");
+    write_file(roster.project / ".lingtai/e-invalid/.agent.json",
+        R"({"admin":{}})");
+    write_file(roster.project / ".lingtai/e-invalid/.agent.heartbeat",
+        "0x1.8p+6");
+    write_file(roster.project / ".lingtai/malformed/.agent.json", "{");
+    fs::create_directories(roster.project / ".lingtai/no-manifest");
+    const auto roster_outcome = open_without_writes(
+        shell, roster, std::nullopt, roster.receipt);
+    require(roster_outcome.disposition == ProjectOpenDisposition::degraded,
+        "roster fixture must open through the existing no-Agent API");
+    required_child<Ui::RpWidget>(window, "lingtai_agent_roster");
+    const auto expected_rows = std::vector<std::pair<std::string, std::string>>{
+        {"a-human", "valid — human — alive_human"},
+        {"agent", "valid — agent — alive"},
+        {"b-main", "valid — main — alive"},
+        {"c-stale", "valid — agent — stale"},
+        {"d-missing", "valid — agent — missing"},
+        {"e-invalid", "valid — agent — invalid"},
+        {"malformed", "malformed — unknown — unknown"},
+    };
+    for (const auto &[key, facts] : expected_rows) {
+        auto *row = agent_row(window, key);
+        require(row->text().contains(QString::fromStdString(facts)),
+            key + " must expose exact manifest, role, and presence truth");
+        require(row->isEnabled() == (key != "malformed"),
+            key + " selectability must derive from valid manifest truth");
+    }
+    auto visible_keys = std::vector<std::string>();
+    const auto *rows_layout = required_child<Ui::RpWidget>(
+        window, "lingtai_agent_roster_rows")->layout();
+    for (auto index = 0; index != rows_layout->count(); ++index) {
+        if (const auto *row = qobject_cast<QPushButton *>(
+                rows_layout->itemAt(index)->widget())) {
+            visible_keys.push_back(
+                row->property("directory_key").toString().toStdString());
+        }
+    }
+    require(visible_keys == std::vector<std::string>{
+            "a-human", "agent", "b-main", "c-stale", "d-missing",
+            "e-invalid", "malformed"},
+        "native rows must preserve deterministic C3 order");
+    require(agent_row(window, "malformed")->text().contains("invalid JSON"),
+        "a malformed row must expose its typed repair diagnostic");
+    require(std::ranges::none_of(window.findChildren<QPushButton *>(),
+            [](const auto *row) {
+                return row->property("directory_key").toString()
+                    == "no-manifest";
+            }),
+        "an absent manifest must not create a roster row");
+    require(label_text(window, "lingtai_agent_roster_state")
+            .contains("projection complete"),
+        "a complete nonempty roster must be visibly complete");
+
+    const auto no_agent_title = label_text(
+        window, "lingtai_compatibility_title");
+    agent_row(window, "malformed")->click();
+    require(!shell.selection_state().selected_agent_directory_key(),
+        "a disabled malformed row must not change C1 truth");
+    const auto malformed = shell.select_agent("malformed");
+    require(malformed.disposition
+            == lingtai::desktop::AgentSelectionDisposition::not_selectable
+            && !shell.selection_state().selected_agent_directory_key()
+            && label_text(window, "lingtai_compatibility_title")
+                == no_agent_title,
+        "the public seam must reject malformed rows without changing report");
+
+    const auto roster_before_selection = tree_snapshot(roster.project);
+    const auto receipt_before_selection = read_file(roster.receipt);
+    const auto selected = shell.select_agent("agent");
+    QCoreApplication::processEvents();
+    require(selected.disposition
+            == lingtai::desktop::AgentSelectionDisposition::selected
+            && selected.commands_allowed,
+        "a valid selection must re-probe C2 and enable compatible commands");
+    require(shell.selection_state().selected_agent_directory_key()
+            == std::optional<fs::path>("agent")
+            && agent_row(window, "agent")->isChecked()
+            && label_text(window, "lingtai_selected_agent_key") == "agent",
+        "detail and highlight must derive from sole C1 selected-key truth");
+    require(label_text(window, "lingtai_compatibility_title") == "Compatible"
+            && label_text(window, "lingtai_commands_availability")
+                == "Commands available: Yes",
+        "selected Agent must replace the prior no-Agent compatibility report");
+    require(tree_snapshot(roster.project) == roster_before_selection
+            && read_file(roster.receipt) == receipt_before_selection,
+        "selection and selected-Agent re-probe must preserve project and receipt");
+
+    agent_row(window, "b-main")->click();
+    require(shell.selection_state().selected_agent_directory_key()
+            == std::optional<fs::path>("b-main")
+            && agent_row(window, "b-main")->isChecked(),
+        "row clicks must use the same C1-owning selection handler");
+    static_cast<void>(shell.select_agent("agent"));
+    const auto refreshed = open_without_writes(
+        shell, roster, std::nullopt, roster.receipt);
+    require(refreshed.disposition == ProjectOpenDisposition::compatible
+            && shell.selection_state().selected_agent_directory_key()
+                == std::optional<fs::path>("agent")
+            && agent_row(window, "agent")->isChecked(),
+        "same-root refresh must preserve a still-valid selection and detail");
+    write_file(roster.agent / ".agent.json", "{");
+    const auto malformed_before_refresh = tree_snapshot(roster.project);
+    const auto repaired = shell.open_project(
+        roster.project, roster.receipt, std::nullopt);
+    require(repaired.disposition == ProjectOpenDisposition::degraded
+            && !shell.selection_state().selected_agent_directory_key()
+            && !agent_row(window, "agent")->isEnabled()
+            && label_text(window, "lingtai_compatibility_findings")
+                .contains("Select an Agent"),
+        "same-root refresh must clear a selected key that became malformed");
+    require(tree_snapshot(roster.project) == malformed_before_refresh,
+        "same-root repair refresh must remain read-only");
 
     CompatibilityFixture compatible(sandbox, "compatible");
     const auto compatible_outcome = open_without_writes(
@@ -270,7 +451,8 @@ void verify_open_project_behavior(
     const auto no_agent_outcome = open_without_writes(
         shell, no_agent, std::nullopt, no_agent.receipt);
     require(no_agent_outcome.disposition == ProjectOpenDisposition::degraded
-            && !no_agent_outcome.commands_allowed,
+            && !no_agent_outcome.commands_allowed
+            && !shell.selection_state().selected_agent_directory_key(),
         "no Agent must be Degraded read-only with commands disabled");
     require(label_text(window, "lingtai_compatibility_title")
             == QString::fromUtf8("Degraded — read-only"),
@@ -401,6 +583,9 @@ void verify_open_project_behavior(
         window, "lingtai_commands_availability");
     const auto prior_findings = label_text(
         window, "lingtai_compatibility_findings");
+    const auto prior_selection = shell.selection_state()
+        .selected_agent_directory_key();
+    const auto prior_row_text = agent_row(window, "agent")->text();
     const auto later_failure = shell.open_project(ordinary, compatible.receipt);
     require(later_failure.disposition == ProjectOpenDisposition::failed,
         "failed reopen must return failed");
@@ -413,6 +598,10 @@ void verify_open_project_behavior(
             && label_text(window, "lingtai_compatibility_findings")
                 == prior_findings,
         "failed reopen must preserve the established compatibility report");
+    require(shell.selection_state().selected_agent_directory_key()
+            == prior_selection
+            && agent_row(window, "agent")->text() == prior_row_text,
+        "failed reopen must preserve selection, roster, and selected detail");
     require(error_surface->isVisible()
             && label_text(window, "lingtai_project_open_error")
                 .contains("not a LingTai project"),
@@ -497,6 +686,9 @@ void verify_semantics_and_request(
         "no-workspace truth must show the empty route");
     require(!project_route->isVisible(),
         "new shell must hide the project compatibility route");
+    require(label_text(window, "lingtai_agent_roster_state")
+            .contains("Roster incomplete"),
+        "an incomplete projection must remain distinct from an empty roster");
     require(!open_error->isVisible(),
         "new shell must hide the project open error");
 
@@ -566,7 +758,8 @@ int main(int argc, char **argv) {
         std::filesystem::current_path(project_root);
         QApplication application(argc, argv);
         const auto original_palette = QApplication::palette();
-        verify_dark_application_palette_inheritance();
+        verify_dark_application_palette_inheritance(
+            project_root / "commit-8-palette-fixture");
         require(QApplication::palette() == original_palette,
             "dark palette test must restore the application palette");
         lingtai::desktop::NativeShell shell;
