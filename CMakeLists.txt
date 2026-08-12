@@ -233,6 +233,13 @@ target_compile_options(lingtai_agent_roster_presence_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_agent_roster_presence_test PRIVATE
     lingtai_desktop_agent_discovery)
+add_executable(lingtai_agent_identity_status_test
+    tests/agent_identity_status_test.cpp)
+init_target(lingtai_agent_identity_status_test)
+target_compile_options(lingtai_agent_identity_status_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_agent_identity_status_test PRIVATE
+    lingtai_desktop_agent_discovery)
 add_executable(lingtai_workspace_selection_test
     tests/workspace_selection_test.cpp)
 init_target(lingtai_workspace_selection_test)
@@ -250,6 +257,9 @@ add_test(NAME agent_manifest_discovery
 add_test(NAME agent_roster_presence
     COMMAND lingtai_agent_roster_presence_test
         "${CMAKE_CURRENT_BINARY_DIR}/agent-roster-presence-fixture")
+add_test(NAME agent_identity_status
+    COMMAND lingtai_agent_identity_status_test
+        "${CMAKE_CURRENT_BINARY_DIR}/agent-identity-status-fixture")
 add_test(NAME workspace_selection
     COMMAND lingtai_workspace_selection_test
         "${CMAKE_CURRENT_BINARY_DIR}/workspace-selection-fixture")

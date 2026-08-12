@@ -3,8 +3,10 @@
 #include "agent_manifest_discovery.h"
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <system_error>
+#include <utility>
 #include <vector>
 namespace lingtai::desktop::testing {
 struct AgentManifestDirectoryListing {
@@ -19,8 +21,18 @@ enum class AgentManifestFileReadKind { candidate_absent,
     candidate_io_error, manifest_absent, read, unsafe_symlink, not_regular,
     unreadable, io_error, too_large };
 
-struct AgentManifestFileRead { AgentManifestFileReadKind kind = AgentManifestFileReadKind::io_error;
-    std::string bytes; std::error_code error; };
+struct AgentManifestFileRead {
+    AgentManifestFileReadKind kind = AgentManifestFileReadKind::io_error;
+    std::string bytes;
+    std::error_code error;
+    std::optional<double> modified_at_seconds;
+    AgentManifestFileRead() = default;
+    AgentManifestFileRead(AgentManifestFileReadKind read_kind,
+            std::string read_bytes, std::error_code read_error,
+            std::optional<double> modified = std::nullopt)
+        : kind(read_kind), bytes(std::move(read_bytes)), error(read_error),
+          modified_at_seconds(modified) {}
+};
 
 class AgentManifestDiscoveryFilesystem {
 public:

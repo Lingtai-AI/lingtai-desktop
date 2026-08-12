@@ -16,9 +16,12 @@ src/agent_manifest_discovery.{h,cpp}   manifest discovery + roster implementatio
 src/agent_manifest_discovery_test_seam.h deterministic filesystem race/error seam
 src/agent_roster_presence.h            pure ordered role/presence projection
 src/agent_roster_presence_test_seam.h  keyed heartbeat and wall-clock seam
+src/agent_identity_status.h            manifest/status composite read model
+src/agent_identity_status_test_seam.h  keyed status/mtime/clock seam
 src/compatibility_probe.{h,cpp}        Qt Core-owned read-only compatibility probe
 tests/agent_manifest_discovery_test.cpp discovery/no-write behavior contract
 tests/agent_roster_presence_test.cpp    strict role/heartbeat behavior contract
+tests/agent_identity_status_test.cpp    source-separated identity/status contract
 tests/native_shell_test.cpp            native shell semantics/geometry/no-write contract
 tests/project_attachment_test.cpp      real C++ attachment/containment behavior contract
 tests/test_native_shell.py             process persistence and smoke-order contract
@@ -109,8 +112,7 @@ Missing or disappearing manifests are
 omitted. Lossless child names are the stable keys. The same successfully parsed
 JSON object derives only the pure role: missing/null `admin` is human, any
 direct Boolean `true` in an `admin` object is main, and every other present
-shape is an agent; malformed or unsafe manifests remain unknown. Identity,
-capability, status, and lifecycle projection remain deliberately excluded.
+shape is an agent; malformed or unsafe manifests remain unknown.
 Root enumeration errors fail closed, results are sorted, and the scanner never
 writes or follows root, child-directory, or manifest symlinks. Qt JSON remains
 private to the discovery implementation.
@@ -132,6 +134,20 @@ Heartbeat content is accepted only by an exact decimal grammar and converted
 through the classic C++ locale. This keeps parsing independent of `LC_NUMERIC`,
 rejects hexadecimal floats and range failures, and preserves the typed
 non-finite/future policy.
+
+`project_agent_identity_status` extends that same C3 owner without a second
+scan: one discovery and injected wall-clock value produce an index-parallel
+roster/detail result. Valid manifest identity owns true name, nickname,
+address, manifest state, safelisted live-LLM values, and raw/display capability
+evidence. Optional `.status.json` is a separately bounded 1 MiB, descriptor-
+anchored, no-follow runtime observation containing only typed state, running,
+PID, progress, active-turn, and positive-window context fields. Each source
+retains relative path, descriptor mtime, shared observation time, byte/read/
+parse outcome, and error evidence. Mtime order plus optional Agent-ID/state
+agreement is deterministic pair evidence only: status never replaces manifest
+identity/state and no TTL, generation, winner, activity aggregate, or health
+verdict is invented. The projection adds no UI, config/init/resolved reads,
+polling, watcher, process query, command, repair, or project-tree write.
 
 `probe_compatibility` reads one explicitly requested relative agent directory
 and one explicitly supplied global install-receipt path below an accepted

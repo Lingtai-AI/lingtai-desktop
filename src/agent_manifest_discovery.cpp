@@ -1,10 +1,13 @@
 #include "agent_manifest_discovery.h"
 #include "agent_manifest_discovery_test_seam.h"
+#include "agent_identity_status.h"
+#include "agent_identity_status_test_seam.h"
 #include "agent_roster_presence.h"
 #include "agent_roster_presence_test_seam.h"
 #include "project_attachment.h"
 
 #include <QtCore/QByteArrayView>
+#include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
 #include <QtCore/QJsonParseError>
 #include <QtCore/QJsonValue>
@@ -34,6 +37,9 @@ using testing::AgentManifestFileRead;
 using testing::AgentManifestFileReadKind;
 using testing::AgentHeartbeatFileRead;
 using testing::AgentHeartbeatFileReadKind;
+using testing::AgentIdentityStatusFilesystem;
+using testing::AgentStatusFileRead;
+using testing::AgentStatusFileReadKind;
 using testing::AgentRosterPresenceClock;
 using testing::AgentRosterPresenceFilesystem;
 using ListingKind = AgentManifestDirectoryListing::Kind;
@@ -41,6 +47,7 @@ using ListingKind = AgentManifestDirectoryListing::Kind;
 // Discovery owns a 1 MiB source-content limit for each immediate manifest.
 // The streaming read, not advisory file metadata, authoritatively enforces it.
 constexpr std::size_t kMaximumAgentManifestBytes = 1024U * 1024U;
+constexpr std::size_t kMaximumAgentStatusBytes = 1024U * 1024U;
 // Heartbeats are one owned wall-clock number, not an arbitrary metadata file.
 constexpr std::size_t kMaximumAgentHeartbeatBytes = 128U;
 
@@ -130,7 +137,17 @@ bool same_file(const struct stat &value, const FileIdentity &identity) {
     return value.st_dev == identity.device && value.st_ino == identity.inode;
 }
 
-class DefaultFilesystem final : public AgentRosterPresenceFilesystem {
+double modified_at_seconds(const struct stat &value) {
+#if defined(__APPLE__)
+    return static_cast<double>(value.st_mtimespec.tv_sec)
+        + static_cast<double>(value.st_mtimespec.tv_nsec) / 1'000'000'000.0;
+#else
+    return static_cast<double>(value.st_mtim.tv_sec)
+        + static_cast<double>(value.st_mtim.tv_nsec) / 1'000'000'000.0;
+#endif
+}
+
+class DefaultFilesystem final : public AgentIdentityStatusFilesystem {
 public:
     AgentManifestDirectoryListing list_directory(
             const fs::path &path) const override {
@@ -293,9 +310,10 @@ public:
         }
         candidate_identities_.insert_or_assign(directory_key,
             FileIdentity{opened_directory.st_dev, opened_directory.st_ino});
-        if (too_large)
-            return {AgentManifestFileReadKind::too_large, {}, {}};
-        return {AgentManifestFileReadKind::read, std::move(bytes), {}};
+        if (too_large) return {AgentManifestFileReadKind::too_large, {}, {},
+            modified_at_seconds(opened_manifest)};
+        return {AgentManifestFileReadKind::read, std::move(bytes), {},
+            modified_at_seconds(opened_manifest)};
     }
 
     AgentHeartbeatFileRead read_heartbeat(
@@ -429,7 +447,116 @@ public:
         return {AgentHeartbeatFileReadKind::read, std::move(bytes), {}};
     }
 
+    AgentStatusFileRead read_status(const fs::path &root,
+            const fs::path &directory_key) const override {
+        if (root_.get() < 0 || root != root_path_)
+            return status_container_error(unknown_io_error());
+        if (const auto failure = current_root_failure()) {
+            return failure->kind == AgentHeartbeatFileReadKind::unsafe_symlink
+                ? AgentStatusFileRead{AgentStatusFileReadKind::unsafe_symlink, {},
+                    failure->error}
+                : AgentStatusFileRead{
+                    failure->kind == AgentHeartbeatFileReadKind::container_changed
+                        ? AgentStatusFileReadKind::container_changed
+                        : AgentStatusFileReadKind::container_unavailable,
+                    {}, failure->error};
+        }
+        const auto expected = candidate_identities_.find(directory_key);
+        if (expected == candidate_identities_.end())
+            return status_container_error(unknown_io_error());
+        struct stat observed_directory {};
+        if (::fstatat(root_.get(), directory_key.c_str(), &observed_directory,
+                AT_SYMLINK_NOFOLLOW) != 0) return status_container_error(current_error());
+        if (S_ISLNK(observed_directory.st_mode))
+            return {AgentStatusFileReadKind::unsafe_symlink, {}, {}};
+        if (!S_ISDIR(observed_directory.st_mode)
+            || !same_file(observed_directory, expected->second))
+            return {AgentStatusFileReadKind::container_changed, {}, {}};
+        const FileDescriptor directory(::openat(
+            root_.get(), directory_key.c_str(), read_flags() | O_DIRECTORY));
+        if (directory.get() < 0) return status_container_error(current_error());
+        struct stat opened_directory {};
+        if (::fstat(directory.get(), &opened_directory) != 0)
+            return status_container_error(current_error());
+        if (!S_ISDIR(opened_directory.st_mode)
+            || !same_file(opened_directory, expected->second))
+            return {AgentStatusFileReadKind::container_changed, {}, {}};
+
+        constexpr auto status_name = ".status.json";
+        struct stat observed_status {};
+        if (::fstatat(directory.get(), status_name, &observed_status,
+                AT_SYMLINK_NOFOLLOW) != 0) return status_error(current_error());
+        if (S_ISLNK(observed_status.st_mode))
+            return {AgentStatusFileReadKind::unsafe_symlink, {}, {}};
+        if (!S_ISREG(observed_status.st_mode))
+            return {AgentStatusFileReadKind::not_regular, {}, {}};
+        const FileIdentity status_identity{
+            observed_status.st_dev, observed_status.st_ino};
+        const FileDescriptor status(
+            ::openat(directory.get(), status_name, read_flags()));
+        if (status.get() < 0) return status_error(current_error());
+        struct stat opened_status {};
+        if (::fstat(status.get(), &opened_status) != 0)
+            return status_error(current_error());
+        if (!S_ISREG(opened_status.st_mode))
+            return {AgentStatusFileReadKind::not_regular, {}, {}};
+        if (!same_file(opened_status, status_identity))
+            return {AgentStatusFileReadKind::source_changed, {}, {}};
+        const auto mtime = modified_at_seconds(opened_status);
+        std::string bytes;
+        std::array<char, 8192> buffer{};
+        for (;;) {
+            const auto remaining = kMaximumAgentStatusBytes - bytes.size();
+            const auto requested = remaining < buffer.size()
+                ? remaining + 1U : buffer.size();
+            const auto count = ::read(status.get(), buffer.data(), requested);
+            if (count == 0) break;
+            if (count < 0) {
+                if (errno == EINTR) continue;
+                return status_error(current_error());
+            }
+            const auto received = static_cast<std::size_t>(count);
+            if (received > remaining)
+                return {AgentStatusFileReadKind::too_large, {}, {}, mtime};
+            bytes.append(buffer.data(), received);
+        }
+        if (const auto failure = current_root_failure()) return {
+            failure->kind == AgentHeartbeatFileReadKind::unsafe_symlink
+                ? AgentStatusFileReadKind::unsafe_symlink
+            : failure->kind == AgentHeartbeatFileReadKind::container_changed
+                ? AgentStatusFileReadKind::container_changed
+                : AgentStatusFileReadKind::container_unavailable, {}, failure->error};
+        struct stat current_directory {}, current_status {};
+        if (::fstatat(root_.get(), directory_key.c_str(), &current_directory,
+                AT_SYMLINK_NOFOLLOW) != 0) return status_container_error(current_error());
+        if (!S_ISDIR(current_directory.st_mode)
+            || !same_file(current_directory, expected->second))
+            return {AgentStatusFileReadKind::container_changed, {}, {}};
+        if (::fstatat(directory.get(), status_name, &current_status,
+                AT_SYMLINK_NOFOLLOW) != 0) return status_error(current_error());
+        if (S_ISLNK(current_status.st_mode))
+            return {AgentStatusFileReadKind::unsafe_symlink, {}, {}};
+        if (!S_ISREG(current_status.st_mode)
+            || !same_file(current_status, status_identity))
+            return {AgentStatusFileReadKind::source_changed, {}, {}};
+        return {AgentStatusFileReadKind::read, std::move(bytes), {}, mtime};
+    }
+
 private:
+    static AgentStatusFileRead status_container_error(std::error_code error) {
+        return {error == std::errc::too_many_symbolic_link_levels
+                ? AgentStatusFileReadKind::unsafe_symlink
+                : AgentStatusFileReadKind::container_unavailable, {}, error};
+    }
+    static AgentStatusFileRead status_error(std::error_code error) {
+        return {is_missing(error) || error == std::errc::not_a_directory
+                ? AgentStatusFileReadKind::absent
+            : error == std::errc::too_many_symbolic_link_levels
+                ? AgentStatusFileReadKind::unsafe_symlink
+            : is_unavailable(error) ? AgentStatusFileReadKind::unreadable
+                                    : AgentStatusFileReadKind::io_error,
+            {}, error};
+    }
     static AgentHeartbeatFileRead container_error(std::error_code error) {
         if (error == std::errc::too_many_symbolic_link_levels) {
             return {AgentHeartbeatFileReadKind::unsafe_symlink, {}, error};
@@ -517,32 +644,116 @@ struct ParsedManifest {
     AgentManifestDiagnosticKind diagnostic =
         AgentManifestDiagnosticKind::invalid_json;
     AgentRole role = AgentRole::unknown;
+    std::optional<AgentManifestIdentityFacts> identity;
 };
+
+std::optional<std::string> nonempty_string(
+        const QJsonObject &object, const char *key) {
+    const auto value = object.value(key);
+    if (!value.isString()) return std::nullopt;
+    const auto text = value.toString().toStdString();
+    return text.empty() ? std::nullopt
+                        : std::optional<std::string>(text);
+}
+
+std::optional<std::int64_t> exact_integer(const QJsonValue &value) {
+    if (!value.isDouble()) return std::nullopt;
+    const auto number = value.toDouble();
+    constexpr auto kMaximumExactInteger = 9007199254740991.0;
+    if (!std::isfinite(number) || std::trunc(number) != number
+        || number < -kMaximumExactInteger || number > kMaximumExactInteger) {
+        return std::nullopt;
+    }
+    return static_cast<std::int64_t>(number);
+}
+
+AgentManifestCapabilityFacts parse_capabilities(const QJsonObject &object) {
+    AgentManifestCapabilityFacts result;
+    constexpr std::array intrinsic{"system", "soul", "email", "psyche"};
+    for (const auto *name : intrinsic) result.display_names.emplace_back(name);
+    if (!object.contains("capabilities")) return result;
+    const auto value = object.value("capabilities");
+    if (!value.isArray()) {
+        result.evidence = AgentManifestCapabilityEvidenceKind::invalid;
+        return result;
+    }
+    auto rejected = false;
+    for (const auto &entry : value.toArray()) {
+        std::optional<std::string> name;
+        if (entry.isString()) {
+            const auto text = entry.toString().toStdString();
+            if (!text.empty()) name = text;
+        } else if (entry.isArray()) {
+            const auto tuple = entry.toArray();
+            if (!tuple.empty() && tuple.at(0).isString()) {
+                const auto text = tuple.at(0).toString().toStdString();
+                if (!text.empty()) name = text;
+            }
+        }
+        if (!name) {
+            rejected = true;
+            continue;
+        }
+        result.manifest_names.push_back(*name);
+        if (std::ranges::find(result.display_names, *name)
+                == result.display_names.end()) {
+            result.display_names.push_back(*name);
+        }
+    }
+    result.evidence = rejected
+        ? result.manifest_names.empty()
+            ? AgentManifestCapabilityEvidenceKind::invalid
+            : AgentManifestCapabilityEvidenceKind::partially_parsed
+        : AgentManifestCapabilityEvidenceKind::parsed;
+    return result;
+}
+
+AgentManifestIdentityFacts parse_identity(const QJsonObject &object) {
+    AgentManifestIdentityFacts result;
+    result.agent_id = nonempty_string(object, "agent_id");
+    result.true_name = nonempty_string(object, "agent_name");
+    result.nickname = nonempty_string(object, "nickname");
+    result.address = nonempty_string(object, "address");
+    result.state = nonempty_string(object, "state");
+    const auto llm = object.value("llm");
+    if (llm.isObject()) {
+        const auto values = llm.toObject();
+        result.llm.provider = nonempty_string(values, "provider");
+        result.llm.model = nonempty_string(values, "model");
+        result.llm.base_url = nonempty_string(values, "base_url");
+        result.llm.api_compat = nonempty_string(values, "api_compat");
+        result.llm.context_limit = exact_integer(values.value("context_limit"));
+    }
+    result.capabilities = parse_capabilities(object);
+    return result;
+}
 
 ParsedManifest parse_manifest(const std::string &bytes) {
     QJsonParseError error;
     const auto value = QJsonValue::fromJson(
         QByteArrayView(bytes.data(), static_cast<qsizetype>(bytes.size())), &error);
     if (error.error != QJsonParseError::NoError) {
-        return {AgentManifestDiagnosticKind::invalid_json, AgentRole::unknown};
+        return {AgentManifestDiagnosticKind::invalid_json,
+            AgentRole::unknown, std::nullopt};
     }
     if (!value.isObject()) {
-        return {AgentManifestDiagnosticKind::not_object, AgentRole::unknown};
+        return {AgentManifestDiagnosticKind::not_object,
+            AgentRole::unknown, std::nullopt};
     }
     const auto object = value.toObject();
+    auto role = AgentRole::agent;
     constexpr auto admin_key = "admin";
     if (!object.contains(admin_key) || object.value(admin_key).isNull()) {
-        return {AgentManifestDiagnosticKind::none, AgentRole::human};
-    }
-    const auto admin = object.value(admin_key);
-    if (admin.isObject()) {
+        role = AgentRole::human;
+    } else if (const auto admin = object.value(admin_key); admin.isObject()) {
         for (const auto &permission : admin.toObject()) {
             if (permission.isBool() && permission.toBool()) {
-                return {AgentManifestDiagnosticKind::none, AgentRole::main};
+                role = AgentRole::main;
+                break;
             }
         }
     }
-    return {AgentManifestDiagnosticKind::none, AgentRole::agent};
+    return {AgentManifestDiagnosticKind::none, role, parse_identity(object)};
 }
 
 void add_scan_diagnostic(AgentManifestDiscoveryReport &report,
@@ -555,9 +766,14 @@ void add_item(AgentManifestDiscoveryReport &report, const fs::path &key,
         const fs::path &directory, AgentManifestKind kind,
         AgentManifestObservationState observation,
         AgentManifestDiagnosticKind diagnostic, std::error_code error = {},
-        AgentRole role = AgentRole::unknown) {
+        AgentRole role = AgentRole::unknown,
+        std::optional<double> modified_at_seconds = std::nullopt,
+        std::optional<std::size_t> byte_count = std::nullopt,
+        std::optional<AgentManifestIdentityFacts> identity = std::nullopt) {
     report.items.push_back({key, directory, kind, role,
-        {directory / ".agent.json", observation, diagnostic, error}});
+        {directory / ".agent.json", observation, diagnostic, error,
+            key / ".agent.json", modified_at_seconds, std::nullopt, byte_count},
+        std::move(identity)});
 }
 
 AgentManifestDiscoveryReport failed_report(
@@ -623,7 +839,8 @@ AgentManifestDiscoveryReport discover_impl(const ProjectAttachment &attachment,
                 : manifest.kind == AgentManifestFileReadKind::too_large
                     ? AgentManifestDiagnosticKind::too_large
                     : AgentManifestDiagnosticKind::io_error,
-                manifest.error);
+                manifest.error, AgentRole::unknown,
+                manifest.modified_at_seconds);
             break;
         case AgentManifestFileReadKind::read: {
             const auto parsed = parse_manifest(manifest.bytes);
@@ -631,7 +848,9 @@ AgentManifestDiscoveryReport discover_impl(const ProjectAttachment &attachment,
                 parsed.diagnostic == AgentManifestDiagnosticKind::none
                     ? AgentManifestKind::valid : AgentManifestKind::malformed,
                 AgentManifestObservationState::read_this_scan,
-                parsed.diagnostic, {}, parsed.role);
+                parsed.diagnostic, {}, parsed.role,
+                manifest.modified_at_seconds, manifest.bytes.size(),
+                std::move(parsed.identity));
             break;
         }
         }
@@ -859,6 +1078,221 @@ AgentRosterSnapshot roster_impl(const ProjectAttachment &attachment,
     return result;
 }
 
+std::optional<double> finite_number(const QJsonValue &value) {
+    if (!value.isDouble()) return std::nullopt;
+    const auto number = value.toDouble();
+    return std::isfinite(number) ? std::optional<double>(number) : std::nullopt;
+}
+
+struct ParsedStatus {
+    AgentStatusDiagnosticKind diagnostic = AgentStatusDiagnosticKind::invalid_json;
+    std::optional<AgentStatusFacts> facts;
+};
+
+ParsedStatus parse_status(const std::string &bytes) {
+    QJsonParseError error;
+    const auto value = QJsonValue::fromJson(
+        QByteArrayView(bytes.data(), static_cast<qsizetype>(bytes.size())), &error);
+    if (error.error != QJsonParseError::NoError) {
+        return {AgentStatusDiagnosticKind::invalid_json, std::nullopt};
+    }
+    if (!value.isObject()) {
+        return {AgentStatusDiagnosticKind::not_object, std::nullopt};
+    }
+    const auto object = value.toObject();
+    AgentStatusFacts facts;
+    if (const auto identity = object.value("identity"); identity.isObject()) {
+        facts.agent_id = nonempty_string(identity.toObject(), "agent_id");
+    }
+    if (const auto runtime = object.value("runtime"); runtime.isObject()) {
+        const auto fields = runtime.toObject();
+        facts.runtime.state = nonempty_string(fields, "state");
+        if (const auto running = fields.value("running"); running.isBool()) {
+            facts.runtime.running = running.toBool();
+        }
+        if (const auto pid = exact_integer(fields.value("pid")); pid && *pid >= 0) {
+            facts.runtime.pid = *pid;
+        }
+        facts.runtime.state_changed_at =
+            finite_number(fields.value("state_changed_at"));
+        facts.runtime.last_progress_at =
+            finite_number(fields.value("last_progress_at"));
+        if (const auto seconds = finite_number(fields.value("no_progress_seconds"));
+                seconds && *seconds >= 0.0) {
+            facts.runtime.no_progress_seconds = *seconds;
+        }
+    }
+    if (const auto active_turn = object.value("active_turn");
+            active_turn.isObject()) {
+        const auto fields = active_turn.toObject();
+        AgentStatusActiveTurnFacts active;
+        active.kind = nonempty_string(fields, "kind");
+        active.id = nonempty_string(fields, "id");
+        active.started_at = finite_number(fields.value("started_at"));
+        if (const auto seconds = finite_number(fields.value("elapsed_seconds"));
+                seconds && *seconds >= 0.0) {
+            active.elapsed_seconds = *seconds;
+        }
+        facts.active_turn = std::move(active);
+    }
+    if (const auto tokens = object.value("tokens"); tokens.isObject()) {
+        const auto context = tokens.toObject().value("context");
+        if (context.isObject()) {
+            const auto fields = context.toObject();
+            const auto window = exact_integer(fields.value("window_size"));
+            if (window && *window > 0) {
+                AgentStatusContextFacts projected;
+                projected.window_size = *window;
+                projected.system_tokens = exact_integer(fields.value("system_tokens"));
+                projected.tools_tokens = exact_integer(fields.value("tools_tokens"));
+                projected.history_tokens = exact_integer(fields.value("history_tokens"));
+                projected.total_tokens = exact_integer(fields.value("total_tokens"));
+                projected.usage_percent = finite_number(fields.value("usage_pct"));
+                projected.fixed_tokens = exact_integer(fields.value("fixed_tokens"));
+                projected.growing_tokens = exact_integer(fields.value("growing_tokens"));
+                facts.context = std::move(projected);
+            }
+        }
+    }
+    return {AgentStatusDiagnosticKind::none, std::move(facts)};
+}
+
+AgentIdentityStatusItem classify_status(const AgentStatusFileRead &read,
+        const AgentManifestDiscoveryItem &manifest, double observed_at) {
+    AgentIdentityStatusItem result;
+    result.status_source.path = manifest.directory_path / ".status.json";
+    result.status_source.relative_path = manifest.directory_key / ".status.json";
+    result.status_source.system_error = read.error;
+    result.status_source.modified_at_seconds = read.modified_at_seconds;
+    result.status_source.observed_at_seconds = observed_at;
+    switch (read.kind) {
+    case AgentStatusFileReadKind::absent:
+        result.status_source.observation = AgentStatusObservationState::absent;
+        result.status_source.diagnostic = AgentStatusDiagnosticKind::none;
+        break;
+    case AgentStatusFileReadKind::unsafe_symlink:
+        result.status_source.observation =
+            AgentStatusObservationState::rejected_unsafe;
+        result.status_source.diagnostic =
+            AgentStatusDiagnosticKind::unsafe_symlink;
+        break;
+    case AgentStatusFileReadKind::not_regular:
+        result.status_source.diagnostic = AgentStatusDiagnosticKind::not_regular;
+        break;
+    case AgentStatusFileReadKind::unreadable:
+        result.status_source.diagnostic = AgentStatusDiagnosticKind::unreadable;
+        break;
+    case AgentStatusFileReadKind::too_large:
+        result.status_source.diagnostic = AgentStatusDiagnosticKind::too_large;
+        break;
+    case AgentStatusFileReadKind::container_unavailable:
+        result.status_source.diagnostic =
+            AgentStatusDiagnosticKind::container_unavailable;
+        break;
+    case AgentStatusFileReadKind::container_changed:
+        result.status_source.diagnostic =
+            AgentStatusDiagnosticKind::container_changed;
+        break;
+    case AgentStatusFileReadKind::source_changed:
+        result.status_source.diagnostic = AgentStatusDiagnosticKind::source_changed;
+        break;
+    case AgentStatusFileReadKind::io_error:
+        result.status_source.diagnostic = AgentStatusDiagnosticKind::io_error;
+        break;
+    case AgentStatusFileReadKind::read:
+        result.status_source.observation =
+            AgentStatusObservationState::read_this_scan;
+        result.status_source.byte_count = read.bytes.size();
+        if (auto parsed = parse_status(read.bytes); parsed.facts) {
+            result.status_source.diagnostic = AgentStatusDiagnosticKind::none;
+            result.status = std::move(parsed.facts);
+        } else {
+            result.status_source.diagnostic = parsed.diagnostic;
+        }
+        break;
+    }
+    return result;
+}
+
+AgentManifestStatusAgreement agreement(
+        const std::optional<std::string> &manifest_value,
+        const std::optional<std::string> &status_value) {
+    if (!manifest_value || !status_value) {
+        return AgentManifestStatusAgreement::unassessable;
+    }
+    return *manifest_value == *status_value
+        ? AgentManifestStatusAgreement::agree
+        : AgentManifestStatusAgreement::disagree;
+}
+
+void relate_manifest_status(const AgentManifestDiscoveryItem &manifest,
+        AgentIdentityStatusItem &detail) {
+    if (!manifest.identity || !detail.status) return;
+    detail.relation.agent_id = agreement(
+        manifest.identity->agent_id, detail.status->agent_id);
+    detail.relation.state = agreement(
+        manifest.identity->state, detail.status->runtime.state);
+    if (!manifest.manifest_source.modified_at_seconds
+        || !detail.status_source.modified_at_seconds) {
+        return;
+    }
+    const auto manifest_time = *manifest.manifest_source.modified_at_seconds;
+    const auto status_time = *detail.status_source.modified_at_seconds;
+    detail.relation.mtime_order = status_time > manifest_time
+        ? AgentManifestStatusMtimeOrder::status_newer
+        : status_time < manifest_time
+            ? AgentManifestStatusMtimeOrder::manifest_newer
+            : AgentManifestStatusMtimeOrder::same_time;
+}
+
+AgentIdentityStatusSnapshot identity_status_impl(
+        const ProjectAttachment &attachment,
+        const AgentIdentityStatusFilesystem &filesystem,
+        const AgentRosterPresenceClock &clock) noexcept {
+    AgentIdentityStatusSnapshot result;
+    result.roster.discovery =
+        testing::discover_agent_manifests(attachment, filesystem);
+    double now = 0.0;
+    try {
+        now = clock.wall_now_seconds();
+        result.observed_at_seconds = now;
+        result.roster.presence_by_item.reserve(
+            result.roster.discovery.items.size());
+        result.detail_by_item.reserve(result.roster.discovery.items.size());
+    } catch (...) {
+        return result;
+    }
+    for (auto &item : result.roster.discovery.items) try {
+        item.manifest_source.observed_at_seconds = now;
+        try {
+            result.roster.presence_by_item.push_back(
+                item.role == AgentRole::human || item.role == AgentRole::unknown
+                    ? no_heartbeat(item) : classify_heartbeat(filesystem.read_heartbeat(
+                        result.roster.discovery.scan.path, item.directory_key), now,
+                        item.directory_path / ".agent.heartbeat"));
+        } catch (...) {
+            result.roster.presence_by_item.push_back(unavailable_presence(
+                item.directory_path / ".agent.heartbeat",
+                AgentHeartbeatObservationState::observed_unavailable,
+                AgentHeartbeatDiagnosticKind::io_error, unknown_io_error()));
+        }
+        try {
+            auto detail = classify_status(filesystem.read_status(
+                result.roster.discovery.scan.path, item.directory_key), item, now);
+            relate_manifest_status(item, detail);
+            result.detail_by_item.push_back(std::move(detail));
+        } catch (...) {
+            result.detail_by_item.push_back(classify_status(
+                {AgentStatusFileReadKind::io_error, {}, unknown_io_error()}, item, now));
+        }
+    } catch (...) {
+        return result;
+    }
+    result.roster.projection_complete = true;
+    result.projection_complete = true;
+    return result;
+}
+
 class SystemClock final : public AgentRosterPresenceClock {
 public:
     double wall_now_seconds() const override {
@@ -881,6 +1315,13 @@ AgentRosterSnapshot project_agent_roster(
     return roster_impl(attachment, filesystem, clock);
 }
 
+AgentIdentityStatusSnapshot project_agent_identity_status(
+        const ProjectAttachment &attachment) noexcept {
+    const DefaultFilesystem filesystem;
+    const SystemClock clock;
+    return identity_status_impl(attachment, filesystem, clock);
+}
+
 namespace testing {
 AgentManifestDiscoveryReport discover_agent_manifests(
         const ProjectAttachment &attachment,
@@ -900,6 +1341,12 @@ AgentRosterSnapshot project_agent_roster(
         const AgentRosterPresenceFilesystem &filesystem,
         const AgentRosterPresenceClock &clock) noexcept {
     return roster_impl(attachment, filesystem, clock);
+}
+AgentIdentityStatusSnapshot project_agent_identity_status(
+        const ProjectAttachment &attachment,
+        const AgentIdentityStatusFilesystem &filesystem,
+        const AgentRosterPresenceClock &clock) noexcept {
+    return identity_status_impl(attachment, filesystem, clock);
 }
 } // namespace testing
 } // namespace lingtai::desktop

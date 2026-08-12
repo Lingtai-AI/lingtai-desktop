@@ -51,6 +51,8 @@ class RepositoryContractTest(unittest.TestCase):
             "src/agent_manifest_discovery_test_seam.h",
             "src/agent_roster_presence.h",
             "src/agent_roster_presence_test_seam.h",
+            "src/agent_identity_status.h",
+            "src/agent_identity_status_test_seam.h",
             "src/compatibility_probe.cpp",
             "src/compatibility_probe.h",
             "src/project_attachment.cpp",
@@ -59,6 +61,7 @@ class RepositoryContractTest(unittest.TestCase):
             "src/workspace_selection.h",
             "tests/agent_manifest_discovery_test.cpp",
             "tests/agent_roster_presence_test.cpp",
+            "tests/agent_identity_status_test.cpp",
             "tests/compatibility_probe_test.cpp",
             "tests/native_shell_test.cpp",
             "tests/project_attachment_test.cpp",
@@ -205,6 +208,19 @@ class RepositoryContractTest(unittest.TestCase):
             r"COMMAND\s+lingtai_agent_roster_presence_test\b",
         )
         self.assertEqual(
+            links("lingtai_agent_identity_status_test"),
+            {
+                "PUBLIC": set(),
+                "PRIVATE": {"lingtai_desktop_agent_discovery"},
+                "INTERFACE": set(),
+            },
+        )
+        self.assertRegex(
+            cmake,
+            r"add_test\(NAME\s+agent_identity_status\s+"
+            r"COMMAND\s+lingtai_agent_identity_status_test\b",
+        )
+        self.assertEqual(
             links("lingtai_workspace_selection_test"),
             {
                 "PUBLIC": set(),
@@ -222,6 +238,8 @@ class RepositoryContractTest(unittest.TestCase):
             "src/agent_manifest_discovery_test_seam.h",
             "src/agent_roster_presence.h",
             "src/agent_roster_presence_test_seam.h",
+            "src/agent_identity_status.h",
+            "src/agent_identity_status_test_seam.h",
             "src/native_shell.h",
             "src/workspace_selection.h",
         ):

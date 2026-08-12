@@ -1,6 +1,9 @@
 #pragma once
 
 #include <filesystem>
+#include <cstdint>
+#include <optional>
+#include <string>
 #include <system_error>
 #include <vector>
 namespace lingtai::desktop {
@@ -29,10 +32,36 @@ enum class AgentManifestObservationState { read_this_scan,
 enum class AgentManifestDiagnosticKind { none, unsafe_symlink, not_regular,
     unreadable, io_error, invalid_json, not_object, too_large };
 
+struct AgentManifestLlmFacts {
+    std::optional<std::string> provider, model, base_url, api_compat;
+    std::optional<std::int64_t> context_limit;
+};
+
+enum class AgentManifestCapabilityEvidenceKind { absent, parsed,
+    partially_parsed, invalid };
+
+struct AgentManifestCapabilityFacts {
+    AgentManifestCapabilityEvidenceKind evidence = AgentManifestCapabilityEvidenceKind::absent;
+    // Parsed names retain manifest order and duplicates as source evidence.
+    std::vector<std::string> manifest_names;
+    // Intrinsics first, then de-duplicated manifest names.
+    std::vector<std::string> display_names;
+};
+
+struct AgentManifestIdentityFacts {
+    std::optional<std::string> agent_id, true_name, nickname, address, state;
+    AgentManifestLlmFacts llm;
+    AgentManifestCapabilityFacts capabilities;
+};
+
 struct AgentManifestSource { std::filesystem::path path;
     AgentManifestObservationState observation = AgentManifestObservationState::observed_unavailable;
     AgentManifestDiagnosticKind diagnostic = AgentManifestDiagnosticKind::io_error;
     std::error_code system_error;
+    std::filesystem::path relative_path;
+    std::optional<double> modified_at_seconds;
+    std::optional<double> observed_at_seconds;
+    std::optional<std::size_t> byte_count;
 };
 
 struct AgentManifestDiscoveryItem {
@@ -42,6 +71,7 @@ struct AgentManifestDiscoveryItem {
     AgentManifestKind manifest_kind = AgentManifestKind::malformed;
     AgentRole role = AgentRole::unknown;
     AgentManifestSource manifest_source;
+    std::optional<AgentManifestIdentityFacts> identity;
 };
 
 struct AgentManifestDiscoveryReport { AgentManifestScanSource scan;
