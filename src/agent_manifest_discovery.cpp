@@ -11,7 +11,6 @@
 #include <cerrno>
 #include <dirent.h>
 #include <fcntl.h>
-#include <limits>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <utility>
@@ -24,6 +23,10 @@ using testing::AgentManifestDiscoveryFilesystem;
 using testing::AgentManifestFileRead;
 using testing::AgentManifestFileReadKind;
 using ListingKind = AgentManifestDirectoryListing::Kind;
+
+// Discovery owns a 1 MiB source-content limit for each immediate manifest.
+// The streaming read, not advisory file metadata, authoritatively enforces it.
+constexpr std::size_t kMaximumAgentManifestBytes = 1024U * 1024U;
 
 bool is_missing(const std::error_code &error) {
     return error == std::errc::no_such_file_or_directory; }
@@ -231,14 +234,23 @@ public:
 
         std::string bytes;
         std::array<char, 8192> buffer{};
+        auto too_large = false;
         for (;;) {
-            const auto count = ::read(manifest.get(), buffer.data(), buffer.size());
+            const auto remaining = kMaximumAgentManifestBytes - bytes.size();
+            const auto requested = remaining < buffer.size()
+                ? remaining + 1U : buffer.size();
+            const auto count = ::read(manifest.get(), buffer.data(), requested);
             if (count == 0) break;
             if (count < 0) {
                 if (errno == EINTR) continue;
                 return manifest_error(current_error());
             }
-            bytes.append(buffer.data(), static_cast<std::size_t>(count));
+            const auto received = static_cast<std::size_t>(count);
+            if (received > remaining) {
+                too_large = true;
+                break;
+            }
+            bytes.append(buffer.data(), received);
         }
 
         struct stat current_directory {};
@@ -254,6 +266,8 @@ public:
             || opened_directory.st_ino != current_directory.st_ino) {
             return {AgentManifestFileReadKind::candidate_absent, {}, {}};
         }
+        if (too_large)
+            return {AgentManifestFileReadKind::too_large, {}, {}};
         return {AgentManifestFileReadKind::read, std::move(bytes), {}};
     }
 
@@ -302,10 +316,6 @@ bool safe_leaf(const fs::path &path) {
 }
 
 AgentManifestDiagnosticKind parse_manifest(const std::string &bytes) {
-    if (bytes.size() > static_cast<std::size_t>(
-            std::numeric_limits<qsizetype>::max())) {
-        return AgentManifestDiagnosticKind::invalid_json;
-    }
     QJsonParseError error;
     const auto value = QJsonValue::fromJson(
         QByteArrayView(bytes.data(), static_cast<qsizetype>(bytes.size())), &error);
@@ -330,19 +340,32 @@ void add_item(AgentManifestDiscoveryReport &report, const fs::path &key,
         {directory / ".agent.json", observation, diagnostic, error}});
 }
 
+AgentManifestDiscoveryReport failed_report(
+    const ProjectAttachment &attachment) noexcept;
+
 AgentManifestDiscoveryReport discover_impl(const ProjectAttachment &attachment,
-        const AgentManifestDiscoveryFilesystem &filesystem) {
+        const AgentManifestDiscoveryFilesystem &filesystem) noexcept {
     AgentManifestDiscoveryReport report;
-    report.scan.path = attachment.root() / ".lingtai";
-    auto listing = filesystem.list_directory(report.scan.path);
-    report.scan.state = scan_state(listing.kind);
-    report.scan.system_error = listing.error;
+    AgentManifestDirectoryListing listing;
+    try {
+        report.scan.path = attachment.root() / ".lingtai";
+        listing = filesystem.list_directory(report.scan.path);
+        report.scan.state = scan_state(listing.kind);
+        report.scan.system_error = listing.error;
+    } catch (...) {
+        return failed_report(attachment);
+    }
     if (listing.kind != ListingKind::complete) return report;
 
-    std::ranges::sort(listing.entries);
-    listing.entries.erase(
-        std::ranges::unique(listing.entries).begin(), listing.entries.end());
-    for (const auto &name : listing.entries) {
+    try {
+        std::ranges::sort(listing.entries);
+        listing.entries.erase(
+            std::ranges::unique(listing.entries).begin(), listing.entries.end());
+    } catch (...) {
+        return report;
+    }
+    // Each try-block contains one algorithm-selected, safe-leaf candidate.
+    for (const auto &name : listing.entries) try {
         if (!safe_leaf(name)) continue;
         const auto directory = report.scan.path / name;
         const auto manifest = filesystem.read_manifest(report.scan.path, name);
@@ -370,12 +393,15 @@ AgentManifestDiscoveryReport discover_impl(const ProjectAttachment &attachment,
         case AgentManifestFileReadKind::not_regular:
         case AgentManifestFileReadKind::unreadable:
         case AgentManifestFileReadKind::io_error:
+        case AgentManifestFileReadKind::too_large:
             add_item(report, name, directory, AgentManifestKind::malformed,
                 AgentManifestObservationState::observed_unavailable,
                 manifest.kind == AgentManifestFileReadKind::not_regular
                     ? AgentManifestDiagnosticKind::not_regular
                 : manifest.kind == AgentManifestFileReadKind::unreadable
                     ? AgentManifestDiagnosticKind::unreadable
+                : manifest.kind == AgentManifestFileReadKind::too_large
+                    ? AgentManifestDiagnosticKind::too_large
                     : AgentManifestDiagnosticKind::io_error,
                 manifest.error);
             break;
@@ -387,6 +413,16 @@ AgentManifestDiscoveryReport discover_impl(const ProjectAttachment &attachment,
                 AgentManifestObservationState::read_this_scan, diagnostic);
             break;
         }
+        }
+    } catch (...) {
+        try {
+            add_item(report, name, report.scan.path / name,
+                AgentManifestKind::malformed,
+                AgentManifestObservationState::observed_unavailable,
+                AgentManifestDiagnosticKind::io_error, unknown_io_error());
+        } catch (...) {
+            // With no memory to represent this item, retain the honest
+            // completed scan and all output already collected.
         }
     }
     return report;
@@ -404,23 +440,15 @@ AgentManifestDiscoveryReport failed_report(
 
 AgentManifestDiscoveryReport discover_agent_manifests(
         const ProjectAttachment &attachment) noexcept {
-    try {
-        const DefaultFilesystem filesystem;
-        return testing::discover_agent_manifests(attachment, filesystem);
-    } catch (...) {
-        return failed_report(attachment);
-    }
+    const DefaultFilesystem filesystem;
+    return testing::discover_agent_manifests(attachment, filesystem);
 }
 
 namespace testing {
 AgentManifestDiscoveryReport discover_agent_manifests(
         const ProjectAttachment &attachment,
         const AgentManifestDiscoveryFilesystem &filesystem) noexcept {
-    try {
-        return discover_impl(attachment, filesystem);
-    } catch (...) {
-        return failed_report(attachment);
-    }
+    return discover_impl(attachment, filesystem);
 }
 } // namespace testing
 } // namespace lingtai::desktop

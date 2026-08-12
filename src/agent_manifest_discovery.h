@@ -26,7 +26,7 @@ enum class AgentManifestObservationState { read_this_scan,
     observed_unavailable, rejected_unsafe };
 
 enum class AgentManifestDiagnosticKind { none, unsafe_symlink, not_regular,
-    unreadable, io_error, invalid_json, not_object };
+    unreadable, io_error, invalid_json, not_object, too_large };
 
 struct AgentManifestSource { std::filesystem::path path;
     AgentManifestObservationState observation = AgentManifestObservationState::observed_unavailable;

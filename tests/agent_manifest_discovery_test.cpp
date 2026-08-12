@@ -11,6 +11,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <new>
 #include <set>
 #include <string>
 #include <string_view>
@@ -44,6 +45,7 @@ class TestFilesystem final : public AgentManifestDiscoveryFilesystem {
 public:
     mutable std::set<fs::path> remove_candidate_before_read;
     mutable std::set<fs::path> remove_before_read;
+    mutable std::set<fs::path> throw_once_for_key;
     std::map<fs::path, AgentManifestFileRead> read_overrides;
     std::error_code listing_error;
     std::vector<fs::path> injected_entries;
@@ -84,6 +86,8 @@ public:
         const auto directory = root / directory_key;
         const auto path = directory / ".agent.json";
         read_requests.push_back(path);
+        if (throw_once_for_key.erase(directory_key) != 0U)
+            throw std::bad_alloc();
         if (remove_candidate_before_read.erase(directory) != 0U) {
             std::error_code error;
             fs::remove_all(directory, error);
@@ -382,6 +386,45 @@ void test_manifest_tristate_and_races(const fs::path &base) {
         AgentManifestDiagnosticKind::unsafe_symlink);
 }
 
+void test_manifest_size_limit(const fs::path &base) {
+    // Mirrors the discovery owner's documented 1 MiB manifest limit.
+    constexpr std::size_t limit = 1024U * 1024U;
+    const auto project = base / "size-limit/project";
+    const auto agents = project / ".lingtai";
+    write_manifest(agents, "aaa-healthy");
+    std::string exact(limit, ' ');
+    exact.front() = '{'; exact.back() = '}';
+    write_manifest(agents, "bbb-exact-limit", exact);
+    std::string oversized(limit + 1U, ' ');
+    oversized.front() = '{'; oversized.back() = '}';
+    write_manifest(agents, "ccc-oversized", oversized);
+    write_manifest(agents, "zzz-healthy");
+    write_file(base / "size-limit/global/marker", "external-marker");
+    const auto before = snapshot(base / "size-limit");
+
+    const auto first = scan(project);
+    const auto second = scan(project);
+    for (const auto *report : {&first, &second}) {
+        expect(report->scan.state == AgentManifestScanState::complete
+                && !report->scan.system_error
+                && report->scan_diagnostics.empty(),
+            "oversized manifest does not invent a root failure");
+        expect(keys(*report) == std::vector<fs::path>({"aaa-healthy",
+                "bbb-exact-limit", "ccc-oversized", "zzz-healthy"}),
+            "oversized manifest and both healthy siblings remain visible");
+        for (const auto name : {"aaa-healthy", "bbb-exact-limit", "zzz-healthy"}) {
+            expect_item(*report, name, AgentManifestKind::valid,
+                AgentManifestObservationState::read_this_scan,
+                AgentManifestDiagnosticKind::none);
+        }
+        expect_item(*report, "ccc-oversized", AgentManifestKind::malformed,
+            AgentManifestObservationState::observed_unavailable,
+            AgentManifestDiagnosticKind::too_large);
+    }
+    expect(snapshot(base / "size-limit") == before,
+        "repeated bounded discovery preserves oversized and external files");
+}
+
 void test_independent_errors_and_fail_closed(const fs::path &base) {
     const auto project = base / "errors/project";
     const auto agents = project / ".lingtai";
@@ -420,6 +463,45 @@ void test_independent_errors_and_fail_closed(const fs::path &base) {
         "root enumeration error is typed");
     expect(failed.items.empty() && failed.scan_diagnostics.empty(),
         "root enumeration fails closed without a partial claim");
+}
+
+void test_candidate_exception_is_isolated(const fs::path &base) {
+    const auto project = base / "candidate-exception/project";
+    const auto agents = project / ".lingtai";
+    write_manifest(agents, "aaa-healthy");
+    write_manifest(agents, "mmm-throws");
+    write_manifest(agents, "zzz-healthy");
+    write_file(base / "candidate-exception/global/marker", "external-marker");
+    const auto before = snapshot(base / "candidate-exception");
+    TestFilesystem filesystem;
+    const auto verify = [&](const AgentManifestDiscoveryReport &report) {
+        expect(report.scan.state == AgentManifestScanState::complete
+                && !report.scan.system_error
+                && report.scan_diagnostics.empty(),
+            "candidate exception does not become a root failure");
+        expect(keys(report) == std::vector<fs::path>({
+                "aaa-healthy", "mmm-throws", "zzz-healthy"}),
+            "candidate exception preserves earlier and later siblings");
+        for (const auto name : {"aaa-healthy", "zzz-healthy"}) {
+            expect_item(report, name, AgentManifestKind::valid,
+                AgentManifestObservationState::read_this_scan,
+                AgentManifestDiagnosticKind::none);
+        }
+        expect_item(report, "mmm-throws", AgentManifestKind::malformed,
+            AgentManifestObservationState::observed_unavailable,
+            AgentManifestDiagnosticKind::io_error,
+            std::make_error_code(std::errc::io_error));
+    };
+
+    filesystem.throw_once_for_key.insert("mmm-throws");
+    verify(scan(project, &filesystem));
+    filesystem.throw_once_for_key.insert("mmm-throws");
+    verify(scan(project, &filesystem));
+    expect(std::ranges::count(filesystem.read_requests,
+            agents / "zzz-healthy/.agent.json") == 2,
+        "each candidate exception continues to the later sibling");
+    expect(snapshot(base / "candidate-exception") == before,
+        "repeated exception recovery preserves project and external files");
 }
 
 void test_repeated_scans_do_not_write(const fs::path &base) {
@@ -461,7 +543,9 @@ int main(int argc, char **argv) {
     test_root_contract(base);
     test_immediate_sorted_membership(base);
     test_manifest_tristate_and_races(base);
+    test_manifest_size_limit(base);
     test_independent_errors_and_fail_closed(base);
+    test_candidate_exception_is_isolated(base);
     test_repeated_scans_do_not_write(base);
     fs::remove_all(base, error);
     expect(!error, "test sandbox is removed");

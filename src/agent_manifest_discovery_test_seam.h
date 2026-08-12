@@ -17,7 +17,7 @@ struct AgentManifestDirectoryListing {
 enum class AgentManifestFileReadKind { candidate_absent,
     candidate_not_directory, candidate_unsafe_symlink, candidate_unreadable,
     candidate_io_error, manifest_absent, read, unsafe_symlink, not_regular,
-    unreadable, io_error };
+    unreadable, io_error, too_large };
 
 struct AgentManifestFileRead { AgentManifestFileReadKind kind = AgentManifestFileReadKind::io_error;
     std::string bytes; std::error_code error; };
