@@ -210,6 +210,18 @@ target_link_libraries(lingtai_desktop_agent_discovery
     PUBLIC lingtai_desktop_core
     PRIVATE Qt6::Core)
 
+# Pure route resolution: no Qt, no filesystem, and deliberately no link edge to
+# discovery, so a second manifest or status read is structurally impossible.
+add_library(lingtai_desktop_direct_route STATIC
+    src/direct_conversation_route.cpp)
+init_target(lingtai_desktop_direct_route)
+target_include_directories(lingtai_desktop_direct_route PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(lingtai_desktop_direct_route PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_desktop_direct_route
+    PUBLIC lingtai_desktop_core)
+
 add_executable(lingtai_compatibility_probe_test
     tests/compatibility_probe_test.cpp)
 init_target(lingtai_compatibility_probe_test)
@@ -240,6 +252,28 @@ target_compile_options(lingtai_agent_identity_status_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_agent_identity_status_test PRIVATE
     lingtai_desktop_agent_discovery)
+add_executable(lingtai_direct_conversation_route_test
+    tests/direct_conversation_route_test.cpp)
+init_target(lingtai_direct_conversation_route_test)
+target_compile_options(lingtai_direct_conversation_route_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_direct_conversation_route_test PRIVATE
+    lingtai_desktop_direct_route)
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    add_executable(lingtai_direct_conversation_route_sanitized_test EXCLUDE_FROM_ALL
+        tests/direct_conversation_route_test.cpp
+        src/direct_conversation_route.cpp)
+    init_target(lingtai_direct_conversation_route_sanitized_test)
+    target_include_directories(lingtai_direct_conversation_route_sanitized_test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_compile_options(lingtai_direct_conversation_route_sanitized_test PRIVATE
+        -Wall -Wextra -Werror -pedantic
+        -fsanitize=address,undefined -fno-omit-frame-pointer)
+    target_link_options(lingtai_direct_conversation_route_sanitized_test PRIVATE
+        -fsanitize=address,undefined)
+    target_link_libraries(lingtai_direct_conversation_route_sanitized_test PRIVATE
+        lingtai_desktop_core)
+endif()
 add_executable(lingtai_workspace_selection_test
     tests/workspace_selection_test.cpp)
 init_target(lingtai_workspace_selection_test)
@@ -260,6 +294,9 @@ add_test(NAME agent_roster_presence
 add_test(NAME agent_identity_status
     COMMAND lingtai_agent_identity_status_test
         "${CMAKE_CURRENT_BINARY_DIR}/agent-identity-status-fixture")
+add_test(NAME direct_conversation_route
+    COMMAND lingtai_direct_conversation_route_test
+        "${CMAKE_CURRENT_BINARY_DIR}/direct-conversation-route-fixture")
 add_test(NAME workspace_selection
     COMMAND lingtai_workspace_selection_test
         "${CMAKE_CURRENT_BINARY_DIR}/workspace-selection-fixture")

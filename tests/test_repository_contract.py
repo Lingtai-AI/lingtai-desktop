@@ -53,6 +53,8 @@ class RepositoryContractTest(unittest.TestCase):
             "src/agent_roster_presence_test_seam.h",
             "src/agent_identity_status.h",
             "src/agent_identity_status_test_seam.h",
+            "src/direct_conversation_route.cpp",
+            "src/direct_conversation_route.h",
             "src/compatibility_probe.cpp",
             "src/compatibility_probe.h",
             "src/project_attachment.cpp",
@@ -62,6 +64,7 @@ class RepositoryContractTest(unittest.TestCase):
             "tests/agent_manifest_discovery_test.cpp",
             "tests/agent_roster_presence_test.cpp",
             "tests/agent_identity_status_test.cpp",
+            "tests/direct_conversation_route_test.cpp",
             "tests/compatibility_probe_test.cpp",
             "tests/native_shell_test.cpp",
             "tests/project_attachment_test.cpp",
@@ -220,6 +223,62 @@ class RepositoryContractTest(unittest.TestCase):
             r"add_test\(NAME\s+agent_identity_status\s+"
             r"COMMAND\s+lingtai_agent_identity_status_test\b",
         )
+        self.assertTrue(
+            {"STATIC", "src/direct_conversation_route.cpp"}
+            <= arguments("add_library", "lingtai_desktop_direct_route")
+        )
+        self.assertEqual(
+            cmake.count("src/direct_conversation_route.cpp"),
+            2,
+            "production library plus focused route sanitizer target",
+        )
+        self.assertEqual(
+            links("lingtai_desktop_direct_route"),
+            {
+                "PUBLIC": {"lingtai_desktop_core"},
+                "PRIVATE": set(),
+                "INTERFACE": set(),
+            },
+            "pure route resolution links neither Qt nor Agent discovery",
+        )
+        self.assertEqual(
+            links("lingtai_direct_conversation_route_test"),
+            {
+                "PUBLIC": set(),
+                "PRIVATE": {"lingtai_desktop_direct_route"},
+                "INTERFACE": set(),
+            },
+        )
+        self.assertRegex(
+            cmake,
+            r"add_test\(NAME\s+direct_conversation_route\s+"
+            r"COMMAND\s+lingtai_direct_conversation_route_test\b",
+        )
+        # Route resolution consumes one already-produced C3 snapshot. It must
+        # never rediscover manifests or touch the filesystem at all; only the
+        # already-attached canonical root getter may be observed.
+        route_source = (ROOT / "src" / "direct_conversation_route.cpp").read_text()
+        for forbidden in (
+            r"\bopen\s*\(",
+            r"\bopenat\b",
+            r"\bfopen\b",
+            r"\bl?stat\s*\(",
+            r"\bfstat\b",
+            r"\bopendir\b",
+            r"\breaddir\b",
+            r"\b[io]f?stream\b",
+            r"\bdirectory_iterator\b",
+            r"\bcanonical\b",
+            r"\bexists\s*\(",
+            r"\.resolve\s*\(",
+            r"\bdiscover_agent_manifests\b",
+            r"\bproject_agent_roster\b",
+            r"\bproject_agent_identity_status\b",
+            r"\.agent\.json",
+            r"#\s*include\s*[<\"](unistd|fcntl|dirent|fstream|sys/|Qt)",
+        ):
+            self.assertNotRegex(route_source, forbidden, forbidden)
+        self.assertEqual(route_source.count("attachment.root()"), 1)
         self.assertEqual(
             links("lingtai_workspace_selection_test"),
             {
@@ -240,6 +299,7 @@ class RepositoryContractTest(unittest.TestCase):
             "src/agent_roster_presence_test_seam.h",
             "src/agent_identity_status.h",
             "src/agent_identity_status_test_seam.h",
+            "src/direct_conversation_route.h",
             "src/native_shell.h",
             "src/workspace_selection.h",
         ):

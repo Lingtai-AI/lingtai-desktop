@@ -18,10 +18,12 @@ src/agent_roster_presence.h            pure ordered role/presence projection
 src/agent_roster_presence_test_seam.h  keyed heartbeat and wall-clock seam
 src/agent_identity_status.h            manifest/status composite read model
 src/agent_identity_status_test_seam.h  keyed status/mtime/clock seam
+src/direct_conversation_route.{h,cpp}  pure direct route + human sender identity
 src/compatibility_probe.{h,cpp}        Qt Core-owned read-only compatibility probe
 tests/agent_manifest_discovery_test.cpp discovery/no-write behavior contract
 tests/agent_roster_presence_test.cpp    strict role/heartbeat behavior contract
 tests/agent_identity_status_test.cpp    source-separated identity/status contract
+tests/direct_conversation_route_test.cpp pure route/stable-identity contract
 tests/native_shell_test.cpp            native shell semantics/geometry/no-write contract
 tests/project_attachment_test.cpp      real C++ attachment/containment behavior contract
 tests/test_native_shell.py             process persistence and smoke-order contract
@@ -148,6 +150,25 @@ agreement is deterministic pair evidence only: status never replaces manifest
 identity/state and no TTL, generation, winner, activity aggregate, or health
 verdict is invented. The projection adds no UI, config/init/resolved reads,
 polling, watcher, process query, command, repair, or project-tree write.
+
+`resolve_direct_conversation_route` consumes one already-produced accepted
+identity snapshot, the attached canonical root, and the C1 selected directory
+key. It performs no filesystem access and no manifest or status rediscovery:
+its library links only `lingtai_desktop_core`, so a second discovery read is
+structurally impossible rather than merely avoided by convention. A completed
+projection, exactly one valid human-role row with typed identity, and an
+exactly matching selected valid non-human target are all required; every other
+outcome is one precise typed `DirectRouteFailure` carrying bounded human
+candidate keys and an exact candidate count for degraded presentation. Current
+human and target directory keys and addresses are returned separately and are
+route authority for later mailbox access only. Stable Desktop thread identity
+is the transparent `DirectThreadKey` of canonical project root plus the
+target's manifest `agent_id`; it is never hashed, never derived from an address
+or directory key, and therefore survives a rename, while remaining exactly as
+stable as the canonical root path itself. The minimal human sender card copies
+only accepted typed manifest fields plus explicit human-role evidence, never
+unknown manifest fields or raw JSON. Mailbox folders, messages, receipts,
+attachments, publication, and Desktop app data remain outside this owner.
 
 `probe_compatibility` reads one explicitly requested relative agent directory
 and one explicitly supplied global install-receipt path below an accepted
