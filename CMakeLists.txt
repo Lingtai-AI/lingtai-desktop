@@ -199,6 +199,19 @@ target_link_libraries(lingtai_desktop_compatibility
     PUBLIC lingtai_desktop_core
     PRIVATE Qt6::Core)
 
+# Internal POSIX descriptor/no-follow primitives. No Qt, no project model, and
+# deliberately no link edge of its own: it is the shared safety mechanism every
+# descriptor-anchored reader must not re-derive, not a filesystem framework.
+# Definitions live in one substitutable link-time unit so the contract can be
+# exercised against a scaffold independently of any consumer.
+add_library(lingtai_desktop_posix_primitives STATIC
+    src/posix_descriptor_primitives.cpp)
+init_target(lingtai_desktop_posix_primitives)
+target_include_directories(lingtai_desktop_posix_primitives PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(lingtai_desktop_posix_primitives PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+
 add_library(lingtai_desktop_agent_discovery STATIC
     src/agent_manifest_discovery.cpp)
 init_target(lingtai_desktop_agent_discovery)
@@ -208,7 +221,7 @@ target_compile_options(lingtai_desktop_agent_discovery PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_desktop_agent_discovery
     PUBLIC lingtai_desktop_core
-    PRIVATE Qt6::Core)
+    PRIVATE Qt6::Core lingtai_desktop_posix_primitives)
 
 # Pure route resolution: no Qt, no filesystem, and deliberately no link edge to
 # discovery, so a second manifest or status read is structurally impossible.
@@ -274,6 +287,27 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_link_libraries(lingtai_direct_conversation_route_sanitized_test PRIVATE
         lingtai_desktop_core)
 endif()
+add_executable(lingtai_posix_descriptor_primitives_test
+    tests/posix_descriptor_primitives_test.cpp)
+init_target(lingtai_posix_descriptor_primitives_test)
+target_compile_options(lingtai_posix_descriptor_primitives_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_posix_descriptor_primitives_test PRIVATE
+    lingtai_desktop_posix_primitives)
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    add_executable(lingtai_posix_descriptor_primitives_sanitized_test
+        EXCLUDE_FROM_ALL
+        tests/posix_descriptor_primitives_test.cpp
+        src/posix_descriptor_primitives.cpp)
+    init_target(lingtai_posix_descriptor_primitives_sanitized_test)
+    target_include_directories(lingtai_posix_descriptor_primitives_sanitized_test
+        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_compile_options(lingtai_posix_descriptor_primitives_sanitized_test
+        PRIVATE -Wall -Wextra -Werror -pedantic
+        -fsanitize=address,undefined -fno-omit-frame-pointer)
+    target_link_options(lingtai_posix_descriptor_primitives_sanitized_test PRIVATE
+        -fsanitize=address,undefined)
+endif()
 add_executable(lingtai_workspace_selection_test
     tests/workspace_selection_test.cpp)
 init_target(lingtai_workspace_selection_test)
@@ -297,6 +331,9 @@ add_test(NAME agent_identity_status
 add_test(NAME direct_conversation_route
     COMMAND lingtai_direct_conversation_route_test
         "${CMAKE_CURRENT_BINARY_DIR}/direct-conversation-route-fixture")
+add_test(NAME posix_descriptor_primitives
+    COMMAND lingtai_posix_descriptor_primitives_test
+        "${CMAKE_CURRENT_BINARY_DIR}/posix-descriptor-primitives-fixture")
 add_test(NAME workspace_selection
     COMMAND lingtai_workspace_selection_test
         "${CMAKE_CURRENT_BINARY_DIR}/workspace-selection-fixture")
@@ -333,6 +370,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         tests/native_shell_test.cpp
         src/native_shell.cpp
         src/agent_manifest_discovery.cpp
+        src/posix_descriptor_primitives.cpp
         src/crl_integration.cpp)
     init_target(lingtai_native_shell_sanitized_test)
     target_include_directories(lingtai_native_shell_sanitized_test PRIVATE

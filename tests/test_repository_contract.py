@@ -46,6 +46,8 @@ class RepositoryContractTest(unittest.TestCase):
             "src/crl_integration.cpp",
             "src/native_shell.cpp",
             "src/native_shell.h",
+            "src/posix_descriptor_primitives.cpp",
+            "src/posix_descriptor_primitives.h",
             "src/agent_manifest_discovery.cpp",
             "src/agent_manifest_discovery.h",
             "src/agent_manifest_discovery_test_seam.h",
@@ -61,6 +63,7 @@ class RepositoryContractTest(unittest.TestCase):
             "src/project_attachment.h",
             "src/workspace_selection.cpp",
             "src/workspace_selection.h",
+            "tests/posix_descriptor_primitives_test.cpp",
             "tests/agent_manifest_discovery_test.cpp",
             "tests/agent_roster_presence_test.cpp",
             "tests/agent_identity_status_test.cpp",
@@ -77,6 +80,22 @@ class RepositoryContractTest(unittest.TestCase):
             self.assertTrue((ROOT / relative).is_file(), relative)
         for script in sorted((ROOT / "scripts").glob("*.sh")):
             subprocess.run(["bash", "-n", str(script)], check=True)
+        # Every registered test must be reachable from the documented build
+        # path, or configure/build/ctest leaves it unbuilt and "Not Run".
+        build_script = (ROOT / "scripts" / "build.sh").read_text()
+        agents = (ROOT / "AGENTS.md").read_text()
+        cmake_text = (ROOT / "CMakeLists.txt").read_text()
+        documented = re.findall(r"ctest[^\n]*-R\s+'([^']+)'", agents)
+        for name, target in re.findall(
+            r"add_test\(NAME\s+(\S+)\s+COMMAND\s+(\S+)", cmake_text
+        ):
+            if not target.startswith("lingtai_"):
+                continue
+            self.assertIn(target, build_script, f"{target} is never built")
+            self.assertTrue(
+                any(re.search(pattern, name) for pattern in documented),
+                f"{name} is in no documented validate step",
+            )
         tracked = subprocess.check_output(
             ["git", "-C", ROOT, "ls-files"], text=True
         ).splitlines()
@@ -180,10 +199,69 @@ class RepositoryContractTest(unittest.TestCase):
             discovery,
             {
                 "PUBLIC": {"lingtai_desktop_core"},
-                "PRIVATE": {"Qt6::Core"},
+                "PRIVATE": {"Qt6::Core", "lingtai_desktop_posix_primitives"},
                 "INTERFACE": set(),
             },
         )
+        # The shared descriptor seam is internal: one library, no link edge of
+        # its own, and therefore no Qt, no project model, and no reader.
+        self.assertTrue(
+            {"STATIC", "src/posix_descriptor_primitives.cpp"}
+            <= arguments("add_library", "lingtai_desktop_posix_primitives")
+        )
+        self.assertEqual(
+            cmake.count("src/posix_descriptor_primitives.cpp"),
+            3,
+            "internal library plus the two focused sanitizer targets",
+        )
+        self.assertNotRegex(
+            cmake,
+            r"target_link_libraries\(\s*lingtai_desktop_posix_primitives",
+            "the internal descriptor seam must depend on nothing",
+        )
+        self.assertEqual(
+            links("lingtai_posix_descriptor_primitives_test"),
+            {
+                "PUBLIC": set(),
+                "PRIVATE": {"lingtai_desktop_posix_primitives"},
+                "INTERFACE": set(),
+            },
+        )
+        self.assertRegex(
+            cmake,
+            r"add_test\(NAME\s+posix_descriptor_primitives\s+"
+            r"COMMAND\s+lingtai_posix_descriptor_primitives_test\b",
+        )
+        self.assertRegex(
+            cmake,
+            r"add_executable\(lingtai_posix_descriptor_primitives_sanitized_test"
+            r"\s+EXCLUDE_FROM_ALL[\s\S]*?src/posix_descriptor_primitives\.cpp"
+            r"[\s\S]*?\)",
+        )
+        # Discovery consumes the shared primitives rather than re-deriving
+        # them; the mechanics must exist in exactly one place.
+        discovery_source = (
+            ROOT / "src" / "agent_manifest_discovery.cpp"
+        ).read_text()
+        self.assertIn(
+            '#include "posix_descriptor_primitives.h"', discovery_source
+        )
+        for duplicated in (
+            r"class\s+FileDescriptor\b",
+            r"class\s+DirectoryStream\b",
+            r"struct\s+FileIdentity\b",
+            r"int\s+read_flags\s*\(",
+            r"bool\s+same_file\s*\(",
+            r"double\s+modified_at_seconds\s*\(",
+            r"bool\s+safe_leaf\s*\(",
+        ):
+            self.assertNotRegex(discovery_source, duplicated, duplicated)
+        for shared in ("read_flags(", "same_file(", "safe_leaf("):
+            self.assertNotIn(
+                " " + shared,
+                discovery_source,
+                f"{shared} must be reached through the qualified seam",
+            )
         self.assertEqual(
             links("lingtai_agent_manifest_discovery_test"),
             {
@@ -293,6 +371,7 @@ class RepositoryContractTest(unittest.TestCase):
             r"COMMAND\s+lingtai_workspace_selection_test\b",
         )
         for header in (
+            "src/posix_descriptor_primitives.h",
             "src/agent_manifest_discovery.h",
             "src/agent_manifest_discovery_test_seam.h",
             "src/agent_roster_presence.h",

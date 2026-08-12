@@ -4,6 +4,7 @@
 #include "agent_identity_status_test_seam.h"
 #include "agent_roster_presence.h"
 #include "agent_roster_presence_test_seam.h"
+#include "posix_descriptor_primitives.h"
 #include "project_attachment.h"
 
 #include <QtCore/QByteArrayView>
@@ -60,42 +61,6 @@ std::error_code current_error() { return {errno, std::generic_category()}; }
 std::error_code unknown_io_error() {
     return std::make_error_code(std::errc::io_error); }
 
-class FileDescriptor final {
-public:
-    explicit FileDescriptor(int value = -1) : value_(value) {}
-    ~FileDescriptor() { reset(); }
-    FileDescriptor(const FileDescriptor &) = delete;
-    FileDescriptor &operator=(const FileDescriptor &) = delete;
-    FileDescriptor(FileDescriptor &&other) noexcept
-    : value_(std::exchange(other.value_, -1)) {}
-    FileDescriptor &operator=(FileDescriptor &&other) noexcept {
-        if (this != &other) reset(std::exchange(other.value_, -1));
-        return *this;
-    }
-    void reset(int value = -1) {
-        if (value_ >= 0) ::close(value_);
-        value_ = value;
-    }
-    [[nodiscard]] int get() const { return value_; }
-private:
-    int value_;
-};
-
-class DirectoryStream final {
-public:
-    explicit DirectoryStream(DIR *value) : value_(value) {}
-    ~DirectoryStream() { if (value_) ::closedir(value_); }
-    [[nodiscard]] DIR *get() const { return value_; }
-private:
-    DIR *value_;
-};
-
-int read_flags() {
-    auto flags = O_RDONLY;
-    flags |= O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK;
-    return flags;
-}
-
 ListingKind listing_error_kind(const std::error_code &error) {
     if (is_missing(error)) return ListingKind::missing;
     if (error == std::errc::not_a_directory) return ListingKind::not_directory;
@@ -128,25 +93,6 @@ AgentManifestFileRead manifest_error(std::error_code error) {
     return {kind, {}, error};
 }
 
-struct FileIdentity {
-    dev_t device = 0;
-    ino_t inode = 0;
-};
-
-bool same_file(const struct stat &value, const FileIdentity &identity) {
-    return value.st_dev == identity.device && value.st_ino == identity.inode;
-}
-
-double modified_at_seconds(const struct stat &value) {
-#if defined(__APPLE__)
-    return static_cast<double>(value.st_mtimespec.tv_sec)
-        + static_cast<double>(value.st_mtimespec.tv_nsec) / 1'000'000'000.0;
-#else
-    return static_cast<double>(value.st_mtim.tv_sec)
-        + static_cast<double>(value.st_mtim.tv_nsec) / 1'000'000'000.0;
-#endif
-}
-
 class DefaultFilesystem final : public AgentIdentityStatusFilesystem {
 public:
     AgentManifestDirectoryListing list_directory(
@@ -163,7 +109,8 @@ public:
             return result.kind = ListingKind::unsafe_symlink, result;
         if (!S_ISDIR(observed_root.st_mode))
             return result.kind = ListingKind::not_directory, result;
-        root_.reset(::open(path.c_str(), read_flags() | O_DIRECTORY));
+        root_.reset(::open(path.c_str(),
+            posix_internal::read_flags() | O_DIRECTORY));
         if (root_.get() < 0) {
             result.error = current_error();
             struct stat current_root {};
@@ -188,7 +135,7 @@ public:
             result.error = current_error();
             return result;
         }
-        DirectoryStream stream(::fdopendir(duplicate));
+        posix_internal::DirectoryStream stream(::fdopendir(duplicate));
         if (!stream.get()) {
             ::close(duplicate);
             result.error = current_error();
@@ -227,8 +174,9 @@ public:
             return {AgentManifestFileReadKind::candidate_unsafe_symlink, {}, {}};
         if (!S_ISDIR(observed_directory.st_mode))
             return {AgentManifestFileReadKind::candidate_not_directory, {}, {}};
-        const FileDescriptor directory(::openat(
-            root_.get(), directory_key.c_str(), read_flags() | O_DIRECTORY));
+        const posix_internal::FileDescriptor directory(
+            ::openat(root_.get(), directory_key.c_str(),
+                posix_internal::read_flags() | O_DIRECTORY));
         if (directory.get() < 0) {
             const auto error = current_error();
             struct stat current_directory {};
@@ -256,8 +204,8 @@ public:
             return {AgentManifestFileReadKind::unsafe_symlink, {}, {}};
         if (!S_ISREG(observed_manifest.st_mode))
             return {AgentManifestFileReadKind::not_regular, {}, {}};
-        const FileDescriptor manifest(::openat(
-            directory.get(), manifest_name, read_flags()));
+        const posix_internal::FileDescriptor manifest(::openat(
+            directory.get(), manifest_name, posix_internal::read_flags()));
         if (manifest.get() < 0) {
             const auto error = current_error();
             struct stat current_manifest {};
@@ -309,11 +257,12 @@ public:
             return {AgentManifestFileReadKind::candidate_absent, {}, {}};
         }
         candidate_identities_.insert_or_assign(directory_key,
-            FileIdentity{opened_directory.st_dev, opened_directory.st_ino});
+            posix_internal::FileIdentity{
+                opened_directory.st_dev, opened_directory.st_ino});
         if (too_large) return {AgentManifestFileReadKind::too_large, {}, {},
-            modified_at_seconds(opened_manifest)};
+            posix_internal::modified_at_seconds(opened_manifest)};
         return {AgentManifestFileReadKind::read, std::move(bytes), {},
-            modified_at_seconds(opened_manifest)};
+            posix_internal::modified_at_seconds(opened_manifest)};
     }
 
     AgentHeartbeatFileRead read_heartbeat(
@@ -339,11 +288,12 @@ public:
             return {AgentHeartbeatFileReadKind::unsafe_symlink, {}, {}};
         }
         if (!S_ISDIR(observed_directory.st_mode)
-            || !same_file(observed_directory, expected->second)) {
+            || !posix_internal::same_file(observed_directory, expected->second)) {
             return {AgentHeartbeatFileReadKind::container_changed, {}, {}};
         }
-        const FileDescriptor directory(::openat(
-            root_.get(), directory_key.c_str(), read_flags() | O_DIRECTORY));
+        const posix_internal::FileDescriptor directory(
+            ::openat(root_.get(), directory_key.c_str(),
+                posix_internal::read_flags() | O_DIRECTORY));
         if (directory.get() < 0) {
             const auto error = current_error();
             struct stat current_directory {};
@@ -359,7 +309,7 @@ public:
             return container_error(current_error());
         }
         if (!S_ISDIR(opened_directory.st_mode)
-            || !same_file(opened_directory, expected->second)) {
+            || !posix_internal::same_file(opened_directory, expected->second)) {
             return {AgentHeartbeatFileReadKind::container_changed, {}, {}};
         }
 
@@ -375,10 +325,10 @@ public:
         if (!S_ISREG(observed_heartbeat.st_mode)) {
             return {AgentHeartbeatFileReadKind::not_regular, {}, {}};
         }
-        const FileIdentity heartbeat_identity{
+        const posix_internal::FileIdentity heartbeat_identity{
             observed_heartbeat.st_dev, observed_heartbeat.st_ino};
-        const FileDescriptor heartbeat(::openat(
-            directory.get(), heartbeat_name, read_flags()));
+        const posix_internal::FileDescriptor heartbeat(::openat(
+            directory.get(), heartbeat_name, posix_internal::read_flags()));
         if (heartbeat.get() < 0) {
             const auto error = current_error();
             struct stat current_heartbeat {};
@@ -396,7 +346,7 @@ public:
         if (!S_ISREG(opened_heartbeat.st_mode)) {
             return {AgentHeartbeatFileReadKind::not_regular, {}, {}};
         }
-        if (!same_file(opened_heartbeat, heartbeat_identity)) {
+        if (!posix_internal::same_file(opened_heartbeat, heartbeat_identity)) {
             return {AgentHeartbeatFileReadKind::source_changed, {}, {}};
         }
 
@@ -429,7 +379,7 @@ public:
             return {AgentHeartbeatFileReadKind::unsafe_symlink, {}, {}};
         }
         if (!S_ISDIR(current_directory.st_mode)
-            || !same_file(current_directory, expected->second)) {
+            || !posix_internal::same_file(current_directory, expected->second)) {
             return {AgentHeartbeatFileReadKind::container_changed, {}, {}};
         }
         struct stat current_heartbeat {};
@@ -441,7 +391,7 @@ public:
             return {AgentHeartbeatFileReadKind::unsafe_symlink, {}, {}};
         }
         if (!S_ISREG(current_heartbeat.st_mode)
-            || !same_file(current_heartbeat, heartbeat_identity)) {
+            || !posix_internal::same_file(current_heartbeat, heartbeat_identity)) {
             return {AgentHeartbeatFileReadKind::source_changed, {}, {}};
         }
         return {AgentHeartbeatFileReadKind::read, std::move(bytes), {}};
@@ -470,16 +420,17 @@ public:
         if (S_ISLNK(observed_directory.st_mode))
             return {AgentStatusFileReadKind::unsafe_symlink, {}, {}};
         if (!S_ISDIR(observed_directory.st_mode)
-            || !same_file(observed_directory, expected->second))
+            || !posix_internal::same_file(observed_directory, expected->second))
             return {AgentStatusFileReadKind::container_changed, {}, {}};
-        const FileDescriptor directory(::openat(
-            root_.get(), directory_key.c_str(), read_flags() | O_DIRECTORY));
+        const posix_internal::FileDescriptor directory(
+            ::openat(root_.get(), directory_key.c_str(),
+                posix_internal::read_flags() | O_DIRECTORY));
         if (directory.get() < 0) return status_container_error(current_error());
         struct stat opened_directory {};
         if (::fstat(directory.get(), &opened_directory) != 0)
             return status_container_error(current_error());
         if (!S_ISDIR(opened_directory.st_mode)
-            || !same_file(opened_directory, expected->second))
+            || !posix_internal::same_file(opened_directory, expected->second))
             return {AgentStatusFileReadKind::container_changed, {}, {}};
 
         constexpr auto status_name = ".status.json";
@@ -490,19 +441,19 @@ public:
             return {AgentStatusFileReadKind::unsafe_symlink, {}, {}};
         if (!S_ISREG(observed_status.st_mode))
             return {AgentStatusFileReadKind::not_regular, {}, {}};
-        const FileIdentity status_identity{
+        const posix_internal::FileIdentity status_identity{
             observed_status.st_dev, observed_status.st_ino};
-        const FileDescriptor status(
-            ::openat(directory.get(), status_name, read_flags()));
+        const posix_internal::FileDescriptor status(
+            ::openat(directory.get(), status_name, posix_internal::read_flags()));
         if (status.get() < 0) return status_error(current_error());
         struct stat opened_status {};
         if (::fstat(status.get(), &opened_status) != 0)
             return status_error(current_error());
         if (!S_ISREG(opened_status.st_mode))
             return {AgentStatusFileReadKind::not_regular, {}, {}};
-        if (!same_file(opened_status, status_identity))
+        if (!posix_internal::same_file(opened_status, status_identity))
             return {AgentStatusFileReadKind::source_changed, {}, {}};
-        const auto mtime = modified_at_seconds(opened_status);
+        const auto mtime = posix_internal::modified_at_seconds(opened_status);
         std::string bytes;
         std::array<char, 8192> buffer{};
         for (;;) {
@@ -530,14 +481,14 @@ public:
         if (::fstatat(root_.get(), directory_key.c_str(), &current_directory,
                 AT_SYMLINK_NOFOLLOW) != 0) return status_container_error(current_error());
         if (!S_ISDIR(current_directory.st_mode)
-            || !same_file(current_directory, expected->second))
+            || !posix_internal::same_file(current_directory, expected->second))
             return {AgentStatusFileReadKind::container_changed, {}, {}};
         if (::fstatat(directory.get(), status_name, &current_status,
                 AT_SYMLINK_NOFOLLOW) != 0) return status_error(current_error());
         if (S_ISLNK(current_status.st_mode))
             return {AgentStatusFileReadKind::unsafe_symlink, {}, {}};
         if (!S_ISREG(current_status.st_mode)
-            || !same_file(current_status, status_identity))
+            || !posix_internal::same_file(current_status, status_identity))
             return {AgentStatusFileReadKind::source_changed, {}, {}};
         return {AgentStatusFileReadKind::read, std::move(bytes), {}, mtime};
     }
@@ -613,10 +564,10 @@ private:
         return ListingKind::complete;
     }
 
-    mutable FileDescriptor root_;
+    mutable posix_internal::FileDescriptor root_;
     mutable fs::path root_path_;
     mutable struct stat opened_root_ {};
-    mutable std::map<fs::path, FileIdentity> candidate_identities_;
+    mutable std::map<fs::path, posix_internal::FileIdentity> candidate_identities_;
 };
 
 AgentManifestScanState scan_state(ListingKind kind) {
@@ -631,13 +582,6 @@ AgentManifestScanState scan_state(ListingKind kind) {
     case ListingKind::io_error: return AgentManifestScanState::root_io_error;
     }
     return AgentManifestScanState::root_io_error;
-}
-
-bool safe_leaf(const fs::path &path) {
-    return !path.empty() && !path.is_absolute() && !path.has_root_name()
-        && !path.has_root_directory() && path == path.filename()
-        && path != "." && path != ".."
-        && path.native().find('\0') == std::string::npos;
 }
 
 struct ParsedManifest {
@@ -802,7 +746,7 @@ AgentManifestDiscoveryReport discover_impl(const ProjectAttachment &attachment,
     }
     // Each try-block contains one algorithm-selected, safe-leaf candidate.
     for (const auto &name : listing.entries) try {
-        if (!safe_leaf(name)) continue;
+        if (!posix_internal::safe_leaf(name)) continue;
         const auto directory = report.scan.path / name;
         const auto manifest = filesystem.read_manifest(report.scan.path, name);
         switch (manifest.kind) {

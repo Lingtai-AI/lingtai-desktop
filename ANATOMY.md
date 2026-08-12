@@ -12,6 +12,7 @@ src/crl_integration.cpp                minimal parent `crl` update-stream integr
 src/native_shell.{h,cpp}               native project/Agent roster selection route owner
 src/project_attachment.{h,cpp}         Qt-independent project-root containment seam
 src/workspace_selection.{h,cpp}        pure Desktop-owned workspace selection state
+src/posix_descriptor_primitives.{h,cpp} internal descriptor/no-follow primitives
 src/agent_manifest_discovery.{h,cpp}   manifest discovery + roster implementation
 src/agent_manifest_discovery_test_seam.h deterministic filesystem race/error seam
 src/agent_roster_presence.h            pure ordered role/presence projection
@@ -20,6 +21,7 @@ src/agent_identity_status.h            manifest/status composite read model
 src/agent_identity_status_test_seam.h  keyed status/mtime/clock seam
 src/direct_conversation_route.{h,cpp}  pure direct route + human sender identity
 src/compatibility_probe.{h,cpp}        Qt Core-owned read-only compatibility probe
+tests/posix_descriptor_primitives_test.cpp descriptor ownership/no-follow contract
 tests/agent_manifest_discovery_test.cpp discovery/no-write behavior contract
 tests/agent_roster_presence_test.cpp    strict role/heartbeat behavior contract
 tests/agent_identity_status_test.cpp    source-separated identity/status contract
@@ -103,6 +105,21 @@ safe-to-create. Path canonicalization cannot detect that an in-project hard
 link shares an inode with a file outside the project. The stored canonical root
 is path-stable only, not inode-pinned: replacing the directory at that path can
 change what a later resolution observes.
+
+`lingtai_desktop_posix_primitives` owns the internal POSIX mechanics that every
+descriptor-anchored reader must not re-derive: move-only descriptor ownership
+that closes exactly once and leaves a moved-from owner empty, ownership of a
+directory stream that has adopted a descriptor, the shared read-only,
+close-on-exec, no-follow, nonblocking read flags, device-plus-inode file
+identity, platform nanosecond mtime conversion, and strict immediate-leaf
+validation. It links nothing: no Qt, no project model, and no reader. The seam
+is internal and intentionally minimal — it is not a general filesystem
+framework and holds no domain policy. Candidate selection, size bounds, error
+mapping, observation order, race verdicts, and every parser stay with the
+reader that owns them; discovery keeps its own stat-versus-stat replacement
+checks because those are discovery's race policy, not shared mechanics.
+Discovery consumes the seam as a private dependency, so no consumer inherits it
+transitively.
 
 `discover_agent_manifests` examines only the canonical attachment root's real
 `.lingtai` directory and its immediate real child directories.
