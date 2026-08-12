@@ -320,6 +320,28 @@ void verify_open_project_behavior(
     constexpr auto markup_key = "<img src=x>";
     write_file(roster.project / ".lingtai" / markup_key / ".agent.json",
         R"({"admin":{}})");
+    constexpr auto ampersand_key = "A&B-agent";
+    constexpr auto plain_neighbor_key = "AB-agent";
+    const auto ampersand_agent = roster.project / ".lingtai" / ampersand_key;
+    write_file(ampersand_agent / ".agent.json", R"({"admin":{}})");
+    write_file(roster.project / ".lingtai" / plain_neighbor_key / ".agent.json",
+        R"({"admin":{}})");
+    const auto ampersand_init = ampersand_agent / "init.json";
+    const auto ampersand_resolved =
+        ampersand_agent / "system/manifest.resolved.json";
+    write_file(ampersand_init, kInit);
+    write_file(ampersand_resolved, kResolved);
+    std::error_code ampersand_time_error;
+    const auto ampersand_now = fs::file_time_type::clock::now();
+    fs::last_write_time(
+        ampersand_init, ampersand_now - std::chrono::seconds(2),
+        ampersand_time_error);
+    require(!ampersand_time_error,
+        "ampersand Agent init timestamp must be set");
+    fs::last_write_time(
+        ampersand_resolved, ampersand_now, ampersand_time_error);
+    require(!ampersand_time_error,
+        "ampersand Agent resolved timestamp must be set");
     fs::create_directories(roster.project / ".lingtai/no-manifest");
     const auto project_marker = roster.project / "project-marker";
     const auto unsafe_outside = roster.root / "outside-agent";
@@ -343,6 +365,8 @@ void verify_open_project_behavior(
     required_child<Ui::RpWidget>(window, "lingtai_agent_roster");
     const auto expected_rows = std::vector<std::pair<std::string, std::string>>{
         {markup_key, "valid — agent — missing"},
+        {ampersand_key, "valid — agent — missing"},
+        {plain_neighbor_key, "valid — agent — missing"},
         {"a-human", "valid — human — alive_human"},
         {"agent", "valid — agent — alive"},
         {"b-main", "valid — main — alive"},
@@ -369,9 +393,24 @@ void verify_open_project_behavior(
         }
     }
     require(visible_keys == std::vector<std::string>{
-            markup_key, "a-human", "agent", "b-main", "c-stale",
-            "d-missing", "e-invalid", "malformed"},
+            markup_key, ampersand_key, plain_neighbor_key, "a-human", "agent",
+            "b-main", "c-stale", "d-missing", "e-invalid", "malformed"},
         "native rows must preserve deterministic C3 order");
+    auto *ampersand_row = agent_row(window, ampersand_key);
+    auto *plain_neighbor_row = agent_row(window, plain_neighbor_key);
+    require(ampersand_row->property("directory_key").toString()
+                == QStringLiteral("A&B-agent")
+            && ampersand_row->accessibleName()
+                == QStringLiteral("Agent A&B-agent")
+            && ampersand_row->isEnabled(),
+        "ampersand row identity and selectability must retain the exact key");
+    require(ampersand_row->text().startsWith(
+                QStringLiteral("A&&B-agent\n")),
+        "Agent row button text must escape ampersands for lossless display");
+    require(plain_neighbor_row->text().startsWith(
+                QStringLiteral("AB-agent\n"))
+            && ampersand_row->text() != plain_neighbor_row->text(),
+        "ampersand and plain neighboring Agent rows must remain distinguishable");
     require(agent_row(window, "malformed")->text().contains("invalid JSON"),
         "a malformed row must expose its typed repair diagnostic");
     require(std::ranges::none_of(window.findChildren<QPushButton *>(),
@@ -410,6 +449,23 @@ void verify_open_project_behavior(
 
     const auto roster_before_selection = tree_snapshot(roster.project);
     const auto receipt_before_selection = read_file(roster.receipt);
+    ampersand_row->click();
+    QCoreApplication::processEvents();
+    require(shell.selection_state().selected_agent_directory_key()
+                == std::optional<fs::path>(ampersand_key)
+            && agent_row(window, ampersand_key)->isChecked()
+            && !agent_row(window, plain_neighbor_key)->isChecked()
+            && label_text(window, "lingtai_selected_agent_key")
+                == QStringLiteral("A&B-agent"),
+        "ampersand row selection must preserve exact C1 and detail truth");
+    require(label_text(window, "lingtai_compatibility_title") == "Compatible"
+            && label_text(window, "lingtai_commands_availability")
+                == "Commands available: Yes",
+        "ampersand row must re-probe C2 at its exact project-relative path");
+    require(tree_snapshot(roster.project) == roster_before_selection
+            && read_file(roster.receipt) == receipt_before_selection
+            && tree_snapshot(unsafe_outside) == outside_before,
+        "ampersand selection and exact-path re-probe must remain read-only");
     auto *markup_row = agent_row(window, markup_key);
     const auto markup_text = QString::fromUtf8(markup_key);
     require(markup_row->property("directory_key").toString() == markup_text,

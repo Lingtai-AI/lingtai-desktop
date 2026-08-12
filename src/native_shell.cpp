@@ -710,9 +710,11 @@ void NativeShell::render_roster() {
             .arg(manifest_text(item.manifest_kind), role_text(item.role),
                 presence_text(presence ? presence->presence
                                        : AgentPresenceKind::unknown));
+        auto button_key = path_text(item.directory_key);
+        button_key.replace(QLatin1Char('&'), QStringLiteral("&&"));
         auto *row = new QPushButton(
             QStringLiteral("%1\n%2\nmanifest: %3; heartbeat: %4")
-                .arg(path_text(item.directory_key), facts,
+                .arg(button_key, facts,
                     manifest_diagnostic_text(item.manifest_source.diagnostic),
                     heartbeat_diagnostic_text(presence)),
             roster_rows_);
