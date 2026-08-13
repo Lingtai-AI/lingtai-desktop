@@ -20,12 +20,14 @@ src/agent_roster_presence_test_seam.h  keyed heartbeat and wall-clock seam
 src/agent_identity_status.h            manifest/status composite read model
 src/agent_identity_status_test_seam.h  keyed status/mtime/clock seam
 src/direct_conversation_route.{h,cpp}  pure direct route + human sender identity
+src/direct_conversation_history.{h,cpp} read-only direct conversation rows
 src/compatibility_probe.{h,cpp}        Qt Core-owned read-only compatibility probe
 tests/posix_descriptor_primitives_test.cpp descriptor ownership/no-follow contract
 tests/agent_manifest_discovery_test.cpp discovery/no-write behavior contract
 tests/agent_roster_presence_test.cpp    strict role/heartbeat behavior contract
 tests/agent_identity_status_test.cpp    source-separated identity/status contract
 tests/direct_conversation_route_test.cpp pure route/stable-identity contract
+tests/direct_conversation_history_test.cpp direct membership/order/no-write contract
 tests/native_shell_test.cpp            native shell semantics/geometry/no-write contract
 tests/project_attachment_test.cpp      real C++ attachment/containment behavior contract
 tests/test_native_shell.py             process persistence and smoke-order contract
@@ -186,6 +188,28 @@ stable as the canonical root path itself. The minimal human sender card copies
 only accepted typed manifest fields plus explicit human-role evidence, never
 unknown manifest fields or raw JSON. Mailbox folders, messages, receipts,
 attachments, publication, and Desktop app data remain outside this owner.
+
+`read_direct_conversation` turns one accepted route into the rows the selected-
+Agent surface shows. It derives its paths only from the accepted canonical root
+and the accepted human directory key, reading the immediate `inbox`, `sent`,
+and `outbox` entries under `.lingtai/<human key>/mailbox` and their immediate
+`message.json` files. It rejects rather than follows a symlinked or non-regular
+entry or message, rejects a `message.json` above 1 MiB, and writes nothing.
+The body field is the kernel's `message`, never `body`. Order comes from the
+kernel's own timestamp precedence — `received_at` on delivery, `sent_at` once
+outbox/<id> becomes sent/<id>, and `deliver_at` while still pending — with the
+entry directory basename as both the displayed ID and the deterministic
+tie-break. Membership is exactly envelope based: one sender, one recipient
+written as a string or one-element array, no CC, and an incoming identity
+`agent_id` that must match the selected target when present. Mail for another
+conversation is simply absent; only an unsafe, unreadable, or malformed entry
+increments the one generic skipped count, and one bad entry never hides a valid
+neighbor. A duplicate outgoing ID observed in both outbox and sent collapses
+onto the sent copy. Nothing about delivery, processing, reply chains, unread
+state, or attachments is read or inferred. `NativeShell` renders those rows in
+the selected-Agent detail area as a read-only plain-text surface that never
+interprets markup, refreshed on project open/refresh and selection change with
+no background poller.
 
 `probe_compatibility` reads one explicitly requested relative agent directory
 and one explicitly supplied global install-receipt path below an accepted

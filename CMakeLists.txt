@@ -186,7 +186,7 @@ target_compile_options(lingtai_desktop_native_shell PRIVATE
 target_link_libraries(lingtai_desktop_native_shell
     PUBLIC lingtai_desktop_core
     PRIVATE desktop-app::lib_ui lingtai_desktop_compatibility
-        lingtai_desktop_agent_discovery)
+        lingtai_desktop_agent_discovery lingtai_desktop_conversation)
 
 add_library(lingtai_desktop_compatibility STATIC
     src/compatibility_probe.cpp)
@@ -234,6 +234,20 @@ target_compile_options(lingtai_desktop_direct_route PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_desktop_direct_route
     PUBLIC lingtai_desktop_core)
+
+# The one current conversation owner: it turns an already-accepted route into
+# the direct rows the selected-Agent surface renders. It reads the human's own
+# mailbox and nothing else, and it owns no presentation.
+add_library(lingtai_desktop_conversation STATIC
+    src/direct_conversation_history.cpp)
+init_target(lingtai_desktop_conversation)
+target_include_directories(lingtai_desktop_conversation PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(lingtai_desktop_conversation PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_desktop_conversation
+    PUBLIC lingtai_desktop_direct_route
+    PRIVATE Qt6::Core)
 
 add_executable(lingtai_compatibility_probe_test
     tests/compatibility_probe_test.cpp)
@@ -287,6 +301,13 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_link_libraries(lingtai_direct_conversation_route_sanitized_test PRIVATE
         lingtai_desktop_core)
 endif()
+add_executable(lingtai_direct_conversation_history_test
+    tests/direct_conversation_history_test.cpp)
+init_target(lingtai_direct_conversation_history_test)
+target_compile_options(lingtai_direct_conversation_history_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_direct_conversation_history_test PRIVATE
+    lingtai_desktop_conversation)
 add_executable(lingtai_posix_descriptor_primitives_test
     tests/posix_descriptor_primitives_test.cpp)
 init_target(lingtai_posix_descriptor_primitives_test)
@@ -331,6 +352,9 @@ add_test(NAME agent_identity_status
 add_test(NAME direct_conversation_route
     COMMAND lingtai_direct_conversation_route_test
         "${CMAKE_CURRENT_BINARY_DIR}/direct-conversation-route-fixture")
+add_test(NAME direct_conversation_history
+    COMMAND lingtai_direct_conversation_history_test
+        "${CMAKE_CURRENT_BINARY_DIR}/direct-conversation-history-fixture")
 add_test(NAME posix_descriptor_primitives
     COMMAND lingtai_posix_descriptor_primitives_test
         "${CMAKE_CURRENT_BINARY_DIR}/posix-descriptor-primitives-fixture")
@@ -371,6 +395,8 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         src/native_shell.cpp
         src/agent_manifest_discovery.cpp
         src/posix_descriptor_primitives.cpp
+        src/direct_conversation_route.cpp
+        src/direct_conversation_history.cpp
         src/crl_integration.cpp)
     init_target(lingtai_native_shell_sanitized_test)
     target_include_directories(lingtai_native_shell_sanitized_test PRIVATE

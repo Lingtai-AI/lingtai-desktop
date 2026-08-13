@@ -1,6 +1,7 @@
 #include "native_shell.h"
 
 #include "compatibility_probe.h"
+#include "direct_conversation_history.h"
 
 #include "ui/rp_widget.h"
 #include "ui/widgets/rp_window.h"
@@ -12,6 +13,7 @@
 #include <QtWidgets/QBoxLayout>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLayout>
+#include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QSizePolicy>
@@ -42,6 +44,13 @@ QLabel *make_label(
     label->setTextFormat(Qt::PlainText);
     label->setAccessibleName(text);
     label->setWordWrap(true);
+    // A wrapped label only reports its true wrapped height to the layout when
+    // its policy opts into height-for-width; without this the detail column
+    // under-measures every label and draws them over one another.
+    auto policy = label->sizePolicy();
+    policy.setHeightForWidth(true);
+    policy.setVerticalPolicy(QSizePolicy::MinimumExpanding);
+    label->setSizePolicy(policy);
     auto font = label->font();
     font.setPointSize(point_size);
     font.setWeight(weight);
@@ -558,10 +567,17 @@ NativeShell::NativeShell()
     rows_layout->setSpacing(6);
     roster_scroll->setWidget(roster_rows_);
 
-    auto *detail = new Ui::RpWidget(directory);
+    // The detail column carries more evidence than any window is tall, so it
+    // scrolls like the roster instead of overflowing and overpainting itself.
+    auto *detail_scroll = new QScrollArea(directory);
+    detail_scroll->setObjectName("lingtai_agent_detail_scroll");
+    detail_scroll->setAccessibleName(QStringLiteral("Selected Agent detail"));
+    detail_scroll->setWidgetResizable(true);
+    directory_layout->addWidget(detail_scroll, 2);
+    auto *detail = new Ui::RpWidget(detail_scroll);
     detail->setObjectName("lingtai_agent_detail");
     detail->setAccessibleName(QStringLiteral("Selected Agent detail"));
-    directory_layout->addWidget(detail, 2);
+    detail_scroll->setWidget(detail);
     auto *detail_layout = new QVBoxLayout(detail);
     detail_layout->setContentsMargins(0, 0, 0, 0);
     detail_layout->setSpacing(8);
@@ -578,6 +594,28 @@ NativeShell::NativeShell()
     presentation_name->setAccessibleName(
         QStringLiteral("Selected Agent presentation name"));
     detail_layout->addWidget(presentation_name);
+    // The conversation is the product, so it sits directly under the selected
+    // Agent's name rather than below the source-provenance labels.
+    detail_layout->addWidget(make_label(
+        detail, QStringLiteral("Conversation"),
+        "lingtai_selected_agent_conversation_heading", 12, QFont::DemiBold));
+    auto *conversation = new QPlainTextEdit(detail);
+    conversation->setObjectName("lingtai_selected_agent_conversation");
+    conversation->setAccessibleName(
+        QStringLiteral("Selected Agent conversation"));
+    conversation->setAccessibleDescription(QStringLiteral(
+        "The current direct conversation with the selected Agent, shown "
+        "read-only as plain text."));
+    conversation->setReadOnly(true);
+    conversation->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+    conversation->setMinimumHeight(180);
+    conversation->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    detail_layout->addWidget(conversation, 1);
+    auto *conversation_state = make_label(
+        detail, QString(), "lingtai_selected_agent_conversation_state", 10);
+    conversation_state->setAccessibleName(
+        QStringLiteral("Selected Agent conversation state"));
+    detail_layout->addWidget(conversation_state);
     auto *manifest_identity = make_label(
         detail, QString(), "lingtai_selected_agent_manifest_identity", 11);
     manifest_identity->setAccessibleName(QStringLiteral("Manifest identity"));
@@ -946,6 +984,7 @@ void NativeShell::render_roster() {
         selected_facts->setText(QStringLiteral(
             "Choose a valid manifest row to inspect compatibility."));
         selected_diagnostic->clear();
+        render_conversation();
         return;
     }
     selected_key->setText(path_text(detail_item->directory_key));
@@ -1086,6 +1125,67 @@ void NativeShell::render_roster() {
         .arg(manifest_diagnostic_text(
                 detail_item->manifest_source.diagnostic),
             heartbeat_diagnostic_text(detail_presence)));
+    render_conversation();
+}
+
+// Shows the current direct conversation for whatever the roster just made the
+// selected Agent. It reads the human's own mailbox and infers nothing about
+// delivery, replies, or unread state.
+void NativeShell::render_conversation() {
+    auto *surface = window_->findChild<QPlainTextEdit *>(
+        "lingtai_selected_agent_conversation");
+    auto *state = window_->findChild<QLabel *>(
+        "lingtai_selected_agent_conversation_state");
+    if (!surface || !state) return;
+    const auto show = [&](const QString &text, const QString &compact) {
+        surface->setPlainText(text);
+        state->setText(compact);
+    };
+
+    if (!selection_state_.active_project()
+        || !selection_state_.selected_agent_directory_key()) {
+        show(QStringLiteral("Select an Agent to see your conversation."),
+            QString());
+        return;
+    }
+    const auto route = resolve_direct_conversation_route(
+        *selection_state_.active_project(), identity_status_,
+        selection_state_.selected_agent_directory_key());
+    if (!route) {
+        show(QStringLiteral(
+                "No conversation is available for this selection."),
+            QString());
+        return;
+    }
+
+    const auto history = read_direct_conversation(*route.route);
+    const auto *presentation_name = window_->findChild<QLabel *>(
+        "lingtai_selected_agent_presentation_name");
+    const auto them = presentation_name && !presentation_name->text().isEmpty()
+        ? presentation_name->text()
+        : path_text(route.route->target_directory_key);
+    auto blocks = QStringList();
+    for (const auto &message : history.messages) {
+        auto block = QStringLiteral("%1 · %2")
+            .arg(message.outgoing ? QStringLiteral("You") : them,
+                QString::fromStdString(message.timestamp));
+        if (!message.subject.empty()) {
+            block += QLatin1Char('\n')
+                + QString::fromStdString(message.subject);
+        }
+        // Message text stays literal: the surface never interprets markup.
+        block += QLatin1Char('\n') + QString::fromStdString(message.text);
+        blocks.push_back(block);
+    }
+    const auto count = history.messages.size();
+    auto compact = count == 1
+        ? QStringLiteral("1 message")
+        : QStringLiteral("%1 messages").arg(count);
+    if (history.skipped > 0) {
+        compact += QStringLiteral(" · %1 skipped").arg(history.skipped);
+    }
+    show(blocks.isEmpty() ? QStringLiteral("No messages yet.")
+                          : blocks.join(QStringLiteral("\n\n")), compact);
 }
 
 AgentSelectionOutcome NativeShell::handle_agent_selection(

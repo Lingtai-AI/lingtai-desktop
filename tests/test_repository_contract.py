@@ -57,6 +57,8 @@ class RepositoryContractTest(unittest.TestCase):
             "src/agent_identity_status_test_seam.h",
             "src/direct_conversation_route.cpp",
             "src/direct_conversation_route.h",
+            "src/direct_conversation_history.cpp",
+            "src/direct_conversation_history.h",
             "src/compatibility_probe.cpp",
             "src/compatibility_probe.h",
             "src/project_attachment.cpp",
@@ -68,6 +70,7 @@ class RepositoryContractTest(unittest.TestCase):
             "tests/agent_roster_presence_test.cpp",
             "tests/agent_identity_status_test.cpp",
             "tests/direct_conversation_route_test.cpp",
+            "tests/direct_conversation_history_test.cpp",
             "tests/compatibility_probe_test.cpp",
             "tests/native_shell_test.cpp",
             "tests/project_attachment_test.cpp",
@@ -174,6 +177,7 @@ class RepositoryContractTest(unittest.TestCase):
                     "desktop-app::lib_ui",
                     "lingtai_desktop_compatibility",
                     "lingtai_desktop_agent_discovery",
+                    "lingtai_desktop_conversation",
                 },
                 "INTERFACE": set(),
             },
@@ -307,8 +311,8 @@ class RepositoryContractTest(unittest.TestCase):
         )
         self.assertEqual(
             cmake.count("src/direct_conversation_route.cpp"),
-            2,
-            "production library plus focused route sanitizer target",
+            3,
+            "production library, route sanitizer, and native-shell sanitizer",
         )
         self.assertEqual(
             links("lingtai_desktop_direct_route"),
@@ -379,6 +383,7 @@ class RepositoryContractTest(unittest.TestCase):
             "src/agent_identity_status.h",
             "src/agent_identity_status_test_seam.h",
             "src/direct_conversation_route.h",
+            "src/direct_conversation_history.h",
             "src/native_shell.h",
             "src/workspace_selection.h",
         ):
