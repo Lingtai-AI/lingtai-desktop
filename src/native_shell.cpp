@@ -2,6 +2,7 @@
 
 #include "agent_activity.h"
 #include "agent_sleep.h"
+#include "agent_task_card.h"
 #include "direct_conversation_history.h"
 #include "direct_mail_publisher.h"
 
@@ -474,6 +475,29 @@ NativeShell::NativeShell()
         QStringLiteral("Selected Agent activity state"));
     detail_layout->addWidget(activity_state);
 
+    // A separate, distinct, bounded read-only projection of the selected
+    // Agent's own self-published Task Card. It is a different source and
+    // authority from both the mailbox conversation and Agent Activity above
+    // and is never merged into either.
+    detail_layout->addWidget(make_label(
+        detail, QStringLiteral("Task Card"),
+        "lingtai_selected_agent_task_card_heading", 12, QFont::DemiBold));
+    auto *task_card = new QPlainTextEdit(detail);
+    task_card->setObjectName("lingtai_selected_agent_task_card");
+    task_card->setAccessibleName(QStringLiteral("Selected Agent Task Card"));
+    task_card->setAccessibleDescription(QStringLiteral(
+        "The selected Agent's current self-published Task Card body, when "
+        "active, shown read-only as plain text."));
+    task_card->setReadOnly(true);
+    task_card->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+    task_card->setMinimumHeight(120);
+    detail_layout->addWidget(task_card);
+    auto *task_card_state = make_label(
+        detail, QString(), "lingtai_selected_agent_task_card_state", 10);
+    task_card_state->setAccessibleName(
+        QStringLiteral("Selected Agent Task Card state"));
+    detail_layout->addWidget(task_card_state);
+
     // The one Step-6 action on the exact selected Agent: an explicit,
     // nonblocking start for a selected non-human Agent whose current
     // projection is not heartbeat-live. Hidden entirely (not merely
@@ -572,6 +596,7 @@ NativeShell::NativeShell()
     QObject::connect(activity_timer_, &QTimer::timeout, [this] {
         render_conversation();
         render_agent_activity();
+        render_agent_task_card();
         if (pending_sleep_observation_) {
             tick_agent_sleep_observation();
         } else if (pending_start_observation_) {
@@ -698,6 +723,9 @@ ProjectOpenOutcome NativeShell::open_project(
     agents_ = std::move(agents);
     window_->findChild<QLabel *>("lingtai_project_root")
         ->setText(path_text(canonical_root));
+    // A fresh open must never let a prior target's preserved Task Card
+    // projection surface under the newly opened project/selection.
+    task_card_last_valid_.reset();
     render_roster();
     auto *selection_error = window_->findChild<QLabel *>(
         "lingtai_agent_selection_error");
@@ -834,6 +862,7 @@ void NativeShell::render_roster() {
             "Choose a valid manifest row to inspect its detail."));
         render_conversation();
         render_agent_activity();
+        render_agent_task_card();
         render_agent_sleep_status();
         render_agent_start_status();
         if (auto *start_status = window_->findChild<QLabel *>(
@@ -920,6 +949,7 @@ void NativeShell::render_roster() {
             role_text(detail_item->role), presence_text(detail_item->presence)));
     render_conversation();
     render_agent_activity();
+    render_agent_task_card();
     render_agent_sleep_status();
     render_agent_start_status();
     if (auto *start_status = window_->findChild<QLabel *>(
@@ -1092,6 +1122,52 @@ void NativeShell::render_agent_activity() {
                           : blocks.join(QStringLiteral("\n\n")), compact);
 }
 
+// Shows the selected Agent's current self-published Task Card: only
+// `taskcard/status` and, when exactly `active`, `taskcard/taskcard.md`. It
+// is a distinct source and surface from both the mailbox conversation and
+// Agent Activity, refreshed on the same explicit open/selection paths plus
+// the one-second timer. A transient unavailable observation for the same
+// selected target preserves the last valid active/inactive projection
+// rather than clearing or erroring it; only an exact inactive status or a
+// project/selection change clears a preserved active body.
+void NativeShell::render_agent_task_card() {
+    auto *surface = window_->findChild<QPlainTextEdit *>(
+        "lingtai_selected_agent_task_card");
+    auto *state = window_->findChild<QLabel *>(
+        "lingtai_selected_agent_task_card_state");
+    if (!surface || !state) return;
+    const auto show = [&](const QString &text, const QString &compact) {
+        if (surface->toPlainText() != text) surface->setPlainText(text);
+        if (state->text() != compact) state->setText(compact);
+    };
+
+    if (!selection_state_.active_project()
+        || !selection_state_.selected_agent_directory_key()) {
+        task_card_last_valid_.reset();
+        show(QStringLiteral("Select an Agent to see its Task Card."),
+            QString());
+        return;
+    }
+
+    const auto snapshot = read_agent_task_card(
+        *selection_state_.active_project(),
+        *selection_state_.selected_agent_directory_key());
+    if (snapshot.state != AgentTaskCardState::unavailable) {
+        task_card_last_valid_ = snapshot;
+    }
+    const auto &projected = snapshot.state != AgentTaskCardState::unavailable
+        ? snapshot
+        : task_card_last_valid_.value_or(AgentTaskCardSnapshot{});
+
+    if (projected.state == AgentTaskCardState::active) {
+        show(QString::fromStdString(projected.body), QStringLiteral("Active"));
+    } else if (projected.state == AgentTaskCardState::inactive) {
+        show(QStringLiteral("No active Task Card."), QStringLiteral("Inactive"));
+    } else {
+        show(QStringLiteral("Task Card unavailable."), QString());
+    }
+}
+
 // Always resolves the route fresh from current C1/C3 truth rather than
 // capturing it once, so a selection change between typing and clicking Send
 // can never deliver to a stale target.
@@ -1148,10 +1224,11 @@ void NativeShell::handle_agent_selection(const fs::path &directory_key) {
     }
     reset_composer();
     // A selection change must never let a prior target's pending sleep or
-    // Start observation or terminal result surface under the newly
-    // selected Agent.
+    // Start observation, terminal result, or preserved Task Card
+    // projection surface under the newly selected Agent.
     pending_sleep_observation_.reset();
     pending_start_observation_.reset();
+    task_card_last_valid_.reset();
     render_roster();
     if (error) {
         error->clear();

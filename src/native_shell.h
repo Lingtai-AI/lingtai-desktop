@@ -3,6 +3,7 @@
 #include "agent_launch.h"
 #include "agent_projection.h"
 #include "agent_sleep.h"
+#include "agent_task_card.h"
 #include "workspace_selection.h"
 
 #include <chrono>
@@ -72,6 +73,7 @@ private:
     void render_roster();
     void render_conversation();
     void render_agent_activity();
+    void render_agent_task_card();
     void reset_composer();
     void handle_send_message();
     void handle_agent_selection(const std::filesystem::path &directory_key);
@@ -121,6 +123,11 @@ private:
     QTimer *activity_timer_ = nullptr;
     std::optional<SleepObservation> pending_sleep_observation_;
     std::optional<StartObservation> pending_start_observation_;
+    // The current selected target's last valid Task Card projection
+    // (active or inactive), preserved only so a transient unavailable
+    // observation does not clear or misreport it. Reset immediately on
+    // project open or Agent selection change; never persisted.
+    std::optional<AgentTaskCardSnapshot> task_card_last_valid_;
 };
 
 } // namespace lingtai::desktop

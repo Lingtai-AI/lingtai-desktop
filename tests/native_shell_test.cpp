@@ -1593,6 +1593,121 @@ void verify_start_agent_action(
     require(!cleanup_error, "Start Agent fixtures must be removed");
 }
 
+// The Step-18 read-only selected-Agent Task Card panel: one heading,
+// surface, and state label distinct from Agent Activity. Covers exact
+// active-body rendering, a changed body refreshing through the real
+// one-second timer with no reselection, a transient unavailable
+// observation preserving the same target's last valid active projection,
+// exact inactive clearing a preserved active body, and selection isolation
+// (B must never show A's card).
+void verify_agent_task_card_panel(
+        lingtai::desktop::NativeShell &shell,
+        const fs::path &sandbox) {
+    auto &window = shell.window();
+    auto *heading = required_child<QLabel>(
+        window, "lingtai_selected_agent_task_card_heading");
+    auto *surface = required_child<QPlainTextEdit>(
+        window, "lingtai_selected_agent_task_card");
+    auto *state = required_child<QLabel>(
+        window, "lingtai_selected_agent_task_card_state");
+
+    require(surface->isReadOnly(), "the Task Card surface must be read-only");
+    require(!surface->accessibleName().isEmpty()
+            && !heading->accessibleName().isEmpty()
+            && !state->accessibleName().isEmpty(),
+        "the Task Card surface must be accessible");
+    require(surface->objectName() != required_child<QPlainTextEdit>(
+                window, "lingtai_selected_agent_activity")->objectName(),
+        "Task Card must be a distinct surface from Agent Activity");
+
+    const auto project = sandbox / "project";
+    write_file(project / ".lingtai/human/.agent.json",
+        R"({"agent_id":"20260101-000000-h001","agent_name":"Ted",)"
+        R"("address":"human","state":"active"})");
+    const auto target_a = project / ".lingtai/telegram-bot";
+    write_file(target_a / ".agent.json",
+        R"({"admin":{},"agent_id":"20260712-191609-d0c8",)"
+        R"("agent_name":"telegram-bot","nickname":"Telegram Bot",)"
+        R"("address":"telegram-bot","state":"active"})");
+    const auto target_b = project / ".lingtai/issue-643";
+    write_file(target_b / ".agent.json",
+        R"({"admin":{},"agent_id":"20260712-191610-q001",)"
+        R"("agent_name":"issue-643","address":"issue-643","state":"active"})");
+
+    const auto status_a = target_a / "taskcard" / "status";
+    const auto body_a = target_a / "taskcard" / "taskcard.md";
+    write_file(status_a, "active");
+    write_file(body_a, "TASK_CARD_A_V1");
+
+    static_cast<void>(shell.open_project(project, std::nullopt));
+    require(!surface->toPlainText().contains(QStringLiteral("TASK_CARD_A")),
+        "no Agent is selected yet, so no Task Card text may render");
+
+    click_agent(window, "telegram-bot");
+    require(surface->toPlainText() == QStringLiteral("TASK_CARD_A_V1"),
+        "selecting Agent A must render A's own active Task Card body, "
+        "literally as plain text");
+    require(state->text() == QStringLiteral("Active"),
+        "an exact active projection must show the active state label");
+
+    // A changed body must become visible through the real one-second timer
+    // with no reselection, mirroring Agent Activity's own append journey.
+    write_file(body_a, "TASK_CARD_A_V2");
+    {
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (surface->toPlainText() != QStringLiteral("TASK_CARD_A_V2")
+                && std::chrono::steady_clock::now() < deadline) {
+            QThread::msleep(50);
+            QCoreApplication::processEvents();
+        }
+        require(surface->toPlainText() == QStringLiteral("TASK_CARD_A_V2"),
+            "a changed active body must refresh through the real "
+            "one-second timer");
+    }
+
+    // A transient unavailable observation (an active status with a
+    // now-blank body) must preserve the same target's last valid
+    // projection rather than clearing or erroring it.
+    write_file(body_a, "");
+    QThread::msleep(1200);
+    QCoreApplication::processEvents();
+    require(surface->toPlainText() == QStringLiteral("TASK_CARD_A_V2"),
+        "a transient invalid observation must preserve the same target's "
+        "last valid active body rather than clearing or erroring it");
+    require(state->text() == QStringLiteral("Active"),
+        "the preserved last-good projection must keep its active state "
+        "label");
+
+    // Exact inactive must clear the preserved active body.
+    write_file(status_a, "inactive");
+    {
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (state->text() != QStringLiteral("Inactive")
+                && std::chrono::steady_clock::now() < deadline) {
+            QThread::msleep(50);
+            QCoreApplication::processEvents();
+        }
+        require(state->text() == QStringLiteral("Inactive"),
+            "an exact inactive status must clear the preserved active "
+            "body through the real one-second timer");
+    }
+    require(!surface->toPlainText().contains(QStringLiteral("TASK_CARD_A")),
+        "an exact inactive projection must never keep showing a preserved "
+        "active body as current");
+
+    // Selecting B must never show A's Task Card content.
+    click_agent(window, "issue-643");
+    require(!surface->toPlainText().contains(QStringLiteral("TASK_CARD_A")),
+        "selecting a different Agent must never retain the previous "
+        "selection's Task Card content");
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "Task Card fixtures must be removed");
+}
+
 void verify_layout(lingtai::desktop::NativeShell &shell) {
     auto &window = shell.window();
     auto *body = window.body().get();
@@ -1659,6 +1774,8 @@ int main(int argc, char **argv) {
             shell, project_root / "commit-16-sleep-fixture");
         verify_start_agent_action(
             shell, project_root / "commit-17-start-fixture");
+        verify_agent_task_card_panel(
+            shell, project_root / "commit-18-task-card-fixture");
         verify_layout(shell);
         std::cout << "native shell behavior: OK\n";
         return 0;

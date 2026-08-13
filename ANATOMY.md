@@ -18,6 +18,7 @@ src/direct_conversation_route.{h,cpp}  pure direct route + human sender identity
 src/direct_conversation_history.{h,cpp} read-only direct conversation rows
 src/direct_mail_publisher.{h,cpp}      one exclusive human outbox leaf publisher
 src/agent_activity.{h,cpp}             stateless bounded selected-Agent activity snapshot reader
+src/agent_task_card.{h,cpp}            stateless read-only selected-Agent Task Card status/body reader
 src/agent_sleep.{h,cpp}                one selected-Agent .sleep marker write + best-effort applied observation
 src/agent_launch.{h,cpp}               one selected-Agent detached, shell-free `lingtai run` start
 tests/posix_descriptor_primitives_test.cpp descriptor ownership/no-follow contract
@@ -26,6 +27,7 @@ tests/direct_conversation_route_test.cpp pure route/eligibility contract
 tests/direct_conversation_history_test.cpp direct membership/order/no-write/containment contract
 tests/direct_mail_publisher_test.cpp   publish envelope/nonoverwrite/containment contract
 tests/agent_activity_test.cpp          activity binding/order/allowlist/bounds/skip contract
+tests/agent_task_card_test.cpp         Task Card active/inactive/containment contract
 tests/agent_sleep_test.cpp             sleep write-targeting/baseline-attribution/containment contract
 tests/native_shell_test.cpp            native shell semantics/geometry/no-write contract
 tests/project_attachment_test.cpp      real C++ attachment/containment behavior contract
@@ -249,6 +251,43 @@ read-only plain-text panel below the conversation/composer, refreshed on the
 same open/selection paths plus one simple one-second view-scoped `QTimer`
 that re-invokes the same stateless reader — the only poller in the shell, and
 not a background thread, filesystem watcher, or persisted cursor.
+
+`read_agent_task_card` is one stateless, read-only projection of the selected
+Agent's own two channel-facing artifacts,
+`<root>/.lingtai/<selected key>/taskcard/status` and, conditionally,
+`taskcard/taskcard.md` -- a distinct source and surface from both the
+mailbox conversation and Agent Activity above, never merged into either.
+Every walked path component -- `.lingtai`, the selected key, and `taskcard`
+itself -- is opened one no-follow leaf at a time, and both leaves must be
+real regular files; a missing, unsafe, or unreadable component reduces only
+to the coarse `unavailable` state, and nothing is ever written. `status` is
+read completely and bounded (32 bytes), and accepted only as the exact bytes
+`active` or `inactive` -- no trimming, case folding, or inference; any other
+content is `unavailable`. Only when `status` is exactly `active` does it
+read `taskcard.md`, completely and bounded to a small independent 8 KiB
+Desktop cap (not read from producer config) that comfortably covers the
+current default 2,000-character producer body; a file over that bound is
+refused rather than truncated. The body must be valid UTF-8 -- proven by an
+exact byte round trip through `QString::fromUtf8`/`toUtf8()` rather than a
+hand-rolled decoder -- and nonblank ignoring surrounding whitespace; a
+blank or invalid body with an exact `active` status is also `unavailable`.
+A valid nonblank body renders completely unchanged, with no Markdown, HTML,
+or link execution. `NativeShell` composes one heading, one read-only
+plain-text surface, and one compact state label in the selected-Agent
+detail area, positioned after Agent Activity and before Start Agent,
+refreshed on the same project-open/selection paths plus the existing
+one-second `QTimer` -- no new timer, thread, or watcher. It holds one tiny
+same-target `task_card_last_valid_` view state: an `unavailable`
+observation for the currently selected target preserves and re-shows the
+last valid active or inactive projection rather than clearing or erroring
+it, while an exact `inactive` observation, a project open, or an Agent
+selection change immediately clears any preserved active body -- so a late
+observation can never surface under a different selection, matching the
+independent Telegram/Feishu reference consumers' own no-op-on-unavailable
+rule. The surface and state label are repainted only when the accepted
+visible text or compact state actually changes. This slice never writes
+`taskcard/status` or `taskcard/taskcard.md`, never reads `taskcard.json` or
+`watch.json`, and never calls `TaskCardManager`.
 
 `request_agent_sleep` reproduces exactly the canonical local `sleep` marker
 protocol for one selected Agent: it creates or truncates
