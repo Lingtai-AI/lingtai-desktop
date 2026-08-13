@@ -19,6 +19,7 @@ src/direct_conversation_history.{h,cpp} read-only direct conversation rows
 src/direct_mail_publisher.{h,cpp}      one exclusive human outbox leaf publisher
 src/agent_activity.{h,cpp}             stateless bounded selected-Agent activity snapshot reader
 src/agent_task_card.{h,cpp}            stateless read-only selected-Agent Task Card status/body reader
+src/agent_preset_summary.{h,cpp}       stateless read-only selected-Agent kernel-resolved Presets policy/effective reader
 src/agent_sleep.{h,cpp}                one selected-Agent .sleep marker write + best-effort applied observation
 src/agent_launch.{h,cpp}               one selected-Agent detached, shell-free `lingtai run` start
 tests/posix_descriptor_primitives_test.cpp descriptor ownership/no-follow contract
@@ -28,6 +29,7 @@ tests/direct_conversation_history_test.cpp direct membership/order/no-write/cont
 tests/direct_mail_publisher_test.cpp   publish envelope/nonoverwrite/containment contract
 tests/agent_activity_test.cpp          activity binding/order/allowlist/bounds/skip contract
 tests/agent_task_card_test.cpp         Task Card active/inactive/containment contract
+tests/agent_preset_summary_test.cpp    resolved/stale/unavailable Presets summary contract
 tests/agent_sleep_test.cpp             sleep write-targeting/baseline-attribution/containment contract
 tests/native_shell_test.cpp            native shell semantics/geometry/no-write contract
 tests/project_attachment_test.cpp      real C++ attachment/containment behavior contract
@@ -288,6 +290,46 @@ rule. The surface and state label are repainted only when the accepted
 visible text or compact state actually changes. This slice never writes
 `taskcard/status` or `taskcard/taskcard.md`, never reads `taskcard.json` or
 `watch.json`, and never calls `TaskCardManager`.
+
+`read_agent_preset_summary` is one stateless, read-only projection of the
+selected Agent's own kernel-published
+`<root>/.lingtai/<selected key>/system/manifest.resolved.json`
+(`schema=lingtai.manifest.resolved/v1`, `source=kernel`) -- a distinct
+source and surface from the mailbox conversation, Agent Activity, and Task
+Card above, never merged into any of them, and never dereferencing an
+allowed preset ref. Every walked path component -- `.lingtai`, the selected
+key, and `system` -- is opened one no-follow leaf at a time, and the final
+leaf must be a real regular file bounded by a fixed 1 MiB Desktop cap (a
+source at or under the observed size that exceeds the bound is refused, not
+truncated). A missing `system` component or `manifest.resolved.json` leaf
+projects `not_yet_published`; a symlinked or non-regular component at
+either exact name projects `unavailable`, not followed. A read artifact is
+parsed only for the exact supported v1 envelope and narrow allowlisted
+paths -- root `schema`/`schema_version`/`source`/`generated_at`, root
+`preset.active`/`default`/`allowed` (exact strings and published order
+preserved), `manifest.llm.provider`/`.model`, `manifest.context_limit`, and
+top-level names from `manifest.capabilities` (sorted only for stable
+display) -- and any missing or wrong-typed field refuses the whole artifact
+as `unavailable` rather than a partial projection. Each allowed ref carries
+independent `is_active`/`is_default` badges by exact string equality
+against that same artifact's own active/default refs. `init.json` is
+descriptor-opened only for one regular-file mtime comparison against the
+artifact's own mtime -- never read or parsed, and never a fallback source
+-- and a supported artifact strictly older than that mtime projects
+`stale` instead of `resolved`; a missing/unsafe `init.json` simply yields
+no staleness evidence. `NativeShell` composes one heading, one read-only
+plain-text surface, and one compact state label ("Resolved" / "Not yet
+published" / "Stale" / "Unavailable") in the selected-Agent detail area,
+positioned after Task Card and before Start Agent, refreshed on the same
+project-open/selection paths plus the existing one-second `QTimer` -- no
+new timer, cache, or watcher. Unlike Task Card, there is no last-valid
+preservation: every observation is shown exactly as read, so an absent,
+stale, or unavailable current observation never keeps a prior target's
+projection visible. The surface and state label are repainted only when
+the accepted visible text or compact state actually changes. This slice
+never opens an allowed ref, never reads or parses `init.json` content,
+never calls a live Agent tool or `system(action="presets")`, and never
+writes anything.
 
 `request_agent_sleep` reproduces exactly the canonical local `sleep` marker
 protocol for one selected Agent: it creates or truncates

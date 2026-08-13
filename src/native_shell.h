@@ -74,6 +74,7 @@ private:
     void render_conversation();
     void render_agent_activity();
     void render_agent_task_card();
+    void render_agent_preset_summary();
     void reset_composer();
     void handle_send_message();
     void handle_agent_selection(const std::filesystem::path &directory_key);

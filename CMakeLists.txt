@@ -189,7 +189,7 @@ target_link_libraries(lingtai_desktop_native_shell
         lingtai_desktop_agent_projection lingtai_desktop_conversation
         lingtai_desktop_mail_publisher lingtai_desktop_agent_activity
         lingtai_desktop_agent_sleep lingtai_desktop_agent_launch
-        lingtai_desktop_agent_task_card)
+        lingtai_desktop_agent_task_card lingtai_desktop_agent_preset_summary)
 
 # Internal POSIX descriptor/no-follow primitives. No Qt, no project model, and
 # deliberately no link edge of its own: it is the shared safety mechanism every
@@ -284,6 +284,22 @@ target_link_libraries(lingtai_desktop_agent_task_card
     PUBLIC lingtai_desktop_core
     PRIVATE Qt6::Core lingtai_desktop_posix_primitives)
 
+# The one Presets summary reader owner: it turns the selected Agent's own
+# kernel-published `system/manifest.resolved.json` into a bounded, stateless,
+# read-only policy/effective projection. It reads no other source (init.json
+# is opened only for an mtime staleness comparison), never dereferences an
+# allowed ref, and owns no presentation.
+add_library(lingtai_desktop_agent_preset_summary STATIC
+    src/agent_preset_summary.cpp)
+init_target(lingtai_desktop_agent_preset_summary)
+target_include_directories(lingtai_desktop_agent_preset_summary PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(lingtai_desktop_agent_preset_summary PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_desktop_agent_preset_summary
+    PUBLIC lingtai_desktop_core
+    PRIVATE Qt6::Core lingtai_desktop_posix_primitives)
+
 # The one Request sleep leaf owner: it turns an already-accepted project
 # attachment and an exact selected Agent key into one local `.sleep` marker
 # write, plus a best-effort target-side `sleep_received` observation of the
@@ -358,6 +374,13 @@ target_compile_options(lingtai_agent_task_card_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_agent_task_card_test PRIVATE
     lingtai_desktop_agent_task_card)
+add_executable(lingtai_agent_preset_summary_test
+    tests/agent_preset_summary_test.cpp)
+init_target(lingtai_agent_preset_summary_test)
+target_compile_options(lingtai_agent_preset_summary_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_agent_preset_summary_test PRIVATE
+    lingtai_desktop_agent_preset_summary)
 add_executable(lingtai_agent_sleep_test
     tests/agent_sleep_test.cpp)
 init_target(lingtai_agent_sleep_test)
@@ -410,6 +433,9 @@ add_test(NAME agent_activity
 add_test(NAME agent_task_card
     COMMAND lingtai_agent_task_card_test
         "${CMAKE_CURRENT_BINARY_DIR}/agent-task-card-fixture")
+add_test(NAME agent_preset_summary
+    COMMAND lingtai_agent_preset_summary_test
+        "${CMAKE_CURRENT_BINARY_DIR}/agent-preset-summary-fixture")
 add_test(NAME agent_sleep
     COMMAND lingtai_agent_sleep_test
         "${CMAKE_CURRENT_BINARY_DIR}/agent-sleep-fixture")

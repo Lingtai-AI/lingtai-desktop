@@ -1,6 +1,7 @@
 #include "native_shell.h"
 
 #include "agent_activity.h"
+#include "agent_preset_summary.h"
 #include "agent_sleep.h"
 #include "agent_task_card.h"
 #include "direct_conversation_history.h"
@@ -498,6 +499,31 @@ NativeShell::NativeShell()
         QStringLiteral("Selected Agent Task Card state"));
     detail_layout->addWidget(task_card_state);
 
+    // A separate, distinct, bounded read-only projection of the selected
+    // Agent's own kernel-published resolved preset policy/effective
+    // configuration. It is a different source and authority from the
+    // mailbox conversation, Agent Activity, and Task Card above and is
+    // never merged into any of them; it never dereferences an allowed ref.
+    detail_layout->addWidget(make_label(
+        detail, QStringLiteral("Presets"),
+        "lingtai_selected_agent_preset_summary_heading", 12, QFont::DemiBold));
+    auto *preset_summary = new QPlainTextEdit(detail);
+    preset_summary->setObjectName("lingtai_selected_agent_preset_summary");
+    preset_summary->setAccessibleName(
+        QStringLiteral("Selected Agent Presets summary"));
+    preset_summary->setAccessibleDescription(QStringLiteral(
+        "The selected Agent's own kernel-resolved preset policy and active "
+        "effective configuration, shown read-only as plain text."));
+    preset_summary->setReadOnly(true);
+    preset_summary->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+    preset_summary->setMinimumHeight(140);
+    detail_layout->addWidget(preset_summary);
+    auto *preset_summary_state = make_label(
+        detail, QString(), "lingtai_selected_agent_preset_summary_state", 10);
+    preset_summary_state->setAccessibleName(
+        QStringLiteral("Selected Agent Presets summary state"));
+    detail_layout->addWidget(preset_summary_state);
+
     // The one Step-6 action on the exact selected Agent: an explicit,
     // nonblocking start for a selected non-human Agent whose current
     // projection is not heartbeat-live. Hidden entirely (not merely
@@ -597,6 +623,7 @@ NativeShell::NativeShell()
         render_conversation();
         render_agent_activity();
         render_agent_task_card();
+        render_agent_preset_summary();
         if (pending_sleep_observation_) {
             tick_agent_sleep_observation();
         } else if (pending_start_observation_) {
@@ -863,6 +890,7 @@ void NativeShell::render_roster() {
         render_conversation();
         render_agent_activity();
         render_agent_task_card();
+        render_agent_preset_summary();
         render_agent_sleep_status();
         render_agent_start_status();
         if (auto *start_status = window_->findChild<QLabel *>(
@@ -950,6 +978,7 @@ void NativeShell::render_roster() {
     render_conversation();
     render_agent_activity();
     render_agent_task_card();
+    render_agent_preset_summary();
     render_agent_sleep_status();
     render_agent_start_status();
     if (auto *start_status = window_->findChild<QLabel *>(
@@ -1166,6 +1195,82 @@ void NativeShell::render_agent_task_card() {
     } else {
         show(QStringLiteral("Task Card unavailable."), QString());
     }
+}
+
+// Shows the selected Agent's own kernel-published resolved preset policy
+// and active effective configuration: only `system/manifest.resolved.json`.
+// It is a distinct source and surface from the mailbox conversation, Agent
+// Activity, and Task Card above, refreshed on the same explicit open/
+// selection paths plus the one-second timer. Unlike Task Card, there is no
+// last-valid preservation: every observation is shown exactly as read, so
+// an absent/stale/unavailable current observation never keeps a prior
+// target's projection visible.
+void NativeShell::render_agent_preset_summary() {
+    auto *surface = window_->findChild<QPlainTextEdit *>(
+        "lingtai_selected_agent_preset_summary");
+    auto *state = window_->findChild<QLabel *>(
+        "lingtai_selected_agent_preset_summary_state");
+    if (!surface || !state) return;
+    const auto show = [&](const QString &text, const QString &compact) {
+        if (surface->toPlainText() != text) surface->setPlainText(text);
+        if (state->text() != compact) state->setText(compact);
+    };
+
+    if (!selection_state_.active_project()
+        || !selection_state_.selected_agent_directory_key()) {
+        show(QStringLiteral("Select an Agent to see its Presets."), QString());
+        return;
+    }
+
+    const auto summary = read_agent_preset_summary(
+        *selection_state_.active_project(),
+        *selection_state_.selected_agent_directory_key());
+
+    switch (summary.source) {
+    case AgentPresetSummarySource::not_yet_published:
+        show(QStringLiteral(
+                "No resolved preset summary has been published yet."),
+            QStringLiteral("Not yet published"));
+        return;
+    case AgentPresetSummarySource::unavailable:
+        show(QStringLiteral("Preset summary is unavailable."),
+            QStringLiteral("Unavailable"));
+        return;
+    case AgentPresetSummarySource::resolved:
+    case AgentPresetSummarySource::stale:
+        break;
+    }
+
+    auto lines = QStringList();
+    lines << QStringLiteral("Active:  %1").arg(value_text(summary.active_ref));
+    lines << QStringLiteral("Default: %1").arg(value_text(summary.default_ref));
+    lines << QStringLiteral("Allowed:");
+    for (const auto &ref : summary.allowed) {
+        auto badges = QStringList();
+        if (ref.is_active) badges << QStringLiteral("Active");
+        if (ref.is_default) badges << QStringLiteral("Default");
+        lines << (badges.isEmpty()
+            ? QStringLiteral("  • %1").arg(QString::fromStdString(ref.ref))
+            : QStringLiteral("  • [%1] %2")
+                  .arg(badges.join(QStringLiteral(", ")),
+                      QString::fromStdString(ref.ref)));
+    }
+    lines << QString();
+    lines << QStringLiteral("Active effective");
+    lines << QStringLiteral("  Provider: %1")
+        .arg(value_text(summary.effective.provider));
+    lines << QStringLiteral("  Model: %1").arg(value_text(summary.effective.model));
+    lines << QStringLiteral("  Context limit: %1")
+        .arg(value_text(summary.effective.context_limit));
+    lines << QStringLiteral("  Capabilities: %1")
+        .arg(joined_names(summary.effective.capability_names));
+    lines << QString();
+    lines << QStringLiteral("Source: kernel · generated %1")
+        .arg(value_text(summary.generated_at));
+
+    show(lines.join(QStringLiteral("\n")),
+        summary.source == AgentPresetSummarySource::stale
+            ? QStringLiteral("Stale") : QStringLiteral("Resolved"));
 }
 
 // Always resolves the route fresh from current C1/C3 truth rather than

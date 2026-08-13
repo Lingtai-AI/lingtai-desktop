@@ -1708,6 +1708,151 @@ void verify_agent_task_card_panel(
     require(!cleanup_error, "Task Card fixtures must be removed");
 }
 
+// The Step-19 read-only selected-Agent Presets summary panel: one heading,
+// surface, and state label distinct from both Task Card and Agent Activity.
+// Covers exact resolved rendering (ordered allowed refs, independent
+// active/default badges, active-effective fields, kernel provenance), a
+// changed artifact becoming visible through the real one-second timer with
+// no reselection, and selection isolation -- B, with no published artifact,
+// must never show A's summary and must show "Not yet published".
+void verify_agent_preset_summary_panel(
+        lingtai::desktop::NativeShell &shell,
+        const fs::path &sandbox) {
+    auto &window = shell.window();
+    auto *heading = required_child<QLabel>(
+        window, "lingtai_selected_agent_preset_summary_heading");
+    auto *surface = required_child<QPlainTextEdit>(
+        window, "lingtai_selected_agent_preset_summary");
+    auto *state = required_child<QLabel>(
+        window, "lingtai_selected_agent_preset_summary_state");
+
+    require(surface->isReadOnly(), "the Presets surface must be read-only");
+    require(!surface->accessibleName().isEmpty()
+            && !heading->accessibleName().isEmpty()
+            && !state->accessibleName().isEmpty(),
+        "the Presets surface must be accessible");
+    require(surface->objectName() != required_child<QPlainTextEdit>(
+                window, "lingtai_selected_agent_task_card")->objectName(),
+        "Presets must be a distinct surface from Task Card");
+
+    const auto project = sandbox / "project";
+    write_file(project / ".lingtai/human/.agent.json",
+        R"({"agent_id":"20260101-000000-h001","agent_name":"Ted",)"
+        R"("address":"human","state":"active"})");
+    const auto target_a = project / ".lingtai/telegram-bot";
+    write_file(target_a / ".agent.json",
+        R"({"admin":{},"agent_id":"20260712-191609-d0c8",)"
+        R"("agent_name":"telegram-bot","nickname":"Telegram Bot",)"
+        R"("address":"telegram-bot","state":"active"})");
+    const auto target_b = project / ".lingtai/issue-643";
+    write_file(target_b / ".agent.json",
+        R"({"admin":{},"agent_id":"20260712-191610-q001",)"
+        R"("agent_name":"issue-643","address":"issue-643","state":"active"})");
+
+    const auto artifact_a = target_a / "system" / "manifest.resolved.json";
+    const auto resolved_v1 = std::string_view(R"JSON({
+      "schema": "lingtai.manifest.resolved/v1",
+      "schema_version": 1,
+      "source": "kernel",
+      "generated_at": "2026-08-13T19:53:34Z",
+      "manifest": {
+        "llm": {"provider": "codex", "model": "gpt-5.6-sol"},
+        "context_limit": 250000,
+        "capabilities": {"web": {}, "avatar": {}, "shell": {}}
+      },
+      "preset": {
+        "active": "~/.lingtai-tui/presets/saved/codex.json",
+        "default": "~/.lingtai-tui/presets/saved/codex.json",
+        "allowed": [
+          "~/.lingtai-tui/presets/saved/deepseek_flash.json",
+          "~/.lingtai-tui/presets/saved/codex.json",
+          "~/.lingtai-tui/presets/saved/zhipu-1.json"
+        ]
+      }
+    })JSON");
+    write_file(artifact_a, resolved_v1);
+
+    static_cast<void>(shell.open_project(project, std::nullopt));
+    require(!surface->toPlainText().contains(QStringLiteral("codex.json")),
+        "no Agent is selected yet, so no Presets text may render");
+
+    click_agent(window, "telegram-bot");
+    const auto expected_v1 = QStringLiteral(
+        "Active:  ~/.lingtai-tui/presets/saved/codex.json\n"
+        "Default: ~/.lingtai-tui/presets/saved/codex.json\n"
+        "Allowed:\n"
+        "  • ~/.lingtai-tui/presets/saved/deepseek_flash.json\n"
+        "  • [Active, Default] ~/.lingtai-tui/presets/saved/codex.json\n"
+        "  • ~/.lingtai-tui/presets/saved/zhipu-1.json\n"
+        "\n"
+        "Active effective\n"
+        "  Provider: codex\n"
+        "  Model: gpt-5.6-sol\n"
+        "  Context limit: 250000\n"
+        "  Capabilities: avatar, shell, web\n"
+        "\n"
+        "Source: kernel · generated 2026-08-13T19:53:34Z");
+    require(surface->toPlainText() == expected_v1,
+        "selecting Agent A must render its exact ordered allowed refs, "
+        "independent active/default badges, active-effective fields, and "
+        "kernel provenance");
+    require(state->text() == QStringLiteral("Resolved"),
+        "a supported complete v1 artifact must show the Resolved state "
+        "label");
+
+    // A changed artifact must become visible through the real one-second
+    // timer with no reselection.
+    const auto resolved_v2 = std::string_view(R"JSON({
+      "schema": "lingtai.manifest.resolved/v1",
+      "schema_version": 1,
+      "source": "kernel",
+      "generated_at": "2026-08-13T20:10:00Z",
+      "manifest": {
+        "llm": {"provider": "codex", "model": "gpt-5.6-sol"},
+        "context_limit": 250000,
+        "capabilities": {"web": {}, "avatar": {}, "shell": {}}
+      },
+      "preset": {
+        "active": "~/.lingtai-tui/presets/saved/codex.json",
+        "default": "~/.lingtai-tui/presets/saved/codex.json",
+        "allowed": [
+          "~/.lingtai-tui/presets/saved/deepseek_flash.json",
+          "~/.lingtai-tui/presets/saved/codex.json",
+          "~/.lingtai-tui/presets/saved/zhipu-1.json"
+        ]
+      }
+    })JSON");
+    write_file(artifact_a, resolved_v2);
+    {
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (!surface->toPlainText().contains(
+                    QStringLiteral("2026-08-13T20:10:00Z"))
+                && std::chrono::steady_clock::now() < deadline) {
+            QThread::msleep(50);
+            QCoreApplication::processEvents();
+        }
+        require(surface->toPlainText().contains(
+                    QStringLiteral("2026-08-13T20:10:00Z")),
+            "a changed artifact must refresh through the real one-second "
+            "timer");
+    }
+
+    // Selecting B, which has no published artifact, must never show A's
+    // summary and must show the Not yet published state.
+    click_agent(window, "issue-643");
+    require(!surface->toPlainText().contains(QStringLiteral("codex.json")),
+        "selecting a different Agent must never retain the previous "
+        "selection's Presets content");
+    require(state->text() == QStringLiteral("Not yet published"),
+        "a selected Agent with no published resolved artifact must show "
+        "the Not yet published state, never a stale carry-over");
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "Presets fixtures must be removed");
+}
+
 void verify_layout(lingtai::desktop::NativeShell &shell) {
     auto &window = shell.window();
     auto *body = window.body().get();
@@ -1776,6 +1921,8 @@ int main(int argc, char **argv) {
             shell, project_root / "commit-17-start-fixture");
         verify_agent_task_card_panel(
             shell, project_root / "commit-18-task-card-fixture");
+        verify_agent_preset_summary_panel(
+            shell, project_root / "commit-19-preset-summary-fixture");
         verify_layout(shell);
         std::cout << "native shell behavior: OK\n";
         return 0;
