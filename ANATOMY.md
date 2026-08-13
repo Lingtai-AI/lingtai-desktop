@@ -20,6 +20,7 @@ src/direct_mail_publisher.{h,cpp}      one exclusive human outbox leaf publisher
 src/agent_activity.{h,cpp}             stateless bounded selected-Agent activity snapshot reader
 src/agent_task_card.{h,cpp}            stateless read-only selected-Agent Task Card status/body reader
 src/agent_preset_summary.{h,cpp}       stateless read-only selected-Agent kernel-resolved Presets policy/effective reader
+src/local_preset_draft.{h,cpp}         opaque project+Agent local preset draft store (app-data root, atomic replace)
 src/agent_sleep.{h,cpp}                one selected-Agent .sleep marker write + best-effort applied observation
 src/agent_launch.{h,cpp}               one selected-Agent detached, shell-free `lingtai run` start
 tests/posix_descriptor_primitives_test.cpp descriptor ownership/no-follow contract
@@ -30,6 +31,7 @@ tests/direct_mail_publisher_test.cpp   publish envelope/nonoverwrite/containment
 tests/agent_activity_test.cpp          activity binding/order/allowlist/bounds/skip contract
 tests/agent_task_card_test.cpp         Task Card active/inactive/containment contract
 tests/agent_preset_summary_test.cpp    resolved/stale/unavailable Presets summary contract
+tests/local_preset_draft_test.cpp      draft round-trip/isolation/oversize-preserves/no-project-write contract
 tests/agent_sleep_test.cpp             sleep write-targeting/baseline-attribution/containment contract
 tests/native_shell_test.cpp            native shell semantics/geometry/no-write contract
 tests/project_attachment_test.cpp      real C++ attachment/containment behavior contract
@@ -330,6 +332,67 @@ the accepted visible text or compact state actually changes. This slice
 never opens an allowed ref, never reads or parses `init.json` content,
 never calls a live Agent tool or `system(action="presets")`, and never
 writes anything.
+
+`load_local_preset_draft`/`save_local_preset_draft` own the Local preset
+draft store: one bounded (64 KiB encoded), opaque, user-authored plain-text
+document per exact (canonical project root, selected Agent's own nonempty
+stable `agent_id`) key -- never a directory name, nickname, address, or
+preset ref, so a directory rename that preserves `agent_id` keeps the same
+draft while a moved project root is simply a different key. It is the
+shell's first writer outside a real project tree: persisted only beneath an
+explicitly injected Desktop application-data root (production resolves this
+from Qt's application-data location after `main.cpp` sets one stable
+application identity; focused/native tests inject a disposable temporary
+root), inside one app-owned, owner-restrictive `local-preset-drafts`
+subdirectory created only by a save, never a load. Each key maps to one
+deterministic SHA-256 digest filename -- a lookup convenience only, never
+the identity check itself, since `load` always re-verifies the envelope's
+own recorded `project`/`agent_id` fields against the exact requested key
+before trusting its `document`. A save is refused, never truncated, over
+the 64 KiB bound, and otherwise always lands by one write-temp-then-
+`renameat` atomic replace so a refused or failed save never touches
+previously saved content. Desktop is the sole writer of this private root
+in this slice: no lock, revision, history, migration, recovery ledger,
+watcher, cache, or generic settings framework is added, and this module
+never reads, parses, or dereferences any preset/config/credential source --
+it treats `document` as opaque bytes throughout.
+
+`NativeShell` composes one Local preset draft surface directly under the
+read-only Presets summary: a heading, one explanation carrying both the
+exact `Stored only by Desktop. Not active or applied.` meaning and a
+concise credentials warning, one editable plain-text surface, Save
+Draft/Discard Changes buttons, and one compact state label (no stable
+identity / clean local draft / unsaved changes / saved locally / save
+failed). A row with no nonempty stable `agent_id` disables the whole
+surface with a truthful reason rather than falling back to a directory key.
+The working copy loads from the store only on a genuine (project, agent_id)
+target change -- tracked by one small memoized key -- never on an unrelated
+same-target reroster and never from the existing one-second `QTimer`, which
+never calls this renderer at all, so a same-selection background refresh
+can never clobber an in-progress edit. Any text difference from the last
+successfully loaded/saved value is dirty; only a successful Save Draft
+updates the clean baseline, and Discard Changes restores the last loaded/
+saved value without touching the saved file. A dirty Agent-selection change
+and a dirty project change (`open_project`) share one guard function
+implementing the same three-way Save Draft/Discard/Cancel boundary: Cancel
+(the default real boundary is one blocking `QMessageBox`, overridable via
+`set_local_preset_draft_boundary_prompt` for tests) or a failed Save leaves
+the current selection/project and the dirty working text exactly as they
+were, matched by a new `ProjectOpenDisposition::cancelled`; Discard always
+restores the working copy to its last loaded/saved value before permitting
+the transition, even when it happens to resolve back to the same target.
+A dirty window close shares the exact same guard. `RpWidget::event()` is
+`final` in the pinned toolkit, so `NativeShell` installs one private,
+cpp-local `QObject` event filter (`LocalPresetDraftCloseGuard`) on the
+existing concrete `window_` instead of adding an `RpWindow` subclass: on
+`QEvent::Close` it calls `guard_local_preset_draft_transition()`, ignoring
+the event (leaving the window open) on Cancel or a failed Save and letting
+it pass through unmodified otherwise, so a clean draft, a successful Save,
+or Discard closes exactly as before. This is the same primitive `RpWindow`'s
+own macOS close() helper uses to deliver its `QCloseEvent`, so the filter
+sees every platform's real close request. This surface never reads or
+dereferences an allowed/active preset file, never imports/exports, never
+offers Apply/Switch/Refresh, and never writes any project or Agent tree.
 
 `request_agent_sleep` reproduces exactly the canonical local `sleep` marker
 protocol for one selected Agent: it creates or truncates

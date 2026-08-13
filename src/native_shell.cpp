@@ -6,19 +6,23 @@
 #include "agent_task_card.h"
 #include "direct_conversation_history.h"
 #include "direct_mail_publisher.h"
+#include "local_preset_draft.h"
 
 #include "ui/rp_widget.h"
 #include "ui/widgets/rp_window.h"
 
+#include <QtCore/QEvent>
 #include <QtCore/QString>
 #include <QtCore/QStringList>
 #include <QtCore/QTimer>
 #include <QtCore/QVariant>
+#include <QtGui/QCloseEvent>
 #include <QtGui/QFont>
 #include <QtWidgets/QBoxLayout>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLayout>
 #include <QtWidgets/QLineEdit>
+#include <QtWidgets/QMessageBox>
 #include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QScrollArea>
@@ -183,6 +187,30 @@ bool agent_start_eligible(const AgentRow &item) {
         || item.presence == AgentPresenceKind::missing;
 }
 
+// `RpWidget::event()` is `final` (see the pinned `rp_window.h`/`rp_widget.h`
+// toolkit sources), so a dirty-draft boundary on real window close needs a
+// plain `QObject` event filter on the existing concrete window, not a new
+// `RpWindow` subclass. A veto (Cancel) ignores the `QCloseEvent` so the
+// window stays open; any permitted transition (clean, Save, Discard) leaves
+// the event untouched for the real close to proceed exactly as before.
+class LocalPresetDraftCloseGuard final : public QObject {
+public:
+    LocalPresetDraftCloseGuard(QObject *parent, std::function<bool()> guard)
+    : QObject(parent), guard_(std::move(guard)) {}
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override {
+        if (event->type() == QEvent::Close && !guard_()) {
+            event->ignore();
+            return true;
+        }
+        return QObject::eventFilter(watched, event);
+    }
+
+private:
+    std::function<bool()> guard_;
+};
+
 } // namespace
 
 NativeShell::NativeShell()
@@ -195,6 +223,8 @@ NativeShell::NativeShell()
         "A native desktop workspace for inspecting LingTai projects and Agents."));
     window_->setMinimumSize(QSize(kMinimumWindowWidth, kMinimumWindowHeight));
     window_->resize(kDefaultWindowWidth, kDefaultWindowHeight);
+    window_->installEventFilter(new LocalPresetDraftCloseGuard(
+        window_.get(), [this] { return guard_local_preset_draft_transition(); }));
 
     auto *body = window_->body().get();
     body->setObjectName("lingtai_desktop_body");
@@ -524,6 +554,83 @@ NativeShell::NativeShell()
         QStringLiteral("Selected Agent Presets summary state"));
     detail_layout->addWidget(preset_summary_state);
 
+    // One Desktop-owned, opaque local working copy for the selected Agent;
+    // distinct from the read-only Presets summary above and never merged
+    // into it or read from an allowed/active preset file.
+    detail_layout->addWidget(make_label(
+        detail, QStringLiteral("Local preset draft"),
+        "lingtai_selected_agent_preset_draft_heading", 12, QFont::DemiBold));
+    auto *preset_draft_explanation = make_label(
+        detail,
+        QStringLiteral("Stored only by Desktop. Not active or applied.\n"
+            "Do not put credentials in this draft."),
+        "lingtai_selected_agent_preset_draft_explanation", 10);
+    detail_layout->addWidget(preset_draft_explanation);
+    auto *preset_draft_editor = new QPlainTextEdit(detail);
+    preset_draft_editor->setObjectName("lingtai_selected_agent_preset_draft_editor");
+    preset_draft_editor->setAccessibleName(
+        QStringLiteral("Local preset draft editor"));
+    preset_draft_editor->setAccessibleDescription(QStringLiteral(
+        "An opaque local working copy for the selected Agent, stored only "
+        "by Desktop. It is never active or applied, and Desktop never "
+        "reads, validates, or scans this text."));
+    preset_draft_editor->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+    preset_draft_editor->setMinimumHeight(120);
+    preset_draft_editor->setEnabled(false);
+    detail_layout->addWidget(preset_draft_editor);
+    QObject::connect(preset_draft_editor, &QPlainTextEdit::textChanged, [this] {
+        handle_local_preset_draft_text_changed();
+    });
+    auto *preset_draft_actions = new Ui::RpWidget(detail);
+    preset_draft_actions->setObjectName("lingtai_selected_agent_preset_draft_actions");
+    auto *preset_draft_actions_layout = new QHBoxLayout(preset_draft_actions);
+    preset_draft_actions_layout->setContentsMargins(0, 0, 0, 0);
+    preset_draft_actions_layout->setSpacing(8);
+    auto *preset_draft_save = new QPushButton(
+        QStringLiteral("Save Draft"), preset_draft_actions);
+    preset_draft_save->setObjectName("lingtai_selected_agent_preset_draft_save");
+    preset_draft_save->setAccessibleName(QStringLiteral("Save Draft"));
+    preset_draft_save->setEnabled(false);
+    QObject::connect(preset_draft_save, &QPushButton::clicked, [this] {
+        handle_save_local_preset_draft();
+    });
+    preset_draft_actions_layout->addWidget(preset_draft_save);
+    auto *preset_draft_discard = new QPushButton(
+        QStringLiteral("Discard Changes"), preset_draft_actions);
+    preset_draft_discard->setObjectName(
+        "lingtai_selected_agent_preset_draft_discard");
+    preset_draft_discard->setAccessibleName(QStringLiteral("Discard Changes"));
+    preset_draft_discard->setEnabled(false);
+    QObject::connect(preset_draft_discard, &QPushButton::clicked, [this] {
+        handle_discard_local_preset_draft();
+    });
+    preset_draft_actions_layout->addWidget(preset_draft_discard);
+    detail_layout->addWidget(preset_draft_actions);
+    auto *preset_draft_state = make_label(
+        detail, QString(), "lingtai_selected_agent_preset_draft_state", 10);
+    preset_draft_state->setAccessibleName(
+        QStringLiteral("Local preset draft state"));
+    detail_layout->addWidget(preset_draft_state);
+
+    // Default blocking Save/Discard/Cancel dialog; overridable via
+    // `set_local_preset_draft_boundary_prompt`.
+    local_preset_draft_boundary_prompt_ = [this] {
+        QMessageBox prompt(window_.get());
+        prompt.setWindowTitle(QStringLiteral("Unsaved local preset draft"));
+        prompt.setText(QStringLiteral(
+            "This local preset draft has unsaved changes."));
+        auto *save = prompt.addButton(
+            QStringLiteral("Save Draft"), QMessageBox::AcceptRole);
+        auto *discard = prompt.addButton(
+            QStringLiteral("Discard"), QMessageBox::DestructiveRole);
+        prompt.addButton(QStringLiteral("Cancel"), QMessageBox::RejectRole);
+        prompt.exec();
+        const auto *clicked = prompt.clickedButton();
+        if (clicked == save) return LocalPresetDraftBoundaryChoice::save;
+        if (clicked == discard) return LocalPresetDraftBoundaryChoice::discard;
+        return LocalPresetDraftBoundaryChoice::cancel;
+    };
+
     // The one Step-6 action on the exact selected Agent: an explicit,
     // nonblocking start for a selected non-human Agent whose current
     // projection is not heartbeat-live. Hidden entirely (not merely
@@ -671,9 +778,25 @@ void NativeShell::set_agent_start_fallback_python(
     agent_start_fallback_python_ = std::move(fallback_python);
 }
 
+void NativeShell::set_local_preset_draft_root(fs::path root) {
+    local_preset_draft_root_ = std::move(root);
+}
+
+void NativeShell::set_local_preset_draft_boundary_prompt(
+        LocalPresetDraftBoundaryPrompt prompt) {
+    local_preset_draft_boundary_prompt_ = std::move(prompt);
+}
+
 ProjectOpenOutcome NativeShell::open_project(
         const fs::path &selected_directory,
         const std::optional<fs::path> &agent_relative_directory) {
+    if (!guard_local_preset_draft_transition()) {
+        return {
+            .disposition = ProjectOpenDisposition::cancelled,
+            .failure = ProjectPathFailure::none,
+        };
+    }
+
     auto attached = attach_project(selected_directory);
     if (!attached) {
         switch (attached.failure) {
@@ -891,6 +1014,7 @@ void NativeShell::render_roster() {
         render_agent_activity();
         render_agent_task_card();
         render_agent_preset_summary();
+        render_local_preset_draft();
         render_agent_sleep_status();
         render_agent_start_status();
         if (auto *start_status = window_->findChild<QLabel *>(
@@ -979,6 +1103,7 @@ void NativeShell::render_roster() {
     render_agent_activity();
     render_agent_task_card();
     render_agent_preset_summary();
+    render_local_preset_draft();
     render_agent_sleep_status();
     render_agent_start_status();
     if (auto *start_status = window_->findChild<QLabel *>(
@@ -1273,6 +1398,176 @@ void NativeShell::render_agent_preset_summary() {
             ? QStringLiteral("Stale") : QStringLiteral("Resolved"));
 }
 
+// Loads the draft only on a genuine (project root, agent_id) target change,
+// never on a same-target re-render or the one-second timer. No stable
+// `agent_id` disables the surface with a truthful reason.
+void NativeShell::render_local_preset_draft() {
+    auto *editor = window_->findChild<QPlainTextEdit *>(
+        "lingtai_selected_agent_preset_draft_editor");
+    auto *save_button = window_->findChild<QPushButton *>(
+        "lingtai_selected_agent_preset_draft_save");
+    auto *discard_button = window_->findChild<QPushButton *>(
+        "lingtai_selected_agent_preset_draft_discard");
+    auto *state = window_->findChild<QLabel *>(
+        "lingtai_selected_agent_preset_draft_state");
+    if (!editor || !save_button || !discard_button || !state) return;
+
+    std::optional<std::pair<std::string, std::string>> target;
+    if (selection_state_.active_project()
+        && selection_state_.selected_agent_directory_key()) {
+        if (const auto *item = selectable_item(
+                agents_, *selection_state_.selected_agent_directory_key());
+            item && item->identity && item->identity->agent_id
+            && !item->identity->agent_id->empty()) {
+            target = std::make_pair(
+                selection_state_.active_project()->root().string(),
+                *item->identity->agent_id);
+        }
+    }
+
+    if (!target) {
+        local_preset_draft_target_.reset();
+        local_preset_draft_baseline_.clear();
+        local_preset_draft_dirty_ = false;
+        local_preset_draft_just_saved_ = false;
+        local_preset_draft_save_failed_ = false;
+        if (!editor->toPlainText().isEmpty()) editor->clear();
+        editor->setEnabled(false);
+        save_button->setEnabled(false);
+        discard_button->setEnabled(false);
+        const auto label = selection_state_.selected_agent_directory_key()
+            ? QStringLiteral("No stable identity for this Agent.")
+            : QString();
+        if (state->text() != label) state->setText(label);
+        return;
+    }
+
+    if (local_preset_draft_target_ != target) {
+        local_preset_draft_target_ = target;
+        const auto loaded = load_local_preset_draft(
+            local_preset_draft_root_,
+            selection_state_.active_project()->root(),
+            target->second);
+        local_preset_draft_baseline_ = loaded.document;
+        editor->setEnabled(true);
+        editor->setPlainText(QString::fromStdString(loaded.document));
+        local_preset_draft_dirty_ = false;
+        local_preset_draft_just_saved_ = false;
+        local_preset_draft_save_failed_ = false;
+    }
+    update_local_preset_draft_controls();
+}
+
+// Refreshes only Save/Discard enabled state and the state label; never
+// touches editor text.
+void NativeShell::update_local_preset_draft_controls() {
+    auto *save_button = window_->findChild<QPushButton *>(
+        "lingtai_selected_agent_preset_draft_save");
+    auto *discard_button = window_->findChild<QPushButton *>(
+        "lingtai_selected_agent_preset_draft_discard");
+    auto *state = window_->findChild<QLabel *>(
+        "lingtai_selected_agent_preset_draft_state");
+    if (!save_button || !discard_button || !state) return;
+
+    save_button->setEnabled(local_preset_draft_dirty_);
+    discard_button->setEnabled(local_preset_draft_dirty_);
+
+    const auto label = !local_preset_draft_target_
+        ? QString()
+        : local_preset_draft_dirty_
+            ? (local_preset_draft_save_failed_
+                  ? QStringLiteral("Draft could not be saved locally.")
+                  : QStringLiteral("Unsaved changes."))
+        : local_preset_draft_just_saved_
+            ? QStringLiteral("Draft saved locally — not applied.")
+            : QStringLiteral("Clean local draft.");
+    if (state->text() != label) state->setText(label);
+}
+
+void NativeShell::handle_local_preset_draft_text_changed() {
+    if (!local_preset_draft_target_) return;
+    auto *editor = window_->findChild<QPlainTextEdit *>(
+        "lingtai_selected_agent_preset_draft_editor");
+    if (!editor) return;
+    const auto dirty = editor->toPlainText().toUtf8().toStdString()
+        != local_preset_draft_baseline_;
+    if (dirty != local_preset_draft_dirty_) {
+        local_preset_draft_dirty_ = dirty;
+        if (dirty) {
+            local_preset_draft_just_saved_ = false;
+        } else {
+            local_preset_draft_save_failed_ = false;
+        }
+    }
+    update_local_preset_draft_controls();
+}
+
+// Shared by Save Draft and the dirty-transition boundary; only a
+// successful persist updates the clean baseline.
+bool NativeShell::attempt_save_local_preset_draft() {
+    if (!local_preset_draft_target_ || !selection_state_.active_project()) {
+        return false;
+    }
+    auto *editor = window_->findChild<QPlainTextEdit *>(
+        "lingtai_selected_agent_preset_draft_editor");
+    if (!editor) return false;
+    const auto text = editor->toPlainText().toUtf8().toStdString();
+    const auto result = save_local_preset_draft(
+        local_preset_draft_root_,
+        selection_state_.active_project()->root(),
+        local_preset_draft_target_->second,
+        text);
+    if (result == LocalPresetDraftSaveResult::saved) {
+        local_preset_draft_baseline_ = text;
+        local_preset_draft_dirty_ = false;
+        local_preset_draft_just_saved_ = true;
+        local_preset_draft_save_failed_ = false;
+        update_local_preset_draft_controls();
+        return true;
+    }
+    local_preset_draft_save_failed_ = true;
+    local_preset_draft_just_saved_ = false;
+    update_local_preset_draft_controls();
+    return false;
+}
+
+void NativeShell::handle_save_local_preset_draft() {
+    static_cast<void>(attempt_save_local_preset_draft());
+}
+
+// Restores the last loaded/saved value without touching the saved file;
+// shared by the Discard button and the boundary's Discard choice.
+void NativeShell::handle_discard_local_preset_draft() {
+    auto *editor = window_->findChild<QPlainTextEdit *>(
+        "lingtai_selected_agent_preset_draft_editor");
+    if (!editor) return;
+    const auto baseline = QString::fromStdString(local_preset_draft_baseline_);
+    if (editor->toPlainText() != baseline) editor->setPlainText(baseline);
+    local_preset_draft_dirty_ = false;
+    local_preset_draft_just_saved_ = false;
+    local_preset_draft_save_failed_ = false;
+    update_local_preset_draft_controls();
+}
+
+// Shared Save/Discard/Cancel boundary; local product behavior, not a
+// general navigation framework. Clean drafts never prompt.
+bool NativeShell::guard_local_preset_draft_transition() {
+    if (!local_preset_draft_dirty_) return true;
+    const auto choice = local_preset_draft_boundary_prompt_
+        ? local_preset_draft_boundary_prompt_()
+        : LocalPresetDraftBoundaryChoice::cancel;
+    switch (choice) {
+    case LocalPresetDraftBoundaryChoice::save:
+        return attempt_save_local_preset_draft();
+    case LocalPresetDraftBoundaryChoice::discard:
+        handle_discard_local_preset_draft();
+        return true;
+    case LocalPresetDraftBoundaryChoice::cancel:
+        return false;
+    }
+    return false;
+}
+
 // Always resolves the route fresh from current C1/C3 truth rather than
 // capturing it once, so a selection change between typing and clicking Send
 // can never deliver to a stale target.
@@ -1308,6 +1603,7 @@ void NativeShell::handle_send_message() {
 }
 
 void NativeShell::handle_agent_selection(const fs::path &directory_key) {
+    if (!guard_local_preset_draft_transition()) return;
     auto *error = window_->findChild<QLabel *>("lingtai_agent_selection_error");
     const auto *item = selectable_item(agents_, directory_key);
     if (!item) {

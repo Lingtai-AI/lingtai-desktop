@@ -189,7 +189,8 @@ target_link_libraries(lingtai_desktop_native_shell
         lingtai_desktop_agent_projection lingtai_desktop_conversation
         lingtai_desktop_mail_publisher lingtai_desktop_agent_activity
         lingtai_desktop_agent_sleep lingtai_desktop_agent_launch
-        lingtai_desktop_agent_task_card lingtai_desktop_agent_preset_summary)
+        lingtai_desktop_agent_task_card lingtai_desktop_agent_preset_summary
+        lingtai_desktop_local_preset_draft)
 
 # Internal POSIX descriptor/no-follow primitives. No Qt, no project model, and
 # deliberately no link edge of its own: it is the shared safety mechanism every
@@ -316,6 +317,17 @@ target_link_libraries(lingtai_desktop_agent_sleep
     PUBLIC lingtai_desktop_core
     PRIVATE Qt6::Core lingtai_desktop_posix_primitives)
 
+# App-data-root-scoped, opaque, atomically replaced local document store.
+add_library(lingtai_desktop_local_preset_draft STATIC
+    src/local_preset_draft.cpp)
+init_target(lingtai_desktop_local_preset_draft)
+target_include_directories(lingtai_desktop_local_preset_draft PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(lingtai_desktop_local_preset_draft PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_desktop_local_preset_draft
+    PRIVATE Qt6::Core lingtai_desktop_posix_primitives)
+
 # The one Start Agent leaf owner: it turns an already-accepted project
 # attachment, an exact selected Agent key, and one Desktop-supplied fallback
 # interpreter into one detached, shell-free `<python> -m lingtai run <dir>`
@@ -388,6 +400,13 @@ target_compile_options(lingtai_agent_sleep_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_agent_sleep_test PRIVATE
     lingtai_desktop_agent_sleep)
+add_executable(lingtai_local_preset_draft_test
+    tests/local_preset_draft_test.cpp)
+init_target(lingtai_local_preset_draft_test)
+target_compile_options(lingtai_local_preset_draft_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_local_preset_draft_test PRIVATE
+    lingtai_desktop_local_preset_draft)
 add_executable(lingtai_posix_descriptor_primitives_test
     tests/posix_descriptor_primitives_test.cpp)
 init_target(lingtai_posix_descriptor_primitives_test)
@@ -439,6 +458,9 @@ add_test(NAME agent_preset_summary
 add_test(NAME agent_sleep
     COMMAND lingtai_agent_sleep_test
         "${CMAKE_CURRENT_BINARY_DIR}/agent-sleep-fixture")
+add_test(NAME local_preset_draft
+    COMMAND lingtai_local_preset_draft_test
+        "${CMAKE_CURRENT_BINARY_DIR}/local-preset-draft-fixture")
 add_test(NAME posix_descriptor_primitives
     COMMAND lingtai_posix_descriptor_primitives_test
         "${CMAKE_CURRENT_BINARY_DIR}/posix-descriptor-primitives-fixture")

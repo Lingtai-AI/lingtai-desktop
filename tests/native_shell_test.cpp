@@ -6,6 +6,7 @@
 #include <QtCore/QCoreApplication>
 #include <QtCore/QString>
 #include <QtCore/QThread>
+#include <QtGui/QCloseEvent>
 #include <QtGui/QColor>
 #include <QtGui/QPalette>
 #include <QtGui/QTextCursor>
@@ -1853,6 +1854,216 @@ void verify_agent_preset_summary_panel(
     require(!cleanup_error, "Presets fixtures must be removed");
 }
 
+void verify_local_preset_draft_panel(
+        lingtai::desktop::NativeShell &shell,
+        const fs::path &sandbox) {
+    auto &window = shell.window();
+    required_child<QLabel>(window, "lingtai_selected_agent_preset_draft_heading");
+    auto *explanation = required_child<QLabel>(
+        window, "lingtai_selected_agent_preset_draft_explanation");
+    auto *editor = required_child<QPlainTextEdit>(
+        window, "lingtai_selected_agent_preset_draft_editor");
+    auto *save_button = required_child<QPushButton>(
+        window, "lingtai_selected_agent_preset_draft_save");
+    auto *discard_button = required_child<QPushButton>(
+        window, "lingtai_selected_agent_preset_draft_discard");
+    auto *state = required_child<QLabel>(
+        window, "lingtai_selected_agent_preset_draft_state");
+    require(!editor->isReadOnly(), "the draft editor must be user-editable");
+    require(explanation->text().contains(
+                QStringLiteral("Stored only by Desktop. Not active or applied."))
+            && explanation->text().contains(QStringLiteral("credentials")),
+        "the exact meaning and a credentials warning must show near the editor");
+
+    const auto app_data_root = sandbox / "app-data";
+    std::error_code app_data_error;
+    fs::create_directories(app_data_root, app_data_error);
+    require(!app_data_error, "app-data root fixture must be created");
+    shell.set_local_preset_draft_root(app_data_root);
+    auto boundary_choice = lingtai::desktop::LocalPresetDraftBoundaryChoice::cancel;
+    shell.set_local_preset_draft_boundary_prompt(
+        [&boundary_choice] { return boundary_choice; });
+
+    const auto project = sandbox / "project";
+    write_file(project / ".lingtai/alpha/.agent.json",
+        R"({"admin":{},"agent_id":"alpha-001","agent_name":"Alpha",)"
+        R"("address":"alpha","state":"active"})");
+    write_file(project / ".lingtai/beta/.agent.json",
+        R"({"admin":{},"agent_id":"beta-002","agent_name":"Beta",)"
+        R"("address":"beta","state":"active"})");
+    write_file(project / ".lingtai/no-id/.agent.json",
+        R"({"admin":{},"agent_name":"NoId","address":"no-id","state":"active"})");
+    const auto project_before = tree_snapshot(project);
+
+    static_cast<void>(shell.open_project(project, std::nullopt));
+    require(!editor->isEnabled() && state->text().isEmpty(),
+        "with no Agent selected the draft surface must be inert");
+
+    click_agent(window, "no-id");
+    require(!editor->isEnabled()
+            && state->text() == QStringLiteral("No stable identity for this Agent."),
+        "a row with no nonempty stable agent_id must disable the surface "
+        "with a concise truthful reason, never fall back to a directory key");
+
+    click_agent(window, "alpha");
+    require(editor->isEnabled() && editor->toPlainText().isEmpty()
+            && state->text() == QStringLiteral("Clean local draft.")
+            && !save_button->isEnabled() && !discard_button->isEnabled(),
+        "a valid selected Agent with no saved draft yet must show an empty, "
+        "clean, enabled local/not-applied surface");
+
+    const auto first_text = QStringLiteral("Notes for Alpha\n你好 🎉\nline three");
+    editor->setPlainText(first_text);
+    require(state->text() == QStringLiteral("Unsaved changes.")
+            && save_button->isEnabled() && discard_button->isEnabled(),
+        "any text difference from the loaded baseline must be dirty and "
+        "must enable both actions");
+
+    save_button->click();
+    require(state->text() == QStringLiteral("Draft saved locally — not applied.")
+            && !save_button->isEnabled() && !discard_button->isEnabled(),
+        "only a successful Save Draft may update the clean baseline and "
+        "show the exact saved-locally wording");
+
+    // The one-second timer (and any same-target reroster it triggers) must
+    // never rewrite or clear an in-progress edit.
+    const auto mid_edit_text = first_text + QStringLiteral(" -- mid edit, do not clobber");
+    editor->setPlainText(mid_edit_text);
+    {
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(2500);
+        while (std::chrono::steady_clock::now() < deadline) {
+            QThread::msleep(50);
+            QCoreApplication::processEvents();
+        }
+    }
+    require(editor->toPlainText() == mid_edit_text
+            && state->text() == QStringLiteral("Unsaved changes."),
+        "the one-second timer must never reload, rewrite, or clear the "
+        "working copy while it stays the same selected target");
+    discard_button->click();
+    require(editor->toPlainText() == first_text
+            && state->text() == QStringLiteral("Clean local draft."),
+        "Discard Changes must restore exactly the last saved value");
+
+    // A different Agent must never see Alpha's draft; reselecting Alpha is
+    // this journey's own shape of "restart/reselection".
+    click_agent(window, "beta");
+    require(editor->toPlainText().isEmpty()
+            && state->text() == QStringLiteral("Clean local draft."),
+        "Beta's own distinct agent_id must never resolve to Alpha's saved "
+        "draft");
+    click_agent(window, "alpha");
+    require(editor->toPlainText() == first_text
+            && state->text() == QStringLiteral("Clean local draft."),
+        "reselecting Alpha must restore the exact saved text from a fresh "
+        "reopen of the store, shown as clean rather than a stale "
+        "saved-locally message from a prior session");
+
+    // Dirty selection change: Cancel preserves selection and working text.
+    const auto cancel_attempt_text = first_text + QStringLiteral(" -- cancel me");
+    editor->setPlainText(cancel_attempt_text);
+    boundary_choice = lingtai::desktop::LocalPresetDraftBoundaryChoice::cancel;
+    click_agent(window, "beta");
+    require(label_text(window, "lingtai_selected_agent_key").toStdString().find("alpha")
+                != std::string::npos,
+        "Cancel at the dirty boundary must keep the current Agent selected");
+    require(editor->toPlainText() == cancel_attempt_text
+            && state->text() == QStringLiteral("Unsaved changes."),
+        "Cancel must preserve the exact dirty working text");
+
+    // Discard permits the transition without persisting the dirty text.
+    boundary_choice = lingtai::desktop::LocalPresetDraftBoundaryChoice::discard;
+    click_agent(window, "beta");
+    require(label_text(window, "lingtai_selected_agent_key").toStdString().find("beta")
+                != std::string::npos,
+        "Discard must permit the selection change to proceed");
+    click_agent(window, "alpha");
+    require(editor->toPlainText() == first_text,
+        "Discard must never write the saved file: reselecting Alpha must "
+        "still show only the earlier explicitly saved text");
+
+    // Boundary Save only permits the transition on a successful persist.
+    const auto boundary_saved_text = first_text + QStringLiteral(" -- boundary save");
+    editor->setPlainText(boundary_saved_text);
+    boundary_choice = lingtai::desktop::LocalPresetDraftBoundaryChoice::save;
+    click_agent(window, "beta");
+    require(label_text(window, "lingtai_selected_agent_key").toStdString().find("beta")
+                != std::string::npos,
+        "a successful boundary Save must permit the selection change");
+    click_agent(window, "alpha");
+    require(editor->toPlainText() == boundary_saved_text,
+        "a successful boundary Save must have actually persisted the exact "
+        "working text before the transition was permitted");
+
+    // A dirty project change shares the exact same guard as selection.
+    editor->setPlainText(boundary_saved_text + QStringLiteral(" -- still dirty"));
+    boundary_choice = lingtai::desktop::LocalPresetDraftBoundaryChoice::cancel;
+    const auto project_change_outcome =
+        shell.open_project(sandbox / "unrelated-project", std::nullopt);
+    require(project_change_outcome.disposition
+                == lingtai::desktop::ProjectOpenDisposition::cancelled,
+        "a dirty draft must block a project change exactly like a dirty "
+        "Agent-selection change, via the same Cancel outcome");
+    require(path_text(project) == label_text(window, "lingtai_project_root"),
+        "a cancelled project change must leave the current project exactly "
+        "as it was");
+
+    // Failed save (oversize) preserves the dirty text and the selection.
+    boundary_choice = lingtai::desktop::LocalPresetDraftBoundaryChoice::discard;
+    click_agent(window, "beta"); // discard the still-pending dirty text first
+    click_agent(window, "alpha");
+    const auto oversized = std::string(64 * 1024 + 1, 'z');
+    editor->setPlainText(QString::fromStdString(oversized));
+    save_button->click();
+    require(state->text() == QStringLiteral("Draft could not be saved locally.")
+            && editor->toPlainText().toStdString() == oversized,
+        "a failed save must stay visibly failed and must preserve the "
+        "dirty working text exactly, never silently truncating it");
+    require(label_text(window, "lingtai_selected_agent_key").toStdString().find("alpha")
+                != std::string::npos,
+        "a failed save must never change the current selection");
+    discard_button->click();
+    require(editor->toPlainText() == boundary_saved_text
+            && state->text() == QStringLiteral("Clean local draft."),
+        "Discard Changes must restore the last saved value without "
+        "touching the saved file");
+
+    require(tree_snapshot(project) == project_before,
+        "no draft load, edit, save, discard, or boundary decision above may "
+        "ever write the attached project or any real Agent tree");
+
+    // Dirty window close shares the same boundary as selection/project
+    // change. `RpWindow`'s own macOS close() sends a `QCloseEvent` via
+    // `qApp->sendEvent`; that is the real close-request signal every
+    // platform's close funnels through, not a stand-in.
+    const auto close_attempt_text =
+        boundary_saved_text + QStringLiteral(" -- close me");
+    editor->setPlainText(close_attempt_text);
+    boundary_choice = lingtai::desktop::LocalPresetDraftBoundaryChoice::cancel;
+    QCloseEvent close_event;
+    QCoreApplication::sendEvent(&window, &close_event);
+    QCoreApplication::processEvents();
+    require(!close_event.isAccepted(),
+        "Cancel at the dirty boundary must veto the real window close event");
+    require(editor->toPlainText() == close_attempt_text
+            && label_text(window, "lingtai_selected_agent_key").toStdString()
+                   .find("alpha") != std::string::npos,
+        "Cancel on window close must preserve the dirty working text and "
+        "current selection exactly, like Cancel on selection/project change");
+    discard_button->click(); // leave clean before the shared cleanup below
+
+    // Leave the shared, longer-lived shell's draft surface inert before
+    // removing `sandbox/app-data`, so no later journey's timer tick can
+    // resolve a load/save against a now-deleted root.
+    click_agent(window, "no-id");
+    require(!editor->isEnabled(), "no live draft target may remain");
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "Local preset draft fixtures must be removed");
+}
+
 void verify_layout(lingtai::desktop::NativeShell &shell) {
     auto &window = shell.window();
     auto *body = window.body().get();
@@ -1923,6 +2134,8 @@ int main(int argc, char **argv) {
             shell, project_root / "commit-18-task-card-fixture");
         verify_agent_preset_summary_panel(
             shell, project_root / "commit-19-preset-summary-fixture");
+        verify_local_preset_draft_panel(
+            shell, project_root / "commit-20-preset-draft-fixture");
         verify_layout(shell);
         std::cout << "native shell behavior: OK\n";
         return 0;
