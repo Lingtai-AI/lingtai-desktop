@@ -93,6 +93,8 @@ private:
     void refresh_route();
     void render_roster();
     void render_conversation();
+    void reset_composer();
+    void handle_send_message();
     void render_compatibility(const CompatibilityReport &report);
     [[nodiscard]] AgentSelectionOutcome handle_agent_selection(
         const std::filesystem::path &directory_key);

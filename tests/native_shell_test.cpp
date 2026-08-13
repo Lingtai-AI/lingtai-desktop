@@ -10,6 +10,7 @@
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLayout>
+#include <QtWidgets/QLineEdit>
 #include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QProgressBar>
 #include <QtWidgets/QPushButton>
@@ -1239,6 +1240,152 @@ void verify_selected_agent_conversation(
     require(!cleanup_error, "conversation fixtures must be removed");
 }
 
+// The final Step-3 product action: a visible composer that queues one real
+// plain-text human outbox entry and refreshes the conversation. One journey
+// covers enablement, the whitespace guard, a real send, a stale-selection
+// guard, and a failure that preserves the typed text.
+void verify_composer_send_behavior(
+        lingtai::desktop::NativeShell &shell,
+        const fs::path &sandbox) {
+    auto &window = shell.window();
+    auto *surface = required_child<QPlainTextEdit>(
+        window, "lingtai_selected_agent_conversation");
+    auto *input = required_child<QLineEdit>(
+        window, "lingtai_composer_input");
+    auto *send_button = required_child<QPushButton>(
+        window, "lingtai_composer_send_button");
+    auto *status = required_child<QLabel>(
+        window, "lingtai_composer_status");
+
+    const auto project = sandbox / "project";
+    const auto receipt = sandbox / "install.json";
+    const auto outbox = project / ".lingtai/human/mailbox/outbox";
+    write_file(receipt, kReceipt);
+    write_file(project / ".lingtai/human/.agent.json",
+        R"({"agent_id":"20260101-000000-h001","agent_name":"Ted",)"
+        R"("address":"human","state":"active"})");
+    const auto target = project / ".lingtai/telegram-bot";
+    write_file(target / ".agent.json",
+        R"({"admin":{},"agent_id":"20260712-191609-d0c8",)"
+        R"("agent_name":"telegram-bot","nickname":"Telegram Bot",)"
+        R"("address":"telegram-bot","state":"active"})");
+    write_file(target / "init.json", kInit);
+    write_file(target / "system/manifest.resolved.json", kResolved);
+    const auto other = project / ".lingtai/issue-643";
+    write_file(other / ".agent.json",
+        R"({"admin":{},"agent_id":"20260712-191610-q001",)"
+        R"("agent_name":"issue-643","address":"issue-643","state":"active"})");
+    write_file(other / "init.json", kInit);
+    write_file(other / "system/manifest.resolved.json", kResolved);
+
+    static_cast<void>(shell.open_project(project, receipt, std::nullopt));
+    require(!input->isEnabled() && !send_button->isEnabled(),
+        "the composer must stay disabled until a valid route is selected");
+
+    require(shell.select_agent("telegram-bot").disposition
+            == lingtai::desktop::AgentSelectionDisposition::selected,
+        "the first Agent must be selectable");
+    require(input->isEnabled() && send_button->isEnabled() && input->text().isEmpty(),
+        "a selected valid route must enable an empty composer");
+
+    input->setText(QStringLiteral("   \t  "));
+    const auto before_whitespace = tree_snapshot(project);
+    send_button->click();
+    require(!fs::exists(outbox),
+        "whitespace-only input must be rejected without writing anything");
+    require(input->text() == QStringLiteral("   \t  "),
+        "a rejected whitespace-only send must preserve the typed input");
+    require(status->text() != QStringLiteral("Queued"),
+        "a rejected whitespace-only send must not claim success");
+    require(tree_snapshot(project) == before_whitespace,
+        "a rejected whitespace-only send must write nothing");
+
+    input->setText(QStringLiteral("Ted, the slice is complete."));
+    send_button->click();
+    require(input->text().isEmpty(),
+        "a successful send must clear the composer");
+    require(status->text() == QStringLiteral("Queued"),
+        "a successful send must show the concise success status");
+    require(surface->toPlainText().contains(QStringLiteral("You ·"))
+            && surface->toPlainText().contains(
+                QStringLiteral("Ted, the slice is complete.")),
+        "a successful send must refresh the conversation to show the new row");
+    require(fs::exists(outbox), "a successful send must create the outbox folder");
+    auto first_leaves = std::vector<fs::path>();
+    for (const auto &entry : fs::directory_iterator(outbox)) {
+        first_leaves.push_back(entry.path());
+    }
+    require(first_leaves.size() == 1,
+        "exactly one leaf must be created by the one successful send");
+    const auto first_body = read_file(first_leaves.front() / "message.json");
+    require(first_body.find("\"to\":[\"telegram-bot\"]") != std::string::npos,
+        "the queued entry must address exactly the selected Agent");
+
+    // Selection change must not let a later click target the prior Agent.
+    require(shell.select_agent("issue-643").disposition
+            == lingtai::desktop::AgentSelectionDisposition::selected,
+        "the second Agent in the same project must be selectable");
+    require(input->text().isEmpty() && status->text().isEmpty(),
+        "selecting a different Agent must reset the composer, not carry a draft");
+    input->setText(QStringLiteral("A message for the other Agent."));
+    send_button->click();
+    require(status->text() == QStringLiteral("Queued"),
+        "the send after switching Agents must still succeed");
+    auto second_agent_bodies = std::vector<std::string>();
+    for (const auto &entry : fs::directory_iterator(outbox)) {
+        second_agent_bodies.push_back(read_file(entry.path() / "message.json"));
+    }
+    require(second_agent_bodies.size() == 2,
+        "the second send must allocate its own fresh leaf");
+    require(std::ranges::any_of(second_agent_bodies, [](const auto &body) {
+            return body.find("\"to\":[\"issue-643\"]") != std::string::npos
+                && body.find("A message for the other Agent.") != std::string::npos;
+        }),
+        "the send after switching selection must target the newly selected "
+        "Agent, never the stale prior one");
+    require(std::ranges::none_of(second_agent_bodies, [](const auto &body) {
+            return body.find("A message for the other Agent.") != std::string::npos
+                && body.find("\"to\":[\"telegram-bot\"]") != std::string::npos;
+        }),
+        "the post-switch send must never reach the previously selected Agent");
+
+    // A blocked outbox path makes the send fail closed while preserving text.
+    const auto blocked_project = sandbox / "blocked-project";
+    const auto blocked_receipt = sandbox / "blocked-install.json";
+    write_file(blocked_receipt, kReceipt);
+    write_file(blocked_project / ".lingtai/human/.agent.json",
+        R"({"agent_id":"20260101-000000-h001","agent_name":"Ted",)"
+        R"("address":"human","state":"active"})");
+    const auto blocked_target = blocked_project / ".lingtai/telegram-bot";
+    write_file(blocked_target / ".agent.json",
+        R"({"admin":{},"agent_id":"20260712-191609-d0c8",)"
+        R"("agent_name":"telegram-bot","address":"telegram-bot","state":"active"})");
+    write_file(blocked_target / "init.json", kInit);
+    write_file(blocked_target / "system/manifest.resolved.json", kResolved);
+    write_file(blocked_project / ".lingtai/human/mailbox/outbox",
+        "not a directory");
+
+    static_cast<void>(shell.open_project(
+        blocked_project, blocked_receipt, std::nullopt));
+    require(shell.select_agent("telegram-bot").disposition
+            == lingtai::desktop::AgentSelectionDisposition::selected,
+        "the blocked-outbox fixture Agent must still be selectable");
+    input->setText(QStringLiteral("Should never be queued."));
+    const auto blocked_before = tree_snapshot(blocked_project);
+    send_button->click();
+    require(input->text() == QStringLiteral("Should never be queued."),
+        "a failed send must preserve the typed text");
+    require(status->text() != QStringLiteral("Queued")
+            && !status->text().isEmpty(),
+        "a failed send must show a concise, non-empty, non-success status");
+    require(tree_snapshot(blocked_project) == blocked_before,
+        "a failed send must write nothing");
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "composer fixtures must be removed");
+}
+
 void verify_layout(lingtai::desktop::NativeShell &shell) {
     auto &window = shell.window();
     auto *body = window.body().get();
@@ -1297,6 +1444,8 @@ int main(int argc, char **argv) {
             shell, project_root / "commit-7-open-project-fixtures");
         verify_selected_agent_conversation(
             shell, project_root / "commit-13-conversation-fixture");
+        verify_composer_send_behavior(
+            shell, project_root / "commit-14-composer-fixture");
         verify_layout(shell);
         std::cout << "native shell behavior: OK\n";
         return 0;

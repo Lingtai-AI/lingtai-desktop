@@ -2,6 +2,7 @@
 
 #include "compatibility_probe.h"
 #include "direct_conversation_history.h"
+#include "direct_mail_publisher.h"
 
 #include "ui/rp_widget.h"
 #include "ui/widgets/rp_window.h"
@@ -13,6 +14,7 @@
 #include <QtWidgets/QBoxLayout>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLayout>
+#include <QtWidgets/QLineEdit>
 #include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QScrollArea>
@@ -611,6 +613,36 @@ NativeShell::NativeShell()
     conversation->setMinimumHeight(180);
     conversation->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     detail_layout->addWidget(conversation, 1);
+
+    // The smallest visible composer, directly under the conversation it
+    // sends into: one plain-text input and one explicit Send action.
+    auto *composer = new Ui::RpWidget(detail);
+    composer->setObjectName("lingtai_composer");
+    composer->setAccessibleName(QStringLiteral("Send a message"));
+    auto *composer_layout = new QHBoxLayout(composer);
+    composer_layout->setContentsMargins(0, 0, 0, 0);
+    composer_layout->setSpacing(8);
+    auto *composer_input = new QLineEdit(composer);
+    composer_input->setObjectName("lingtai_composer_input");
+    composer_input->setAccessibleName(QStringLiteral("Message"));
+    composer_input->setPlaceholderText(QStringLiteral("Message…"));
+    composer_input->setEnabled(false);
+    composer_layout->addWidget(composer_input, 1);
+    auto *send_button = new QPushButton(
+        QStringLiteral("Send"), composer);
+    send_button->setObjectName("lingtai_composer_send_button");
+    send_button->setAccessibleName(QStringLiteral("Send message"));
+    send_button->setEnabled(false);
+    QObject::connect(send_button, &QPushButton::clicked, [this] {
+        handle_send_message();
+    });
+    composer_layout->addWidget(send_button);
+    detail_layout->addWidget(composer);
+    auto *composer_status = make_label(
+        detail, QString(), "lingtai_composer_status", 10);
+    composer_status->setAccessibleName(QStringLiteral("Send status"));
+    detail_layout->addWidget(composer_status);
+
     auto *conversation_state = make_label(
         detail, QString(), "lingtai_selected_agent_conversation_state", 10);
     conversation_state->setAccessibleName(
@@ -781,6 +813,7 @@ ProjectOpenOutcome NativeShell::open_project(
     selection_error->hide();
     window_->findChild<QLabel *>("lingtai_project_open_error")->clear();
     open_error_surface_->hide();
+    reset_composer();
     refresh_route();
     return {
         .disposition = open_disposition(report.disposition),
@@ -1136,16 +1169,27 @@ void NativeShell::render_conversation() {
         "lingtai_selected_agent_conversation");
     auto *state = window_->findChild<QLabel *>(
         "lingtai_selected_agent_conversation_state");
-    if (!surface || !state) return;
+    auto *composer_input = window_->findChild<QLineEdit *>(
+        "lingtai_composer_input");
+    auto *send_button = window_->findChild<QPushButton *>(
+        "lingtai_composer_send_button");
+    if (!surface || !state || !composer_input || !send_button) return;
     const auto show = [&](const QString &text, const QString &compact) {
         surface->setPlainText(text);
         state->setText(compact);
+    };
+    // Composer enablement only; never touches typed text or send status, so a
+    // refresh right after a send does not erase the status it just set.
+    const auto set_composer_eligible = [&](bool eligible) {
+        composer_input->setEnabled(eligible);
+        send_button->setEnabled(eligible);
     };
 
     if (!selection_state_.active_project()
         || !selection_state_.selected_agent_directory_key()) {
         show(QStringLiteral("Select an Agent to see your conversation."),
             QString());
+        set_composer_eligible(false);
         return;
     }
     const auto route = resolve_direct_conversation_route(
@@ -1155,8 +1199,10 @@ void NativeShell::render_conversation() {
         show(QStringLiteral(
                 "No conversation is available for this selection."),
             QString());
+        set_composer_eligible(false);
         return;
     }
+    set_composer_eligible(true);
 
     const auto history = read_direct_conversation(*route.route);
     const auto *presentation_name = window_->findChild<QLabel *>(
@@ -1186,6 +1232,52 @@ void NativeShell::render_conversation() {
     }
     show(blocks.isEmpty() ? QStringLiteral("No messages yet.")
                           : blocks.join(QStringLiteral("\n\n")), compact);
+}
+
+// Called only when the selected target actually changes (a fresh project open
+// or a successful Agent selection), never on an ordinary conversation
+// refresh, so a just-set "Queued" status is never wiped by its own refresh.
+void NativeShell::reset_composer() {
+    if (auto *input = window_->findChild<QLineEdit *>("lingtai_composer_input")) {
+        input->clear();
+    }
+    if (auto *status = window_->findChild<QLabel *>("lingtai_composer_status")) {
+        status->clear();
+    }
+}
+
+// Always resolves the route fresh from current C1/C3 truth rather than
+// capturing it once, so a selection change between typing and clicking Send
+// can never deliver to a stale target.
+void NativeShell::handle_send_message() {
+    auto *input = window_->findChild<QLineEdit *>("lingtai_composer_input");
+    auto *status = window_->findChild<QLabel *>("lingtai_composer_status");
+    if (!input || !status) return;
+    const auto text = input->text().trimmed();
+    if (text.isEmpty()) return; // reject whitespace-only input without writing
+
+    if (!selection_state_.active_project()
+        || !selection_state_.selected_agent_directory_key()) {
+        status->setText(QStringLiteral("Select an Agent to send a message."));
+        return;
+    }
+    const auto route = resolve_direct_conversation_route(
+        *selection_state_.active_project(), identity_status_,
+        selection_state_.selected_agent_directory_key());
+    if (!route) {
+        status->setText(QStringLiteral(
+            "No conversation is available for this selection."));
+        return;
+    }
+
+    const auto result = send_direct_mail(*route.route, text.toStdString());
+    if (result == DirectMailSendResult::queued) {
+        input->clear();
+        status->setText(QStringLiteral("Queued"));
+        render_conversation();
+    } else {
+        status->setText(QStringLiteral("Message was not queued."));
+    }
 }
 
 AgentSelectionOutcome NativeShell::handle_agent_selection(
@@ -1222,6 +1314,7 @@ AgentSelectionOutcome NativeShell::handle_agent_selection(
         fs::path(".lingtai") / item->directory_key,
         *install_receipt_path_);
     render_compatibility(report);
+    reset_composer();
     render_roster();
     if (error) {
         error->clear();

@@ -186,7 +186,8 @@ target_compile_options(lingtai_desktop_native_shell PRIVATE
 target_link_libraries(lingtai_desktop_native_shell
     PUBLIC lingtai_desktop_core
     PRIVATE desktop-app::lib_ui lingtai_desktop_compatibility
-        lingtai_desktop_agent_discovery lingtai_desktop_conversation)
+        lingtai_desktop_agent_discovery lingtai_desktop_conversation
+        lingtai_desktop_mail_publisher)
 
 add_library(lingtai_desktop_compatibility STATIC
     src/compatibility_probe.cpp)
@@ -249,6 +250,20 @@ target_link_libraries(lingtai_desktop_conversation
     PUBLIC lingtai_desktop_direct_route
     PRIVATE Qt6::Core)
 
+# The one current publisher owner: it turns an already-accepted route and a
+# validated plain-text body into one exclusively created human outbox leaf. It
+# writes only that leaf and never the target inbox or human sent.
+add_library(lingtai_desktop_mail_publisher STATIC
+    src/direct_mail_publisher.cpp)
+init_target(lingtai_desktop_mail_publisher)
+target_include_directories(lingtai_desktop_mail_publisher PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(lingtai_desktop_mail_publisher PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_desktop_mail_publisher
+    PUBLIC lingtai_desktop_direct_route
+    PRIVATE Qt6::Core)
+
 add_executable(lingtai_compatibility_probe_test
     tests/compatibility_probe_test.cpp)
 init_target(lingtai_compatibility_probe_test)
@@ -308,6 +323,13 @@ target_compile_options(lingtai_direct_conversation_history_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_direct_conversation_history_test PRIVATE
     lingtai_desktop_conversation)
+add_executable(lingtai_direct_mail_publisher_test
+    tests/direct_mail_publisher_test.cpp)
+init_target(lingtai_direct_mail_publisher_test)
+target_compile_options(lingtai_direct_mail_publisher_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_direct_mail_publisher_test PRIVATE
+    lingtai_desktop_mail_publisher)
 add_executable(lingtai_posix_descriptor_primitives_test
     tests/posix_descriptor_primitives_test.cpp)
 init_target(lingtai_posix_descriptor_primitives_test)
@@ -355,6 +377,9 @@ add_test(NAME direct_conversation_route
 add_test(NAME direct_conversation_history
     COMMAND lingtai_direct_conversation_history_test
         "${CMAKE_CURRENT_BINARY_DIR}/direct-conversation-history-fixture")
+add_test(NAME direct_mail_publisher
+    COMMAND lingtai_direct_mail_publisher_test
+        "${CMAKE_CURRENT_BINARY_DIR}/direct-mail-publisher-fixture")
 add_test(NAME posix_descriptor_primitives
     COMMAND lingtai_posix_descriptor_primitives_test
         "${CMAKE_CURRENT_BINARY_DIR}/posix-descriptor-primitives-fixture")
@@ -397,6 +422,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         src/posix_descriptor_primitives.cpp
         src/direct_conversation_route.cpp
         src/direct_conversation_history.cpp
+        src/direct_mail_publisher.cpp
         src/crl_integration.cpp)
     init_target(lingtai_native_shell_sanitized_test)
     target_include_directories(lingtai_native_shell_sanitized_test PRIVATE
