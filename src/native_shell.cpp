@@ -1,6 +1,7 @@
 #include "native_shell.h"
 
 #include "agent_activity.h"
+#include "agent_sleep.h"
 #include "direct_conversation_history.h"
 #include "direct_mail_publisher.h"
 
@@ -19,6 +20,7 @@
 #include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QScrollArea>
+#include <QtWidgets/QScrollBar>
 #include <QtWidgets/QSizePolicy>
 
 #include <algorithm>
@@ -142,6 +144,23 @@ const AgentRow *selectable_item(const AgentSnapshot &snapshot, const fs::path &k
                 && item.manifest_kind == AgentManifestKind::valid;
         });
     return found == snapshot.items.end() ? nullptr : &*found;
+}
+
+// Desktop's own product gate, not kernel-core enforcement: a valid manifest,
+// a main/agent role (never human/unknown), the canonical strict `< 5.0 s`
+// heartbeat predicate, and a known current manifest state -- from
+// `.agent.json.state`, not the best-effort `.status.json` -- other than
+// `asleep`/`suspended`. No `.status.json.running`, PID, active turn,
+// `admin.karma`, or compatibility probe is ever consulted.
+bool agent_sleep_eligible(const AgentRow &item) {
+    if (item.manifest_kind != AgentManifestKind::valid) return false;
+    if (item.role != AgentRole::main && item.role != AgentRole::agent) {
+        return false;
+    }
+    if (item.presence != AgentPresenceKind::alive) return false;
+    if (!item.identity || !item.identity->state) return false;
+    return *item.identity->state != "asleep"
+        && *item.identity->state != "suspended";
 }
 
 } // namespace
@@ -437,6 +456,36 @@ NativeShell::NativeShell()
         QStringLiteral("Selected Agent activity state"));
     detail_layout->addWidget(activity_state);
 
+    // The one Step-5 action on the exact selected Agent: reproduces only the
+    // canonical empty `.sleep` marker write plus a best-effort target-side
+    // observation. Disabled while ineligible or while a just-clicked
+    // observation is still pending; the status label below shows only
+    // truthful, evidence-backed claims, never a lifecycle status inferred
+    // from the write or a timeout alone.
+    auto *sleep_row = new Ui::RpWidget(detail);
+    sleep_row->setObjectName("lingtai_selected_agent_sleep_row");
+    sleep_row->setAccessibleName(QStringLiteral("Request sleep"));
+    auto *sleep_row_layout = new QHBoxLayout(sleep_row);
+    sleep_row_layout->setContentsMargins(0, 0, 0, 0);
+    sleep_row_layout->setSpacing(8);
+    auto *sleep_button = new QPushButton(
+        QStringLiteral("Request sleep"), sleep_row);
+    sleep_button->setObjectName("lingtai_selected_agent_request_sleep");
+    sleep_button->setAccessibleName(QStringLiteral("Request sleep"));
+    sleep_button->setAccessibleDescription(QStringLiteral(
+        "Writes one empty local sleep-request marker for the selected "
+        "Agent. It does not queue, cancel, suspend, or restart anything."));
+    sleep_button->setEnabled(false);
+    QObject::connect(sleep_button, &QPushButton::clicked, [this] {
+        handle_request_sleep();
+    });
+    sleep_row_layout->addWidget(sleep_button);
+    detail_layout->addWidget(sleep_row);
+    auto *sleep_status = make_label(
+        detail, QString(), "lingtai_selected_agent_sleep_status", 10);
+    sleep_status->setAccessibleName(QStringLiteral("Sleep request status"));
+    detail_layout->addWidget(sleep_status);
+
     auto *manifest_identity = make_label(
         detail, QString(), "lingtai_selected_agent_manifest_identity", 11);
     manifest_identity->setAccessibleName(QStringLiteral("Manifest identity"));
@@ -471,7 +520,20 @@ NativeShell::NativeShell()
     activity_timer_ = new QTimer(body);
     activity_timer_->setInterval(1000);
     QObject::connect(activity_timer_, &QTimer::timeout, [this] {
+        render_conversation();
         render_agent_activity();
+        if (pending_sleep_observation_) {
+            tick_agent_sleep_observation();
+        } else if (selection_state_.active_project()
+                && selection_state_.selected_agent_directory_key()) {
+            // No click-armed observation is pending, so eligibility can only
+            // go stale here: the target's own state can change (e.g. an
+            // ordinary-message wake) with no click or reselection to trigger
+            // a re-check. Reruns the same stateless projection this shell
+            // already reruns at every click/settle boundary.
+            agents_ = project_agents(*selection_state_.active_project());
+            render_agent_sleep_status();
+        }
     });
     activity_timer_->start();
 
@@ -584,6 +646,9 @@ ProjectOpenOutcome NativeShell::open_project(
     window_->findChild<QLabel *>("lingtai_project_open_error")->clear();
     open_error_surface_->hide();
     reset_composer();
+    // A fresh open must never let a prior target's pending sleep
+    // observation surface under the newly opened project/selection.
+    pending_sleep_observation_.reset();
     refresh_route();
     return {
         .disposition = ProjectOpenDisposition::opened,
@@ -708,6 +773,7 @@ void NativeShell::render_roster() {
             "Choose a valid manifest row to inspect its detail."));
         render_conversation();
         render_agent_activity();
+        render_agent_sleep_status();
         return;
     }
     selected_key->setText(path_text(detail_item->directory_key));
@@ -788,6 +854,7 @@ void NativeShell::render_roster() {
             role_text(detail_item->role), presence_text(detail_item->presence)));
     render_conversation();
     render_agent_activity();
+    render_agent_sleep_status();
 }
 
 // Shows the current direct conversation for whatever the roster just made the
@@ -803,8 +870,21 @@ void NativeShell::render_conversation() {
     auto *send_button = window_->findChild<QPushButton *>(
         "lingtai_composer_send_button");
     if (!surface || !state || !composer_input || !send_button) return;
+    // Replace the document only when content actually changed (an identical
+    // refresh must not reset scroll/selection); on a real change, follow the
+    // new bottom only if the human was already there. Mirrors mail.go's
+    // AtBottom/GotoBottom guard and Telegram's wasAtBottom-gated
+    // updateHistoryGeometry.
     const auto show = [&](const QString &text, const QString &compact) {
-        surface->setPlainText(text);
+        if (surface->toPlainText() != text) {
+            auto *scrollbar = surface->verticalScrollBar();
+            const auto previous_value = scrollbar->value();
+            const auto was_at_bottom = previous_value >= scrollbar->maximum();
+            surface->setPlainText(text);
+            scrollbar->setValue(was_at_bottom
+                ? scrollbar->maximum()
+                : std::min(previous_value, scrollbar->maximum()));
+        }
         state->setText(compact);
     };
     // Composer enablement only; never touches typed text or send status, so a
@@ -996,11 +1076,144 @@ void NativeShell::handle_agent_selection(const fs::path &directory_key) {
         return;
     }
     reset_composer();
+    // A selection change must never let a prior target's pending sleep
+    // observation or terminal result surface under the newly selected Agent.
+    pending_sleep_observation_.reset();
     render_roster();
     if (error) {
         error->clear();
         error->hide();
     }
+}
+
+// Reflects only the eligibility of the exact current selection against
+// whatever `agents_` currently holds. Also reached through `render_roster()`
+// from a click or a timer tick, but only before either overwrites the
+// button/status with its own more specific write/observation text, so this
+// never clobbers in-progress or terminal wording for the current selection.
+void NativeShell::render_agent_sleep_status() {
+    auto *button = window_->findChild<QPushButton *>(
+        "lingtai_selected_agent_request_sleep");
+    auto *status = window_->findChild<QLabel *>(
+        "lingtai_selected_agent_sleep_status");
+    if (!button || !status) return;
+
+    const auto *item = selection_state_.active_project()
+            && selection_state_.selected_agent_directory_key()
+        ? selectable_item(agents_,
+              *selection_state_.selected_agent_directory_key())
+        : nullptr;
+    const auto eligible = item && agent_sleep_eligible(*item);
+    button->setEnabled(eligible);
+    status->setText(eligible
+        ? QString()
+        : QStringLiteral("Select a live Agent that is not already asleep."));
+}
+
+// The human's explicit click is the local product action. Rerun the sole
+// `project_agents` projection once at the click boundary and use only the
+// fresh exact row for the exact current selection -- never a cached one --
+// before writing anything.
+void NativeShell::handle_request_sleep() {
+    auto *status = window_->findChild<QLabel *>(
+        "lingtai_selected_agent_sleep_status");
+    auto *button = window_->findChild<QPushButton *>(
+        "lingtai_selected_agent_request_sleep");
+    if (!status || !button) return;
+    if (pending_sleep_observation_) return; // one observation at a time
+
+    if (!selection_state_.active_project()
+        || !selection_state_.selected_agent_directory_key()) {
+        return;
+    }
+    const auto &attachment = *selection_state_.active_project();
+    const auto key = *selection_state_.selected_agent_directory_key();
+
+    agents_ = project_agents(attachment);
+    render_roster();
+
+    const auto *item = selectable_item(agents_, key);
+    if (!item || !agent_sleep_eligible(*item)) {
+        status->setText(
+            QStringLiteral("Select a live Agent that is not already asleep."));
+        button->setEnabled(false);
+        return;
+    }
+
+    const auto baseline = capture_agent_sleep_event_baseline(attachment, key);
+    const auto result = request_agent_sleep(attachment, key);
+    if (result != AgentSleepRequestResult::requested) {
+        status->setText(QStringLiteral("Sleep request not written."));
+        return;
+    }
+
+    status->setText(QStringLiteral("Sleep requested."));
+    button->setEnabled(false); // disable duplicate click while observing
+    pending_sleep_observation_ = SleepObservation{
+        .project_root = attachment.root(),
+        .directory_key = key,
+        .baseline = baseline,
+        .deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3),
+    };
+}
+
+// Piggybacks on the existing one-second view timer: no new timer, thread, or
+// watcher. Idle unless a click armed a pending observation for the exact
+// current selection.
+void NativeShell::tick_agent_sleep_observation() {
+    if (!pending_sleep_observation_) return;
+    if (!selection_state_.active_project()
+        || selection_state_.active_project()->root()
+            != pending_sleep_observation_->project_root
+        || !selection_state_.selected_agent_directory_key()
+        || *selection_state_.selected_agent_directory_key()
+            != pending_sleep_observation_->directory_key) {
+        // The target changed since the click; a late result must never
+        // appear under a different selection.
+        pending_sleep_observation_.reset();
+        return;
+    }
+
+    const auto &attachment = *selection_state_.active_project();
+    const auto key = pending_sleep_observation_->directory_key;
+    const auto applied = observe_agent_sleep_received(
+        attachment, key, pending_sleep_observation_->baseline);
+    const auto expired = std::chrono::steady_clock::now()
+        >= pending_sleep_observation_->deadline;
+    if (!applied && !expired) return; // keep waiting within the window
+
+    pending_sleep_observation_.reset();
+    agents_ = project_agents(attachment);
+    render_roster();
+
+    auto *status = window_->findChild<QLabel *>(
+        "lingtai_selected_agent_sleep_status");
+    auto *button = window_->findChild<QPushButton *>(
+        "lingtai_selected_agent_request_sleep");
+    if (!status || !button) return;
+    const auto *item = selectable_item(agents_, key);
+    const auto state = item && item->identity && item->identity->state
+        ? QString::fromStdString(*item->identity->state)
+        : QString();
+    if (applied) {
+        const auto woke = state == QStringLiteral("active")
+            || state == QStringLiteral("idle");
+        status->setText(woke
+            ? QStringLiteral("Sleep applied; Agent subsequently woke. "
+                  "Current state: %1.")
+                  .arg(state)
+            : state.isEmpty()
+                ? QStringLiteral("Sleep request applied.")
+                : QStringLiteral("Sleep request applied. Current state: %1.")
+                    .arg(state));
+    } else {
+        status->setText(state.isEmpty()
+            ? QStringLiteral("Sleep requested; application not yet observed.")
+            : QStringLiteral("Sleep requested; application not yet "
+                  "observed. Current state: %1.")
+                  .arg(state));
+    }
+    button->setEnabled(item && agent_sleep_eligible(*item));
 }
 
 ProjectOpenOutcome NativeShell::show_open_error(

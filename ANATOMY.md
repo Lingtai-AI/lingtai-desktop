@@ -18,12 +18,14 @@ src/direct_conversation_route.{h,cpp}  pure direct route + human sender identity
 src/direct_conversation_history.{h,cpp} read-only direct conversation rows
 src/direct_mail_publisher.{h,cpp}      one exclusive human outbox leaf publisher
 src/agent_activity.{h,cpp}             stateless bounded selected-Agent activity snapshot reader
+src/agent_sleep.{h,cpp}                one selected-Agent .sleep marker write + best-effort applied observation
 tests/posix_descriptor_primitives_test.cpp descriptor ownership/no-follow contract
 tests/agent_projection_test.cpp        composite discovery/role/presence/status/no-write contract
 tests/direct_conversation_route_test.cpp pure route/eligibility contract
 tests/direct_conversation_history_test.cpp direct membership/order/no-write/containment contract
 tests/direct_mail_publisher_test.cpp   publish envelope/nonoverwrite/containment contract
 tests/agent_activity_test.cpp          activity binding/order/allowlist/bounds/skip contract
+tests/agent_sleep_test.cpp             sleep write-targeting/baseline-attribution/containment contract
 tests/native_shell_test.cpp            native shell semantics/geometry/no-write contract
 tests/project_attachment_test.cpp      real C++ attachment/containment behavior contract
 tests/test_native_shell.py             process persistence and smoke-order contract
@@ -72,8 +74,9 @@ compose and send.
 Application composition in `src/main.cpp` owns the real native directory
 picker. Cancel is a no-op; a nonempty choice is passed to the shell with no
 selected Agent. The shell performs no project, registry, or Desktop-state
-writes; the only project write is one explicit composer send through
-`send_direct_mail`.
+writes beyond two explicit user-triggered actions: one composer send through
+`send_direct_mail`, and one Request sleep marker write through
+`request_agent_sleep`.
 
 `WorkspaceSelectionState` is C1's sole owner of the optional accepted active
 project and optional selected Agent directory key, and the sole same-root/
@@ -242,6 +245,45 @@ read-only plain-text panel below the conversation/composer, refreshed on the
 same open/selection paths plus one simple one-second view-scoped `QTimer`
 that re-invokes the same stateless reader — the only poller in the shell, and
 not a background thread, filesystem watcher, or persisted cursor.
+
+`request_agent_sleep` reproduces exactly the canonical local `sleep` marker
+protocol for one selected Agent: it creates or truncates
+`<accepted root>/.lingtai/<selected key>/.sleep` to zero bytes, walked
+descriptor-relative and no-follow with the shared `posix_internal`
+primitives from the accepted root through `.lingtai` to the selected key.
+Neither `.lingtai` nor the selected key's own directory is ever created;
+only the one `.sleep` leaf is created or truncated, and an existing
+non-regular target at that exact leaf name is refused rather than replaced.
+An existing marker is overwritten, matching the canonical coalescing,
+non-queued, non-exactly-once semantics; there is no request ID, temp/lock
+file, or directory creation of any kind. `capture_agent_sleep_event_baseline`
+records the selected Agent's own `logs/events.jsonl` byte size and whether
+its last byte was a newline immediately before that one write, and
+`observe_agent_sleep_received` independently reopens the same log afterward
+and reports only whether one complete, LF-terminated
+`sleep_received(source="signal_file")` row appended strictly after that
+boundary; a pre-existing partial tail line that only completes afterward is
+discarded using the recorded newline bit rather than attributed. Neither
+function is a poller, cursor service, or ledger; both are stateless,
+best-effort, and read/write nothing else.
+
+`NativeShell` composes one Request sleep button and one status label in the
+selected-Agent detail area, positioned after Agent Activity and before the
+low-level manifest/status facts. Desktop's own eligibility gate -- a valid
+manifest, a main/agent role, the canonical strict `< 5.0 s` heartbeat
+predicate, and a known current `.agent.json.state` other than
+`asleep`/`suspended` -- is re-evaluated at the click boundary by rerunning
+`project_agents` once and updating the sole `agents_` snapshot, never a
+second roster owner. A successful write shows exactly "Sleep requested." and
+disables the button; the pending observation then piggybacks on the existing
+one-second `QTimer` (no new timer, thread, or watcher) for at most three
+wall-clock seconds, after which the sole `agents_` snapshot is refreshed once
+more and the button/status reflect the freshly projected current state.
+Project open or Agent selection change discards any prior target's pending
+observation and terminal status immediately, so a late result can never
+surface under a different selection. This action never claims `queued`,
+target acknowledgement, or "Agent is asleep" from the write or a timeout
+alone.
 
 Qt is external rather than fetched or committed. Configure resolves the exact
 Qt 6.11.1 prefix from `QT_ROOT` or the documented `$HOME/Qt/6.11.1/macos`

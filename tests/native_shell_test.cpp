@@ -8,6 +8,7 @@
 #include <QtCore/QThread>
 #include <QtGui/QColor>
 #include <QtGui/QPalette>
+#include <QtGui/QTextCursor>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLayout>
@@ -15,6 +16,7 @@
 #include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QProgressBar>
 #include <QtWidgets/QPushButton>
+#include <QtWidgets/QScrollBar>
 
 #include <algorithm>
 #include <chrono>
@@ -824,6 +826,94 @@ void verify_selected_agent_conversation(
         "mail for another conversation must be absent");
     require(state->text() == QStringLiteral("2 messages · 1 skipped"),
         "the compact state must show the count and the generic skipped count");
+    require(tree_snapshot(project) == fixture_before,
+        "opening and selecting the first Agent must never write to the project");
+
+    // Overflow the pane before establishing where the human is scrolled:
+    // without genuine overflow, "the pane follows the bottom" below would be
+    // vacuously true. Each filler message contributes several wrapped lines
+    // via embedded newlines, so a small count already exceeds any plausible
+    // panel height.
+    for (auto index = 0; index != 120; ++index) {
+        const auto minute = 10 + index / 60;
+        const auto second = index % 60;
+        const auto timestamp = QStringLiteral("2026-08-07T19:%1:%2Z")
+            .arg(minute, 2, 10, QLatin1Char('0'))
+            .arg(second, 2, 10, QLatin1Char('0'));
+        const auto key = QStringLiteral("20260807T19%1%2-fl%3")
+            .arg(minute, 2, 10, QLatin1Char('0'))
+            .arg(second, 2, 10, QLatin1Char('0'))
+            .arg(index, 3, 10, QLatin1Char('0'));
+        write_file(mailbox / "inbox" / key.toStdString() / "message.json",
+            conversation_envelope("telegram-bot", "human", "",
+                "Filler line one.\\nFiller line two.\\nFiller line three.",
+                "received_at", timestamp.toStdString()));
+    }
+    const auto filler_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!state->text().contains(QStringLiteral("122 messages"))
+            && std::chrono::steady_clock::now() < filler_deadline) {
+        QThread::msleep(50);
+        QCoreApplication::processEvents();
+    }
+    require(state->text().contains(QStringLiteral("122 messages")),
+        "the filler fixture must render through the same one-second view "
+        "timer before the pane-overflow assertions below are meaningful");
+
+    auto *conversation_scrollbar = surface->verticalScrollBar();
+    require(conversation_scrollbar->maximum() > 0,
+        "the fixture must genuinely overflow the pane, or the bottom-follow "
+        "assertions below would be vacuous");
+
+    // Establish the human at the bottom with an active selection, matching
+    // Ted's exact acceptance state before the reply below arrives.
+    auto selection_cursor = surface->textCursor();
+    selection_cursor.movePosition(QTextCursor::Start);
+    selection_cursor.movePosition(QTextCursor::Down, QTextCursor::KeepAnchor, 2);
+    surface->setTextCursor(selection_cursor);
+    require(surface->textCursor().hasSelection(),
+        "test setup must actually create a selection to be meaningful");
+    conversation_scrollbar->setValue(conversation_scrollbar->maximum());
+    const auto established_value = conversation_scrollbar->value();
+    const auto established_max = conversation_scrollbar->maximum();
+    require(established_value == established_max && established_value > 0,
+        "the human must be established at the bottom of a genuinely "
+        "overflowing pane before the append below");
+
+    // A single cheap idle tick with unchanged content must not reset the
+    // viewport or destroy the selection.
+    QThread::msleep(1200);
+    QCoreApplication::processEvents();
+    require(conversation_scrollbar->value() == established_value
+            && conversation_scrollbar->maximum() == established_max,
+        "an idle one-second tick with unchanged content must not move the "
+        "scroll position");
+    require(surface->textCursor().hasSelection(),
+        "an idle one-second tick with unchanged content must not clear the "
+        "human's text selection");
+
+    // A new real incoming direct Agent reply, appended after the initial
+    // conversation already rendered, with no reselection: only the real
+    // one-second view timer can surface it in the message pane.
+    write_file(mailbox / "inbox" / "20260807T193000-nr01" / "message.json",
+        conversation_envelope("telegram-bot", "human", "Re: \xe5\x9c\xa8\xe5\x90\x97",
+            "\xe5\x9c\xa8\xe5\x90\x97\xef\xbc\x9f Yes, awake now.", "received_at",
+            "2026-08-07T19:30:00Z"));
+    const auto reply_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!surface->toPlainText().contains(QStringLiteral("Yes, awake now."))
+            && std::chrono::steady_clock::now() < reply_deadline) {
+        QThread::msleep(50);
+        QCoreApplication::processEvents();
+    }
+    require(surface->toPlainText().contains(QStringLiteral("Yes, awake now.")),
+        "a new incoming direct reply appended with no reselection must "
+        "become visible through the real one-second view timer");
+    require(conversation_scrollbar->value() == conversation_scrollbar->maximum(),
+        "the newly arrived reply must be visible: the pane must follow the "
+        "bottom when the human was already there, not leave the reply below "
+        "the fold");
+    const auto after_reply = tree_snapshot(project);
 
     // A valid route whose Agent has no mail is an ordinary empty conversation.
     click_agent(window, "issue-643");
@@ -833,8 +923,8 @@ void verify_selected_agent_conversation(
     require(surface->toPlainText() == QStringLiteral("No messages yet."),
         "a valid route with no rows must say so exactly");
 
-    require(tree_snapshot(project) == fixture_before,
-        "opening and selecting must never write to the project");
+    require(tree_snapshot(project) == after_reply,
+        "selecting the second Agent must never write to the project");
 
     std::error_code cleanup_error;
     fs::remove_all(sandbox, cleanup_error);
@@ -1061,6 +1151,166 @@ void verify_agent_activity_panel(
     require(!cleanup_error, "Activity fixtures must be removed");
 }
 
+// The Step-5 Request sleep action row: one button plus one status label
+// after Activity, before the low-level manifest/status facts. Covers
+// no-selection disablement, a real write targeting exactly the selected
+// Agent, the immediate "Sleep requested." text, the real one-second timer
+// observing a simulated target-side application, A->B->A carrying no stale
+// result, and one representative ineligible (stale) selection writing
+// nothing.
+void verify_request_sleep_action(
+        lingtai::desktop::NativeShell &shell,
+        const fs::path &sandbox) {
+    auto &window = shell.window();
+    auto *button = required_child<QPushButton>(
+        window, "lingtai_selected_agent_request_sleep");
+    auto *status = required_child<QLabel>(
+        window, "lingtai_selected_agent_sleep_status");
+
+    const auto project = sandbox / "project";
+    const auto fresh_heartbeat = [] {
+        return std::to_string(std::chrono::duration<double>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+    };
+
+    write_file(project / ".lingtai/agent-a/.agent.json",
+        R"({"admin":{},"state":"idle"})");
+    write_file(project / ".lingtai/agent-a/.agent.heartbeat", fresh_heartbeat());
+
+    write_file(project / ".lingtai/agent-b/.agent.json",
+        R"({"admin":{},"state":"idle"})");
+    write_file(project / ".lingtai/agent-b/.agent.heartbeat", fresh_heartbeat());
+    write_file(project / ".lingtai/agent-b/logs/events.jsonl", "");
+
+    write_file(project / ".lingtai/agent-c/.agent.json",
+        R"({"admin":{},"state":"idle"})");
+    write_file(project / ".lingtai/agent-c/.agent.heartbeat", "0");
+
+    static_cast<void>(shell.open_project(project, std::nullopt));
+    require(!button->isEnabled(),
+        "Request sleep must be disabled with no Agent selected");
+    require(status->text() == QStringLiteral(
+                "Select a live Agent that is not already asleep."),
+        "the no-selection status must show the concise eligibility reason");
+
+    click_agent(window, "agent-c");
+    require(!button->isEnabled(),
+        "a stale (non-alive) selection must leave Request sleep disabled");
+    require(!fs::exists(project / ".lingtai/agent-c/.sleep"),
+        "a stale ineligible selection must never gain a .sleep marker");
+
+    click_agent(window, "agent-a");
+    require(button->isEnabled(),
+        "an eligible selected Agent must enable Request sleep");
+
+    // The click-boundary refresh must be load-bearing, not decorative: make
+    // A ineligible on disk without reselecting, so the cached `agents_` row
+    // the button's enabled state was drawn from is now stale. A click must
+    // rerun the projection, see the fresh ineligible row, and write nothing
+    // -- proving the defensive re-check in handle_request_sleep actually
+    // runs rather than trusting the cached snapshot.
+    write_file(project / ".lingtai/agent-a/.agent.json",
+        R"({"admin":{},"state":"asleep"})");
+    const auto stale_cache_before = tree_snapshot(project);
+    button->click();
+    QCoreApplication::processEvents();
+    require(!fs::exists(project / ".lingtai/agent-a/.sleep"),
+        "a click whose cached row went stale before the click must never "
+        "write a marker");
+    require(tree_snapshot(project) == stale_cache_before,
+        "a click-boundary rejection must write nothing at all");
+    require(status->text() == QStringLiteral(
+                "Select a live Agent that is not already asleep."),
+        "a click-boundary rejection must show the concise eligibility "
+        "reason, not a write status");
+    require(!button->isEnabled(),
+        "the button must reflect the freshly discovered ineligibility "
+        "after the rejected click");
+
+    // Restore A to eligible for the later A<->B selection-clearing checks;
+    // this fixture's only remaining job is proving those, not staying
+    // asleep.
+    write_file(project / ".lingtai/agent-a/.agent.json",
+        R"({"admin":{},"state":"idle"})");
+
+    click_agent(window, "agent-b");
+    require(button->isEnabled(),
+        "the second eligible Agent must also enable Request sleep");
+    require(!fs::exists(project / ".lingtai/agent-a/.sleep"),
+        "selecting B must never have written A's marker");
+
+    button->click();
+    QCoreApplication::processEvents();
+    require(fs::exists(project / ".lingtai/agent-b/.sleep"),
+        "a click on an eligible selection must write exactly B's marker");
+    require(read_file(project / ".lingtai/agent-b/.sleep").empty(),
+        "the written marker must be exactly zero bytes");
+    require(!fs::exists(project / ".lingtai/agent-a/.sleep"),
+        "clicking Request sleep for B must never write A's marker");
+    require(status->text() == QStringLiteral("Sleep requested."),
+        "the immediate status after a successful write must be exactly "
+        "\"Sleep requested.\", not applied or asleep");
+    require(!button->isEnabled(),
+        "the button must disable itself while an observation is pending");
+
+    // Simulate the target kernel's own canonical behavior: it consumes the
+    // marker, updates its own manifest state, and appends its own event.
+    write_file(project / ".lingtai/agent-b/.agent.json",
+        R"({"admin":{},"state":"asleep"})");
+    append_file(project / ".lingtai/agent-b/logs/events.jsonl",
+        R"({"type":"sleep_received","source":"signal_file"})" "\n");
+
+    const auto applied_text = QStringLiteral(
+        "Sleep request applied. Current state: asleep.");
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (status->text() != applied_text
+            && std::chrono::steady_clock::now() < deadline) {
+        QThread::msleep(50);
+        QCoreApplication::processEvents();
+    }
+    require(status->text() == applied_text,
+        "the real one-second timer must observe the appended sleep_received "
+        "and show the fresh current manifest state, with no reselection");
+    require(!button->isEnabled(),
+        "B is now asleep, so the button must stay disabled after the "
+        "terminal observation");
+
+    click_agent(window, "agent-a");
+    require(button->isEnabled() && status->text().isEmpty(),
+        "switching back to the still-eligible A must show a fresh, cleared "
+        "status, never B's terminal result");
+
+    click_agent(window, "agent-b");
+    require(!button->isEnabled()
+            && status->text() == QStringLiteral(
+                   "Select a live Agent that is not already asleep."),
+        "reselecting the now-asleep B must show fresh ineligibility, not "
+        "the stale applied text");
+
+    // Ordinary-message wake: the target kernel later flips B's own manifest
+    // back to an eligible state on its own, entirely outside any pending
+    // observation. With no reselection, only the same real one-second timer
+    // can make Request sleep re-enable for the still-selected B.
+    write_file(project / ".lingtai/agent-b/.agent.json",
+        R"({"admin":{},"state":"idle"})");
+    write_file(project / ".lingtai/agent-b/.agent.heartbeat", fresh_heartbeat());
+    const auto wake_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!button->isEnabled()
+            && std::chrono::steady_clock::now() < wake_deadline) {
+        QThread::msleep(50);
+        QCoreApplication::processEvents();
+    }
+    require(button->isEnabled(),
+        "an ordinary-message wake observed with no reselection must "
+        "re-enable Request sleep for the still-selected Agent");
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "Request sleep fixtures must be removed");
+}
+
 void verify_layout(lingtai::desktop::NativeShell &shell) {
     auto &window = shell.window();
     auto *body = window.body().get();
@@ -1123,6 +1373,8 @@ int main(int argc, char **argv) {
             shell, project_root / "commit-14-composer-fixture");
         verify_agent_activity_panel(
             shell, project_root / "commit-15-activity-fixture");
+        verify_request_sleep_action(
+            shell, project_root / "commit-16-sleep-fixture");
         verify_layout(shell);
         std::cout << "native shell behavior: OK\n";
         return 0;

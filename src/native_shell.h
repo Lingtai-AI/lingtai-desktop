@@ -1,8 +1,10 @@
 #pragma once
 
 #include "agent_projection.h"
+#include "agent_sleep.h"
 #include "workspace_selection.h"
 
+#include <chrono>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -68,9 +70,22 @@ private:
     void reset_composer();
     void handle_send_message();
     void handle_agent_selection(const std::filesystem::path &directory_key);
+    void render_agent_sleep_status();
+    void handle_request_sleep();
+    void tick_agent_sleep_observation();
     [[nodiscard]] ProjectOpenOutcome show_open_error(
         ProjectPathFailure failure,
         std::string message);
+
+    // The one action-local pending sleep observation for at most three
+    // wall-clock seconds after a successful write; discarded whenever the
+    // project or Agent selection changes, and never persisted. It is not a
+    // command ledger.
+    struct SleepObservation {
+        std::filesystem::path project_root, directory_key;
+        AgentSleepEventBaseline baseline;
+        std::chrono::steady_clock::time_point deadline;
+    };
 
     WorkspaceSelectionState selection_state_;
     std::unique_ptr<Ui::RpWindow> window_;
@@ -84,6 +99,7 @@ private:
     // same stateless snapshot reader every second, and owns no cursor/offset
     // state of its own.
     QTimer *activity_timer_ = nullptr;
+    std::optional<SleepObservation> pending_sleep_observation_;
 };
 
 } // namespace lingtai::desktop

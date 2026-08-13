@@ -187,7 +187,8 @@ target_link_libraries(lingtai_desktop_native_shell
     PUBLIC lingtai_desktop_core
     PRIVATE desktop-app::lib_ui
         lingtai_desktop_agent_projection lingtai_desktop_conversation
-        lingtai_desktop_mail_publisher lingtai_desktop_agent_activity)
+        lingtai_desktop_mail_publisher lingtai_desktop_agent_activity
+        lingtai_desktop_agent_sleep)
 
 # Internal POSIX descriptor/no-follow primitives. No Qt, no project model, and
 # deliberately no link edge of its own: it is the shared safety mechanism every
@@ -267,6 +268,22 @@ target_link_libraries(lingtai_desktop_agent_activity
     PUBLIC lingtai_desktop_core
     PRIVATE Qt6::Core lingtai_desktop_posix_primitives)
 
+# The one Request sleep leaf owner: it turns an already-accepted project
+# attachment and an exact selected Agent key into one local `.sleep` marker
+# write, plus a best-effort target-side `sleep_received` observation of the
+# selected Agent's own `logs/events.jsonl`. It owns no eligibility policy,
+# UI, timer, or command framework.
+add_library(lingtai_desktop_agent_sleep STATIC
+    src/agent_sleep.cpp)
+init_target(lingtai_desktop_agent_sleep)
+target_include_directories(lingtai_desktop_agent_sleep PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(lingtai_desktop_agent_sleep PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_desktop_agent_sleep
+    PUBLIC lingtai_desktop_core
+    PRIVATE Qt6::Core lingtai_desktop_posix_primitives)
+
 add_executable(lingtai_agent_projection_test
     tests/agent_projection_test.cpp)
 init_target(lingtai_agent_projection_test)
@@ -302,6 +319,13 @@ target_compile_options(lingtai_agent_activity_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_agent_activity_test PRIVATE
     lingtai_desktop_agent_activity)
+add_executable(lingtai_agent_sleep_test
+    tests/agent_sleep_test.cpp)
+init_target(lingtai_agent_sleep_test)
+target_compile_options(lingtai_agent_sleep_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_agent_sleep_test PRIVATE
+    lingtai_desktop_agent_sleep)
 add_executable(lingtai_posix_descriptor_primitives_test
     tests/posix_descriptor_primitives_test.cpp)
 init_target(lingtai_posix_descriptor_primitives_test)
@@ -344,6 +368,9 @@ add_test(NAME direct_mail_publisher
 add_test(NAME agent_activity
     COMMAND lingtai_agent_activity_test
         "${CMAKE_CURRENT_BINARY_DIR}/agent-activity-fixture")
+add_test(NAME agent_sleep
+    COMMAND lingtai_agent_sleep_test
+        "${CMAKE_CURRENT_BINARY_DIR}/agent-sleep-fixture")
 add_test(NAME posix_descriptor_primitives
     COMMAND lingtai_posix_descriptor_primitives_test
         "${CMAKE_CURRENT_BINARY_DIR}/posix-descriptor-primitives-fixture")
