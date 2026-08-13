@@ -17,6 +17,13 @@ int main(int argc, char **argv) {
         && std::string_view(argv[1]) == "--offscreen");
 
     lingtai::desktop::NativeShell shell;
+    // The one Desktop fallback interpreter, used only when a selected
+    // Agent's own `init.json.venv_path` is absent or its platform Python
+    // does not exist: the same managed LingTai runtime location the current
+    // local development setup already uses.
+    shell.set_agent_start_fallback_python(
+        std::filesystem::path(QDir::homePath().toStdU16String())
+            / ".lingtai-tui" / "runtime" / "venv" / "bin" / "python");
     shell.set_open_project_request_handler([&shell] {
         const auto selected = QFileDialog::getExistingDirectory(
             QApplication::activeWindow(),

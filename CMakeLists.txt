@@ -188,7 +188,7 @@ target_link_libraries(lingtai_desktop_native_shell
     PRIVATE desktop-app::lib_ui
         lingtai_desktop_agent_projection lingtai_desktop_conversation
         lingtai_desktop_mail_publisher lingtai_desktop_agent_activity
-        lingtai_desktop_agent_sleep)
+        lingtai_desktop_agent_sleep lingtai_desktop_agent_launch)
 
 # Internal POSIX descriptor/no-follow primitives. No Qt, no project model, and
 # deliberately no link edge of its own: it is the shared safety mechanism every
@@ -283,6 +283,22 @@ target_compile_options(lingtai_desktop_agent_sleep PRIVATE
 target_link_libraries(lingtai_desktop_agent_sleep
     PUBLIC lingtai_desktop_core
     PRIVATE Qt6::Core lingtai_desktop_posix_primitives)
+
+# The one Start Agent leaf owner: it turns an already-accepted project
+# attachment, an exact selected Agent key, and one Desktop-supplied fallback
+# interpreter into one detached, shell-free `<python> -m lingtai run <dir>`
+# start. It owns no eligibility policy, UI, timer, PID tracking, or command
+# framework.
+add_library(lingtai_desktop_agent_launch STATIC
+    src/agent_launch.cpp)
+init_target(lingtai_desktop_agent_launch)
+target_include_directories(lingtai_desktop_agent_launch PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(lingtai_desktop_agent_launch PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_desktop_agent_launch
+    PUBLIC lingtai_desktop_core
+    PRIVATE Qt6::Core)
 
 add_executable(lingtai_agent_projection_test
     tests/agent_projection_test.cpp)

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agent_launch.h"
 #include "agent_projection.h"
 #include "agent_sleep.h"
 #include "workspace_selection.h"
@@ -45,6 +46,10 @@ public:
     void show();
     void show_offscreen();
     void set_open_project_request_handler(OpenProjectRequestHandler handler);
+    // Application composition's one concrete fallback interpreter, used only
+    // when a selected Agent's own `init.json.venv_path` is absent or its
+    // platform Python does not exist. Defaults to an empty path.
+    void set_agent_start_fallback_python(std::filesystem::path fallback_python);
     [[nodiscard]] ProjectOpenOutcome open_project(
         const std::filesystem::path &selected_directory,
         const std::optional<std::filesystem::path> &agent_relative_directory
@@ -73,6 +78,9 @@ private:
     void render_agent_sleep_status();
     void handle_request_sleep();
     void tick_agent_sleep_observation();
+    void render_agent_start_status();
+    void handle_start_agent();
+    void tick_agent_start_observation();
     [[nodiscard]] ProjectOpenOutcome show_open_error(
         ProjectPathFailure failure,
         std::string message);
@@ -87,6 +95,17 @@ private:
         std::chrono::steady_clock::time_point deadline;
     };
 
+    // The one action-local pending Start observation for at most ten
+    // wall-clock seconds after a successful detached start; discarded
+    // whenever the project or Agent selection changes, and never
+    // persisted. Success is proven solely by the sole `project_agents`
+    // projection later reporting this exact selection `alive`; there is no
+    // separate heartbeat baseline or second reader.
+    struct StartObservation {
+        std::filesystem::path project_root, directory_key;
+        std::chrono::steady_clock::time_point deadline;
+    };
+
     WorkspaceSelectionState selection_state_;
     std::unique_ptr<Ui::RpWindow> window_;
     Ui::RpWidget *empty_route_ = nullptr;
@@ -95,11 +114,13 @@ private:
     Ui::RpWidget *roster_rows_ = nullptr;
     AgentSnapshot agents_;
     OpenProjectRequestHandler open_project_request_handler_;
+    std::filesystem::path agent_start_fallback_python_;
     // View-scoped: exists only for the shell's own lifetime, re-invokes the
     // same stateless snapshot reader every second, and owns no cursor/offset
     // state of its own.
     QTimer *activity_timer_ = nullptr;
     std::optional<SleepObservation> pending_sleep_observation_;
+    std::optional<StartObservation> pending_start_observation_;
 };
 
 } // namespace lingtai::desktop

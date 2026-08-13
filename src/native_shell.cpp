@@ -163,6 +163,24 @@ bool agent_sleep_eligible(const AgentRow &item) {
         && *item.identity->state != "suspended";
 }
 
+// Desktop's own product gate for showing Start Agent at all: a valid
+// manifest, a main/agent role (never human/unknown), and exactly a stale or
+// missing heartbeat -- the two presence kinds a genuine new heartbeat write
+// can honestly transition out of. `invalid` (for example a future-dated
+// heartbeat) and `unavailable` are deliberately excluded: either could
+// later read as `alive` from wall-clock movement alone or a transient read
+// failure, with no real new write, which would let the post-click success
+// check in `tick_agent_start_observation()` claim a false "Agent is
+// online." without ever consulting a heartbeat timestamp baseline.
+bool agent_start_eligible(const AgentRow &item) {
+    if (item.manifest_kind != AgentManifestKind::valid) return false;
+    if (item.role != AgentRole::main && item.role != AgentRole::agent) {
+        return false;
+    }
+    return item.presence == AgentPresenceKind::stale
+        || item.presence == AgentPresenceKind::missing;
+}
+
 } // namespace
 
 NativeShell::NativeShell()
@@ -456,6 +474,38 @@ NativeShell::NativeShell()
         QStringLiteral("Selected Agent activity state"));
     detail_layout->addWidget(activity_state);
 
+    // The one Step-6 action on the exact selected Agent: an explicit,
+    // nonblocking start for a selected non-human Agent whose current
+    // projection is not heartbeat-live. Hidden entirely (not merely
+    // disabled) for a live Agent, matching the product contract's "no
+    // Start action" rather than Request sleep's always-visible/disabled
+    // shape. The status label below shows only truthful, evidence-backed
+    // claims -- spawn acceptance is never "online" on its own.
+    auto *start_row = new Ui::RpWidget(detail);
+    start_row->setObjectName("lingtai_selected_agent_start_row");
+    start_row->setAccessibleName(QStringLiteral("Start Agent"));
+    auto *start_row_layout = new QHBoxLayout(start_row);
+    start_row_layout->setContentsMargins(0, 0, 0, 0);
+    start_row_layout->setSpacing(8);
+    auto *start_button = new QPushButton(
+        QStringLiteral("Start Agent"), start_row);
+    start_button->setObjectName("lingtai_selected_agent_start_agent");
+    start_button->setAccessibleName(QStringLiteral("Start Agent"));
+    start_button->setAccessibleDescription(QStringLiteral(
+        "Starts the selected Agent's own configured runtime as a detached "
+        "local process. It does not provision, install, or repair a "
+        "runtime, and never auto-starts any Agent on its own."));
+    start_button->setVisible(false);
+    QObject::connect(start_button, &QPushButton::clicked, [this] {
+        handle_start_agent();
+    });
+    start_row_layout->addWidget(start_button);
+    detail_layout->addWidget(start_row);
+    auto *start_status = make_label(
+        detail, QString(), "lingtai_selected_agent_start_status", 10);
+    start_status->setAccessibleName(QStringLiteral("Start Agent status"));
+    detail_layout->addWidget(start_status);
+
     // The one Step-5 action on the exact selected Agent: reproduces only the
     // canonical empty `.sleep` marker write plus a best-effort target-side
     // observation. Disabled while ineligible or while a just-clicked
@@ -524,15 +574,20 @@ NativeShell::NativeShell()
         render_agent_activity();
         if (pending_sleep_observation_) {
             tick_agent_sleep_observation();
+        } else if (pending_start_observation_) {
+            tick_agent_start_observation();
         } else if (selection_state_.active_project()
                 && selection_state_.selected_agent_directory_key()) {
             // No click-armed observation is pending, so eligibility can only
             // go stale here: the target's own state can change (e.g. an
-            // ordinary-message wake) with no click or reselection to trigger
-            // a re-check. Reruns the same stateless projection this shell
+            // ordinary-message wake, or a Start observation from a since-
+            // abandoned pending click for a different selection landing in
+            // the background) with no click or reselection to trigger a
+            // re-check. Reruns the same stateless projection this shell
             // already reruns at every click/settle boundary.
             agents_ = project_agents(*selection_state_.active_project());
             render_agent_sleep_status();
+            render_agent_start_status();
         }
     });
     activity_timer_->start();
@@ -557,6 +612,11 @@ void NativeShell::show_offscreen() {
 void NativeShell::set_open_project_request_handler(
         OpenProjectRequestHandler handler) {
     open_project_request_handler_ = std::move(handler);
+}
+
+void NativeShell::set_agent_start_fallback_python(
+        fs::path fallback_python) {
+    agent_start_fallback_python_ = std::move(fallback_python);
 }
 
 ProjectOpenOutcome NativeShell::open_project(
@@ -646,9 +706,10 @@ ProjectOpenOutcome NativeShell::open_project(
     window_->findChild<QLabel *>("lingtai_project_open_error")->clear();
     open_error_surface_->hide();
     reset_composer();
-    // A fresh open must never let a prior target's pending sleep
+    // A fresh open must never let a prior target's pending sleep or Start
     // observation surface under the newly opened project/selection.
     pending_sleep_observation_.reset();
+    pending_start_observation_.reset();
     refresh_route();
     return {
         .disposition = ProjectOpenDisposition::opened,
@@ -774,6 +835,11 @@ void NativeShell::render_roster() {
         render_conversation();
         render_agent_activity();
         render_agent_sleep_status();
+        render_agent_start_status();
+        if (auto *start_status = window_->findChild<QLabel *>(
+                "lingtai_selected_agent_start_status")) {
+            start_status->clear();
+        }
         return;
     }
     selected_key->setText(path_text(detail_item->directory_key));
@@ -855,6 +921,11 @@ void NativeShell::render_roster() {
     render_conversation();
     render_agent_activity();
     render_agent_sleep_status();
+    render_agent_start_status();
+    if (auto *start_status = window_->findChild<QLabel *>(
+            "lingtai_selected_agent_start_status")) {
+        start_status->clear();
+    }
 }
 
 // Shows the current direct conversation for whatever the roster just made the
@@ -1076,9 +1147,11 @@ void NativeShell::handle_agent_selection(const fs::path &directory_key) {
         return;
     }
     reset_composer();
-    // A selection change must never let a prior target's pending sleep
-    // observation or terminal result surface under the newly selected Agent.
+    // A selection change must never let a prior target's pending sleep or
+    // Start observation or terminal result surface under the newly
+    // selected Agent.
     pending_sleep_observation_.reset();
+    pending_start_observation_.reset();
     render_roster();
     if (error) {
         error->clear();
@@ -1214,6 +1287,122 @@ void NativeShell::tick_agent_sleep_observation() {
                   .arg(state));
     }
     button->setEnabled(item && agent_sleep_eligible(*item));
+}
+
+// Reflects only the eligibility of the exact current selection against
+// whatever `agents_` currently holds, mirroring the button/enabled half of
+// render_agent_sleep_status() -- but deliberately *not* the status-text
+// half. This is called every second from the idle ambient timer branch
+// (with no click or resolution involved) purely to keep the button's
+// visible/enabled state honest against external drift (e.g. an ordinary-
+// message wake with no reselection); it must never touch the status label,
+// or it would erase a just-shown "Starting Agent...", "Agent is online.",
+// or failure message on the very next tick after it was set. Callers that
+// genuinely need a fresh status slate (selection change, project open, a
+// click/tick resolution) clear the label themselves at that specific
+// point, not through this function.
+void NativeShell::render_agent_start_status() {
+    auto *button = window_->findChild<QPushButton *>(
+        "lingtai_selected_agent_start_agent");
+    if (!button) return;
+
+    const auto *item = selection_state_.active_project()
+            && selection_state_.selected_agent_directory_key()
+        ? selectable_item(agents_,
+              *selection_state_.selected_agent_directory_key())
+        : nullptr;
+    const auto eligible = item && agent_start_eligible(*item);
+    button->setVisible(eligible);
+    button->setEnabled(eligible);
+}
+
+// The human's explicit click is the local product action. Rerun the sole
+// `project_agents` projection once at the click boundary and use only the
+// fresh exact row for the exact current selection -- never a cached one --
+// before starting anything. Request sleep is never separately disabled
+// here: it already requires `alive` presence, which a start-eligible
+// (stale/missing) row can never have at this exact instant.
+void NativeShell::handle_start_agent() {
+    auto *status = window_->findChild<QLabel *>(
+        "lingtai_selected_agent_start_status");
+    auto *button = window_->findChild<QPushButton *>(
+        "lingtai_selected_agent_start_agent");
+    if (!status || !button) return;
+    if (pending_start_observation_) return; // one observation at a time
+
+    if (!selection_state_.active_project()
+        || !selection_state_.selected_agent_directory_key()) {
+        return;
+    }
+    const auto &attachment = *selection_state_.active_project();
+    const auto key = *selection_state_.selected_agent_directory_key();
+
+    agents_ = project_agents(attachment);
+    render_roster();
+
+    const auto *item = selectable_item(agents_, key);
+    if (!item || !agent_start_eligible(*item)) {
+        return; // render_roster() above already reflects fresh eligibility
+    }
+
+    const auto result =
+        start_agent(attachment, key, agent_start_fallback_python_);
+    if (result != AgentLaunchResult::started) {
+        status->setText(QStringLiteral(
+            "Could not start Agent. See %1/logs/agent.log.")
+            .arg(path_text(attachment.root() / ".lingtai" / key)));
+        return;
+    }
+
+    status->setText(QStringLiteral("Starting Agent..."));
+    button->setEnabled(false); // disable duplicate click while observing
+    pending_start_observation_ = StartObservation{
+        .project_root = attachment.root(),
+        .directory_key = key,
+        .deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10),
+    };
+}
+
+// Piggybacks on the existing one-second view timer: no new timer, thread, or
+// watcher, and no second heartbeat parser. Idle unless a click armed a
+// pending observation for the exact current selection. Success is proven
+// solely by the sole `project_agents` projection reporting this exact
+// selection `alive`; `agent_start_eligible()`'s narrowed stale/missing gate
+// is what makes that transition trustworthy without a separate timestamp
+// baseline.
+void NativeShell::tick_agent_start_observation() {
+    if (!pending_start_observation_) return;
+    if (!selection_state_.active_project()
+        || selection_state_.active_project()->root()
+            != pending_start_observation_->project_root
+        || !selection_state_.selected_agent_directory_key()
+        || *selection_state_.selected_agent_directory_key()
+            != pending_start_observation_->directory_key) {
+        // The target changed since the click; a late result must never
+        // appear under a different selection.
+        pending_start_observation_.reset();
+        return;
+    }
+
+    const auto &attachment = *selection_state_.active_project();
+    const auto key = pending_start_observation_->directory_key;
+    agents_ = project_agents(attachment);
+    const auto *item = selectable_item(agents_, key);
+    const auto online = item && item->presence == AgentPresenceKind::alive;
+    const auto expired = std::chrono::steady_clock::now()
+        >= pending_start_observation_->deadline;
+    if (!online && !expired) return; // keep waiting within the window
+
+    pending_start_observation_.reset();
+    render_roster();
+
+    auto *status = window_->findChild<QLabel *>(
+        "lingtai_selected_agent_start_status");
+    if (!status) return;
+    status->setText(online
+        ? QStringLiteral("Agent is online.")
+        : QStringLiteral("Agent did not come online. See %1/logs/agent.log.")
+              .arg(path_text(attachment.root() / ".lingtai" / key)));
 }
 
 ProjectOpenOutcome NativeShell::show_open_error(

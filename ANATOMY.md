@@ -19,6 +19,7 @@ src/direct_conversation_history.{h,cpp} read-only direct conversation rows
 src/direct_mail_publisher.{h,cpp}      one exclusive human outbox leaf publisher
 src/agent_activity.{h,cpp}             stateless bounded selected-Agent activity snapshot reader
 src/agent_sleep.{h,cpp}                one selected-Agent .sleep marker write + best-effort applied observation
+src/agent_launch.{h,cpp}               one selected-Agent detached, shell-free `lingtai run` start
 tests/posix_descriptor_primitives_test.cpp descriptor ownership/no-follow contract
 tests/agent_projection_test.cpp        composite discovery/role/presence/status/no-write contract
 tests/direct_conversation_route_test.cpp pure route/eligibility contract
@@ -72,11 +73,14 @@ probe, policy, or panel, and a valid selection is immediately eligible to
 compose and send.
 
 Application composition in `src/main.cpp` owns the real native directory
-picker. Cancel is a no-op; a nonempty choice is passed to the shell with no
-selected Agent. The shell performs no project, registry, or Desktop-state
-writes beyond two explicit user-triggered actions: one composer send through
-`send_direct_mail`, and one Request sleep marker write through
-`request_agent_sleep`.
+picker and the one concrete Desktop fallback interpreter passed to
+`set_agent_start_fallback_python`. Cancel is a no-op; a nonempty choice is
+passed to the shell with no selected Agent. The shell performs no project,
+registry, or Desktop-state writes beyond three explicit user-triggered
+actions: one composer send through `send_direct_mail`, one Request sleep
+marker write through `request_agent_sleep`, and one Start Agent detached
+launch through `start_agent`, which also creates the selected Agent's own
+`logs/` directory so its redirected `agent.log` has somewhere to land.
 
 `WorkspaceSelectionState` is C1's sole owner of the optional accepted active
 project and optional selected Agent directory key, and the sole same-root/
@@ -284,6 +288,55 @@ observation and terminal status immediately, so a late result can never
 surface under a different selection. This action never claims `queued`,
 target acknowledgement, or "Agent is asleep" from the write or a timeout
 alone.
+
+`start_agent` is the Step-6 leaf: given an already-accepted attachment, the
+exact selected directory key, and application composition's one Desktop
+fallback interpreter, it resolves the absolute selected Agent directory
+through the existing `ProjectAttachment::resolve` containment seam, then
+starts exactly `<python> -m lingtai run <absolute-selected-agent-dir>`
+detached and without a shell via `QProcess`. The interpreter is the
+selected Agent's own top-level `init.json.venv_path` platform Python --
+read by one ordinary, bounded, non-descriptor-relative config read, since
+the directory is already contained and the spawned kernel remains the
+validating authority for its own config -- when that exact absolute path's
+`bin/python` file exists, otherwise the fallback; a relative `venv_path` is
+rejected rather than resolved against some ambient working directory, and a
+present-but-broken configured interpreter is attempted rather than silently
+replaced. This slice never provisions, installs, upgrades, import-probes,
+or repairs either interpreter. Stdout/stderr are redirected to the selected
+Agent's own `logs/agent.log` (creating `logs/` first if absent), matching
+the current TUI launcher's own redirection, since the kernel process itself
+never creates that file. `start_agent` tracks no PID, never waits on or
+signals the spawned process, and returns only accepted/refused; the kernel
+child remains the sole authority for config validation, duplicate defense,
+workdir lease, signal cleanup, and lifetime.
+
+`NativeShell` composes one Start Agent button and one status label,
+positioned in the selected-Agent detail area before the Request sleep row.
+Desktop's own eligibility gate -- a valid manifest, a main/agent role, and
+exactly a stale or missing heartbeat (never `invalid`/`unavailable`, since
+only those two presence kinds honestly exclude a false "online" reading
+from wall-clock movement or a transient read failure with no genuine new
+heartbeat write) -- is re-evaluated at the click boundary by rerunning
+`project_agents` once, exactly like Request sleep. A live selection shows no
+Start action at all: the button is hidden, not merely disabled. A
+successful local start shows exactly "Starting Agent..." and disables the
+button; Request sleep needs no separate disabling here since it already
+requires `alive` presence, which a start-eligible row cannot have at that
+instant. The pending observation then piggybacks on the existing one-second
+`QTimer` (no new timer, thread, second scanner, or heartbeat parser) for at
+most ten wall-clock seconds, succeeding only when the sole `project_agents`
+projection reports the exact selected Agent `alive`, and showing "Agent is
+online." with normal controls returning. A timeout shows "Agent did not
+come online. See `<agent>/logs/agent.log`." and leaves the button enabled
+for an explicit retry; a local start refusal shows "Could not start Agent.
+See `<agent>/logs/agent.log`." immediately, with no pending observation.
+Project open or Agent selection change discards any prior target's pending
+observation and terminal status immediately -- never the detached process
+itself, which this shell has no PID to kill or cancel -- so a late result
+can never surface under a different selection. Start Agent never auto-
+starts any Agent on its own, never claims readiness beyond heartbeat
+liveness, and never retries, scans processes, or manages a launch ID.
 
 Qt is external rather than fetched or committed. Configure resolves the exact
 Qt 6.11.1 prefix from `QT_ROOT` or the documented `$HOME/Qt/6.11.1/macos`
