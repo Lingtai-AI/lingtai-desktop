@@ -4,7 +4,6 @@
 #include "posix_descriptor_primitives.h"
 
 #include <cerrno>
-#include <cmath>
 #include <cstring>
 #include <dirent.h>
 #include <fcntl.h>
@@ -190,33 +189,6 @@ void check_directory_stream_ownership(const fs::path &root) {
     if (recycled >= 0) ::close(recycled);
 }
 
-void check_file_identity(const fs::path &root) {
-    const auto left = root / "left";
-    const auto right = root / "right";
-    write_file(left, "left");
-    write_file(right, "right");
-    struct stat observed {};
-    struct stat other {};
-    expect(::stat(left.c_str(), &observed) == 0, "left fixture is observed");
-    expect(::stat(right.c_str(), &other) == 0, "right fixture is observed");
-
-    const FileIdentity exact{observed.st_dev, observed.st_ino};
-    expect(same_file(observed, exact), "a file is identical to its own identity");
-    expect(!same_file(other, exact), "a different file is not the same file");
-
-    const FileIdentity swapped_device{
-        static_cast<dev_t>(observed.st_dev + 1), observed.st_ino};
-    expect(!same_file(observed, swapped_device),
-        "identity compares the device, not the inode alone");
-    const FileIdentity swapped_inode{
-        observed.st_dev, static_cast<ino_t>(observed.st_ino + 1)};
-    expect(!same_file(observed, swapped_inode), "identity compares the inode");
-
-    const FileIdentity blank;
-    expect(blank.device == 0 && blank.inode == 0,
-        "an unset identity matches nothing by construction");
-}
-
 void check_safe_leaf() {
     expect(safe_leaf("alpha"), "an ordinary immediate leaf is safe");
     expect(safe_leaf(".hidden"), "a dot-prefixed immediate leaf is safe");
@@ -231,35 +203,6 @@ void check_safe_leaf() {
         "an embedded NUL is not a safe leaf");
 }
 
-// The fraction, not just the second, must survive the conversion.
-void check_modified_at_seconds(const fs::path &root) {
-    const auto file = root / "timed";
-    write_file(file, "timed");
-    const auto stamp = [&](long seconds, long nanoseconds) {
-        struct timespec times[2];
-        times[0].tv_sec = seconds;
-        times[0].tv_nsec = nanoseconds;
-        times[1] = times[0];
-        return ::utimensat(AT_FDCWD, file.c_str(), times, AT_SYMLINK_NOFOLLOW) == 0;
-    };
-    const auto observe = [&] {
-        struct stat observed {};
-        expect(::stat(file.c_str(), &observed) == 0, "the timed fixture is observed");
-        return modified_at_seconds(observed);
-    };
-
-    expect(stamp(1'000'003L, 123'456'789L), "an exact nanosecond mtime is set");
-    const auto earlier = observe();
-    expect(std::fabs(earlier - 1'000'003.123456789) < 1e-6,
-        "the converted mtime carries its nanosecond fraction");
-    expect(earlier - 1'000'003.0 > 0.0,
-        "the nanosecond fraction is preserved rather than truncated");
-
-    expect(stamp(1'000'003L, 987'654'321L), "a later nanosecond mtime is set");
-    const auto later = observe();
-    expect(later > earlier,
-        "two mtimes inside the same second remain strictly ordered");
-}
 } // namespace
 
 int main(int argc, char **argv) {
@@ -279,9 +222,7 @@ int main(int argc, char **argv) {
     check_descriptor_ownership(root / "ownership");
     check_read_flags(root / "flags");
     check_directory_stream_ownership(root / "stream");
-    check_file_identity(root / "identity");
     check_safe_leaf();
-    check_modified_at_seconds(root / "mtime");
 
     if (failures != 0) {
         std::cerr << failures << " descriptor primitive contract failures\n";

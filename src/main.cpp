@@ -26,11 +26,8 @@ int main(int argc, char **argv) {
         if (selected.isEmpty()) {
             return;
         }
-        const auto receipt = QDir(QDir::homePath()).filePath(
-            QStringLiteral(".lingtai-tui/install.json"));
         static_cast<void>(shell.open_project(
-            std::filesystem::path(selected.toStdU16String()),
-            std::filesystem::path(receipt.toStdU16String())));
+            std::filesystem::path(selected.toStdU16String())));
     });
     if (offscreen_mode) {
         shell.show_offscreen();
@@ -40,26 +37,8 @@ int main(int argc, char **argv) {
 
     if (smoke_mode) {
         QTimer::singleShot(0, &app, [&] {
-            const auto state = shell.snapshot();
-            const auto ready = state.window_class == "Ui::RpWindow"
-                && state.window_object == "lingtai_desktop_window"
-                && state.body_object == "lingtai_desktop_body"
-                && state.sidebar_object == "lingtai_desktop_sidebar"
-                && state.content_object == "lingtai_desktop_content"
-                && state.empty_route_visible
-                && state.positioned_offscreen
-                && state.shown;
-            if (!ready) {
-                std::cerr << "LINGTAI_LIB_UI_SMOKE_SHELL_NOT_READY"
-                          << " class=" << state.window_class
-                          << " window=" << state.window_object
-                          << " body=" << state.body_object
-                          << " sidebar=" << state.sidebar_object
-                          << " content=" << state.content_object
-                          << " empty=" << state.empty_route_visible
-                          << " offscreen=" << state.positioned_offscreen
-                          << " shown=" << state.shown
-                          << std::endl;
+            if (!shell.smoke_ready()) {
+                std::cerr << "LINGTAI_LIB_UI_SMOKE_SHELL_NOT_READY" << std::endl;
                 app.exit(98);
                 return;
             }
@@ -67,11 +46,11 @@ int main(int argc, char **argv) {
             std::cout
                 << "LINGTAI_LIB_UI_FULL_TARGET_SMOKE_OK"
                 << " qt=" << qVersion()
-                << " class=" << state.window_class
-                << " window=" << state.window_object
-                << " body=" << state.body_object
-                << " sidebar=" << state.sidebar_object
-                << " content=" << state.content_object
+                << " class=Ui::RpWindow"
+                << " window=lingtai_desktop_window"
+                << " body=lingtai_desktop_body"
+                << " sidebar=lingtai_desktop_sidebar"
+                << " content=lingtai_desktop_content"
                 << " empty=visible"
                 << " offscreen=true"
                 << " shown=true"

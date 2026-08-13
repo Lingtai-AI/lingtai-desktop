@@ -8,11 +8,11 @@ BUILD_DIR="${BUILD_DIR:-$ROOT/build}"
   exit 1
 }
 cmake --build "$BUILD_DIR" --target \
-  lingtai_desktop_smoke lingtai_compatibility_probe_test \
-  lingtai_agent_manifest_discovery_test lingtai_agent_roster_presence_test \
-  lingtai_agent_identity_status_test lingtai_direct_conversation_route_test \
+  lingtai_desktop_smoke \
+  lingtai_agent_projection_test lingtai_direct_conversation_route_test \
   lingtai_direct_conversation_history_test \
   lingtai_direct_mail_publisher_test \
   lingtai_posix_descriptor_primitives_test \
-  lingtai_workspace_selection_test lingtai_native_shell_test \
+  lingtai_workspace_selection_test lingtai_project_attachment_test \
+  lingtai_native_shell_test \
   --parallel "${BUILD_JOBS:-8}"

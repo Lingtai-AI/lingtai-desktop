@@ -1,4 +1,5 @@
 #include "direct_mail_publisher.h"
+#include "posix_descriptor_primitives.h"
 
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
@@ -6,17 +7,21 @@
 #include <QtCore/QString>
 
 #include <array>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <ctime>
-#include <fstream>
+#include <fcntl.h>
 #include <optional>
 #include <random>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace lingtai::desktop {
 namespace {
 
 namespace fs = std::filesystem;
+namespace posix = posix_internal;
 
 // Matches the current Go TUI pseudo-agent sender's per-folder attempt budget
 // (`mailboxIDCollisionRetries`): enough to absorb a same-second 4-hex-suffix
@@ -112,24 +117,32 @@ struct StampedId {
     return QJsonDocument(payload).toJson(QJsonDocument::Compact).toStdString();
 }
 
-// Write-temp-then-rename inside the already-exclusively-created leaf, mirroring
-// the current sender's own `writeJSONAtomic`. The temp name is never
-// `message.json`, so the pseudo-outbox poller -- which claims any directory
-// containing a parseable, addressed `message.json` -- cannot observe a partial
-// write.
-[[nodiscard]] bool write_leaf_json(const fs::path &leaf, const std::string &bytes) {
-    const auto tmp = leaf / "message.json.tmp";
-    {
-        auto stream = std::ofstream(tmp, std::ios::binary | std::ios::trunc);
-        if (!stream) return false;
-        stream.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-        if (!stream.good()) return false;
-        stream.close();
-        if (!stream.good()) return false;
+// Write-temp-then-rename inside the already-exclusively-created leaf,
+// descriptor-relative to it, mirroring the current sender's own
+// `writeJSONAtomic`. The temp name is never `message.json`, so the
+// pseudo-outbox poller -- which claims any directory containing a
+// parseable, addressed `message.json` -- cannot observe a partial write.
+[[nodiscard]] bool write_leaf_json(int leaf_fd, const std::string &bytes) {
+    const auto raw_fd = ::openat(leaf_fd, "message.json.tmp",
+        O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (raw_fd < 0) return false;
+    auto ok = true;
+    std::size_t total = 0;
+    while (ok && total < bytes.size()) {
+        const auto count = ::write(raw_fd, bytes.data() + total,
+            bytes.size() - total);
+        if (count < 0) {
+            if (errno == EINTR) continue;
+            ok = false;
+            break;
+        }
+        total += static_cast<std::size_t>(count);
     }
-    std::error_code rename_error;
-    fs::rename(tmp, leaf / "message.json", rename_error);
-    return !rename_error;
+    // Explicit close-and-check before the rename: a write that looked
+    // successful can still fail to land at close.
+    if (::close(raw_fd) != 0) ok = false;
+    if (!ok) return false;
+    return ::renameat(leaf_fd, "message.json.tmp", leaf_fd, "message.json") == 0;
 }
 
 } // namespace
@@ -145,36 +158,57 @@ DirectMailSendResult send_direct_mail(
             || key == "." || key == "..") {
             return DirectMailSendResult::failed_local;
         }
-        const auto outbox = route.thread_key.project_root / ".lingtai" / key
-            / "mailbox" / "outbox";
-        std::error_code parent_error;
-        fs::create_directories(outbox, parent_error);
-        if (parent_error) return DirectMailSendResult::failed_local;
+        // Anchored, descriptor-relative walk: every component from the
+        // project root down to the outbox is opened no-follow, one leaf at a
+        // time, so no intermediate `.lingtai`, human-directory, `mailbox`,
+        // or `outbox` symlink can redirect this publish outside the project.
+        // The `.lingtai` and human directories are opened, never created:
+        // only the current sender's own `mailbox`/`outbox` folders are
+        // created here if missing.
+        const auto root = posix::open_root_directory(
+            route.project_root);
+        if (root.get() < 0) return DirectMailSendResult::failed_local;
+        const auto lingtai = posix::open_directory_component(root.get(), ".lingtai");
+        if (lingtai.get() < 0) return DirectMailSendResult::failed_local;
+        const auto human = posix::open_directory_component(lingtai.get(), key);
+        if (human.get() < 0) return DirectMailSendResult::failed_local;
+        const auto mailbox = posix::open_directory_component(
+            human.get(), "mailbox", /*create=*/true);
+        if (mailbox.get() < 0) return DirectMailSendResult::failed_local;
+        const auto outbox = posix::open_directory_component(
+            mailbox.get(), "outbox", /*create=*/true);
+        if (outbox.get() < 0) return DirectMailSendResult::failed_local;
 
         for (auto attempt = 0; attempt != kIdCollisionRetries; ++attempt) {
             const auto stamp = fresh_id();
             if (!stamp) return DirectMailSendResult::failed_local;
-            const auto leaf = outbox / stamp->directory_id;
 
-            // Exclusive create: mkdir(2) fails rather than replacing an
+            // Exclusive create: mkdirat(2) fails rather than replacing an
             // existing leaf, exactly mirroring the current sender's
             // os.Mkdir-plus-retry-on-collision leaf allocation.
-            std::error_code create_error;
-            const auto created = fs::create_directory(leaf, create_error);
-            if (create_error) return DirectMailSendResult::failed_local;
-            if (!created) continue; // another writer already owns this id
+            if (::mkdirat(outbox.get(), stamp->directory_id.c_str(), 0700) != 0) {
+                if (errno == EEXIST) continue; // another writer owns this id
+                return DirectMailSendResult::failed_local;
+            }
+            const auto leaf = posix::open_directory_component(
+                outbox.get(), stamp->directory_id);
+            if (leaf.get() < 0) {
+                ::unlinkat(outbox.get(), stamp->directory_id.c_str(),
+                    AT_REMOVEDIR);
+                return DirectMailSendResult::failed_local;
+            }
 
-            if (write_leaf_json(leaf, build_payload(route, text, *stamp))) {
+            if (write_leaf_json(leaf.get(), build_payload(route, text, *stamp))) {
                 return DirectMailSendResult::queued;
             }
 
             // The leaf never gained a parseable message.json, so the poller
             // could never have claimed it; only this attempt's own fresh,
             // still-private leaf is removed. Pre-existing content is never
-            // touched because `created` being true is exactly the proof that
-            // this leaf did not exist before this call.
-            std::error_code cleanup_error;
-            fs::remove_all(leaf, cleanup_error);
+            // touched, because this exact id was exclusively created by this
+            // call moments earlier.
+            ::unlinkat(leaf.get(), "message.json.tmp", 0);
+            ::unlinkat(outbox.get(), stamp->directory_id.c_str(), AT_REMOVEDIR);
             return DirectMailSendResult::failed_local;
         }
         return DirectMailSendResult::failed_local;

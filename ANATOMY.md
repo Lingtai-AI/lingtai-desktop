@@ -13,29 +13,20 @@ src/native_shell.{h,cpp}               native project/Agent roster selection rou
 src/project_attachment.{h,cpp}         Qt-independent project-root containment seam
 src/workspace_selection.{h,cpp}        pure Desktop-owned workspace selection state
 src/posix_descriptor_primitives.{h,cpp} internal descriptor/no-follow primitives
-src/agent_manifest_discovery.{h,cpp}   manifest discovery + roster implementation
-src/agent_manifest_discovery_test_seam.h deterministic filesystem race/error seam
-src/agent_roster_presence.h            pure ordered role/presence projection
-src/agent_roster_presence_test_seam.h  keyed heartbeat and wall-clock seam
-src/agent_identity_status.h            manifest/status composite read model
-src/agent_identity_status_test_seam.h  keyed status/mtime/clock seam
+src/agent_projection.{h,cpp}           one composite Agent discovery/role/presence/status projection
 src/direct_conversation_route.{h,cpp}  pure direct route + human sender identity
 src/direct_conversation_history.{h,cpp} read-only direct conversation rows
-src/compatibility_probe.{h,cpp}        Qt Core-owned read-only compatibility probe
+src/direct_mail_publisher.{h,cpp}      one exclusive human outbox leaf publisher
 tests/posix_descriptor_primitives_test.cpp descriptor ownership/no-follow contract
-tests/agent_manifest_discovery_test.cpp discovery/no-write behavior contract
-tests/agent_roster_presence_test.cpp    strict role/heartbeat behavior contract
-tests/agent_identity_status_test.cpp    source-separated identity/status contract
-tests/direct_conversation_route_test.cpp pure route/stable-identity contract
-tests/direct_conversation_history_test.cpp direct membership/order/no-write contract
+tests/agent_projection_test.cpp        composite discovery/role/presence/status/no-write contract
+tests/direct_conversation_route_test.cpp pure route/eligibility contract
+tests/direct_conversation_history_test.cpp direct membership/order/no-write/containment contract
+tests/direct_mail_publisher_test.cpp   publish envelope/nonoverwrite/containment contract
 tests/native_shell_test.cpp            native shell semantics/geometry/no-write contract
 tests/project_attachment_test.cpp      real C++ attachment/containment behavior contract
 tests/test_native_shell.py             process persistence and smoke-order contract
 tests/workspace_selection_test.cpp     workspace/Agent state behavior contract
-tests/test_project_attachment.py       dependency-free C++ contract compile/run harness
-tests/test_workspace_selection.py      dependency-free workspace contract harness
-tests/compatibility_probe_test.cpp     compatibility behavior/no-write contract
-tests/test_repository_contract.py      focused tracked-tree and lock contract
+tests/test_repository_contract.py      pinned toolkit provenance + tracked-artifact guard
 ```
 
 `bootstrap-deps.sh` materializes ignored `.deps/` inputs in three groups:
@@ -52,8 +43,7 @@ tests/test_repository_contract.py      focused tracked-tree and lock contract
 The top-level CMake graph creates the upstream dependency target names expected
 by the full pinned `lib_ui` CMake target and adds its complete source tree
 without patching it. The Qt-independent `lingtai_desktop_core` library owns the
-project-attachment seam and workspace selection state. The separate
-`lingtai_desktop_compatibility` library privately owns Qt Core JSON parsing.
+project-attachment seam and workspace selection state.
 The smoke links the native shell with `desktop-app::lib_ui`.
 `src/crl_integration.cpp` supplies the bounded, no-emission parent update
 producer the smoke needs; it is owned LingTai glue, not a Telegram model.
@@ -62,35 +52,36 @@ The `lingtai_desktop_native_shell` library owns one real `Ui::RpWindow`, uses
 its real `Ui::RpWidget` body, and composes a bounded sidebar with a flexible
 content region using native widget layouts. It holds one
 `WorkspaceSelectionState`; the visible empty/project routes are derived from
-that C1 model. Its Qt-free open seam accepts an explicit selected directory,
-install receipt, and optional project-relative Agent directory. It attaches
-and probes through C2, activates C1 only after safe `.lingtai` validation, then
-reads one C3 roster snapshot. Valid and malformed rows retain ordered manifest,
-role, presence, completeness, and diagnostic truth. Only valid rows propose
-selection through C1; row clicks and the public seam share one handler, and
-highlight/detail are re-derived from C1. A successful selection re-probes C2
-at `.lingtai/<directory_key>` using the retained in-memory receipt path.
-Same-root refresh preserves only a still-valid selected key; failed opens leave
-the prior project, receipt, roster, selection, and compatibility report intact
-while showing a transient error. The shell uses static accessible/object names
-for semantic tests, and its minimum/default sizing protects both layout regions.
+that C1 model. Its Qt-free open seam accepts an explicit selected directory and
+an optional project-relative Agent directory. It activates C1 only after safe
+`.lingtai` validation, then reads one composite Agent snapshot. Valid and
+malformed rows retain ordered manifest, role, and presence truth. Only valid
+rows propose selection through C1; a row click is the sole selection entry
+point, and highlight/detail are re-derived from C1. `NativeShell::smoke_ready`
+is real product readiness used only by `main.cpp`'s `--smoke` path, not a
+public test seam. Same-root refresh preserves only a still-valid selected key;
+failed opens leave the prior project, roster, and selection intact while
+showing a transient error. The shell uses static accessible/object names for
+semantic tests, and its minimum/default sizing protects both layout regions.
+Compatibility is not a Send authorization gate: the shell has no compatibility
+probe, policy, or panel, and a valid selection is immediately eligible to
+compose and send.
 
 Application composition in `src/main.cpp` owns the real native directory
-picker. Cancel is a no-op; a nonempty choice is passed to the shell with the
-current user's absolute `.lingtai-tui/install.json` path and no selected Agent.
-The shell and compatibility probe perform no project, receipt, registry, or
-Desktop-state writes.
+picker. Cancel is a no-op; a nonempty choice is passed to the shell with no
+selected Agent. The shell performs no project, registry, or Desktop-state
+writes; the only project write is one explicit composer send through
+`send_direct_mail`.
 
 `WorkspaceSelectionState` is C1's sole owner of the optional accepted active
-project, optional selected Agent directory key, and in-memory Desktop recents;
-C5 may propose only typed transitions through it. Activation compares accepted
-canonical roots without filesystem access, maintains a deduplicated bounded
-MRU, preserves Agent selection for the same root, and clears it for a different
-root. Closing retains recents, while removing a recent never changes active
-state. Agent keys use discovery's safe one-component relative grammar and are
-never interpreted as identity. The model performs no compatibility or roster
-reads, persistence, registry import, or project/settings writes, and retains
-state if an accepted root is later deleted or unmounted.
+project and optional selected Agent directory key, and the sole same-root/
+root-switch transition owner; C5 may propose only typed transitions through
+it. Activation compares accepted canonical roots without filesystem access,
+preserving Agent selection for the same root and clearing it for a different
+root. Agent keys use discovery's safe one-component relative grammar and are
+never interpreted as identity. The model performs no roster reads,
+persistence, registry import, or project/settings writes, and retains state
+if an accepted root is later deleted or unmounted.
 
 `ProjectAttachment` accepts an existing directory and retains its canonical
 (symlink-resolved) root path. Its `resolve` method accepts nonempty existing
@@ -112,115 +103,118 @@ change what a later resolution observes.
 descriptor-anchored reader must not re-derive: move-only descriptor ownership
 that closes exactly once and leaves a moved-from owner empty, ownership of a
 directory stream that has adopted a descriptor, the shared read-only,
-close-on-exec, no-follow, nonblocking read flags, device-plus-inode file
-identity, platform nanosecond mtime conversion, and strict immediate-leaf
-validation. It links nothing: no Qt, no project model, and no reader. The seam
+close-on-exec, no-follow, nonblocking read flags, strict immediate-leaf
+validation, and one-leaf-at-a-time descriptor-relative directory/regular-file
+opening (with optional directory creation) anchored from an already-open
+parent descriptor or, for the very first component of a walk, an absolute
+root path. It links nothing: no Qt, no project model, and no reader. The seam
 is internal and intentionally minimal — it is not a general filesystem
 framework and holds no domain policy. Candidate selection, size bounds, error
-mapping, observation order, race verdicts, and every parser stay with the
-reader that owns them; discovery keeps its own stat-versus-stat replacement
-checks because those are discovery's race policy, not shared mechanics.
-Discovery consumes the seam as a private dependency, so no consumer inherits it
+mapping, observation order, and every parser stay with the reader that owns
+them. Discovery, the direct-conversation reader, and the mail publisher each
+consume the seam as a private dependency, so no consumer inherits it
 transitively.
 
-`discover_agent_manifests` examines only the canonical attachment root's real
-`.lingtai` directory and its immediate real child directories.
-Discovery owns a 1 MiB per-manifest source limit, enforced by streaming read rather
-than file metadata. Only a regular, non-symlink `.agent.json` within that limit can
-make any JSON object `Valid`; present unsafe, unreadable, nonregular, oversized
-(`too_large`), invalid, or non-object sources remain visible with typed provenance.
-Missing or disappearing manifests are
-omitted. Lossless child names are the stable keys. The same successfully parsed
-JSON object derives only the pure role: missing/null `admin` is human, any
-direct Boolean `true` in an `admin` object is main, and every other present
-shape is an agent; malformed or unsafe manifests remain unknown.
-Root enumeration errors fail closed, results are sorted, and the scanner never
-writes or follows root, child-directory, or manifest symlinks. Qt JSON remains
-private to the discovery implementation.
+`project_agents` is the sole production Agent projection: one composite scan
+of the canonical attachment root's real `.lingtai` directory and its
+immediate real child directories, all from one shared wall-clock sample. It
+returns one deterministically ordered vector of rows; there are no public
+standalone discovery/roster-only wrappers, no parallel index-parallel
+vectors, and no completeness flag. Discovery owns a
+1 MiB per-manifest and per-status source limit, enforced by a bounded read on
+the actual opened descriptor rather than file metadata. Only a regular,
+non-symlink `.agent.json` within that limit can make any JSON object `valid`;
+present unsafe, unreadable, oversized, invalid, or non-object sources remain
+visible as a `malformed` or `unsafe` row with a concise typed diagnostic —
+not source path, mtime, byte count, or observed-time provenance. Missing or
+disappearing manifests are omitted entirely, and one unsafe or unreadable
+candidate directory is invisible without hiding a later healthy sibling.
+Lossless child names are the stable keys. The same successfully parsed JSON
+object derives only the pure role: missing/null `admin` is human, any direct
+Boolean `true` in an `admin` object is main, and every other present shape is
+an agent; malformed or unsafe manifests remain unknown.
 
-`project_agent_roster` calls accepted manifest discovery once, preserves its
-report and deterministic item order, then reads one wall-clock value for the
-whole presence projection. A valid human is `alive_human` without opening
-`.agent.heartbeat`; malformed/unsafe roles are unknown and also short-circuit.
-Main and ordinary agents use descriptor-anchored, no-follow access beneath the
-same opened `.lingtai` root, with a streaming 128-byte heartbeat ownership
-limit. A heartbeat is live only when its timestamp and `now` are finite, it is
-not future, and `0 <= now - timestamp < 5.0`; future and non-finite values are
-invalid, exact age five is stale, and display age is never negative or
-non-finite. Typed heartbeat provenance keeps absence, unsafe sources, I/O,
-container replacement, invalid numbers, and staleness independent from the
-manifest lifecycle. The snapshot reads no status, performs no writes, retry,
-process query, or repair, and retains discovery evidence if projection fails.
-Heartbeat content is accepted only by an exact decimal grammar and converted
-through the classic C++ locale. This keeps parsing independent of `LC_NUMERIC`,
-rejects hexadecimal floats and range failures, and preserves the typed
-non-finite/future policy.
-
-`project_agent_identity_status` extends that same C3 owner without a second
-scan: one discovery and injected wall-clock value produce an index-parallel
-roster/detail result. Valid manifest identity owns true name, nickname,
-address, manifest state, safelisted live-LLM values, and raw/display capability
-evidence. Optional `.status.json` is a separately bounded 1 MiB, descriptor-
+A valid human role is `alive_human` without opening `.agent.heartbeat`;
+malformed/unsafe/unknown-role rows are `unknown` and also short-circuit. Main
+and ordinary agents use the same descriptor-anchored, no-follow access, with
+a bounded 128-byte heartbeat read. A heartbeat is live only when its
+timestamp and `now` are finite, it is not future, and
+`0 <= now - timestamp < 5.0`; future and non-finite values are invalid, and
+display age is never negative or non-finite. Heartbeat content is accepted
+only by an exact decimal grammar and converted through the classic C++
+locale, independent of `LC_NUMERIC`, and rejects hexadecimal floats and range
+failures. Optional `.status.json` is a separately bounded, descriptor-
 anchored, no-follow runtime observation containing only typed state, running,
-PID, progress, active-turn, and positive-window context fields. Each source
-retains relative path, descriptor mtime, shared observation time, byte/read/
-parse outcome, and error evidence. Mtime order plus optional Agent-ID/state
-agreement is deterministic pair evidence only: status never replaces manifest
-identity/state and no TTL, generation, winner, activity aggregate, or health
-verdict is invented. The projection adds no UI, config/init/resolved reads,
-polling, watcher, process query, command, repair, or project-tree write.
+PID, progress, active-turn, and positive-window context fields; a malformed
+or absent status simply leaves that row's status unset. There is no manifest/
+status mtime-order or ID/state agreement relation, no device/inode generation
+comparison, no re-verification after a read, and no health/winner verdict:
+the collapsed projection reads each source exactly once and reports what it
+found. The projection adds no UI, config/init/resolved reads, polling,
+watcher, process query, command, repair, or project-tree write.
 
 `resolve_direct_conversation_route` consumes one already-produced accepted
-identity snapshot, the attached canonical root, and the C1 selected directory
+Agent snapshot, the attached canonical root, and the C1 selected directory
 key. It performs no filesystem access and no manifest or status rediscovery:
 its library links only `lingtai_desktop_core`, so a second discovery read is
-structurally impossible rather than merely avoided by convention. A completed
-projection, exactly one valid human-role row with typed identity, and an
-exactly matching selected valid non-human target are all required; every other
-outcome is one precise typed `DirectRouteFailure` carrying bounded human
-candidate keys and an exact candidate count for degraded presentation. Current
-human and target directory keys and addresses are returned separately and are
-route authority for later mailbox access only. Stable Desktop thread identity
-is the transparent `DirectThreadKey` of canonical project root plus the
-target's manifest `agent_id`; it is never hashed, never derived from an address
-or directory key, and therefore survives a rename, while remaining exactly as
-stable as the canonical root path itself. The minimal human sender card copies
-only accepted typed manifest fields plus explicit human-role evidence, never
-unknown manifest fields or raw JSON. Mailbox folders, messages, receipts,
-attachments, publication, and Desktop app data remain outside this owner.
+structurally impossible rather than merely avoided by convention. It returns
+an optional compact route: a route resolves only for an exact selected valid
+non-human row with a present target manifest `agent_id` and address, exactly
+one valid addressed human row, and human/target addresses that differ; any
+other case is simply no route, with no typed failure or candidate evidence
+retained. Current human and target directory keys and addresses are returned
+separately and are route authority for later mailbox access only. The route
+additionally carries the canonical project root and the target's manifest
+`agent_id`, used only to anchor the mailbox path for the current call. The
+minimal human sender card copies only accepted typed manifest fields, never
+unknown manifest fields or raw JSON. Mailbox folders, messages, attachments,
+publication, and Desktop app data remain outside this owner.
 
-`read_direct_conversation` turns one accepted route into the rows the selected-
-Agent surface shows. It derives its paths only from the accepted canonical root
-and the accepted human directory key, reading the immediate `inbox`, `sent`,
-and `outbox` entries under `.lingtai/<human key>/mailbox` and their immediate
-`message.json` files. It rejects rather than follows a symlinked or non-regular
-entry or message, rejects a `message.json` above 1 MiB, and writes nothing.
-The body field is the kernel's `message`, never `body`. Order comes from the
-kernel's own timestamp precedence — `received_at` on delivery, `sent_at` once
-outbox/<id> becomes sent/<id>, and `deliver_at` while still pending — with the
-entry directory basename as both the displayed ID and the deterministic
-tie-break. Membership is exactly envelope based: one sender, one recipient
-written as a string or one-element array, no CC, and an incoming identity
-`agent_id` that must match the selected target when present. Mail for another
-conversation is simply absent; only an unsafe, unreadable, or malformed entry
-increments the one generic skipped count, and one bad entry never hides a valid
-neighbor. A duplicate outgoing ID observed in both outbox and sent collapses
-onto the sent copy. Nothing about delivery, processing, reply chains, unread
-state, or attachments is read or inferred. `NativeShell` renders those rows in
-the selected-Agent detail area as a read-only plain-text surface that never
-interprets markup, refreshed on project open/refresh and selection change with
-no background poller.
+`read_direct_conversation` and `send_direct_mail` both reach
+`.lingtai/<human key>/mailbox` through the shared `posix_internal`
+descriptor-relative primitives with an anchored, per-operation walk: the
+project root, `.lingtai`, the human directory, and `mailbox` are each opened
+one leaf at a time with `O_NOFOLLOW`, so no intermediate symlink at any of
+those components can redirect either a read or a write outside the project.
+Only the current sender's own `mailbox`/`outbox` folders are created if
+missing; `.lingtai` and the human directory are opened, never created.
 
-`probe_compatibility` reads one explicitly requested relative agent directory
-and one explicitly supplied global install-receipt path below an accepted
-attachment; it never infers `$HOME` or a project receipt. It recognizes only
-the current machine receipt and kernel-resolved-manifest envelopes, reports raw
-`init.json` structure and the `bash`/`shell` alias case without rewriting it,
-and retains independent typed findings. No requested agent is explicitly
-`Degraded`; commands are allowed only for a finding-free requested agent with a
-recognized receipt, fresh resolved manifest, and structurally usable raw init.
-The probe does not implement the kernel's full raw-init semantics or verify an
-installed executable.
+`read_direct_conversation` turns one accepted route into the rows the
+selected-Agent surface shows. It reads the immediate `inbox`, `sent`, and
+`outbox` entries under the anchored mailbox and their immediate
+`message.json` files, opened descriptor-relative and no-follow at every step.
+It rejects a symlinked or non-regular entry or message, rejects a
+`message.json` above 1 MiB (enforced on the actual read, not just metadata),
+and writes nothing. The body field is the kernel's `message`, never `body`.
+Order comes from the kernel's own timestamp precedence — `received_at` on
+delivery, `sent_at` once outbox/<id> becomes sent/<id>, and `deliver_at`
+while still pending — with the entry directory basename as both the
+displayed ID and the deterministic tie-break. Membership is exactly envelope
+based: one sender, one recipient written as a string or one-element array,
+no CC, and an incoming identity `agent_id` that must match the selected
+target when present. Mail for another conversation is simply absent; only an
+unsafe, unreadable, or malformed entry increments the one generic skipped
+count, and one bad entry never hides a valid neighbor. A duplicate outgoing
+ID observed in both outbox and sent collapses onto the sent copy. Nothing
+about delivery, processing, reply chains, unread state, or attachments is
+read or inferred. `NativeShell` renders those rows in the selected-Agent
+detail area as a read-only plain-text surface that never interprets markup,
+refreshed on project open/refresh and selection change with no background
+poller.
+
+`send_direct_mail` publishes one plain-text human outbox entry for the
+route's target: an exclusively created `outbox/<id>` leaf (`mkdirat`, retried
+up to eight times on an id collision, matching the current Go TUI
+pseudo-agent sender's own budget), then a write-temp-then-`renameat` of
+`message.json` inside it with an explicit close-and-check before the rename.
+The envelope carries the current interoperable schema only — `id`,
+`_mailbox_id`, `from`, `to`, `cc`, `subject`, `message`, `type`,
+`received_at`, and the accepted human identity fields — with no status,
+`deliver_at`, thread/reply, receipt, version, fingerprint, provenance, or
+attachment field ever added. On local failure only the held fresh leaf from
+that attempt is removed; pre-existing content is never touched. It never
+writes the target inbox or the human `sent/`, never stages outside `outbox/`,
+and never retries or reuses an id across calls.
 
 Qt is external rather than fetched or committed. Configure resolves the exact
 Qt 6.11.1 prefix from `QT_ROOT` or the documented `$HOME/Qt/6.11.1/macos`

@@ -63,8 +63,8 @@ DirectConversationRoute route_for(const fs::path &project_root) {
     route.target_directory_key = "telegram-bot";
     route.human_address = "human";
     route.target_address = "telegram-bot";
-    route.thread_key.project_root = project_root;
-    route.thread_key.target_agent_id = "20260712-191609-d0c8";
+    route.project_root = project_root;
+    route.target_agent_id = "20260712-191609-d0c8";
     route.human_identity.agent_id = "20260101-000000-h001";
     route.human_identity.true_name = "Ted";
     route.human_identity.address = "human";
@@ -175,6 +175,37 @@ void verify_publish_and_failure(const fs::path &sandbox) {
         "a failed publish must leave every pre-existing byte and path untouched");
 }
 
+// An intermediate mailbox-path component (`outbox`, before the final fresh
+// leaf the publisher already creates exclusively) must not be followed even
+// though the OS otherwise resolves it transparently: a symlink there must
+// fail the publish closed rather than write a leaf into an outside tree, and
+// the outside tree must stay exactly as it was.
+void verify_intermediate_symlink_no_outside_write(const fs::path &sandbox) {
+    const auto project = sandbox / "symlink-write-project";
+    const auto outside = sandbox / "symlink-write-outside";
+    write_file(outside / "marker.txt", "outside-marker");
+
+    std::error_code parent_error;
+    fs::create_directories(
+        project / ".lingtai" / "human" / "mailbox", parent_error);
+    require(!parent_error, "mailbox parent must be created");
+    std::error_code link_error;
+    fs::create_directory_symlink(outside,
+        project / ".lingtai" / "human" / "mailbox" / "outbox", link_error);
+    require(!link_error,
+        "intermediate outbox symlink fixture must be created");
+
+    const auto outside_before = tree_snapshot(outside);
+    const auto result = send_direct_mail(route_for(project),
+        "Must never leave the project through a symlinked outbox.");
+    require(result == DirectMailSendResult::failed_local,
+        "a symlinked outbox component must fail closed rather than "
+        "publish outside the project");
+    require(tree_snapshot(outside) == outside_before,
+        "a blocked publish through a symlinked outbox must leave outside "
+        "content untouched, with no outside leaf or file created");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -191,6 +222,7 @@ int main(int argc, char **argv) {
         require(!error, "sandbox must be created");
 
         verify_publish_and_failure(sandbox);
+        verify_intermediate_symlink_no_outside_write(sandbox);
 
         fs::remove_all(sandbox, error);
         require(!error, "sandbox must be removed");

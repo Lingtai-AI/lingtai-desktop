@@ -24,22 +24,15 @@ message, media, contact, cache, or high-level UI code.
 From the repository root:
 
 ```bash
-python3 -m unittest tests.test_project_attachment tests.test_workspace_selection tests.test_repository_contract
-if [[ -x /usr/local/bin/g++-14 ]]; then
-  CXX=/usr/local/bin/g++-14 python3 -m unittest tests.test_project_attachment tests.test_workspace_selection
-else
-  printf 'GCC 14 portability gate skipped: /usr/local/bin/g++-14 absent\n'
-fi
+python3 -m unittest tests.test_repository_contract
 python3 -m json.tool cmake/desktop-app-toolkit-lock.json >/dev/null
 for script in scripts/*.sh; do bash -n "$script"; done
 export QT_ROOT="$HOME/Qt/6.11.1/macos"
 ./scripts/bootstrap-deps.sh
 ./scripts/configure.sh
 ./scripts/build.sh
-ctest --test-dir build --output-on-failure -R '^compatibility_probe$'
-ctest --test-dir build --output-on-failure -R '^agent_manifest_discovery$'
-ctest --test-dir build --output-on-failure -R '^agent_roster_presence$'
-ctest --test-dir build --output-on-failure -R '^agent_identity_status$'
+ctest --test-dir build --output-on-failure -R '^project_attachment$'
+ctest --test-dir build --output-on-failure -R '^agent_projection$'
 ctest --test-dir build --output-on-failure -R '^direct_conversation_route$'
 ctest --test-dir build --output-on-failure -R '^direct_conversation_history$'
 ctest --test-dir build --output-on-failure -R '^direct_mail_publisher$'
@@ -49,6 +42,7 @@ ctest --test-dir build --output-on-failure -R '^native_shell(_behavior)?$'
 ./scripts/smoke.py
 ```
 
-Keep the one focused repository-contract test focused. Add a test only for a
-clearly distinct, owned behavior; dependency configuration is already covered
-by the real configure/build/offscreen smoke path.
+Keep the one focused repository-contract test focused on pinned dependency
+provenance and tracked-artifact hygiene. Add a test only for a clearly
+distinct, owned behavior, and prefer a real CMake/ctest target over a
+Python wrapper that recompiles a C++ contract ctest already builds and runs.

@@ -1,4 +1,5 @@
 #include "direct_conversation_history.h"
+#include "posix_descriptor_primitives.h"
 
 #include <QtCore/QByteArrayView>
 #include <QtCore/QJsonArray>
@@ -7,16 +8,20 @@
 #include <QtCore/QJsonValue>
 
 #include <algorithm>
+#include <cerrno>
 #include <cstddef>
-#include <fstream>
+#include <dirent.h>
 #include <optional>
 #include <set>
 #include <string>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace lingtai::desktop {
 namespace {
 
 namespace fs = std::filesystem;
+namespace posix = posix_internal;
 
 // Fixed read folders for this slice. `sent` precedes `outbox` so that an entry
 // the kernel has already moved from outbox to sent collapses onto the sent
@@ -114,7 +119,7 @@ enum class Membership { incoming, outgoing, absent };
     if (envelope.from == route.target_address && to == route.human_address) {
         return !envelope.identity_agent_id
                 || *envelope.identity_agent_id
-                    == route.thread_key.target_agent_id
+                    == route.target_agent_id
             ? Membership::incoming : Membership::absent;
     }
     if (envelope.from == route.human_address && to == route.target_address)
@@ -122,51 +127,77 @@ enum class Membership { incoming, outgoing, absent };
     return Membership::absent;
 }
 
-// Reads one immediate message.json after explicit symlink and regular-file
-// checks, rejecting anything unsafe, unreadable, or oversized.
-[[nodiscard]] bool read_message(const fs::path &path, std::string &bytes) {
-    std::error_code error;
-    const auto status = fs::symlink_status(path, error);
-    if (error || fs::is_symlink(status) || !fs::is_regular_file(status))
+// Reads one immediate message.json descriptor-relative to its already open,
+// already type-checked entry directory, no-follow at every component walked
+// to reach it, bounded to the byte limit on the actual read.
+[[nodiscard]] bool read_message_at(int entry_fd, std::string &bytes) {
+    const auto file = posix::open_regular_file_component(entry_fd, "message.json");
+    if (file.get() < 0) return false;
+    struct stat opened {};
+    if (::fstat(file.get(), &opened) != 0) return false;
+    if (static_cast<std::uintmax_t>(opened.st_size) > direct_message_byte_limit)
         return false;
-    const auto size = fs::file_size(path, error);
-    if (error || size > direct_message_byte_limit) return false;
-    auto stream = std::ifstream(path, std::ios::binary);
-    if (!stream) return false;
+    bytes.resize(static_cast<std::size_t>(opened.st_size));
+    std::size_t total = 0;
+    while (total < bytes.size()) {
+        const auto count = ::read(file.get(), bytes.data() + total,
+            bytes.size() - total);
+        if (count < 0) {
+            if (errno == EINTR) continue;
+            return false;
+        }
+        if (count == 0) break;
+        total += static_cast<std::size_t>(count);
+    }
     // Bound the read itself, not just the size check: an entry that grows
     // after its size is taken still cannot be read past the limit.
-    bytes.resize(static_cast<std::size_t>(size));
-    stream.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-    bytes.resize(static_cast<std::size_t>(stream.gcount()));
-    return !stream.bad();
+    bytes.resize(total);
+    return true;
 }
 
-// One folder contributes its immediate <entry>/message.json files. A missing
-// folder is simply no rows; an unreadable folder or entry is one generic skip,
-// and never hides its valid neighbors.
+// One folder contributes its immediate <entry>/message.json files, opened
+// relative to the already open mailbox descriptor so that no intermediate
+// path component -- however it is later replaced on disk -- is ever
+// resolved by anything but this single descriptor-relative step. A missing
+// folder is simply no rows; an unsafe or unreadable folder or entry is one
+// generic skip, and never hides its valid neighbors.
 void read_folder(
-        const fs::path &folder,
+        int mailbox_fd,
+        const char *folder_name,
         const DirectConversationRoute &route,
         DirectConversationHistory &history,
         std::set<std::string> &outgoing_ids) {
-    std::error_code error;
-    const auto status = fs::symlink_status(folder, error);
-    if (error || !fs::exists(status)) return;
-    if (fs::is_symlink(status) || !fs::is_directory(status)) {
+    const auto folder = posix::open_directory_component(mailbox_fd, folder_name);
+    if (folder.get() < 0) {
+        // A missing folder is simply no rows; a symlink, a non-directory, or
+        // any other open failure at this single leaf is one generic skip.
+        if (errno != ENOENT) ++history.skipped;
+        return;
+    }
+    const auto duplicate = ::dup(folder.get());
+    if (duplicate < 0) { ++history.skipped; return; }
+    posix::DirectoryStream stream(::fdopendir(duplicate));
+    if (!stream.get()) {
+        ::close(duplicate);
         ++history.skipped;
         return;
     }
-    auto entry = fs::directory_iterator(folder, error);
-    for (; !error && entry != fs::directory_iterator(); entry.increment(error)) {
-        const auto entry_status = entry->symlink_status(error);
-        if (error || fs::is_symlink(entry_status)
-            || !fs::is_directory(entry_status)) {
-            error.clear();
+    for (;;) {
+        errno = 0;
+        const auto raw_entry = ::readdir(stream.get());
+        if (!raw_entry) {
+            if (errno != 0) ++history.skipped;
+            break;
+        }
+        const auto name = std::string(raw_entry->d_name);
+        if (name == "." || name == "..") continue;
+        const auto entry_dir = posix::open_directory_component(folder.get(), name);
+        if (entry_dir.get() < 0) {
             ++history.skipped;
             continue;
         }
         auto bytes = std::string();
-        if (!read_message(entry->path() / "message.json", bytes)) {
+        if (!read_message_at(entry_dir.get(), bytes)) {
             ++history.skipped;
             continue;
         }
@@ -178,13 +209,11 @@ void read_folder(
         const auto membership = membership_of(*envelope, route);
         if (membership == Membership::absent) continue;
         // The entry directory basename is the stable, displayed message ID.
-        auto id = entry->path().filename().string();
         const auto outgoing = membership == Membership::outgoing;
-        if (outgoing && !outgoing_ids.insert(id).second) continue;
-        history.messages.push_back({std::move(id), outgoing,
+        if (outgoing && !outgoing_ids.insert(name).second) continue;
+        history.messages.push_back({name, outgoing,
             envelope->timestamp, envelope->subject, envelope->text});
     }
-    if (error) ++history.skipped;
 }
 
 } // namespace
@@ -201,11 +230,23 @@ DirectConversationHistory read_direct_conversation(
             || key == "." || key == "..") {
             return {};
         }
-        const auto mailbox = route.thread_key.project_root / ".lingtai" / key
-            / "mailbox";
+        // Anchored, descriptor-relative walk: every component from the
+        // project root down to the mailbox is opened no-follow, one leaf at
+        // a time, so no intermediate `.lingtai`, human-directory, or
+        // `mailbox` symlink can redirect this read outside the project.
+        const auto root = posix::open_root_directory(
+            route.project_root);
+        if (root.get() < 0) return {};
+        const auto lingtai = posix::open_directory_component(root.get(), ".lingtai");
+        if (lingtai.get() < 0) return {};
+        const auto human = posix::open_directory_component(lingtai.get(), key);
+        if (human.get() < 0) return {};
+        const auto mailbox = posix::open_directory_component(human.get(), "mailbox");
+        if (mailbox.get() < 0) return {};
+
         auto outgoing_ids = std::set<std::string>();
         for (const auto *folder : kFolders)
-            read_folder(mailbox / folder, route, history, outgoing_ids);
+            read_folder(mailbox.get(), folder, route, history, outgoing_ids);
         // Chronological, with the directory ID as the deterministic tie-break.
         std::ranges::sort(history.messages, [](const auto &a, const auto &b) {
             return a.timestamp != b.timestamp

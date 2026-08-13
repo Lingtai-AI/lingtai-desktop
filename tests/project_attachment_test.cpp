@@ -46,6 +46,8 @@ int main(int argc, char **argv) {
     const auto outside = sandbox / "outside";
     const auto sibling = sandbox / "project-evil";
     std::error_code error;
+    fs::remove_all(sandbox, error);
+    expect(!error, "test sandbox is reset");
     fs::create_directories(nested, error);
     expect(!error, "project fixture directories are created");
     fs::create_directories(outside, error);
@@ -196,6 +198,8 @@ int main(int argc, char **argv) {
             "resolving a path performs no project-tree writes");
     }
 
+    fs::remove_all(sandbox, error);
+    expect(!error, "test sandbox is removed");
     if (failures != 0) {
         std::cerr << failures << " project attachment assertion(s) failed\n";
         return 1;

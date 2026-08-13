@@ -92,8 +92,8 @@ DirectConversationRoute route_for(const fs::path &project_root) {
     route.target_directory_key = "telegram-bot";
     route.human_address = "human";
     route.target_address = "telegram-bot";
-    route.thread_key.project_root = project_root;
-    route.thread_key.target_agent_id = "20260712-191609-d0c8";
+    route.project_root = project_root;
+    route.target_agent_id = "20260712-191609-d0c8";
     return route;
 }
 
@@ -230,6 +230,39 @@ void verify_bad_neighbors_are_skipped(const fs::path &sandbox) {
     }
 }
 
+// An intermediate mailbox-path component (the human directory, before the
+// final `mailbox`/`inbox`/entry components the reader already checks) must
+// not be followed even though the OS otherwise resolves it transparently: a
+// symlink there must not let an outside tree's mail be read as this
+// conversation's history, and reading must never change the outside tree.
+void verify_intermediate_symlink_no_outside_read(const fs::path &sandbox) {
+    const auto project = sandbox / "symlink-read-project";
+    const auto outside = sandbox / "symlink-read-outside";
+    write_file(outside / "mailbox" / "inbox" / "20260807T200000-out1"
+            / "message.json",
+        envelope("telegram-bot", "human", "Outside",
+            "Must never be read through an intermediate symlink.",
+            "received_at", "2026-08-07T20:00:00Z"));
+
+    std::error_code mkdir_error;
+    fs::create_directories(project / ".lingtai", mkdir_error);
+    require(!mkdir_error, "project .lingtai parent must be created");
+    std::error_code link_error;
+    fs::create_directory_symlink(
+        outside, project / ".lingtai" / "human", link_error);
+    require(!link_error, "intermediate human-directory symlink fixture "
+        "must be created");
+
+    const auto outside_before = tree_snapshot(outside);
+    const auto history = read_direct_conversation(route_for(project));
+    require(tree_snapshot(outside) == outside_before,
+        "reading through a blocked intermediate symlink must never change "
+        "outside state");
+    require(ids_of(history).empty(),
+        "a message reachable only through an intermediate mailbox-path "
+        "symlink must never be accepted into the conversation");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -249,6 +282,7 @@ int main(int argc, char **argv) {
         verify_exact_direct_membership(sandbox);
         verify_outbox_and_sent_collapse(sandbox);
         verify_bad_neighbors_are_skipped(sandbox);
+        verify_intermediate_symlink_no_outside_read(sandbox);
 
         fs::remove_all(sandbox, error);
         require(!error, "sandbox must be removed");

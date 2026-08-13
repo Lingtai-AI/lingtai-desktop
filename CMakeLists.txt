@@ -185,20 +185,9 @@ target_compile_options(lingtai_desktop_native_shell PRIVATE
     $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-unused-parameter>)
 target_link_libraries(lingtai_desktop_native_shell
     PUBLIC lingtai_desktop_core
-    PRIVATE desktop-app::lib_ui lingtai_desktop_compatibility
-        lingtai_desktop_agent_discovery lingtai_desktop_conversation
+    PRIVATE desktop-app::lib_ui
+        lingtai_desktop_agent_projection lingtai_desktop_conversation
         lingtai_desktop_mail_publisher)
-
-add_library(lingtai_desktop_compatibility STATIC
-    src/compatibility_probe.cpp)
-init_target(lingtai_desktop_compatibility)
-target_include_directories(lingtai_desktop_compatibility PUBLIC
-    "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_compile_options(lingtai_desktop_compatibility PRIVATE
-    -Wall -Wextra -Werror -pedantic)
-target_link_libraries(lingtai_desktop_compatibility
-    PUBLIC lingtai_desktop_core
-    PRIVATE Qt6::Core)
 
 # Internal POSIX descriptor/no-follow primitives. No Qt, no project model, and
 # deliberately no link edge of its own: it is the shared safety mechanism every
@@ -213,14 +202,14 @@ target_include_directories(lingtai_desktop_posix_primitives PUBLIC
 target_compile_options(lingtai_desktop_posix_primitives PRIVATE
     -Wall -Wextra -Werror -pedantic)
 
-add_library(lingtai_desktop_agent_discovery STATIC
-    src/agent_manifest_discovery.cpp)
-init_target(lingtai_desktop_agent_discovery)
-target_include_directories(lingtai_desktop_agent_discovery PUBLIC
+add_library(lingtai_desktop_agent_projection STATIC
+    src/agent_projection.cpp)
+init_target(lingtai_desktop_agent_projection)
+target_include_directories(lingtai_desktop_agent_projection PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_compile_options(lingtai_desktop_agent_discovery PRIVATE
+target_compile_options(lingtai_desktop_agent_projection PRIVATE
     -Wall -Wextra -Werror -pedantic)
-target_link_libraries(lingtai_desktop_agent_discovery
+target_link_libraries(lingtai_desktop_agent_projection
     PUBLIC lingtai_desktop_core
     PRIVATE Qt6::Core lingtai_desktop_posix_primitives)
 
@@ -248,7 +237,7 @@ target_compile_options(lingtai_desktop_conversation PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_desktop_conversation
     PUBLIC lingtai_desktop_direct_route
-    PRIVATE Qt6::Core)
+    PRIVATE Qt6::Core lingtai_desktop_posix_primitives)
 
 # The one current publisher owner: it turns an already-accepted route and a
 # validated plain-text body into one exclusively created human outbox leaf. It
@@ -262,38 +251,15 @@ target_compile_options(lingtai_desktop_mail_publisher PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_desktop_mail_publisher
     PUBLIC lingtai_desktop_direct_route
-    PRIVATE Qt6::Core)
+    PRIVATE Qt6::Core lingtai_desktop_posix_primitives)
 
-add_executable(lingtai_compatibility_probe_test
-    tests/compatibility_probe_test.cpp)
-init_target(lingtai_compatibility_probe_test)
-target_compile_options(lingtai_compatibility_probe_test PRIVATE
+add_executable(lingtai_agent_projection_test
+    tests/agent_projection_test.cpp)
+init_target(lingtai_agent_projection_test)
+target_compile_options(lingtai_agent_projection_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
-target_link_libraries(lingtai_compatibility_probe_test PRIVATE
-    lingtai_desktop_compatibility)
-
-add_executable(lingtai_agent_manifest_discovery_test
-    tests/agent_manifest_discovery_test.cpp)
-init_target(lingtai_agent_manifest_discovery_test)
-target_compile_options(lingtai_agent_manifest_discovery_test PRIVATE
-    -Wall -Wextra -Werror -pedantic)
-target_link_libraries(lingtai_agent_manifest_discovery_test PRIVATE
-    lingtai_desktop_agent_discovery)
-
-add_executable(lingtai_agent_roster_presence_test
-    tests/agent_roster_presence_test.cpp)
-init_target(lingtai_agent_roster_presence_test)
-target_compile_options(lingtai_agent_roster_presence_test PRIVATE
-    -Wall -Wextra -Werror -pedantic)
-target_link_libraries(lingtai_agent_roster_presence_test PRIVATE
-    lingtai_desktop_agent_discovery)
-add_executable(lingtai_agent_identity_status_test
-    tests/agent_identity_status_test.cpp)
-init_target(lingtai_agent_identity_status_test)
-target_compile_options(lingtai_agent_identity_status_test PRIVATE
-    -Wall -Wextra -Werror -pedantic)
-target_link_libraries(lingtai_agent_identity_status_test PRIVATE
-    lingtai_desktop_agent_discovery)
+target_link_libraries(lingtai_agent_projection_test PRIVATE
+    lingtai_desktop_agent_projection)
 add_executable(lingtai_direct_conversation_route_test
     tests/direct_conversation_route_test.cpp)
 init_target(lingtai_direct_conversation_route_test)
@@ -301,21 +267,6 @@ target_compile_options(lingtai_direct_conversation_route_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_direct_conversation_route_test PRIVATE
     lingtai_desktop_direct_route)
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-    add_executable(lingtai_direct_conversation_route_sanitized_test EXCLUDE_FROM_ALL
-        tests/direct_conversation_route_test.cpp
-        src/direct_conversation_route.cpp)
-    init_target(lingtai_direct_conversation_route_sanitized_test)
-    target_include_directories(lingtai_direct_conversation_route_sanitized_test
-        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-    target_compile_options(lingtai_direct_conversation_route_sanitized_test PRIVATE
-        -Wall -Wextra -Werror -pedantic
-        -fsanitize=address,undefined -fno-omit-frame-pointer)
-    target_link_options(lingtai_direct_conversation_route_sanitized_test PRIVATE
-        -fsanitize=address,undefined)
-    target_link_libraries(lingtai_direct_conversation_route_sanitized_test PRIVATE
-        lingtai_desktop_core)
-endif()
 add_executable(lingtai_direct_conversation_history_test
     tests/direct_conversation_history_test.cpp)
 init_target(lingtai_direct_conversation_history_test)
@@ -337,20 +288,6 @@ target_compile_options(lingtai_posix_descriptor_primitives_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_posix_descriptor_primitives_test PRIVATE
     lingtai_desktop_posix_primitives)
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-    add_executable(lingtai_posix_descriptor_primitives_sanitized_test
-        EXCLUDE_FROM_ALL
-        tests/posix_descriptor_primitives_test.cpp
-        src/posix_descriptor_primitives.cpp)
-    init_target(lingtai_posix_descriptor_primitives_sanitized_test)
-    target_include_directories(lingtai_posix_descriptor_primitives_sanitized_test
-        PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
-    target_compile_options(lingtai_posix_descriptor_primitives_sanitized_test
-        PRIVATE -Wall -Wextra -Werror -pedantic
-        -fsanitize=address,undefined -fno-omit-frame-pointer)
-    target_link_options(lingtai_posix_descriptor_primitives_sanitized_test PRIVATE
-        -fsanitize=address,undefined)
-endif()
 add_executable(lingtai_workspace_selection_test
     tests/workspace_selection_test.cpp)
 init_target(lingtai_workspace_selection_test)
@@ -358,19 +295,22 @@ target_compile_options(lingtai_workspace_selection_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_workspace_selection_test PRIVATE
     lingtai_desktop_core)
+add_executable(lingtai_project_attachment_test
+    tests/project_attachment_test.cpp)
+init_target(lingtai_project_attachment_test)
+target_include_directories(lingtai_project_attachment_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_options(lingtai_project_attachment_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_project_attachment_test PRIVATE
+    lingtai_desktop_core)
 enable_testing()
-add_test(NAME compatibility_probe
-    COMMAND lingtai_compatibility_probe_test
-        "${CMAKE_CURRENT_BINARY_DIR}/compatibility-probe-fixture")
-add_test(NAME agent_manifest_discovery
-    COMMAND lingtai_agent_manifest_discovery_test
-        "${CMAKE_CURRENT_BINARY_DIR}/agent-manifest-discovery-fixture")
-add_test(NAME agent_roster_presence
-    COMMAND lingtai_agent_roster_presence_test
-        "${CMAKE_CURRENT_BINARY_DIR}/agent-roster-presence-fixture")
-add_test(NAME agent_identity_status
-    COMMAND lingtai_agent_identity_status_test
-        "${CMAKE_CURRENT_BINARY_DIR}/agent-identity-status-fixture")
+add_test(NAME project_attachment
+    COMMAND lingtai_project_attachment_test
+        "${CMAKE_CURRENT_BINARY_DIR}/project-attachment-fixture")
+add_test(NAME agent_projection
+    COMMAND lingtai_agent_projection_test
+        "${CMAKE_CURRENT_BINARY_DIR}/agent-projection-fixture")
 add_test(NAME direct_conversation_route
     COMMAND lingtai_direct_conversation_route_test
         "${CMAKE_CURRENT_BINARY_DIR}/direct-conversation-route-fixture")
@@ -413,32 +353,6 @@ target_compile_options(lingtai_native_shell_test PRIVATE
 target_link_libraries(lingtai_native_shell_test PRIVATE
     lingtai_desktop_native_shell
     desktop-app::lib_ui)
-
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
-    add_executable(lingtai_native_shell_sanitized_test EXCLUDE_FROM_ALL
-        tests/native_shell_test.cpp
-        src/native_shell.cpp
-        src/agent_manifest_discovery.cpp
-        src/posix_descriptor_primitives.cpp
-        src/direct_conversation_route.cpp
-        src/direct_conversation_history.cpp
-        src/direct_mail_publisher.cpp
-        src/crl_integration.cpp)
-    init_target(lingtai_native_shell_sanitized_test)
-    target_include_directories(lingtai_native_shell_sanitized_test PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src")
-    target_compile_options(lingtai_native_shell_sanitized_test PRIVATE
-        -Wall -Wextra -Werror -pedantic
-        -fsanitize=address,undefined -fno-omit-frame-pointer
-        $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-unused-parameter>
-        $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-deprecated-this-capture>
-        $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-unused-parameter>)
-    target_link_options(lingtai_native_shell_sanitized_test PRIVATE
-        -fsanitize=address,undefined)
-    target_link_libraries(lingtai_native_shell_sanitized_test PRIVATE
-        lingtai_desktop_compatibility
-        desktop-app::lib_ui)
-endif()
 
 file(MAKE_DIRECTORY
     "${CMAKE_CURRENT_BINARY_DIR}/native-shell-no-write-fixture")

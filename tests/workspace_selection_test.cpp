@@ -90,13 +90,12 @@ std::vector<TreeEntry> snapshot_tree(const fs::path &root) {
     return result;
 }
 
-void test_activation_owns_project_and_recent_root(const fs::path &sandbox) {
+void test_activation_owns_project(const fs::path &sandbox) {
     auto project = accepted_project(sandbox / "alpha");
     const auto root = project.root();
-    WorkspaceSelectionState state(3);
+    WorkspaceSelectionState state;
 
     expect(!state.active_project(), "workspace starts closed");
-    expect(state.recent_project_roots().empty(), "recents start empty");
 
     state.activate_project(std::move(project));
 
@@ -104,57 +103,11 @@ void test_activation_owns_project_and_recent_root(const fs::path &sandbox) {
     expect(
         state.active_project() && state.active_project()->root() == root,
         "the active project retains its accepted canonical root");
-    expect(
-        state.recent_project_roots() == std::vector<fs::path>{root},
-        "activation places the canonical root first in recents");
-}
-
-void test_recent_roots_are_bounded_mru(const fs::path &sandbox) {
-    auto alpha = accepted_project(sandbox / "mru-alpha");
-    auto beta = accepted_project(sandbox / "mru-beta");
-    auto gamma = accepted_project(sandbox / "mru-gamma");
-    auto delta = accepted_project(sandbox / "mru-delta");
-    const auto alpha_root = alpha.root();
-    const auto beta_root = beta.root();
-    const auto gamma_root = gamma.root();
-    const auto delta_root = delta.root();
-    WorkspaceSelectionState state(3);
-
-    state.activate_project(alpha);
-    state.activate_project(beta);
-    state.activate_project(gamma);
-    expect(
-        state.recent_project_roots()
-            == std::vector<fs::path>{gamma_root, beta_root, alpha_root},
-        "activation orders recent roots from newest to oldest");
-
-    state.activate_project(beta);
-    expect(
-        state.recent_project_roots()
-            == std::vector<fs::path>{beta_root, gamma_root, alpha_root},
-        "reactivation moves one deduplicated root to the front");
-
-    state.activate_project(delta);
-    expect(
-        state.recent_project_roots()
-            == std::vector<fs::path>{delta_root, beta_root, gamma_root},
-        "activation evicts roots beyond the configured bound");
-
-    WorkspaceSelectionState disabled(0);
-    disabled.activate_project(alpha);
-    disabled.activate_project(beta);
-    expect(
-        disabled.recent_project_roots().empty(),
-        "a zero maximum disables recents");
-    expect(
-        disabled.active_project()
-            && disabled.active_project()->root() == beta_root,
-        "zero recents does not disable project activation");
 }
 
 void test_agent_selection_requires_an_active_project_and_safe_key(
         const fs::path &sandbox) {
-    WorkspaceSelectionState state(2);
+    WorkspaceSelectionState state;
     expect(
         state.select_agent("agent-01")
             == AgentSelectionResult::no_active_project,
@@ -208,7 +161,7 @@ void test_project_activation_preserves_or_clears_agent_by_root(
         const fs::path &sandbox) {
     auto alpha = accepted_project(sandbox / "transition-alpha");
     auto beta = accepted_project(sandbox / "transition-beta");
-    WorkspaceSelectionState state(3);
+    WorkspaceSelectionState state;
 
     state.activate_project(alpha);
     expect(
@@ -226,41 +179,13 @@ void test_project_activation_preserves_or_clears_agent_by_root(
         "activating a different canonical root clears Agent selection");
 }
 
-void test_close_clears_active_context_but_retains_recents(
-        const fs::path &sandbox) {
-    auto alpha = accepted_project(sandbox / "close-alpha");
-    auto beta = accepted_project(sandbox / "close-beta");
-    WorkspaceSelectionState state(3);
-    state.activate_project(alpha);
-    state.activate_project(beta);
-    expect(
-        state.select_agent("beta-agent") == AgentSelectionResult::selected,
-        "close fixture has an Agent selection");
-    const auto recents_before_close = state.recent_project_roots();
-
-    state.close_workspace();
-
-    expect(!state.active_project(), "close clears the active project");
-    expect(
-        !state.selected_agent_directory_key(),
-        "close clears the selected Agent directory key");
-    expect(
-        state.recent_project_roots() == recents_before_close,
-        "close retains Desktop-owned recents");
-    expect(
-        state.select_agent("after-close")
-            == AgentSelectionResult::no_active_project,
-        "a closed workspace rejects Agent selection");
-}
-
 void test_clear_agent_selection_is_idempotent(const fs::path &sandbox) {
-    WorkspaceSelectionState state(2);
+    WorkspaceSelectionState state;
     state.activate_project(accepted_project(sandbox / "clear-project"));
     expect(
         state.select_agent("clear-agent") == AgentSelectionResult::selected,
         "clear fixture has an Agent selection");
     const auto active_root = state.active_project()->root();
-    const auto recents_before_clear = state.recent_project_roots();
 
     state.clear_agent_selection();
     expect(
@@ -274,49 +199,13 @@ void test_clear_agent_selection_is_idempotent(const fs::path &sandbox) {
         state.active_project()
             && state.active_project()->root() == active_root,
         "clearing Agent selection retains the active project");
-    expect(
-        state.recent_project_roots() == recents_before_clear,
-        "clearing Agent selection retains recents");
-}
-
-void test_removing_active_root_from_recents_does_not_close_it(
-        const fs::path &sandbox) {
-    auto alpha = accepted_project(sandbox / "remove-alpha");
-    auto beta = accepted_project(sandbox / "remove-beta");
-    const auto alpha_root = alpha.root();
-    const auto beta_root = beta.root();
-    WorkspaceSelectionState state(3);
-    state.activate_project(alpha);
-    state.activate_project(beta);
-    expect(
-        state.select_agent("beta-agent") == AgentSelectionResult::selected,
-        "remove fixture has an Agent selection");
-
-    state.remove_recent_project(beta_root);
-
-    expect(
-        state.recent_project_roots() == std::vector<fs::path>{alpha_root},
-        "removing a recent root changes only the MRU list");
-    expect(
-        state.active_project()
-            && state.active_project()->root() == beta_root,
-        "removing the active root from recents does not close it");
-    expect(
-        state.selected_agent_directory_key()
-            == std::optional<fs::path>("beta-agent"),
-        "removing the active root from recents preserves Agent selection");
-
-    state.remove_recent_project(beta_root);
-    expect(
-        state.recent_project_roots() == std::vector<fs::path>{alpha_root},
-        "removing an absent recent root is a no-op");
 }
 
 void test_deleted_active_root_does_not_change_model_state(
         const fs::path &sandbox) {
     auto project = accepted_project(sandbox / "deleted-project");
     const auto root = project.root();
-    WorkspaceSelectionState state(2);
+    WorkspaceSelectionState state;
     state.activate_project(project);
     expect(
         state.select_agent("before-delete") == AgentSelectionResult::selected,
@@ -335,9 +224,6 @@ void test_deleted_active_root_does_not_change_model_state(
             == std::optional<fs::path>("before-delete"),
         "same-root activation after deletion preserves Agent selection");
     expect(
-        state.recent_project_roots() == std::vector<fs::path>{root},
-        "deleted canonical root remains deterministic MRU state");
-    expect(
         state.select_agent("after-delete") == AgentSelectionResult::selected,
         "Agent-key selection does not test deleted-root availability");
     expect(
@@ -354,7 +240,7 @@ void test_workspace_transitions_write_nothing(const fs::path &sandbox) {
     write_file(sandbox / "desktop-settings.json", "settings-before");
     const auto before = snapshot_tree(sandbox);
 
-    WorkspaceSelectionState state(2);
+    WorkspaceSelectionState state;
     state.activate_project(project);
     expect(
         state.select_agent("agent-a") == AgentSelectionResult::selected,
@@ -363,8 +249,6 @@ void test_workspace_transitions_write_nothing(const fs::path &sandbox) {
     expect(
         state.select_agent("agent-a") == AgentSelectionResult::selected,
         "no-write fixture reselects without touching the tree");
-    state.remove_recent_project(project.root());
-    state.close_workspace();
 
     expect(
         snapshot_tree(sandbox) == before,
@@ -374,7 +258,7 @@ void test_workspace_transitions_write_nothing(const fs::path &sandbox) {
 } // namespace
 
 int main(int argc, char **argv) {
-    static_assert(noexcept(WorkspaceSelectionState(3)));
+    static_assert(noexcept(WorkspaceSelectionState()));
     static_assert(std::is_same_v<
         decltype(std::declval<WorkspaceSelectionState &>()
             .active_project()),
@@ -383,10 +267,6 @@ int main(int argc, char **argv) {
         decltype(std::declval<WorkspaceSelectionState &>()
             .selected_agent_directory_key()),
         const std::optional<fs::path> &>);
-    static_assert(std::is_same_v<
-        decltype(std::declval<WorkspaceSelectionState &>()
-            .recent_project_roots()),
-        const std::vector<fs::path> &>);
     if (argc != 2) {
         std::cerr << "expected one test-sandbox path\n";
         return 2;
@@ -397,13 +277,10 @@ int main(int argc, char **argv) {
     fs::create_directories(sandbox, error);
     expect(!error, "test sandbox is created");
 
-    test_activation_owns_project_and_recent_root(sandbox);
-    test_recent_roots_are_bounded_mru(sandbox);
+    test_activation_owns_project(sandbox);
     test_agent_selection_requires_an_active_project_and_safe_key(sandbox);
     test_project_activation_preserves_or_clears_agent_by_root(sandbox);
-    test_close_clears_active_context_but_retains_recents(sandbox);
     test_clear_agent_selection_is_idempotent(sandbox);
-    test_removing_active_root_from_recents_does_not_close_it(sandbox);
     test_deleted_active_root_does_not_change_model_state(sandbox);
     test_workspace_transitions_write_nothing(sandbox);
 
