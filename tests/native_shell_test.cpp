@@ -5,6 +5,7 @@
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QString>
+#include <QtCore/QThread>
 #include <QtGui/QColor>
 #include <QtGui/QPalette>
 #include <QtWidgets/QApplication>
@@ -86,6 +87,12 @@ void write_file(const fs::path &path, std::string_view bytes) {
     auto stream = std::ofstream(path, std::ios::binary);
     stream << bytes;
     require(stream.good(), "fixture file must be written: " + path.string());
+}
+
+void append_file(const fs::path &path, std::string_view bytes) {
+    auto stream = std::ofstream(path, std::ios::binary | std::ios::app);
+    stream << bytes;
+    require(stream.good(), "fixture file must be appended: " + path.string());
 }
 
 std::string read_file(const fs::path &path) {
@@ -972,6 +979,88 @@ void verify_composer_send_behavior(
     require(!cleanup_error, "composer fixtures must be removed");
 }
 
+// The Step-4 Agent Activity slice: a separate bounded read-only snapshot of
+// the selected Agent's own `logs/events.jsonl`, distinct from the mailbox
+// conversation above. Covers no-selection, real selection, a same-selection
+// live append becoming visible through the real one-second timer with no
+// reselection, and A->B replacement leaving no A text behind.
+void verify_agent_activity_panel(
+        lingtai::desktop::NativeShell &shell,
+        const fs::path &sandbox) {
+    auto &window = shell.window();
+    auto *heading = required_child<QLabel>(
+        window, "lingtai_selected_agent_activity_heading");
+    auto *surface = required_child<QPlainTextEdit>(
+        window, "lingtai_selected_agent_activity");
+    auto *state = required_child<QLabel>(
+        window, "lingtai_selected_agent_activity_state");
+
+    require(surface->isReadOnly(), "the Activity surface must be read-only");
+    require(!surface->accessibleName().isEmpty()
+            && !heading->accessibleName().isEmpty()
+            && !state->accessibleName().isEmpty(),
+        "the Activity surface must be accessible");
+    require(surface->objectName() != required_child<QPlainTextEdit>(
+                window, "lingtai_selected_agent_conversation")->objectName(),
+        "Activity must be a distinct surface from the mailbox conversation");
+
+    const auto project = sandbox / "project";
+    write_file(project / ".lingtai/human/.agent.json",
+        R"({"agent_id":"20260101-000000-h001","agent_name":"Ted",)"
+        R"("address":"human","state":"active"})");
+    const auto target_a = project / ".lingtai/telegram-bot";
+    write_file(target_a / ".agent.json",
+        R"({"admin":{},"agent_id":"20260712-191609-d0c8",)"
+        R"("agent_name":"telegram-bot","nickname":"Telegram Bot",)"
+        R"("address":"telegram-bot","state":"active"})");
+    const auto target_b = project / ".lingtai/issue-643";
+    write_file(target_b / ".agent.json",
+        R"({"admin":{},"agent_id":"20260712-191610-q001",)"
+        R"("agent_name":"issue-643","address":"issue-643","state":"active"})");
+
+    const auto events_a = target_a / "logs/events.jsonl";
+    write_file(events_a,
+        R"({"type":"diary","text":"AGENT_A_FIRST <b>&amp;</b> not-a-tag"})"
+        "\n");
+    const auto events_b = target_b / "logs/events.jsonl";
+    write_file(events_b, R"({"type":"diary","text":"AGENT_B_ONLY"})" "\n");
+
+    static_cast<void>(shell.open_project(project, std::nullopt));
+    require(!surface->toPlainText().contains(QStringLiteral("AGENT_A_FIRST")),
+        "no Agent is selected yet, so no Activity text may render");
+
+    click_agent(window, "telegram-bot");
+    require(surface->toPlainText().contains(
+                QStringLiteral("AGENT_A_FIRST <b>&amp;</b> not-a-tag")),
+        "selecting Agent A must render A's own bounded public Activity, "
+        "literally as plain text with no markup interpretation");
+
+    // Append a complete new row with no reselection, then wait for the real
+    // one-second timer: only a live timer tick can make this visible, and
+    // the reader journey alone cannot prove it.
+    append_file(events_a, R"({"type":"diary","text":"AGENT_A_APPENDED"})" "\n");
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!surface->toPlainText().contains(QStringLiteral("AGENT_A_APPENDED"))
+            && std::chrono::steady_clock::now() < deadline) {
+        QThread::msleep(50);
+        QCoreApplication::processEvents();
+    }
+    require(surface->toPlainText().contains(QStringLiteral("AGENT_A_APPENDED")),
+        "an appended row must become visible through the real one-second "
+        "timer with no reselection");
+
+    click_agent(window, "issue-643");
+    require(surface->toPlainText().contains(QStringLiteral("AGENT_B_ONLY")),
+        "selecting Agent B must render B's own Activity");
+    require(!surface->toPlainText().contains(QStringLiteral("AGENT_A")),
+        "A's Activity text must never remain visible after selecting B");
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "Activity fixtures must be removed");
+}
+
 void verify_layout(lingtai::desktop::NativeShell &shell) {
     auto &window = shell.window();
     auto *body = window.body().get();
@@ -1032,6 +1121,8 @@ int main(int argc, char **argv) {
             shell, project_root / "commit-13-conversation-fixture");
         verify_composer_send_behavior(
             shell, project_root / "commit-14-composer-fixture");
+        verify_agent_activity_panel(
+            shell, project_root / "commit-15-activity-fixture");
         verify_layout(shell);
         std::cout << "native shell behavior: OK\n";
         return 0;

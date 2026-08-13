@@ -9,6 +9,8 @@
 #include <optional>
 #include <string>
 
+class QTimer;
+
 namespace Ui {
 class RpWidget;
 class RpWindow;
@@ -62,6 +64,7 @@ private:
     void refresh_route();
     void render_roster();
     void render_conversation();
+    void render_agent_activity();
     void reset_composer();
     void handle_send_message();
     void handle_agent_selection(const std::filesystem::path &directory_key);
@@ -77,6 +80,10 @@ private:
     Ui::RpWidget *roster_rows_ = nullptr;
     AgentSnapshot agents_;
     OpenProjectRequestHandler open_project_request_handler_;
+    // View-scoped: exists only for the shell's own lifetime, re-invokes the
+    // same stateless snapshot reader every second, and owns no cursor/offset
+    // state of its own.
+    QTimer *activity_timer_ = nullptr;
 };
 
 } // namespace lingtai::desktop

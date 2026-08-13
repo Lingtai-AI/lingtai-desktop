@@ -187,7 +187,7 @@ target_link_libraries(lingtai_desktop_native_shell
     PUBLIC lingtai_desktop_core
     PRIVATE desktop-app::lib_ui
         lingtai_desktop_agent_projection lingtai_desktop_conversation
-        lingtai_desktop_mail_publisher)
+        lingtai_desktop_mail_publisher lingtai_desktop_agent_activity)
 
 # Internal POSIX descriptor/no-follow primitives. No Qt, no project model, and
 # deliberately no link edge of its own: it is the shared safety mechanism every
@@ -253,6 +253,20 @@ target_link_libraries(lingtai_desktop_mail_publisher
     PUBLIC lingtai_desktop_direct_route
     PRIVATE Qt6::Core lingtai_desktop_posix_primitives)
 
+# The one Agent Activity reader owner: it turns the selected Agent's own
+# `logs/events.jsonl` into a bounded, stateless, read-only snapshot. It reads
+# no other source and owns no presentation.
+add_library(lingtai_desktop_agent_activity STATIC
+    src/agent_activity.cpp)
+init_target(lingtai_desktop_agent_activity)
+target_include_directories(lingtai_desktop_agent_activity PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(lingtai_desktop_agent_activity PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_desktop_agent_activity
+    PUBLIC lingtai_desktop_core
+    PRIVATE Qt6::Core lingtai_desktop_posix_primitives)
+
 add_executable(lingtai_agent_projection_test
     tests/agent_projection_test.cpp)
 init_target(lingtai_agent_projection_test)
@@ -281,6 +295,13 @@ target_compile_options(lingtai_direct_mail_publisher_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_direct_mail_publisher_test PRIVATE
     lingtai_desktop_mail_publisher)
+add_executable(lingtai_agent_activity_test
+    tests/agent_activity_test.cpp)
+init_target(lingtai_agent_activity_test)
+target_compile_options(lingtai_agent_activity_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_agent_activity_test PRIVATE
+    lingtai_desktop_agent_activity)
 add_executable(lingtai_posix_descriptor_primitives_test
     tests/posix_descriptor_primitives_test.cpp)
 init_target(lingtai_posix_descriptor_primitives_test)
@@ -320,6 +341,9 @@ add_test(NAME direct_conversation_history
 add_test(NAME direct_mail_publisher
     COMMAND lingtai_direct_mail_publisher_test
         "${CMAKE_CURRENT_BINARY_DIR}/direct-mail-publisher-fixture")
+add_test(NAME agent_activity
+    COMMAND lingtai_agent_activity_test
+        "${CMAKE_CURRENT_BINARY_DIR}/agent-activity-fixture")
 add_test(NAME posix_descriptor_primitives
     COMMAND lingtai_posix_descriptor_primitives_test
         "${CMAKE_CURRENT_BINARY_DIR}/posix-descriptor-primitives-fixture")

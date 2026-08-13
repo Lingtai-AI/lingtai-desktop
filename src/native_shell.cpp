@@ -1,5 +1,6 @@
 #include "native_shell.h"
 
+#include "agent_activity.h"
 #include "direct_conversation_history.h"
 #include "direct_mail_publisher.h"
 
@@ -8,6 +9,7 @@
 
 #include <QtCore/QString>
 #include <QtCore/QStringList>
+#include <QtCore/QTimer>
 #include <QtCore/QVariant>
 #include <QtGui/QFont>
 #include <QtWidgets/QBoxLayout>
@@ -412,6 +414,29 @@ NativeShell::NativeShell()
     conversation_state->setAccessibleName(
         QStringLiteral("Selected Agent conversation state"));
     detail_layout->addWidget(conversation_state);
+
+    // A separate, distinct, bounded read-only snapshot of the selected
+    // Agent's own logs/events.jsonl. It is a different source and authority
+    // from the mailbox conversation above and is never merged into it.
+    detail_layout->addWidget(make_label(
+        detail, QStringLiteral("Agent activity"),
+        "lingtai_selected_agent_activity_heading", 12, QFont::DemiBold));
+    auto *activity = new QPlainTextEdit(detail);
+    activity->setObjectName("lingtai_selected_agent_activity");
+    activity->setAccessibleName(QStringLiteral("Selected Agent activity"));
+    activity->setAccessibleDescription(QStringLiteral(
+        "A bounded read-only snapshot of the selected Agent's own visible "
+        "activity, shown as plain text."));
+    activity->setReadOnly(true);
+    activity->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+    activity->setMinimumHeight(140);
+    detail_layout->addWidget(activity);
+    auto *activity_state = make_label(
+        detail, QString(), "lingtai_selected_agent_activity_state", 10);
+    activity_state->setAccessibleName(
+        QStringLiteral("Selected Agent activity state"));
+    detail_layout->addWidget(activity_state);
+
     auto *manifest_identity = make_label(
         detail, QString(), "lingtai_selected_agent_manifest_identity", 11);
     manifest_identity->setAccessibleName(QStringLiteral("Manifest identity"));
@@ -438,6 +463,17 @@ NativeShell::NativeShell()
     detail_facts->setAccessibleName(QStringLiteral("Selected Agent facts"));
     detail_layout->addWidget(detail_facts);
     detail_layout->addStretch();
+
+    // One simple view-scoped timer: it re-invokes the same stateless
+    // snapshot reader every second so a same-selection append becomes
+    // visible without reselection. It is behavior, not a watcher subsystem:
+    // no background thread, debouncing, or persisted state.
+    activity_timer_ = new QTimer(body);
+    activity_timer_->setInterval(1000);
+    QObject::connect(activity_timer_, &QTimer::timeout, [this] {
+        render_agent_activity();
+    });
+    activity_timer_->start();
 
     refresh_route();
     render_roster();
@@ -671,6 +707,7 @@ void NativeShell::render_roster() {
         selected_facts->setText(QStringLiteral(
             "Choose a valid manifest row to inspect its detail."));
         render_conversation();
+        render_agent_activity();
         return;
     }
     selected_key->setText(path_text(detail_item->directory_key));
@@ -750,6 +787,7 @@ void NativeShell::render_roster() {
         .arg(manifest_text(detail_item->manifest_kind),
             role_text(detail_item->role), presence_text(detail_item->presence)));
     render_conversation();
+    render_agent_activity();
 }
 
 // Shows the current direct conversation for whatever the roster just made the
@@ -835,6 +873,72 @@ void NativeShell::reset_composer() {
     if (auto *status = window_->findChild<QLabel *>("lingtai_composer_status")) {
         status->clear();
     }
+}
+
+// Shows a bounded read-only snapshot of the selected Agent's own visible
+// activity: public diary text plus reduced tool call/result rows. This is a
+// distinct source and surface from the mailbox conversation above, refreshed
+// on the same explicit open/selection paths plus the one-second timer.
+void NativeShell::render_agent_activity() {
+    auto *surface = window_->findChild<QPlainTextEdit *>(
+        "lingtai_selected_agent_activity");
+    auto *state = window_->findChild<QLabel *>(
+        "lingtai_selected_agent_activity_state");
+    if (!surface || !state) return;
+    const auto show = [&](const QString &text, const QString &compact) {
+        surface->setPlainText(text);
+        state->setText(compact);
+    };
+
+    if (!selection_state_.active_project()
+        || !selection_state_.selected_agent_directory_key()) {
+        show(QStringLiteral("Select an Agent to see its activity."),
+            QString());
+        return;
+    }
+    const auto snapshot = read_agent_activity(
+        *selection_state_.active_project(),
+        *selection_state_.selected_agent_directory_key());
+    if (!snapshot.available) {
+        show(QStringLiteral("No activity is available for this selection."),
+            QString());
+        return;
+    }
+
+    auto blocks = QStringList();
+    for (const auto &row : snapshot.rows) {
+        auto block = QString();
+        if (row.is_tool) {
+            block = QStringLiteral("Tool · %1")
+                .arg(QString::fromStdString(row.tool_name));
+            if (!row.tool_action.empty()) {
+                block += QStringLiteral(" (%1)")
+                    .arg(QString::fromStdString(row.tool_action));
+            }
+            block += row.tool_status == AgentActivityToolStatus::success
+                ? QStringLiteral(" — success")
+                : row.tool_status == AgentActivityToolStatus::error
+                    ? QStringLiteral(" — error")
+                    : QStringLiteral(" — unknown");
+            if (row.tool_elapsed_ms) {
+                block += QStringLiteral(" (%1 ms)").arg(*row.tool_elapsed_ms);
+            }
+        } else {
+            block = QStringLiteral("Agent · %1")
+                .arg(QString::fromStdString(row.text));
+        }
+        if (!row.timestamp_text.empty()) {
+            block += QStringLiteral("\n%1")
+                .arg(QString::fromStdString(row.timestamp_text));
+        }
+        blocks.push_back(block);
+    }
+    auto compact = QStringLiteral("%1 row(s)").arg(snapshot.rows.size());
+    if (snapshot.skipped > 0) {
+        compact += QStringLiteral(" · some activity records were skipped");
+    }
+    show(blocks.isEmpty() ? QStringLiteral("No activity yet.")
+                          : blocks.join(QStringLiteral("\n\n")), compact);
 }
 
 // Always resolves the route fresh from current C1/C3 truth rather than

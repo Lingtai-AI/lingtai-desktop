@@ -17,11 +17,13 @@ src/agent_projection.{h,cpp}           one composite Agent discovery/role/presen
 src/direct_conversation_route.{h,cpp}  pure direct route + human sender identity
 src/direct_conversation_history.{h,cpp} read-only direct conversation rows
 src/direct_mail_publisher.{h,cpp}      one exclusive human outbox leaf publisher
+src/agent_activity.{h,cpp}             stateless bounded selected-Agent activity snapshot reader
 tests/posix_descriptor_primitives_test.cpp descriptor ownership/no-follow contract
 tests/agent_projection_test.cpp        composite discovery/role/presence/status/no-write contract
 tests/direct_conversation_route_test.cpp pure route/eligibility contract
 tests/direct_conversation_history_test.cpp direct membership/order/no-write/containment contract
 tests/direct_mail_publisher_test.cpp   publish envelope/nonoverwrite/containment contract
+tests/agent_activity_test.cpp          activity binding/order/allowlist/bounds/skip contract
 tests/native_shell_test.cpp            native shell semantics/geometry/no-write contract
 tests/project_attachment_test.cpp      real C++ attachment/containment behavior contract
 tests/test_native_shell.py             process persistence and smoke-order contract
@@ -215,6 +217,31 @@ attachment field ever added. On local failure only the held fresh leaf from
 that attempt is removed; pre-existing content is never touched. It never
 writes the target inbox or the human `sent/`, never stages outside `outbox/`,
 and never retries or reuses an id across calls.
+
+`read_agent_activity` is one stateless, read-only projection of the selected
+Agent's own `<root>/.lingtai/<selected key>/logs/events.jsonl` — a distinct
+source and surface from the mailbox conversation above, never merged into it.
+Every call reads one independent bounded binary suffix (at most 512 KiB) of
+the file on the actual read, discards a leading mid-record fragment when that
+read did not begin at byte zero, and accepts only complete LF-terminated
+top-level JSON objects; an unterminated final line is simply not visited.
+Every walked path component — `.lingtai`, the selected key, and `logs` — is
+opened one no-follow leaf at a time, and the final `events.jsonl` must be a
+real regular file; a missing, unsafe, or unreadable source reduces only to
+one coarse unavailable result, and nothing is ever written. It projects only
+the public allowlist in file byte order, keeping at most the latest 100 rows:
+nonblank `diary` text whose `hidden` is not `true` and whose `visibility` is
+absent or exactly `public`; and a `tool_call` row (bounded name plus optional
+bounded `tool_args.action`) completed in place by its matching `tool_result`
+(reduced to success/error/unknown status and a finite nonnegative
+`elapsed_ms`). Unknown types and excluded types (`thinking`, `text_input`,
+raw tool args/results, and anything else) are silently filtered; only a
+malformed, non-object, or invalid-UTF-8 complete row increments the one
+coarse `skipped` count. `NativeShell` renders this snapshot in a separate
+read-only plain-text panel below the conversation/composer, refreshed on the
+same open/selection paths plus one simple one-second view-scoped `QTimer`
+that re-invokes the same stateless reader — the only poller in the shell, and
+not a background thread, filesystem watcher, or persisted cursor.
 
 Qt is external rather than fetched or committed. Configure resolves the exact
 Qt 6.11.1 prefix from `QT_ROOT` or the documented `$HOME/Qt/6.11.1/macos`
