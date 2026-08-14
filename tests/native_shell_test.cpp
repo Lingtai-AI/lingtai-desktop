@@ -1,6 +1,8 @@
 #include "native_shell.h"
 
 #include "ui/rp_widget.h"
+#include "ui/widgets/buttons.h"
+#include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/rp_window.h"
 #include "ui/widgets/shadow.h"
 
@@ -8,6 +10,7 @@
 #include <QtCore/QString>
 #include <QtCore/QThread>
 #include <QtGui/QColor>
+#include <QtGui/QKeyEvent>
 #include <QtGui/QPalette>
 #include <QtGui/QTextBlock>
 #include <QtGui/QTextCursor>
@@ -1050,10 +1053,10 @@ void verify_composer_send_behavior(
     auto &window = shell.window();
     auto *surface = required_child<QPlainTextEdit>(
         window, "lingtai_selected_agent_conversation");
-    auto *input = required_child<QLineEdit>(
-        window, "lingtai_composer_input");
-    auto *send_button = required_child<QPushButton>(
-        window, "lingtai_composer_send_button");
+    auto *input = static_cast<Ui::InputField *>(
+        required_child<QObject>(window, "lingtai_composer_input"));
+    auto *send_button = static_cast<Ui::RoundButton *>(
+        required_child<QObject>(window, "lingtai_composer_send_button"));
     auto *status = required_child<QLabel>(
         window, "lingtai_composer_status");
 
@@ -1080,15 +1083,16 @@ void verify_composer_send_behavior(
     require(shell.selection_state().selected_agent_directory_key()
                 == std::optional<fs::path>("telegram-bot"),
         "the first Agent must be selectable");
-    require(input->isEnabled() && send_button->isEnabled() && input->text().isEmpty(),
+    require(input->isEnabled() && send_button->isEnabled()
+            && input->getLastText().isEmpty(),
         "a selected valid route must enable an empty composer");
 
     input->setText(QStringLiteral("   \t  "));
     const auto before_whitespace = tree_snapshot(project);
-    send_button->click();
+    send_button->clicked(Qt::NoModifier, Qt::LeftButton);
     require(!fs::exists(outbox),
         "whitespace-only input must be rejected without writing anything");
-    require(input->text() == QStringLiteral("   \t  "),
+    require(input->getLastText() == QStringLiteral("   \t  "),
         "a rejected whitespace-only send must preserve the typed input");
     require(status->text() != QStringLiteral("Queued"),
         "a rejected whitespace-only send must not claim success");
@@ -1096,8 +1100,8 @@ void verify_composer_send_behavior(
         "a rejected whitespace-only send must write nothing");
 
     input->setText(QStringLiteral("Ted, the slice is complete."));
-    send_button->click();
-    require(input->text().isEmpty(),
+    send_button->clicked(Qt::NoModifier, Qt::LeftButton);
+    require(input->getLastText().isEmpty(),
         "a successful send must clear the composer");
     require(status->text() == QStringLiteral("Queued"),
         "a successful send must show the concise success status");
@@ -1116,23 +1120,45 @@ void verify_composer_send_behavior(
     require(first_body.find("\"to\":[\"telegram-bot\"]") != std::string::npos,
         "the queued entry must address exactly the selected Agent");
 
+    // Pressing Enter in the nonempty composer must submit through the same
+    // send path: queue exactly one addressed outbox leaf and clear the input.
+    input->setText(QStringLiteral("Entered via the Return key."));
+    auto enter = QKeyEvent(
+        QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(input->rawTextEdit(), &enter);
+    require(input->getLastText().isEmpty(),
+        "pressing Enter in the nonempty composer must clear the input");
+    auto enter_leaves = std::vector<fs::path>();
+    for (const auto &entry : fs::directory_iterator(outbox)) {
+        enter_leaves.push_back(entry.path());
+    }
+    require(enter_leaves.size() == 2,
+        "pressing Enter must queue exactly one more addressed outbox leaf");
+    require(std::ranges::any_of(enter_leaves, [](const auto &leaf) {
+            const auto body = read_file(leaf / "message.json");
+            return body.find("\"to\":[\"telegram-bot\"]") != std::string::npos
+                && body.find("Entered via the Return key.") != std::string::npos;
+        }),
+        "the Enter-queued leaf must address exactly the selected Agent and "
+        "carry the typed text");
+
     // Selection change must not let a later click target the prior Agent.
     click_agent(window, "issue-643");
     require(shell.selection_state().selected_agent_directory_key()
                 == std::optional<fs::path>("issue-643"),
         "the second Agent in the same project must be selectable");
-    require(input->text().isEmpty() && status->text().isEmpty(),
+    require(input->getLastText().isEmpty() && status->text().isEmpty(),
         "selecting a different Agent must reset the composer, not carry a draft");
     input->setText(QStringLiteral("A message for the other Agent."));
-    send_button->click();
+    send_button->clicked(Qt::NoModifier, Qt::LeftButton);
     require(status->text() == QStringLiteral("Queued"),
         "the send after switching Agents must still succeed");
     auto second_agent_bodies = std::vector<std::string>();
     for (const auto &entry : fs::directory_iterator(outbox)) {
         second_agent_bodies.push_back(read_file(entry.path() / "message.json"));
     }
-    require(second_agent_bodies.size() == 2,
-        "the second send must allocate its own fresh leaf");
+    require(second_agent_bodies.size() == 3,
+        "the three sends must each allocate a fresh leaf");
     require(std::ranges::any_of(second_agent_bodies, [](const auto &body) {
             return body.find("\"to\":[\"issue-643\"]") != std::string::npos
                 && body.find("A message for the other Agent.") != std::string::npos;
@@ -1164,8 +1190,8 @@ void verify_composer_send_behavior(
         "the blocked-outbox fixture Agent must still be selectable");
     input->setText(QStringLiteral("Should never be queued."));
     const auto blocked_before = tree_snapshot(blocked_project);
-    send_button->click();
-    require(input->text() == QStringLiteral("Should never be queued."),
+    send_button->clicked(Qt::NoModifier, Qt::LeftButton);
+    require(input->getLastText() == QStringLiteral("Should never be queued."),
         "a failed send must preserve the typed text");
     require(status->text() != QStringLiteral("Queued")
             && !status->text().isEmpty(),

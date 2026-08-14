@@ -8,6 +8,19 @@
 #include "ui/agent_roster.h"
 #include "workspace_selection.h"
 
+// Vendored composer widget headers pull in ui/text/text_entity.h, whose
+// aggregate brace init omits a field. Targets that include these headers (the
+// shell implementation and its behavior test) build with -Werror, which would
+// promote that vendored warning to an error. Vendored sources are out of
+// scope, so scope the suppression to exactly this include boundary.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+#include "ui/widgets/buttons.h"
+#include "ui/widgets/fields/input_field.h"
+#pragma GCC diagnostic pop
+
+#include <rpl/lifetime.h>
+
 #include <chrono>
 #include <filesystem>
 #include <functional>
@@ -148,6 +161,9 @@ private:
     // constructor and hidden until a successful preset discovery.
     QDialog *bootstrap_dialog_ = nullptr;
     Ui::RpWidget *bootstrap_status_surface_ = nullptr;
+    // Owns the vendored composer input's Enter-to-send subscription for the
+    // whole shell lifetime. The button click uses the button's own lifetime.
+    rpl::lifetime submits_lifetime_;
     // True while a New Project subprocess is pending (preset discovery or
     // spawn). While true the New Project and Open Project actions are
     // disabled so duplicate activation is impossible.

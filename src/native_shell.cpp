@@ -7,9 +7,16 @@
 #include "direct_conversation_history.h"
 #include "direct_mail_publisher.h"
 
+#include "base/integration.h"
+
 #include "styles/palette.h"
+#include "styles/style_widgets.h"
 #include "ui/conversation_surface.h"
+#include "ui/effects/animations.h"
+#include "ui/integration.h"
 #include "ui/rp_widget.h"
+#include "ui/widgets/buttons.h"
+#include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/rp_window.h"
 #include "ui/widgets/shadow.h"
 
@@ -31,6 +38,8 @@
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QScrollBar>
 #include <QtWidgets/QSizePolicy>
+
+#include <rpl/range.h>
 
 #include <algorithm>
 #include <utility>
@@ -177,16 +186,123 @@ bool agent_start_eligible(const AgentRow &item) {
         || item.presence == AgentPresenceKind::missing;
 }
 
+// Desktop never installs the base::Integration the vendored InputField's Qt
+// signal producer needs: it delivers QTextDocument::contentsChange through
+// base::Integration::Instance(), and with no instance installed the first
+// composer clear() trips the base assertion and crashes. One process-lifetime
+// minimum adapter suffices, mirroring how Core::BaseIntegration wraps the
+// base contract: direct event-loop delivery plus no-op logging.
+class DesktopBaseIntegration final : public base::Integration {
+public:
+    DesktopBaseIntegration()
+    : base::Integration(0, nullptr) {
+        base::Integration::Set(this);
+    }
+
+    void enterFromEventLoop(FnMut<void()> &&method) override {
+        std::move(method)();
+    }
+
+    bool logSkipDebug() override {
+        return true;
+    }
+
+    void logMessageDebug(const QString &message) override {
+    }
+
+    void logMessage(const QString &message) override {
+    }
+
+};
+
+// lib_ui's own Integration is equally required: the vendored InputField calls
+// Ui::Integration::Instance() from its contents-changed handler, and without
+// an installed instance that assertion fires on the first composer clear().
+// The base class implements every non-pure virtual with a safe default, so
+// this adapter only supplies the eight pure slots with no-op semantics.
+class DesktopUiIntegration final : public Ui::Integration {
+public:
+    DesktopUiIntegration() {
+        Ui::Integration::Set(this);
+    }
+
+    void postponeCall(FnMut<void()> &&callable) override {
+        std::move(callable)();
+    }
+
+    void registerLeaveSubscription(not_null<QWidget *> widget) override {
+    }
+
+    void unregisterLeaveSubscription(not_null<QWidget *> widget) override {
+    }
+
+    [[nodiscard]] QString emojiCacheFolder() override {
+        return QString();
+    }
+
+    [[nodiscard]] QString openglCheckFilePath() override {
+        return QString();
+    }
+
+    [[nodiscard]] QString angleBackendFilePath() override {
+        return QString();
+    }
+
+    void touchCounterIncrement() override {
+    }
+
+    [[nodiscard]] int touchCounterNow() override {
+        return 0;
+    }
+
+};
+
 std::unique_ptr<Ui::RpWindow> make_native_window() {
-    // The roster directly paints two generated palette tokens. Initialize only
-    // that generated palette: starting every Telegram style module also changes
-    // unrelated application font metrics and breaks the existing window layout.
+    // Install the adapters before any vendored widget is constructed, unless
+    // a hosting environment already installed them.
+    static const auto integration_installed = [] {
+        if (!base::Integration::Exists()) {
+            static DesktopBaseIntegration base_integration;
+        }
+        if (!Ui::Integration::Exists()) {
+            static DesktopUiIntegration ui_integration;
+        }
+        // The vendored InputField's placeholder animation asserts unless the
+        // process-global animations manager exists, so own exactly one.
+        static Ui::Animations::Manager animations_manager;
+        return true;
+    }();
+    (void)integration_installed;
+
+    // The roster paints generated palette tokens; that palette must be ready
+    // before any window is built. The vendored widget-style module is started
+    // only after the window exists: its generated custom-title style would
+    // otherwise give the mac window helper a nonzero title height and change
+    // the explicit window minimum, while the composer controls (which need
+    // those styles) are constructed only after this function returns.
     static const auto palette_started = [] {
         style::internal::init_palette(style::kScaleDefault);
         return true;
     }();
     (void)palette_started;
-    return std::make_unique<Ui::RpWindow>();
+    auto result = std::make_unique<Ui::RpWindow>();
+    static const auto widget_styles_started = [] {
+        style::internal::init_style_widgets(style::kScaleDefault);
+        return true;
+    }();
+    (void)widget_styles_started;
+    // The vendored mac title widget keeps a pointer to the style it is given,
+    // so this zero-height copy must be process-lifetime: it keeps the custom
+    // title hidden (frameMargins().top() == 0) and the explicit window minimum
+    // exactly (720, 480) while the widget styles stay initialized for the
+    // vendored composer controls.
+    static const auto desktop_title_style = [] {
+        auto style_copy = st::defaultWindowTitle;
+        style_copy.height = 0;
+        return style_copy;
+    }();
+    result->setTitleStyle(desktop_title_style);
+    return result;
 }
 
 } // namespace
@@ -401,25 +517,32 @@ NativeShell::NativeShell()
     detail_layout->addWidget(conversation, 1);
 
     // The smallest visible composer, directly under the conversation it
-    // sends into: one plain-text input and one explicit Send action.
+    // sends into: one vendored single-line input and one explicit Send
+    // action, both submitting through the same send path.
     auto *composer = new Ui::RpWidget(detail);
     composer->setObjectName("lingtai_composer");
     composer->setAccessibleName(QStringLiteral("Send a message"));
     auto *composer_layout = new QHBoxLayout(composer);
     composer_layout->setContentsMargins(0, 0, 0, 0);
     composer_layout->setSpacing(8);
-    auto *composer_input = new QLineEdit(composer);
+    auto *composer_input = new Ui::InputField(
+        composer,
+        st::defaultInputField,
+        Ui::InputField::Mode::SingleLine,
+        rpl::single(QStringLiteral("Message…")));
     composer_input->setObjectName("lingtai_composer_input");
     composer_input->setAccessibleName(QStringLiteral("Message"));
-    composer_input->setPlaceholderText(QStringLiteral("Message…"));
+    composer_input->setMinHeight(36);
     composer_input->setEnabled(false);
     composer_layout->addWidget(composer_input, 1);
-    auto *send_button = new QPushButton(
-        QStringLiteral("Send"), composer);
+    auto *send_button = new Ui::RoundButton(
+        composer,
+        rpl::single(QStringLiteral("Send")),
+        st::defaultActiveButton);
     send_button->setObjectName("lingtai_composer_send_button");
     send_button->setAccessibleName(QStringLiteral("Send message"));
     send_button->setEnabled(false);
-    QObject::connect(send_button, &QPushButton::clicked, [this] {
+    send_button->addClickHandler([this] {
         handle_send_message();
     });
     composer_layout->addWidget(send_button);
@@ -428,6 +551,10 @@ NativeShell::NativeShell()
         detail, QString(), "lingtai_composer_status", 10);
     composer_status->setAccessibleName(QStringLiteral("Send status"));
     detail_layout->addWidget(composer_status);
+    composer_input->submits()
+        | rpl::on_next([this] {
+            handle_send_message();
+        }, submits_lifetime_);
 
     auto *conversation_state = make_label(
         detail, QString(), "lingtai_selected_agent_conversation_state", 10);
@@ -1254,10 +1381,10 @@ void NativeShell::render_conversation() {
         "lingtai_selected_agent_conversation");
     auto *state = window_->findChild<QLabel *>(
         "lingtai_selected_agent_conversation_state");
-    auto *composer_input = window_->findChild<QLineEdit *>(
-        "lingtai_composer_input");
-    auto *send_button = window_->findChild<QPushButton *>(
-        "lingtai_composer_send_button");
+    auto *composer_input = static_cast<Ui::InputField *>(
+        window_->findChild<QObject *>("lingtai_composer_input"));
+    auto *send_button = static_cast<Ui::RoundButton *>(
+        window_->findChild<QObject *>("lingtai_composer_send_button"));
     if (!surface || !state || !composer_input || !send_button) return;
     // Composer enablement only; never touches typed text or send status, so a
     // refresh right after a send does not erase the status it just set.
@@ -1313,7 +1440,8 @@ void NativeShell::render_conversation() {
 // or a successful Agent selection), never on an ordinary conversation
 // refresh, so a just-set "Queued" status is never wiped by its own refresh.
 void NativeShell::reset_composer() {
-    if (auto *input = window_->findChild<QLineEdit *>("lingtai_composer_input")) {
+    if (auto *input = static_cast<Ui::InputField *>(
+            window_->findChild<QObject *>("lingtai_composer_input"))) {
         input->clear();
     }
     if (auto *status = window_->findChild<QLabel *>("lingtai_composer_status")) {
@@ -1513,10 +1641,11 @@ void NativeShell::render_agent_preset_summary() {
 // capturing it once, so a selection change between typing and clicking Send
 // can never deliver to a stale target.
 void NativeShell::handle_send_message() {
-    auto *input = window_->findChild<QLineEdit *>("lingtai_composer_input");
+    auto *input = static_cast<Ui::InputField *>(
+        window_->findChild<QObject *>("lingtai_composer_input"));
     auto *status = window_->findChild<QLabel *>("lingtai_composer_status");
     if (!input || !status) return;
-    const auto text = input->text().trimmed();
+    const auto text = input->getLastText().trimmed();
     if (text.isEmpty()) return; // reject whitespace-only input without writing
 
     if (!selection_state_.active_project()
