@@ -1,7 +1,6 @@
 #include "native_shell.h"
 
 #include <QtCore/QDir>
-#include <QtCore/QStandardPaths>
 #include <QtCore/QTimer>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QFileDialog>
@@ -9,30 +8,15 @@
 #include <filesystem>
 #include <iostream>
 #include <string_view>
-#include <system_error>
 
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
-    // One stable application identity, set once so Qt's application-data
-    // location resolves to a consistent, real per-app directory rather than
-    // a generic or unnamed one. Nothing else in this slice depends on it.
-    QApplication::setOrganizationName(QStringLiteral("LingTai"));
-    QApplication::setApplicationName(QStringLiteral("LingTai Desktop"));
     const auto smoke_mode = argc == 2
         && std::string_view(argv[1]) == "--smoke";
     const auto offscreen_mode = smoke_mode || (argc == 2
         && std::string_view(argv[1]) == "--offscreen");
 
     lingtai::desktop::NativeShell shell;
-    // The one Desktop application-data root the Local preset draft store
-    // persists beneath. Best-effort creation: a failure here simply leaves
-    // every save failing closed rather than writing anywhere ambient.
-    const auto app_data_root = std::filesystem::path(
-        QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)
-            .toStdU16String());
-    std::error_code app_data_error;
-    std::filesystem::create_directories(app_data_root, app_data_error);
-    shell.set_local_preset_draft_root(app_data_root);
     // The one Desktop fallback interpreter, used only when a selected
     // Agent's own `init.json.venv_path` is absent or its platform Python
     // does not exist: the same managed LingTai runtime location the current

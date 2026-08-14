@@ -4,7 +4,6 @@
 #include "agent_projection.h"
 #include "agent_sleep.h"
 #include "agent_task_card.h"
-#include "local_preset_draft.h"
 #include "workspace_selection.h"
 
 #include <chrono>
@@ -26,9 +25,6 @@ namespace lingtai::desktop {
 enum class ProjectOpenDisposition {
     opened,
     failed,
-    // Cancel at the dirty local-draft boundary: not opened, not a path
-    // failure; prior project/roster/selection are untouched.
-    cancelled,
 };
 
 struct ProjectOpenOutcome {
@@ -36,17 +32,11 @@ struct ProjectOpenOutcome {
     ProjectPathFailure failure = ProjectPathFailure::none;
 };
 
-// Shared Save/Discard/Cancel boundary for a dirty draft transition; `save`
-// only permits the transition on a successful persist.
-enum class LocalPresetDraftBoundaryChoice { save, discard, cancel };
-
 // C5-owned native composition. C1's WorkspaceSelectionState remains the only
 // active project/Agent truth; an open request proposes no state transition.
 class NativeShell final {
 public:
     using OpenProjectRequestHandler = std::function<void()>;
-    using LocalPresetDraftBoundaryPrompt =
-        std::function<LocalPresetDraftBoundaryChoice()>;
 
     NativeShell();
     ~NativeShell();
@@ -61,13 +51,6 @@ public:
     // when a selected Agent's own `init.json.venv_path` is absent or its
     // platform Python does not exist. Defaults to an empty path.
     void set_agent_start_fallback_python(std::filesystem::path fallback_python);
-    // Injected app-data root the draft store persists beneath; empty by
-    // default, which fails every save closed rather than writing ambiently.
-    void set_local_preset_draft_root(std::filesystem::path root);
-    // Overrides the real blocking Save/Discard/Cancel prompt; tests inject
-    // a scripted choice.
-    void set_local_preset_draft_boundary_prompt(
-        LocalPresetDraftBoundaryPrompt prompt);
     [[nodiscard]] ProjectOpenOutcome open_project(
         const std::filesystem::path &selected_directory,
         const std::optional<std::filesystem::path> &agent_relative_directory
@@ -92,15 +75,6 @@ private:
     void render_agent_activity();
     void render_agent_task_card();
     void render_agent_preset_summary();
-    void render_local_preset_draft();
-    void update_local_preset_draft_controls();
-    void handle_local_preset_draft_text_changed();
-    void handle_save_local_preset_draft();
-    void handle_discard_local_preset_draft();
-    [[nodiscard]] bool attempt_save_local_preset_draft();
-    // True: caller may proceed (clean, successful Save, or Discard). False:
-    // Cancel or a failed Save; caller must leave state untouched.
-    [[nodiscard]] bool guard_local_preset_draft_transition();
     void reset_composer();
     void handle_send_message();
     void handle_agent_selection(const std::filesystem::path &directory_key);
@@ -155,18 +129,6 @@ private:
     // observation does not clear or misreport it. Reset immediately on
     // project open or Agent selection change; never persisted.
     std::optional<AgentTaskCardSnapshot> task_card_last_valid_;
-
-    std::filesystem::path local_preset_draft_root_;
-    LocalPresetDraftBoundaryPrompt local_preset_draft_boundary_prompt_;
-    // (project root, agent_id) currently loaded; only a genuine target
-    // change reloads, so a same-selection reroster never clobbers an edit.
-    std::optional<std::pair<std::string, std::string>> local_preset_draft_target_;
-    std::string local_preset_draft_baseline_;
-    bool local_preset_draft_dirty_ = false;
-    // Set by a just-completed Save so the label says "saved locally" once.
-    bool local_preset_draft_just_saved_ = false;
-    // Set by a failed Save; a failed save always leaves the draft dirty.
-    bool local_preset_draft_save_failed_ = false;
 };
 
 } // namespace lingtai::desktop
