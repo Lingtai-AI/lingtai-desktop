@@ -17,6 +17,7 @@
 #include "ui/rp_widget.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/fields/input_field.h"
+#include "ui/widgets/labels.h"
 #include "ui/widgets/rp_window.h"
 #include "ui/widgets/shadow.h"
 
@@ -77,6 +78,28 @@ QLabel *make_label(
     font.setWeight(weight);
     label->setFont(font);
     return label;
+}
+
+// The first-project surfaces use the same mature lib_ui label language as the
+// accepted composer/dashboard: a FlatLabel whose accessible text is its own
+// readable text, with the exact current object name and accessibility label.
+Ui::FlatLabel *make_flat_label(
+        QWidget *parent,
+        const QString &text,
+        const char *object_name) {
+    auto *label = new Ui::FlatLabel(parent, text);
+    label->setObjectName(object_name);
+    label->setAccessibleName(text);
+    return label;
+}
+
+// The vendored lib_ui controls (InputField, RoundButton, FlatLabel) carry no
+// Q_OBJECT macro, so Qt's templated findChild<Ui::X *> cannot name them. These
+// classes are polymorphic, so resolving by object name through a QObject
+// lookup plus dynamic_cast stays safe and type-checked.
+template <typename Widget>
+Widget *find_ui_child(QObject &root, const char *object_name) {
+    return dynamic_cast<Widget *>(root.findChild<QObject *>(object_name));
 }
 
 // One shared structural owner for the three read-only selected-Agent source
@@ -442,12 +465,10 @@ NativeShell::NativeShell()
     open_error_surface_->setObjectName("lingtai_project_open_error_surface");
     auto *error_layout = new QVBoxLayout(open_error_surface_);
     error_layout->setContentsMargins(0, 0, 0, 0);
-    auto *open_error = make_label(
+    auto *open_error = make_flat_label(
         open_error_surface_,
         QString(),
-        "lingtai_project_open_error",
-        12,
-        QFont::Medium);
+        "lingtai_project_open_error");
     open_error->setAccessibleName(QStringLiteral("Project open error"));
     error_layout->addWidget(open_error);
     open_error_surface_->hide();
@@ -461,12 +482,10 @@ NativeShell::NativeShell()
         "lingtai_bootstrap_status_surface");
     auto *bootstrap_status_layout = new QVBoxLayout(bootstrap_status_surface_);
     bootstrap_status_layout->setContentsMargins(0, 0, 0, 0);
-    auto *bootstrap_status = make_label(
+    auto *bootstrap_status = make_flat_label(
         bootstrap_status_surface_,
         QString(),
-        "lingtai_bootstrap_status",
-        12,
-        QFont::Medium);
+        "lingtai_bootstrap_status");
     bootstrap_status->setAccessibleName(QStringLiteral("New project status"));
     bootstrap_status_layout->addWidget(bootstrap_status);
     bootstrap_status_surface_->hide();
@@ -482,17 +501,14 @@ NativeShell::NativeShell()
     auto *empty_layout = new QVBoxLayout(empty_route_);
     empty_layout->setContentsMargins(0, 0, 0, 0);
     empty_layout->setSpacing(12);
-    auto *empty_title = make_label(
+    auto *empty_title = make_flat_label(
         empty_route_,
         QStringLiteral("No project open"),
-        "lingtai_no_project_title",
-        18,
-        QFont::DemiBold);
-    auto *empty_detail = make_label(
+        "lingtai_no_project_title");
+    auto *empty_detail = make_flat_label(
         empty_route_,
         QStringLiteral("Open a LingTai project to inspect its Agents."),
-        "lingtai_no_project_detail",
-        12);
+        "lingtai_no_project_detail");
     empty_layout->addStretch();
     empty_layout->addWidget(empty_title);
     empty_layout->addWidget(empty_detail);
@@ -780,40 +796,43 @@ NativeShell::NativeShell()
     auto *dialog_layout = new QVBoxLayout(bootstrap_dialog_);
     dialog_layout->setContentsMargins(24, 24, 24, 24);
     dialog_layout->setSpacing(12);
-    auto *dialog_note = make_label(
+    auto *dialog_note = make_flat_label(
         bootstrap_dialog_,
         QStringLiteral(
             "Creates a new LingTai project, names its first Agent from the "
             "destination folder by default, and starts it."),
-        "lingtai_bootstrap_dialog_note",
-        12);
+        "lingtai_bootstrap_dialog_note");
     dialog_note->setAccessibleName(QStringLiteral(
         "New project note"));
     dialog_layout->addWidget(dialog_note);
 
     auto *destination_row = new QHBoxLayout;
     destination_row->setSpacing(8);
-    auto *destination_input = new QLineEdit(bootstrap_dialog_);
+    auto *destination_input = new Ui::InputField(
+        bootstrap_dialog_,
+        st::defaultInputField,
+        Ui::InputField::Mode::SingleLine,
+        rpl::single(QStringLiteral("Destination folder")));
     destination_input->setObjectName("lingtai_bootstrap_destination_input");
     destination_input->setAccessibleName(QStringLiteral("Destination folder"));
-    destination_input->setPlaceholderText(QStringLiteral("Destination folder"));
     destination_row->addWidget(destination_input, 1);
-    auto *browse_button = new QPushButton(
-        QStringLiteral("Browse…"), bootstrap_dialog_);
+    auto *browse_button = new Ui::RoundButton(
+        bootstrap_dialog_,
+        rpl::single(QStringLiteral("Browse…")),
+        st::defaultLightButton);
     browse_button->setObjectName("lingtai_bootstrap_destination_browse");
-    browse_button->setAccessibleName(QStringLiteral("Browse destination folder"));
-    QObject::connect(browse_button, &QPushButton::clicked, [this] {
+    browse_button->setAccessibleName(
+        QStringLiteral("Browse destination folder"));
+    browse_button->addClickHandler([this] {
         handle_browse_destination();
     });
     destination_row->addWidget(browse_button);
     dialog_layout->addLayout(destination_row);
 
-    auto *preset_label = make_label(
+    auto *preset_label = make_flat_label(
         bootstrap_dialog_,
         QStringLiteral("Preset"),
-        "lingtai_bootstrap_preset_label",
-        12,
-        QFont::Medium);
+        "lingtai_bootstrap_preset_label");
     dialog_layout->addWidget(preset_label);
     auto *preset_chooser = new QComboBox(bootstrap_dialog_);
     preset_chooser->setObjectName("lingtai_bootstrap_preset_chooser");
@@ -822,23 +841,30 @@ NativeShell::NativeShell()
         "Choose the preset the new project's first Agent is created from."));
     dialog_layout->addWidget(preset_chooser);
 
-    auto *dialog_status = make_label(
+    auto *dialog_status = make_flat_label(
         bootstrap_dialog_,
         QString(),
-        "lingtai_bootstrap_dialog_status",
-        11,
-        QFont::Medium);
+        "lingtai_bootstrap_dialog_status");
     dialog_status->setAccessibleName(QStringLiteral("New project dialog status"));
-    dialog_status->setWordWrap(true);
     dialog_layout->addWidget(dialog_status);
+
+    // One thin plain-shadow divider gives the form/actions one visible stable
+    // separation, the same structural cue the dashboard sections use.
+    auto *dialog_divider = new Ui::PlainShadow(bootstrap_dialog_);
+    dialog_divider->setObjectName("lingtai_bootstrap_dialog_divider");
+    dialog_divider->setAccessibleName(QStringLiteral("New project form divider"));
+    dialog_divider->setFixedHeight(st::lineWidth);
+    dialog_layout->addWidget(dialog_divider);
 
     auto *dialog_actions = new QHBoxLayout;
     dialog_actions->setSpacing(8);
-    auto *cancel_button = new QPushButton(
-        QStringLiteral("Cancel"), bootstrap_dialog_);
+    auto *cancel_button = new Ui::RoundButton(
+        bootstrap_dialog_,
+        rpl::single(QStringLiteral("Cancel")),
+        st::defaultLightButton);
     cancel_button->setObjectName("lingtai_bootstrap_cancel");
     cancel_button->setAccessibleName(QStringLiteral("Cancel"));
-    QObject::connect(cancel_button, &QPushButton::clicked, [this] {
+    cancel_button->addClickHandler([this] {
         handle_cancel_bootstrap();
     });
     // The standard QDialog dismissal paths (window close control, Escape) call
@@ -851,21 +877,30 @@ NativeShell::NativeShell()
     QObject::connect(bootstrap_dialog_, &QDialog::rejected, [this] {
         handle_cancel_bootstrap();
     });
-    auto *create_button = new QPushButton(
-        QStringLiteral("Create & Start"), bootstrap_dialog_);
+    auto *create_button = new Ui::RoundButton(
+        bootstrap_dialog_,
+        rpl::single(QStringLiteral("Create & Start")),
+        st::defaultActiveButton);
     create_button->setObjectName("lingtai_bootstrap_create_start");
     create_button->setAccessibleName(QStringLiteral("Create and Start"));
     create_button->setAccessibleDescription(QStringLiteral(
         "Creates the new project, names its first Agent from the destination "
         "folder, and starts that Agent."));
-    create_button->setDefault(true);
-    QObject::connect(create_button, &QPushButton::clicked, [this] {
+    create_button->addClickHandler([this] {
         handle_create_and_start();
     });
     dialog_actions->addStretch();
     dialog_actions->addWidget(cancel_button);
     dialog_actions->addWidget(create_button);
     dialog_layout->addLayout(dialog_actions);
+    // The QPushButton default-enter path does not survive the switch to
+    // RoundButton, so the destination field's own Return submission keeps the
+    // current useful default activation wired to the same Create & Start
+    // handler. Wider keyboard navigation stays Commit30's work.
+    destination_input->submits()
+        | rpl::on_next([this] {
+            handle_create_and_start();
+        }, submits_lifetime_);
     bootstrap_dialog_->hide();
 
     refresh_route();
@@ -911,7 +946,8 @@ void NativeShell::set_bootstrap_actions_enabled(bool enabled) {
 }
 
 void NativeShell::set_bootstrap_status(const QString &text) {
-    auto *status = window_->findChild<QLabel *>("lingtai_bootstrap_status");
+    auto *status = find_ui_child<Ui::FlatLabel>(
+        *window_, "lingtai_bootstrap_status");
     if (!status) return;
     status->setText(text);
     bootstrap_status_surface_->setVisible(!text.isEmpty());
@@ -988,9 +1024,9 @@ void NativeShell::show_bootstrap_dialog(
                 help.join(QStringLiteral(" · ")), Qt::ToolTipRole);
         }
     }
-    if (auto *status = window_->findChild<QLabel *>(
-            "lingtai_bootstrap_dialog_status")) {
-        status->clear();
+    if (auto *status = find_ui_child<Ui::FlatLabel>(
+            *window_, "lingtai_bootstrap_dialog_status")) {
+        status->setText(QString());
     }
     set_bootstrap_status(QString());
     bootstrap_dialog_->show();
@@ -1004,8 +1040,8 @@ void NativeShell::handle_browse_destination() {
         QDir::homePath(),
         QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
     if (selected.isEmpty()) return;
-    if (auto *input = window_->findChild<QLineEdit *>(
-            "lingtai_bootstrap_destination_input")) {
+    if (auto *input = find_ui_child<Ui::InputField>(
+            *window_, "lingtai_bootstrap_destination_input")) {
         input->setText(selected);
     }
 }
@@ -1015,14 +1051,14 @@ void NativeShell::handle_create_and_start() {
         || bootstrap_runner_->is_pending()) {
         return;
     }
-    auto *input = window_->findChild<QLineEdit *>(
-        "lingtai_bootstrap_destination_input");
+    auto *input = find_ui_child<Ui::InputField>(
+        *window_, "lingtai_bootstrap_destination_input");
     auto *chooser = window_->findChild<QComboBox *>(
         "lingtai_bootstrap_preset_chooser");
-    auto *dialog_status = window_->findChild<QLabel *>(
-        "lingtai_bootstrap_dialog_status");
+    auto *dialog_status = find_ui_child<Ui::FlatLabel>(
+        *window_, "lingtai_bootstrap_dialog_status");
     if (!input || !chooser || !dialog_status) return;
-    const auto destination = input->text().trimmed();
+    const auto destination = input->getLastText().trimmed();
     const auto preset = chooser->currentText().trimmed();
     if (destination.isEmpty() || preset.isEmpty()) {
         dialog_status->setText(QStringLiteral(
@@ -1034,7 +1070,7 @@ void NativeShell::handle_create_and_start() {
             "No TUI executable is configured."));
         return;
     }
-    dialog_status->clear();
+    dialog_status->setText(QString());
     bootstrap_dialog_->hide();
     set_bootstrap_status(QStringLiteral(
         "Creating project and starting Agent…"));
@@ -1182,7 +1218,8 @@ ProjectOpenOutcome NativeShell::open_project(
         "lingtai_agent_selection_error");
     selection_error->clear();
     selection_error->hide();
-    window_->findChild<QLabel *>("lingtai_project_open_error")->clear();
+    find_ui_child<Ui::FlatLabel>(*window_, "lingtai_project_open_error")
+        ->setText(QString());
     open_error_surface_->hide();
     reset_composer();
     // A fresh open must never let a prior target's pending sleep or Start
@@ -1970,7 +2007,8 @@ void NativeShell::tick_agent_start_observation() {
 ProjectOpenOutcome NativeShell::show_open_error(
         ProjectPathFailure failure,
         std::string message) {
-    auto *label = window_->findChild<QLabel *>("lingtai_project_open_error");
+    auto *label = find_ui_child<Ui::FlatLabel>(
+        *window_, "lingtai_project_open_error");
     label->setText(QString::fromStdString(message));
     open_error_surface_->show();
     refresh_route();

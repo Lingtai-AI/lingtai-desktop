@@ -3,6 +3,7 @@
 #include "ui/rp_widget.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/fields/input_field.h"
+#include "ui/widgets/labels.h"
 #include "ui/widgets/rp_window.h"
 #include "ui/widgets/shadow.h"
 
@@ -76,6 +77,21 @@ private:
 template <typename Widget>
 Widget *required_child(QWidget &root, const char *object_name) {
     auto *result = root.findChild<Widget *>(object_name);
+    require(result != nullptr, std::string("missing child: ") + object_name);
+    return result;
+}
+
+// The vendored lib_ui controls (InputField, RoundButton, FlatLabel) carry no
+// Q_OBJECT macro, so Qt's templated findChild<Ui::X *> cannot name them. The
+// composer already resolves them through a QObject lookup plus a cast. These
+// classes are polymorphic, so dynamic_cast also stays safe on raw Qt
+// production: when the object is still a QLineEdit/QPushButton/QLabel it
+// resolves to null and the require below reports the missing semantic type
+// instead of dereferencing a mis-typed pointer.
+template <typename Widget>
+Widget *required_ui_child(QWidget &root, const char *object_name) {
+    auto *result = dynamic_cast<Widget *>(
+        required_child<QObject>(root, object_name));
     require(result != nullptr, std::string("missing child: ") + object_name);
     return result;
 }
@@ -199,6 +215,14 @@ QString label_text(QWidget &window, const char *object_name) {
     return required_child<QLabel>(window, object_name)->text();
 }
 
+// The first-project surfaces now speak the same lib_ui label language as the
+// accepted composer/dashboard: their readable text is the FlatLabel's own
+// accessibility text, read back through accessibilityName().
+QString flat_label_text(QWidget &window, const char *object_name) {
+    return required_ui_child<Ui::FlatLabel>(window, object_name)
+        ->accessibilityName();
+}
+
 QPushButton *agent_row(QWidget &window, std::string_view key) {
     const auto expected = QString::fromUtf8(key.data(), key.size());
     for (auto *row : window.findChildren<QPushButton *>()) {
@@ -258,9 +282,6 @@ void verify_dark_application_palette_inheritance(const fs::path &sandbox) {
         required_child<QLabel>(window, "lingtai_sidebar_workspace_label"),
         required_child<QLabel>(window, "lingtai_product_title"),
         required_child<QLabel>(window, "lingtai_product_purpose"),
-        required_child<QLabel>(window, "lingtai_no_project_title"),
-        required_child<QLabel>(window, "lingtai_no_project_detail"),
-        required_child<QLabel>(window, "lingtai_project_open_error"),
         required_child<QLabel>(window, "lingtai_project_route_heading"),
         required_child<QLabel>(window, "lingtai_project_root"),
         required_child<QLabel>(window, "lingtai_agent_selection_error"),
@@ -276,6 +297,15 @@ void verify_dark_application_palette_inheritance(const fs::path &sandbox) {
         required_child<QLabel>(window, "lingtai_selected_agent_status_context"),
         required_child<QLabel>(window, "lingtai_selected_agent_facts"),
     };
+    // The no-project route, open-error and bootstrap-status surfaces are the
+    // first-project presentation slice: they now use the same lib_ui label
+    // language as the accepted dashboard, exposed through the FlatLabel's
+    // accessibility text.
+    const auto flat_labels = std::vector<Ui::FlatLabel *>{
+        required_ui_child<Ui::FlatLabel>(window, "lingtai_no_project_title"),
+        required_ui_child<Ui::FlatLabel>(window, "lingtai_no_project_detail"),
+        required_ui_child<Ui::FlatLabel>(window, "lingtai_project_open_error"),
+    };
     auto *open_button = required_child<QPushButton>(
         window, "lingtai_open_project_button");
 
@@ -290,6 +320,14 @@ void verify_dark_application_palette_inheritance(const fs::path &sandbox) {
             "dark application WindowText role must reach every shell label");
         require(label->textFormat() == Qt::PlainText,
             "every LingTai label surface must render explicit plain text");
+    }
+    for (auto *label : flat_labels) {
+        require(label->palette().color(QPalette::WindowText) == window_ink,
+            "dark application WindowText role must reach every first-project "
+            "flat label");
+        require(!label->accessibleName().isEmpty(),
+            "every first-project flat label must keep its exact accessible "
+            "name");
     }
     require(open_button->palette().color(QPalette::Button) == button_surface,
         "dark application Button role must reach the open affordance");
@@ -657,7 +695,7 @@ void verify_open_project_behavior(
             && agent_row(window, "agent")->text() == prior_row_text,
         "failed reopen must preserve selection, roster, and selected detail");
     require(error_surface->isVisible()
-            && label_text(window, "lingtai_project_open_error")
+            && flat_label_text(window, "lingtai_project_open_error")
                 .contains("not a LingTai project"),
         "failed reopen must show its error beside the preserved roster");
 
@@ -688,15 +726,15 @@ void verify_semantics_and_request(
         window, "lingtai_empty_workspace_route");
     auto *project_route = required_child<Ui::RpWidget>(
         window, "lingtai_project_route");
-    auto *open_error = required_child<QLabel>(
+    auto *open_error = required_ui_child<Ui::FlatLabel>(
         window, "lingtai_project_open_error");
     auto *title = required_child<QLabel>(
         window, "lingtai_product_title");
     auto *purpose = required_child<QLabel>(
         window, "lingtai_product_purpose");
-    auto *empty_title = required_child<QLabel>(
+    auto *empty_title = required_ui_child<Ui::FlatLabel>(
         window, "lingtai_no_project_title");
-    auto *empty_detail = required_child<QLabel>(
+    auto *empty_detail = required_ui_child<Ui::FlatLabel>(
         window, "lingtai_no_project_detail");
     auto *open_button = required_child<QPushButton>(
         window, "lingtai_open_project_button");
@@ -717,9 +755,9 @@ void verify_semantics_and_request(
     require(purpose->text()
             == "A clear view of the project and Agents you choose.",
         "product purpose changed");
-    require(empty_title->text() == "No project open",
+    require(empty_title->accessibilityName() == "No project open",
         "empty-route title changed");
-    require(empty_detail->text()
+    require(empty_detail->accessibilityName()
             == "Open a LingTai project to inspect its Agents.",
         "empty-route explanation changed");
     require(open_button->text() == QStringLiteral("Open Project\u2026"),
@@ -2008,28 +2046,39 @@ void verify_first_project_bootstrap(
         window, "lingtai_open_project_button");
     require(open_button->isVisible(),
         "no-project state must keep the Open Project action visible");
-    auto *status = required_child<QLabel>(
+    auto *status = required_ui_child<Ui::FlatLabel>(
         window, "lingtai_bootstrap_status");
     auto *dialog = required_child<QDialog>(
         window, "lingtai_new_project_dialog");
-    auto *destination_input = required_child<QLineEdit>(
+    auto *destination_input = required_ui_child<Ui::InputField>(
         window, "lingtai_bootstrap_destination_input");
     auto *preset_chooser = required_child<QComboBox>(
         window, "lingtai_bootstrap_preset_chooser");
-    auto *create_start = required_child<QPushButton>(
+    auto *create_start = required_ui_child<Ui::RoundButton>(
         window, "lingtai_bootstrap_create_start");
-    required_child<QPushButton>(window, "lingtai_bootstrap_cancel");
-    auto *dialog_status = required_child<QLabel>(
+    required_ui_child<Ui::RoundButton>(window, "lingtai_bootstrap_cancel");
+    auto *dialog_status = required_ui_child<Ui::FlatLabel>(
         window, "lingtai_bootstrap_dialog_status");
-    auto *browse_button = required_child<QPushButton>(
+    auto *browse_button = required_ui_child<Ui::RoundButton>(
         window, "lingtai_bootstrap_destination_browse");
-    auto *dialog_note = required_child<QLabel>(
+    auto *dialog_note = required_ui_child<Ui::FlatLabel>(
         window, "lingtai_bootstrap_dialog_note");
-    require(browse_button->text() == QStringLiteral("Browse\u2026"),
-        "destination row must offer a Browse affordance");
-    require(create_start->text() == QStringLiteral("Create & Start"),
-        "the committing dialog action must be explicitly Create & Start");
-    require(dialog_note->text().contains(QStringLiteral("first Agent")),
+    required_ui_child<Ui::FlatLabel>(window, "lingtai_bootstrap_preset_label");
+    // One named plain-shadow divider separates the dialog form from its action
+    // row. PlainShadow carries no Q_OBJECT, so the lookup resolves the named
+    // RpWidget and confirms the runtime type, exactly like the roster and
+    // dashboard separators.
+    auto *divider_widget = required_child<Ui::RpWidget>(
+        *dialog, "lingtai_bootstrap_dialog_divider");
+    require(dynamic_cast<Ui::PlainShadow *>(divider_widget) != nullptr,
+        "the dialog form/action divider must be a Ui::PlainShadow");
+    require(browse_button->accessibleName()
+            == QStringLiteral("Browse destination folder"),
+        "the Browse affordance must keep its exact accessible name");
+    require(create_start->accessibleName() == QStringLiteral("Create and Start"),
+        "the committing dialog action must keep its exact accessible name");
+    require(dialog_note->accessibilityName()
+            .contains(QStringLiteral("first Agent")),
         "the dialog note must truthfully state the first-Agent naming rule");
 
     const auto argv_record = sandbox / "tui-argv.txt";
@@ -2053,7 +2102,7 @@ exit 0)");
     auto open_requests = std::size_t{0};
     shell.set_open_project_request_handler([&] { ++open_requests; });
     new_project_button->click();
-    require(status->text() == QStringLiteral("Discovering presets…"),
+    require(status->accessibilityName() == QStringLiteral("Discovering presets…"),
         "a pending discovery must show one truthful phase status");
     require(!new_project_button->isEnabled() && !open_button->isEnabled(),
         "duplicate New Project and Open Project must be disabled while pending");
@@ -2106,15 +2155,22 @@ exit 0)");
         QCoreApplication::processEvents();
     }
     require(dialog->isVisible(), "the second discovery must reopen the dialog");
-    create_start->click();
+    create_start->clicked(Qt::NoModifier, Qt::LeftButton);
     QCoreApplication::processEvents();
-    require(dialog_status->text().contains(QStringLiteral("nonempty")),
+    require(dialog_status->accessibilityName()
+                .contains(QStringLiteral("nonempty")),
         "Create & Start with no destination must refuse with a concise "
         "dialog status");
     destination_input->setText(path_text(destination));
     preset_chooser->setCurrentIndex(1); // beta: non-first preset
-    create_start->click();
-    require(status->text() == QStringLiteral(
+    // The current useful default path is the filled destination field's
+    // Return submission: it must reach the same Create & Start handler and
+    // produce the exact same separated spawn argv.
+    destination_input->setFocus();
+    QCoreApplication::processEvents();
+    auto enter = QKeyEvent(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(destination_input->rawTextEdit(), &enter);
+    require(status->accessibilityName() == QStringLiteral(
                 "Creating project and starting Agent…"),
         "a pending spawn must show one truthful phase status");
     require(!new_project_button->isEnabled() && !open_button->isEnabled(),
@@ -2142,12 +2198,13 @@ exit 0)");
     // project and reports created+started.
     const auto attached_deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (status->text() != QStringLiteral("Project created and Agent started.")
+    while (status->accessibilityName()
+                != QStringLiteral("Project created and Agent started.")
             && std::chrono::steady_clock::now() < attached_deadline) {
         QThread::msleep(20);
         QCoreApplication::processEvents();
     }
-    require(status->text() == QStringLiteral(
+    require(status->accessibilityName() == QStringLiteral(
                 "Project created and Agent started."),
         "spawn success must report the concise created-and-started status");
     require(shell.selection_state().active_project()
@@ -2184,19 +2241,19 @@ exit 7)");
         "the failing fixture's discovery must still show the dialog");
     destination_input->setText(path_text(sandbox / "partial-destination"));
     preset_chooser->setCurrentIndex(0);
-    create_start->click();
+    create_start->clicked(Qt::NoModifier, Qt::LeftButton);
     QCoreApplication::processEvents();
     const auto failure_deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (!status->text().contains(QStringLiteral("launch_failed"))
+    while (!status->accessibilityName().contains(QStringLiteral("launch_failed"))
             && std::chrono::steady_clock::now() < failure_deadline) {
         QThread::msleep(20);
         QCoreApplication::processEvents();
     }
-    require(status->text().contains(QStringLiteral("launch_failed"))
-            && status->text().contains(
+    require(status->accessibilityName().contains(QStringLiteral("launch_failed"))
+            && status->accessibilityName().contains(
                 QStringLiteral("fixture spawn refused"))
-            && status->text().contains(QStringLiteral(
+            && status->accessibilityName().contains(QStringLiteral(
                 "partially initialized LingTai project")),
         "a structured spawn failure must surface the code and error plus the "
         "generic partial-state warning");
@@ -2236,12 +2293,14 @@ exit 0)",
         "the malformed-presets fixture must be invoked with the exact argv");
     const auto fail_closed_deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (!status->text().contains(QStringLiteral("could not be used"))
+    while (!status->accessibilityName().contains(
+                QStringLiteral("could not be used"))
             && std::chrono::steady_clock::now() < fail_closed_deadline) {
         QThread::msleep(20);
         QCoreApplication::processEvents();
     }
-    require(status->text().contains(QStringLiteral("could not be used")),
+    require(status->accessibilityName().contains(
+                QStringLiteral("could not be used")),
         "malformed preset output must fail closed with one concise failure");
     require(!dialog->isVisible() && new_project_button->isEnabled()
             && open_button->isEnabled(),
