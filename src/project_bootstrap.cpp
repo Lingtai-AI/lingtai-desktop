@@ -88,8 +88,9 @@ PresetDiscoveryResult parse_presets_result(
     return {PresetDiscoveryKind::succeeded, std::move(entries), {}, {}};
 }
 
-// Success requires exit 0 plus valid stdout JSON with `status == "launched"`
-// and a nonempty `project_dir`. The PID is deliberately ignored as an
+// Success requires exit 0 plus valid stdout JSON with `status` of either the
+// installed TUI's readiness value `"ready"` or the legacy `"launched"`, and a
+// nonempty `project_dir`. The PID is deliberately ignored as an
 // ownership/liveness authority. Any other shape fails closed.
 SpawnOutcome parse_spawn_outcome(
         int exit_code,
@@ -106,8 +107,9 @@ SpawnOutcome parse_spawn_outcome(
         return {SpawnOutcomeKind::malformed, {}, {}, {}};
     }
     const auto object = document.object();
-    if (object.value(QLatin1StringView("status")).toString()
-        != QLatin1StringView("launched")) {
+    const auto status = object.value(QLatin1StringView("status")).toString();
+    if (status != QLatin1StringView("launched")
+        && status != QLatin1StringView("ready")) {
         return {SpawnOutcomeKind::malformed, {}, {}, {}};
     }
     const auto project_dir =

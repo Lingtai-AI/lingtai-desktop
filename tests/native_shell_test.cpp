@@ -1946,7 +1946,7 @@ void verify_first_project_bootstrap(
 exit 0)",
         R"(mkdir -p "$2/.lingtai/agent"
 printf '%s' '{"admin":{}}' > "$2/.lingtai/agent/.agent.json"
-printf '%s' "{\"status\":\"launched\",\"project_dir\":\"$2\",\"agent_name\":\"agent\",\"agent_dir\":\"$2/.lingtai/agent\",\"preset\":\"$4\",\"recipe\":\"plain\",\"pid\":0}"
+printf '%s' "{\"status\":\"ready\",\"project_dir\":\"$2\",\"agent_name\":\"agent\",\"agent_dir\":\"$2/.lingtai/agent\",\"preset\":\"$4\",\"recipe\":\"plain\",\"pid\":0}"
 exit 0)");
     shell.set_tui_executable(success_tui);
 
