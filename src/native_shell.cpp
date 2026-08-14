@@ -7,8 +7,10 @@
 #include "direct_conversation_history.h"
 #include "direct_mail_publisher.h"
 
+#include "styles/palette.h"
 #include "ui/rp_widget.h"
 #include "ui/widgets/rp_window.h"
+#include "ui/widgets/shadow.h"
 
 #include <QtCore/QString>
 #include <QtCore/QStringList>
@@ -35,7 +37,6 @@
 namespace lingtai::desktop {
 namespace {
 
-constexpr auto kSidebarWidth = 264;
 constexpr auto kMinimumWindowWidth = 720;
 constexpr auto kMinimumWindowHeight = 480;
 constexpr auto kDefaultWindowWidth = 1100;
@@ -97,18 +98,6 @@ QString joined_names(const std::vector<std::string> &names) {
     auto text = QStringList();
     for (const auto &name : names) text.push_back(QString::fromStdString(name));
     return names.empty() ? QStringLiteral("none") : text.join(QStringLiteral(", "));
-}
-
-QString manifest_diagnostic_text(AgentManifestDiagnosticKind diagnostic) {
-    using Kind = AgentManifestDiagnosticKind;
-    switch (diagnostic) {
-    case Kind::none: return QStringLiteral("none");
-    case Kind::unsafe_symlink: return QStringLiteral("unsafe symlink");
-    case Kind::unreadable: return QStringLiteral("unreadable");
-    case Kind::invalid_json: return QStringLiteral("invalid JSON");
-    case Kind::not_object: return QStringLiteral("JSON root is not an object");
-    }
-    return QStringLiteral("unreadable");
 }
 
 QString manifest_text(AgentManifestKind kind) {
@@ -187,10 +176,22 @@ bool agent_start_eligible(const AgentRow &item) {
         || item.presence == AgentPresenceKind::missing;
 }
 
+std::unique_ptr<Ui::RpWindow> make_native_window() {
+    // The roster directly paints two generated palette tokens. Initialize only
+    // that generated palette: starting every Telegram style module also changes
+    // unrelated application font metrics and breaks the existing window layout.
+    static const auto palette_started = [] {
+        style::internal::init_palette(style::kScaleDefault);
+        return true;
+    }();
+    (void)palette_started;
+    return std::make_unique<Ui::RpWindow>();
+}
+
 } // namespace
 
 NativeShell::NativeShell()
-: window_(std::make_unique<Ui::RpWindow>()) {
+: window_(make_native_window()) {
     window_->setObjectName("lingtai_desktop_window");
     window_->setTitle(QStringLiteral("LingTai Desktop"));
     window_->setWindowTitle(QStringLiteral("LingTai Desktop"));
@@ -208,57 +209,34 @@ NativeShell::NativeShell()
     shell_layout->setContentsMargins(0, 0, 0, 0);
     shell_layout->setSpacing(0);
 
-    auto *sidebar = new Ui::RpWidget(body);
-    sidebar->setObjectName("lingtai_desktop_sidebar");
-    sidebar->setAccessibleName(QStringLiteral("Workspace navigation"));
-    sidebar->setFixedWidth(kSidebarWidth);
-    shell_layout->addWidget(sidebar);
-
-    auto *sidebar_layout = new QVBoxLayout(sidebar);
-    sidebar_layout->setContentsMargins(28, 34, 28, 30);
-    sidebar_layout->setSpacing(10);
-    auto *brand = make_label(
-        sidebar,
-        QStringLiteral("LingTai"),
-        "lingtai_sidebar_brand",
-        20,
-        QFont::DemiBold);
-    auto *section = make_label(
-        sidebar,
-        QStringLiteral("Workspace"),
-        "lingtai_sidebar_workspace_label",
-        11,
-        QFont::Medium);
-    section->setAccessibleDescription(QStringLiteral(
-        "Project and Agent navigation will appear here after a project opens."));
-    sidebar_layout->addWidget(brand);
-    sidebar_layout->addSpacing(26);
-    sidebar_layout->addWidget(section);
-    sidebar_layout->addStretch();
-
-    auto *open_button = new QPushButton(
-        QStringLiteral("Open Project…"), sidebar);
-    open_button->setObjectName("lingtai_open_project_button");
-    open_button->setAccessibleName(QStringLiteral("Open Project"));
-    open_button->setAccessibleDescription(QStringLiteral(
-        "Request a project location. No project is changed by this request."));
-    open_button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    QObject::connect(open_button, &QPushButton::clicked, [this] {
-        request_open_project();
+    // The persistent left 260px project/Agent list column: project identity
+    // header, compact Open/New Project actions, and the scrollable Agent
+    // rows. The shell wires the owner's row clicks and its action buttons.
+    agent_roster_ = new AgentRoster(body);
+    agent_roster_->set_row_click_handler([this](const fs::path &key) {
+        handle_agent_selection(key);
     });
-    auto *new_button = new QPushButton(
-        QStringLiteral("New Project…"), sidebar);
-    new_button->setObjectName("lingtai_new_project_button");
-    new_button->setAccessibleName(QStringLiteral("New Project"));
-    new_button->setAccessibleDescription(QStringLiteral(
-        "Creates a new LingTai project and its first Agent through the "
-        "canonical TUI, then starts that Agent."));
-    new_button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    QObject::connect(new_button, &QPushButton::clicked, [this] {
-        request_new_project();
-    });
-    sidebar_layout->addWidget(open_button);
-    sidebar_layout->addWidget(new_button);
+    if (auto *open_button = agent_roster_->findChild<QPushButton *>(
+            "lingtai_open_project_button")) {
+        QObject::connect(open_button, &QPushButton::clicked, [this] {
+            request_open_project();
+        });
+    }
+    if (auto *new_button = agent_roster_->findChild<QPushButton *>(
+            "lingtai_new_project_button")) {
+        QObject::connect(new_button, &QPushButton::clicked, [this] {
+            request_new_project();
+        });
+    }
+    shell_layout->addWidget(agent_roster_);
+
+    // One thin lib_ui shadow separates the persistent list column from the
+    // selected-content pane, matching the pinned shell's between-column
+    // `_sideShadow` geometry.
+    auto *separator = new Ui::PlainShadow(body);
+    separator->setObjectName("lingtai_roster_separator");
+    separator->setAccessibleName(QStringLiteral("Project list divider"));
+    shell_layout->addWidget(separator);
 
     auto *content = new Ui::RpWidget(body);
     content->setObjectName("lingtai_desktop_content");
@@ -267,7 +245,7 @@ NativeShell::NativeShell()
     shell_layout->addWidget(content, 1);
 
     auto *content_layout = new QVBoxLayout(content);
-    content_layout->setContentsMargins(52, 44, 52, 44);
+    content_layout->setContentsMargins(24, 24, 24, 24);
     content_layout->setSpacing(8);
     auto *title = make_label(
         content,
@@ -363,8 +341,6 @@ NativeShell::NativeShell()
         "lingtai_project_route_heading",
         18,
         QFont::DemiBold));
-    project_layout->addWidget(make_label(
-        project_route_, QString(), "lingtai_project_root", 11));
     auto *selection_error = make_label(
         project_route_, QString(), "lingtai_agent_selection_error", 11,
         QFont::Medium);
@@ -379,35 +355,6 @@ NativeShell::NativeShell()
     project_layout->addWidget(directory, 1);
     auto *directory_layout = new QHBoxLayout(directory);
     directory_layout->setContentsMargins(0, 12, 0, 0);
-    directory_layout->setSpacing(20);
-
-    auto *roster = new Ui::RpWidget(directory);
-    roster->setObjectName("lingtai_agent_roster");
-    roster->setAccessibleName(QStringLiteral("Agent roster"));
-    roster->setMinimumWidth(180);
-    directory_layout->addWidget(roster, 1);
-    auto *roster_layout = new QVBoxLayout(roster);
-    roster_layout->setContentsMargins(0, 0, 0, 0);
-    roster_layout->setSpacing(8);
-    roster_layout->addWidget(make_label(
-        roster, QStringLiteral("Agents"), "lingtai_agent_roster_heading", 14,
-        QFont::DemiBold));
-    auto *roster_state = make_label(
-        roster, QString(), "lingtai_agent_roster_state", 10);
-    roster_state->setAccessibleName(QStringLiteral("Agent roster status"));
-    roster_layout->addWidget(roster_state);
-    auto *roster_scroll = new QScrollArea(roster);
-    roster_scroll->setObjectName("lingtai_agent_roster_scroll");
-    roster_scroll->setAccessibleName(QStringLiteral("Agent roster rows"));
-    roster_scroll->setWidgetResizable(true);
-    roster_layout->addWidget(roster_scroll, 1);
-    roster_rows_ = new Ui::RpWidget(roster_scroll);
-    roster_rows_->setObjectName("lingtai_agent_roster_rows");
-    roster_rows_->setAccessibleName(QStringLiteral("Agent roster rows"));
-    auto *rows_layout = new QVBoxLayout(roster_rows_);
-    rows_layout->setContentsMargins(0, 0, 0, 0);
-    rows_layout->setSpacing(6);
-    roster_scroll->setWidget(roster_rows_);
 
     // The detail column carries more evidence than any window is tall, so it
     // scrolls like the roster instead of overflowing and overpainting itself.
@@ -415,7 +362,7 @@ NativeShell::NativeShell()
     detail_scroll->setObjectName("lingtai_agent_detail_scroll");
     detail_scroll->setAccessibleName(QStringLiteral("Selected Agent detail"));
     detail_scroll->setWidgetResizable(true);
-    directory_layout->addWidget(detail_scroll, 2);
+    directory_layout->addWidget(detail_scroll, 1);
     auto *detail = new Ui::RpWidget(detail_scroll);
     detail->setObjectName("lingtai_agent_detail");
     detail->setAccessibleName(QStringLiteral("Selected Agent detail"));
@@ -1121,14 +1068,16 @@ const WorkspaceSelectionState &NativeShell::selection_state() const noexcept {
 }
 
 bool NativeShell::smoke_ready() const noexcept {
-    const auto *sidebar = window_->findChild<Ui::RpWidget *>(
-        "lingtai_desktop_sidebar");
     const auto *content = window_->findChild<Ui::RpWidget *>(
         "lingtai_desktop_content");
+    const auto *separator = window_->findChild<Ui::RpWidget *>(
+        "lingtai_roster_separator");
     return window_->objectName() == "lingtai_desktop_window"
         && window_->body().get()->objectName() == "lingtai_desktop_body"
-        && sidebar && sidebar->objectName() == "lingtai_desktop_sidebar"
+        && agent_roster_ && agent_roster_->objectName()
+            == "lingtai_desktop_sidebar"
         && content && content->objectName() == "lingtai_desktop_content"
+        && separator && separator->objectName() == "lingtai_roster_separator"
         && empty_route_->isVisible()
         && window_->testAttribute(Qt::WA_DontShowOnScreen)
         && window_->isVisible();
@@ -1142,7 +1091,6 @@ void NativeShell::request_open_project() {
 }
 
 void NativeShell::render_roster() {
-    auto *state = window_->findChild<QLabel *>("lingtai_agent_roster_state");
     auto *selected_key = window_->findChild<QLabel *>(
         "lingtai_selected_agent_key");
     auto *presentation_name = window_->findChild<QLabel *>(
@@ -1159,60 +1107,28 @@ void NativeShell::render_roster() {
         "lingtai_selected_agent_status_context");
     auto *selected_facts = window_->findChild<QLabel *>(
         "lingtai_selected_agent_facts");
-    if (!state || !selected_key || !presentation_name || !manifest_identity
+    if (!selected_key || !presentation_name || !manifest_identity
         || !manifest_llm || !manifest_capabilities || !status_activity
         || !status_context || !selected_facts) {
         return;
     }
 
-    // roster_rows_ and its layout are stored pointers the constructor always
-    // sets before render_roster() can run, so no null/no-layout branch is
-    // real here; unlike the findChild lookups above, this is not speculative.
-    auto *layout = roster_rows_->layout();
-    while (auto *child = layout->takeAt(0)) {
-        delete child->widget();
-        delete child;
-    }
-
-    state->setText(agents_.scan != AgentScanState::complete
-        ? QStringLiteral("Roster unavailable")
-        : agents_.items.empty()
-            ? QStringLiteral("No Agents found — scan complete")
-            : QStringLiteral("%1 Agent(s) — scan complete")
-                .arg(agents_.items.size()));
+    // The persistent left column owns the roster rows and their state label;
+    // it rebuilds its row tree only when the visible model actually changed,
+    // so an unchanged one-second projection refresh keeps scroll, focus, and
+    // row identity intact.
+    agent_roster_->set_rows(
+        agents_, selection_state_.selected_agent_directory_key());
 
     const auto selected = selection_state_.selected_agent_directory_key();
     const AgentRow *detail_item = nullptr;
-    for (auto index = std::size_t{0}; index != agents_.items.size(); ++index) {
-        const auto &item = agents_.items[index];
-        const auto facts = QStringLiteral("%1 — %2 — %3")
-            .arg(manifest_text(item.manifest_kind), role_text(item.role),
-                presence_text(item.presence));
-        auto button_key = path_text(item.directory_key);
-        button_key.replace(QLatin1Char('&'), QStringLiteral("&&"));
-        auto *row = new QPushButton(
-            QStringLiteral("%1\n%2\nmanifest diagnostic: %3")
-                .arg(button_key, facts,
-                    manifest_diagnostic_text(item.manifest_diagnostic)),
-            roster_rows_);
-        row->setObjectName(
-            QStringLiteral("lingtai_agent_row_%1").arg(index));
-        row->setAccessibleName(
-            QStringLiteral("Agent %1").arg(path_text(item.directory_key)));
-        row->setAccessibleDescription(facts);
-        row->setProperty("directory_key", path_text(item.directory_key));
-        row->setCheckable(true);
-        row->setChecked(selected && *selected == item.directory_key);
-        row->setEnabled(item.manifest_kind == AgentManifestKind::valid);
-        row->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        const auto key = item.directory_key;
-        QObject::connect(row, &QPushButton::clicked, [this, key] {
-            handle_agent_selection(key);
-        });
-        layout->addWidget(row);
-        if (row->isChecked()) detail_item = &item;
+    for (const auto &item : agents_.items) {
+        if (selected && *selected == item.directory_key
+            && item.manifest_kind == AgentManifestKind::valid) {
+            detail_item = &item;
+            break;
+        }
     }
-    if (auto *box = qobject_cast<QBoxLayout *>(layout)) box->addStretch();
 
     if (!detail_item) {
         selected_key->setText(QStringLiteral("No Agent selected"));

@@ -10,6 +10,7 @@ scripts/smoke.py                       bounded explicit native-shell smoke runne
 src/main.cpp                           persistent app entry + explicit smoke exit
 src/crl_integration.cpp                minimal parent `crl` update-stream integration
 src/native_shell.{h,cpp}               native project/Agent roster selection route owner
+src/ui/agent_roster.{h,cpp}            persistent 260px project/Agent list column owner
 src/project_attachment.{h,cpp}         Qt-independent project-root containment seam
 src/workspace_selection.{h,cpp}        pure Desktop-owned workspace selection state
 src/posix_descriptor_primitives.{h,cpp} internal descriptor/no-follow primitives
@@ -59,8 +60,15 @@ The smoke links the native shell with `desktop-app::lib_ui`.
 producer the smoke needs; it is owned LingTai glue, not a Telegram model.
 
 The `lingtai_desktop_native_shell` library owns one real `Ui::RpWindow`, uses
-its real `Ui::RpWidget` body, and composes a bounded sidebar with a flexible
-content region using native widget layouts. It holds one
+its real `Ui::RpWidget` body, and composes a persistent 260px project/Agent
+list column beside a flexible content region using native widget layouts.
+The left column is owned by one `AgentRoster` widget (`src/ui/agent_roster`)
+that composes the project identity header, the compact Open/New Project
+actions, and the scrollable Agent rows using the already-linked lib_ui
+primitives; it rebuilds its row tree only when the visible model changes, so
+an unchanged one-second projection refresh preserves selection, scroll, and
+focus. A `Ui::PlainShadow` separates the list column from the content pane.
+It holds one
 `WorkspaceSelectionState`; the visible empty/project routes are derived from
 that C1 model. Its Qt-free open seam accepts an explicit selected directory and
 an optional project-relative Agent directory. It activates C1 only after safe

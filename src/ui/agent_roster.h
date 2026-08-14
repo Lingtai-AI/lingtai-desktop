@@ -1,0 +1,52 @@
+#pragma once
+
+#include "agent_projection.h"
+#include "ui/rp_widget.h"
+
+#include <filesystem>
+#include <functional>
+#include <optional>
+
+class QLabel;
+class QScrollArea;
+class QVBoxLayout;
+
+namespace lingtai::desktop {
+
+// The persistent 260px left project/Agent list column. It owns the project
+// identity header, the compact Open/New Project actions, and the scrollable
+// Agent rows; the selected-content pane lives outside this owner. Rows are a
+// fixed 62px with 10px/8px framing and show one primary name line plus one
+// compact manifest/role/presence state line, painted from the shared lib_ui
+// palette (`dialogsBgActive` selected, `dialogsBgOver` hover/pressed).
+//
+// `set_rows` rebuilds the row tree only when the visible row set actually
+// changed; an unchanged projection refresh only updates checked state, so
+// scroll, focus, and row identity survive the shell's one-second refresh.
+class AgentRoster final : public Ui::RpWidget {
+public:
+    using RowClickHandler = std::function<void(const std::filesystem::path &)>;
+
+    explicit AgentRoster(QWidget *parent);
+    ~AgentRoster() override;
+
+    AgentRoster(const AgentRoster &) = delete;
+    AgentRoster &operator=(const AgentRoster &) = delete;
+
+    void set_rows(const AgentSnapshot &snapshot,
+        const std::optional<std::filesystem::path> &selected_key);
+    void set_row_click_handler(RowClickHandler handler);
+
+private:
+    void update_state_label(const AgentSnapshot &snapshot);
+    void update_checked_states(
+        const std::optional<std::filesystem::path> &selected_key);
+
+    RowClickHandler row_click_handler_;
+    QLabel *roster_state_ = nullptr;
+    QScrollArea *scroll_ = nullptr;
+    QVBoxLayout *rows_layout_ = nullptr;
+    AgentSnapshot visible_snapshot_;
+};
+
+} // namespace lingtai::desktop

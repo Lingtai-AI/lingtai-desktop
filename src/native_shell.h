@@ -5,6 +5,7 @@
 #include "agent_sleep.h"
 #include "agent_task_card.h"
 #include "project_bootstrap.h"
+#include "ui/agent_roster.h"
 #include "workspace_selection.h"
 
 #include <chrono>
@@ -127,10 +128,13 @@ private:
 
     WorkspaceSelectionState selection_state_;
     std::unique_ptr<Ui::RpWindow> window_;
+    // The persistent left 260px project/Agent list column. It owns the
+    // project identity header, the compact Open/New Project actions, and the
+    // Agent rows; the shell wires its row clicks and the action buttons.
+    AgentRoster *agent_roster_ = nullptr;
     Ui::RpWidget *empty_route_ = nullptr;
     Ui::RpWidget *project_route_ = nullptr;
     Ui::RpWidget *open_error_surface_ = nullptr;
-    Ui::RpWidget *roster_rows_ = nullptr;
     AgentSnapshot agents_;
     OpenProjectRequestHandler open_project_request_handler_;
     std::filesystem::path agent_start_fallback_python_;

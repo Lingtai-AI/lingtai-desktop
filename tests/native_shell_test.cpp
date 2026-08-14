@@ -2,6 +2,7 @@
 
 #include "ui/rp_widget.h"
 #include "ui/widgets/rp_window.h"
+#include "ui/widgets/shadow.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QString>
@@ -18,6 +19,7 @@
 #include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QProgressBar>
 #include <QtWidgets/QPushButton>
+#include <QtWidgets/QScrollArea>
 #include <QtWidgets/QScrollBar>
 
 #include <algorithm>
@@ -430,7 +432,8 @@ void verify_open_project_behavior(
                 QStringLiteral("AB-agent\n"))
             && ampersand_row->text() != plain_neighbor_row->text(),
         "ampersand and plain neighboring Agent rows must remain distinguishable");
-    require(agent_row(window, "malformed")->text().contains("invalid JSON"),
+    require(agent_row(window, "malformed")->accessibleDescription()
+                .contains("invalid JSON"),
         "a malformed row must expose its typed repair diagnostic");
     const auto roster_status = label_text(window, "lingtai_agent_roster_state");
     require(roster_status.contains("scan complete"),
@@ -2172,7 +2175,7 @@ void verify_layout(lingtai::desktop::NativeShell &shell) {
     const auto narrow_content_width = content->width();
     require(window.width() >= 720 && window.height() >= 480,
         "window must honor its minimum size");
-    require(sidebar->width() == 264,
+    require(sidebar->width() == 260,
         "sidebar must remain bounded");
     require(sidebar->height() == content->height()
             && sidebar->height() == body->height(),
@@ -2182,13 +2185,128 @@ void verify_layout(lingtai::desktop::NativeShell &shell) {
 
     window.resize(1200, 800);
     QCoreApplication::processEvents();
-    require(sidebar->width() == 264,
+    require(sidebar->width() == 260,
         "sidebar width must stay bounded after resize");
     require(content->width() > narrow_content_width,
         "content region must absorb added window width");
     require(sidebar->height() == content->height()
             && sidebar->height() == body->height(),
         "both regions must continue filling the resized body");
+}
+
+// The Commit-24 shell slice: one persistent 260px left project/Agent list
+// column replaces the action-only rail and the nested roster route. The
+// roster is the left column's own content (never a second list inside the
+// right content route), its rows are a fixed 62px with one primary name line
+// plus one compact secondary/state line, a plain-shadow separator divides
+// list from content, the compact project actions stay reachable, selection
+// still drives the same right detail, and an unchanged projection refresh
+// must not rebuild the row tree so selection/focus/scroll survive.
+void verify_persistent_roster_shell(
+        lingtai::desktop::NativeShell &shell,
+        const fs::path &sandbox) {
+    auto &window = shell.window();
+    auto *sidebar = required_child<Ui::RpWidget>(
+        window, "lingtai_desktop_sidebar");
+    auto *content = required_child<Ui::RpWidget>(
+        window, "lingtai_desktop_content");
+    auto *open_button = required_child<QPushButton>(
+        window, "lingtai_open_project_button");
+    auto *new_button = required_child<QPushButton>(
+        window, "lingtai_new_project_button");
+
+    // Compact project actions must be reachable even before any project opens.
+    require(open_button->isVisible() && new_button->isVisible(),
+        "compact project actions must be reachable in the left column");
+
+    const auto project = sandbox / "project";
+    write_file(project / ".lingtai/alpha/.agent.json", R"({"admin":{}})");
+    write_file(project / ".lingtai/beta/.agent.json", R"({"admin":{}})");
+    for (auto index = 0; index != 12; ++index) {
+        write_file(project / ".lingtai"
+                / ("z-extra-" + std::to_string(index)) / ".agent.json",
+            R"({"admin":{}})");
+    }
+    const auto fixture_before = tree_snapshot(project);
+    const auto outcome = shell.open_project(project, std::nullopt);
+    require(tree_snapshot(project) == fixture_before,
+        "opening the roster-shell fixture must remain read-only");
+    require(outcome.disposition == ProjectOpenDisposition::opened,
+        "the roster-shell fixture project must open");
+
+    // The persistent left list column is exactly 260px wide when a project is
+    // open, and fills the body height.
+    require(sidebar->width() == 260,
+        "the persistent left list column must be 260px wide");
+    require(sidebar->height() == content->height(),
+        "the persistent left column must fill the body height");
+
+    // The roster is the left column's own content, never a second nested list
+    // inside the right content route.
+    require(content->findChild<Ui::RpWidget *>("lingtai_agent_roster") == nullptr,
+        "the Agent roster must not be nested inside the right content route");
+    auto *roster = required_child<Ui::RpWidget>(window, "lingtai_agent_roster");
+    require(sidebar->findChild<Ui::RpWidget *>("lingtai_agent_roster") == roster,
+        "the Agent roster must be a child of the persistent left column");
+
+    // A plain-shadow separator divides the list column from the content pane.
+    auto *separator_widget = required_child<Ui::RpWidget>(
+        window, "lingtai_roster_separator");
+    auto *separator = dynamic_cast<Ui::PlainShadow *>(separator_widget);
+    require(separator != nullptr,
+        "the left/right separator must be a Ui::PlainShadow");
+    require(separator->isVisible(), "the left/right separator must be visible");
+    require(separator->geometry().left() >= sidebar->geometry().right() - 1
+            && separator->geometry().left() <= content->geometry().left(),
+        "the separator must sit between the left column and the content pane");
+
+    // Rows: a fixed 62px tall, with exactly one primary name line plus one
+    // compact secondary/state line.
+    auto *row = agent_row(window, "alpha");
+    require(row->minimumHeight() == 62 && row->maximumHeight() == 62,
+        "Agent rows must be a fixed 62px tall");
+    require(row->text().split(QLatin1Char('\n')).size() == 2,
+        "each Agent row must show one primary name line plus one compact "
+        "secondary/state line");
+
+    // Agent selection still drives the same right detail.
+    click_agent(window, "alpha");
+    require(shell.selection_state().selected_agent_directory_key()
+                == std::optional<fs::path>("alpha")
+            && row->isChecked()
+            && label_text(window, "lingtai_selected_agent_key") == "alpha",
+        "Agent selection must still drive the same right detail");
+
+    // An unchanged projection refresh must not rebuild the row tree, so the
+    // selected row keeps its identity, selected state, scroll, and focus.
+    auto *row_before = agent_row(window, "alpha");
+    auto *scroll = required_child<QScrollArea>(
+        window, "lingtai_agent_roster_scroll");
+    QCoreApplication::processEvents();
+    auto *scroll_bar = scroll->verticalScrollBar();
+    require(row_before->focusPolicy() == Qt::StrongFocus,
+        "the selected row must remain keyboard-focusable");
+    require(scroll_bar->maximum() > 0,
+        "the tall roster must expose a nonzero scroll range");
+    scroll_bar->setValue(scroll_bar->maximum());
+    const auto scroll_before = scroll_bar->value();
+
+    const auto refreshed = shell.open_project(project, std::nullopt);
+    QCoreApplication::processEvents();
+    require(refreshed.disposition == ProjectOpenDisposition::opened
+            && agent_row(window, "alpha") == row_before
+            && row_before->isChecked()
+            && row_before->focusPolicy() == Qt::StrongFocus,
+        "an unchanged projection refresh must preserve the selected row's "
+        "identity, selected state, and focus eligibility");
+    require(scroll_bar->value() == scroll_before,
+        "an unchanged projection refresh must preserve roster scroll");
+    require(tree_snapshot(project) == fixture_before,
+        "the unchanged refresh must remain read-only");
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "roster-shell fixtures must be removed");
 }
 
 } // namespace
@@ -2211,6 +2329,8 @@ int main(int argc, char **argv) {
         shell.show_offscreen();
         QCoreApplication::processEvents();
         verify_semantics_and_request(shell, project_root);
+        verify_persistent_roster_shell(
+            shell, project_root / "commit-24-roster-shell-fixture");
         verify_first_project_bootstrap(
             shell, project_root / "commit-22-bootstrap-fixture");
         verify_open_project_behavior(

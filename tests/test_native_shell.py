@@ -51,6 +51,8 @@ class NativeShellProcessTest(unittest.TestCase):
         self.assertIn("body=lingtai_desktop_body", marker_lines[0])
         self.assertIn("sidebar=lingtai_desktop_sidebar", marker_lines[0])
         self.assertIn("content=lingtai_desktop_content", marker_lines[0])
+        self.assertIn("separator=lingtai_roster_separator", marker_lines[0])
+        self.assertIn("roster=lingtai_agent_roster", marker_lines[0])
         self.assertIn("empty=visible", marker_lines[0])
         self.assertIn("offscreen=true", marker_lines[0])
         self.assertIn("shown=true", marker_lines[0])

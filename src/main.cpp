@@ -68,6 +68,8 @@ int main(int argc, char **argv) {
                 << " body=lingtai_desktop_body"
                 << " sidebar=lingtai_desktop_sidebar"
                 << " content=lingtai_desktop_content"
+                << " separator=lingtai_roster_separator"
+                << " roster=lingtai_agent_roster"
                 << " empty=visible"
                 << " offscreen=true"
                 << " shown=true"
