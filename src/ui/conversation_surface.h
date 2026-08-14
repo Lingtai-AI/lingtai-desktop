@@ -2,21 +2,25 @@
 
 #include "direct_conversation_history.h"
 
-#include <QtWidgets/QPlainTextEdit>
+#include <QtWidgets/QTextEdit>
 
 #include <cstddef>
 #include <string>
 #include <vector>
 
+class QPaintEvent;
+class QResizeEvent;
+
 namespace lingtai::desktop {
 
 // One LingTai-owned, read-only, text-selectable conversation surface for the
-// selected Agent. It stays a plain QPlainTextEdit so the inherited selection,
-// copy, and accessibility behavior is preserved; the visible conversation is
-// rebuilt programmatically with QTextCursor/QTextBlockFormat/QTextCharFormat
-// blocks (incoming left / outgoing right, with the shared palette's distinct
-// bubble backgrounds) from the existing direct-conversation rows.
-class ConversationSurface final : public QPlainTextEdit {
+// selected Agent. It stays a plain QTextEdit so the inherited selection, copy,
+// and accessibility behavior is preserved; the visible conversation is rebuilt
+// programmatically with QTextCursor/QTextBlockFormat/QTextCharFormat blocks
+// (one message per block, incoming left / outgoing right, with the shared
+// palette's distinct rounded bubble backgrounds painted behind the text) from
+// the existing direct-conversation rows.
+class ConversationSurface final : public QTextEdit {
     Q_OBJECT
 public:
     explicit ConversationSurface(QWidget *parent = nullptr);
@@ -32,6 +36,13 @@ public:
     // One plain centered state for the selection/no-route/empty cases.
     void set_plain_state(const QString &text);
 
+protected:
+    // Fills the viewport with the chat backdrop, paints the rounded message
+    // bubbles behind the text, then lets the document layout draw the text.
+    void paintEvent(QPaintEvent *event) override;
+    // Recomputes the viewport-bounded message width and reflows the document.
+    void resizeEvent(QResizeEvent *event) override;
+
 private:
     void rebuild_document(
         const std::vector<DirectConversationMessage> &messages);
@@ -41,6 +52,7 @@ private:
     QString them_;
     std::vector<DirectConversationMessage> last_messages_;
     QString last_plain_state_;
+    int message_cap_width_ = 0;
 };
 
 } // namespace lingtai::desktop

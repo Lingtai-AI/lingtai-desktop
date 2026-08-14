@@ -1,5 +1,6 @@
 #include "native_shell.h"
 
+#include "styles/palette.h"
 #include "ui/rp_widget.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/fields/input_field.h"
@@ -12,8 +13,10 @@
 #include <QtCore/QThread>
 #include <QtGui/QColor>
 #include <QtGui/QFont>
+#include <QtGui/QImage>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QPalette>
+#include <QtGui/QPixmap>
 #include <QtGui/QTextBlock>
 #include <QtGui/QTextCursor>
 #include <QtGui/QTextDocument>
@@ -29,6 +32,7 @@
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QScrollBar>
+#include <QtWidgets/QTextEdit>
 
 #include <algorithm>
 #include <chrono>
@@ -823,7 +827,7 @@ void verify_selected_agent_conversation(
     auto &window = shell.window();
     auto *heading = required_child<QLabel>(
         window, "lingtai_selected_agent_conversation_heading");
-    auto *surface = required_child<QPlainTextEdit>(
+    auto *surface = required_child<QTextEdit>(
         window, "lingtai_selected_agent_conversation");
     auto *state = required_child<QLabel>(
         window, "lingtai_selected_agent_conversation_state");
@@ -921,8 +925,10 @@ void verify_selected_agent_conversation(
 
     // The real QTextDocument must expose the two directions as distinct
     // message blocks: the incoming row under its sender header and the
-    // outgoing row under the "You" header, oppositely aligned with distinct
-    // real backgrounds.
+    // outgoing row under the "You" header, oppositely aligned. Distinct real
+    // bubble backgrounds are Commit31's own rounded viewport painting and are
+    // already proven by the black-box rendered-pixel coverage in
+    // verify_telegram_theme_reset, so only the alignment is asserted here.
     auto incoming_block = QTextBlock();
     auto outgoing_block = QTextBlock();
     for (auto block = surface->document()->begin();
@@ -943,12 +949,6 @@ void verify_selected_agent_conversation(
             || (incoming_alignment == Qt::AlignRight
                 && outgoing_alignment == Qt::AlignLeft),
         "incoming and outgoing message blocks must be oppositely aligned");
-    const auto incoming_background = incoming_block.blockFormat().background();
-    const auto outgoing_background = outgoing_block.blockFormat().background();
-    require(incoming_background.style() != Qt::NoBrush
-            && outgoing_background.style() != Qt::NoBrush
-            && incoming_background.color() != outgoing_background.color(),
-        "incoming and outgoing message blocks must have distinct real backgrounds");
 
     require(tree_snapshot(project) == fixture_before,
         "opening and selecting the first Agent must never write to the project");
@@ -1090,7 +1090,7 @@ void verify_composer_send_behavior(
         lingtai::desktop::NativeShell &shell,
         const fs::path &sandbox) {
     auto &window = shell.window();
-    auto *surface = required_child<QPlainTextEdit>(
+    auto *surface = required_child<QTextEdit>(
         window, "lingtai_selected_agent_conversation");
     auto *input = static_cast<Ui::InputField *>(
         required_child<QObject>(window, "lingtai_composer_input"));
@@ -1264,7 +1264,7 @@ void verify_agent_activity_panel(
             && !heading->accessibleName().isEmpty()
             && !state->accessibleName().isEmpty(),
         "the Activity surface must be accessible");
-    require(surface->objectName() != required_child<QPlainTextEdit>(
+    require(surface->objectName() != required_child<QTextEdit>(
                 window, "lingtai_selected_agent_conversation")->objectName(),
         "Activity must be a distinct surface from the mailbox conversation");
 
@@ -2331,7 +2331,7 @@ void verify_layout(
         window, "lingtai_roster_separator");
     auto *detail = required_child<Ui::RpWidget>(
         window, "lingtai_agent_detail");
-    auto *back_button = required_ui_child<Ui::RoundButton>(
+    auto *back_button = required_child<QPushButton>(
         window, "lingtai_agent_detail_back");
     auto *composer = static_cast<Ui::InputField *>(
         required_child<QObject>(window, "lingtai_composer_input"));
@@ -2356,13 +2356,15 @@ void verify_layout(
     require(tree_snapshot(project) == fixture_before,
         "opening the responsive fixture must remain read-only");
 
-    // Wide: both surfaces visible, Back hidden, roster 260, detail >= 380.
+    // Wide: both surfaces visible, Back hidden, roster responsive past its
+    // 260px minimum, detail >= 380.
     require(sidebar->isVisible() && content->isVisible(),
         "a wide window must show roster and detail together");
     require(!back_button->isVisible(),
         "Back must stay hidden in wide two-column mode");
-    require(sidebar->width() == 260,
-        "wide mode must keep the roster at the source-backed 260px");
+    require(sidebar->width() >= 260,
+        "wide mode must keep the roster at or beyond the source-backed "
+        "260px minimum");
     require(detail->width() >= 380,
         "wide mode must keep the detail column at least 380px");
 
@@ -2405,9 +2407,9 @@ void verify_layout(
             && sidebar->isVisible() && content->isVisible()
             && !back_button->isVisible(),
         "widening must show both surfaces and keep the selected Agent");
-    require(sidebar->width() == 260 && detail->width() >= 380,
-        "wide mode must keep roster 260 and detail at least 380 after "
-        "narrowing");
+    require(sidebar->width() >= 260 && detail->width() >= 380,
+        "wide mode must keep roster past its 260 minimum and detail at "
+        "least 380 after narrowing");
 
     window.resize(380, 480);
     QCoreApplication::processEvents();
@@ -2416,7 +2418,7 @@ void verify_layout(
         "narrowing with an active selected Agent must keep the detail");
 
     // Back returns to the roster and focuses a usable row.
-    back_button->clicked(Qt::NoModifier, Qt::LeftButton);
+    back_button->click();
     QCoreApplication::processEvents();
     require(!shell.selection_state().selected_agent_directory_key(),
         "Back must clear the narrow-window selection");
@@ -2427,16 +2429,16 @@ void verify_layout(
     require(focus && qobject_cast<QPushButton *>(focus),
         "Back must return keyboard focus to a usable roster row");
 
-    // Widen once more: both surfaces return, Back hides, roster 260 and
-    // detail at least 380.
+    // Widen once more: both surfaces return, Back hides, roster responsive
+    // past its minimum and detail at least 380.
     window.resize(1200, 800);
     QCoreApplication::processEvents();
     require(sidebar->isVisible() && content->isVisible(),
         "a wide window must show roster and detail together after narrow");
     require(!back_button->isVisible(),
         "Back must stay hidden in wide two-column mode");
-    require(sidebar->width() == 260,
-        "wide roster must be exactly 260px after narrow");
+    require(sidebar->width() >= 260,
+        "wide roster must stay at or beyond 260px after narrow");
     require(detail->width() >= 380,
         "wide detail must stay at least 380px after narrow");
 
@@ -2445,14 +2447,15 @@ void verify_layout(
     require(!cleanup_error, "responsive fixtures must be removed");
 }
 
-// The Commit-24 shell slice: one persistent 260px left project/Agent list
-// column replaces the action-only rail and the nested roster route. The
-// roster is the left column's own content (never a second list inside the
-// right content route), its rows are a fixed 62px with one primary name line
-// plus one compact secondary/state line, a plain-shadow separator divides
-// list from content, the compact project actions stay reachable, selection
-// still drives the same right detail, and an unchanged projection refresh
-// must not rebuild the row tree so selection/focus/scroll survive.
+// The Commit-24 shell slice: one persistent left project/Agent list column
+// (responsive from a 260px minimum) replaces the action-only rail and the
+// nested roster route. The roster is the left column's own content (never a
+// second list inside the right content route), its rows are a fixed 62px with
+// one primary name line plus one compact secondary/state line, a plain-shadow
+// separator divides list from content, the compact project actions stay
+// reachable, selection still drives the same right detail, and an unchanged
+// projection refresh must not rebuild the row tree so selection/focus/scroll
+// survive.
 void verify_persistent_roster_shell(
         lingtai::desktop::NativeShell &shell,
         const fs::path &sandbox) {
@@ -2485,10 +2488,10 @@ void verify_persistent_roster_shell(
     require(outcome.disposition == ProjectOpenDisposition::opened,
         "the roster-shell fixture project must open");
 
-    // The persistent left list column is exactly 260px wide when a project is
-    // open, and fills the body height.
-    require(sidebar->width() == 260,
-        "the persistent left list column must be 260px wide");
+    // The persistent left list column is responsive at or beyond its 260px
+    // minimum when a project is open, and fills the body height.
+    require(sidebar->width() >= 260,
+        "the persistent left list column must keep its 260px minimum");
     require(sidebar->height() == content->height(),
         "the persistent left column must fill the body height");
 
@@ -2707,6 +2710,277 @@ void verify_selected_agent_dashboard_layout(
     require(!cleanup_error, "dashboard fixtures must be removed");
 }
 
+// The Commit-31 cut: one coherent Telegram-family theme/layout reset for the
+// normal-width chats shell. A wide window must give the dialog list a
+// source-backed responsive width beyond its 260px minimum, all major surfaces
+// and the selected row must be owned by the shared lib_ui palette (not raw
+// white Qt surfaces), the selected-Agent detail must be chat-first -- the
+// conversation dominates while Activity / Task Card / Presets sit behind one
+// compact secondary page navigation so only one content surface shows at a
+// time -- the conversation must be a real bubble surface with a lib_ui-owned
+// composer at the bottom, and every existing object/accessibility anchor must
+// survive the reset.
+void verify_telegram_theme_reset(
+        lingtai::desktop::NativeShell &shell,
+        const fs::path &sandbox) {
+    auto &window = shell.window();
+    auto *sidebar = required_child<Ui::RpWidget>(
+        window, "lingtai_desktop_sidebar");
+    auto *content = required_child<Ui::RpWidget>(
+        window, "lingtai_desktop_content");
+    auto *conversation_heading = required_child<QLabel>(
+        window, "lingtai_selected_agent_conversation_heading");
+    auto *conversation = required_child<QTextEdit>(
+        window, "lingtai_selected_agent_conversation");
+    auto *conversation_state = required_child<QLabel>(
+        window, "lingtai_selected_agent_conversation_state");
+    auto *composer_input = required_ui_child<Ui::InputField>(
+        window, "lingtai_composer_input");
+    auto *send_button = required_ui_child<Ui::RoundButton>(
+        window, "lingtai_composer_send_button");
+    auto *activity_owner = required_child<Ui::RpWidget>(
+        window, "lingtai_selected_agent_activity_section");
+    auto *task_card_owner = required_child<Ui::RpWidget>(
+        window, "lingtai_selected_agent_task_card_section");
+    auto *preset_owner = required_child<Ui::RpWidget>(
+        window, "lingtai_selected_agent_preset_summary_section");
+
+    const auto project = sandbox / "project";
+    const auto mailbox = project / ".lingtai" / "human" / "mailbox";
+    write_file(project / ".lingtai/human/.agent.json",
+        R"({"agent_id":"20260101-000000-h001","agent_name":"Ted",)"
+        R"("address":"human","state":"active"})");
+    write_file(project / ".lingtai/alpha/.agent.json",
+        R"({"admin":{},"agent_id":"20260712-191609-a001",)"
+        R"("agent_name":"alpha","address":"alpha","state":"active"})");
+    write_file(mailbox / "inbox" / "20260807T184852-0d13" / "message.json",
+        conversation_envelope("alpha", "human", "Slice done",
+            "PR published, not merged.", "received_at",
+            "2026-08-07T18:48:52Z"));
+    write_file(mailbox / "sent" / "20260807T190000-aa01" / "message.json",
+        conversation_envelope("human", "alpha", "Re: Slice done",
+            "Thanks, reviewing tomorrow.", "sent_at",
+            "2026-08-07T19:00:00Z"));
+
+    window.resize(1200, 800);
+    QCoreApplication::processEvents();
+    const auto body_width = window.body()->width();
+    const auto outcome = shell.open_project(project, std::nullopt);
+    require(outcome.disposition == ProjectOpenDisposition::opened,
+        "the theme-reset fixture project must open");
+    QCoreApplication::processEvents();
+
+    // 1. Responsive list/content proportion: at a normal reference width the
+    // dialog list must expand past its source-backed 260px minimum toward the
+    // screenshot's ~38.7% normal-width share while staying narrower than the
+    // chat content.
+    require(sidebar->width() > 260,
+        "a wide window must give the dialog list a responsive width beyond "
+        "the 260px source minimum");
+    require(sidebar->width() < content->width()
+            && sidebar->width() > body_width / 5,
+        "the list column must stay a bounded, narrower-than-chat proportion "
+        "of the body");
+    require(content->width() >= 380,
+        "the chat content must keep the source-backed 380px detail minimum");
+
+    // 2. Palette-owned surfaces and selected row: the list surface is painted
+    // from the shared lib_ui palette, the chat surface carries the palette
+    // background token, and the selected row resolves its selection color
+    // from the same palette -- never raw/white Qt defaults.
+    require(sidebar->grab().toImage().pixelColor(2, 2)
+            == st::windowBgOver->c,
+        "the dialog list surface must be palette-owned (windowBgOver), not "
+        "a raw white Qt surface");
+    require(content->grab().toImage().pixelColor(2, 2) == st::windowBg->c,
+        "the chat content surface must be palette-owned (windowBg), not a "
+        "raw white Qt surface");
+    auto *row = agent_row(window, "alpha");
+    row->setChecked(true);
+    require(row->palette().color(QPalette::Highlight) == st::dialogsBgActive->c,
+        "the selected Agent row must resolve its selection color from the "
+        "shared lib_ui palette");
+
+    // 3. Chat-first page instead of simultaneous dashboard stacking: the
+    // conversation surface dominates the detail while the three read-only
+    // secondary sources sit behind one compact page navigation.
+    click_agent(window, "alpha");
+    require(shell.selection_state().selected_agent_directory_key()
+            == std::optional<fs::path>("alpha"),
+        "alpha must be selectable for the theme reset");
+    require(conversation->isVisible(),
+        "the conversation must be the visible default content of a selected "
+        "Agent");
+    require(!activity_owner->isVisible()
+            && !task_card_owner->isVisible()
+            && !preset_owner->isVisible(),
+        "Activity, Task Card and Presets must not stack under the "
+        "conversation in the chat-first detail");
+
+    auto *pages_nav = required_child<Ui::RpWidget>(
+        window, "lingtai_agent_pages_nav");
+    auto *activity_nav = required_child<QPushButton>(
+        window, "lingtai_agent_page_nav_activity");
+    auto *conversation_nav = required_child<QPushButton>(
+        window, "lingtai_agent_page_nav_conversation");
+    require(pages_nav->isVisible() && conversation_nav->isVisible(),
+        "the compact secondary page navigation must be reachable in the "
+        "selected-Agent detail");
+    activity_nav->click();
+    QCoreApplication::processEvents();
+    require(activity_owner->isVisible()
+            && !task_card_owner->isVisible()
+            && !preset_owner->isVisible()
+            && !conversation->isVisible(),
+        "activating the Activity page must show exactly that one secondary "
+        "surface");
+    conversation_nav->click();
+    QCoreApplication::processEvents();
+    require(conversation->isVisible()
+            && !activity_owner->isVisible(),
+        "returning to the Conversation page must restore the chat surface "
+        "and hide every secondary page");
+
+    // 4. Bubble/composer ownership, black-box: only the rendered viewport
+    // pixels and public Qt behavior are consulted -- never document or block
+    // internals. The chat surface must paint a palette-derived non-white,
+    // non-bubble backdrop, distinct incoming/outgoing bubble components
+    // (msgInBg on the left, msgOutBg on the right), a largest bubble span of
+    // at most 75% of the viewport, real vertical spacing between the two
+    // bubbles, and the lib_ui composer visible directly below the conversation
+    // in one common ancestor coordinate system.
+    const auto surface_image = conversation->viewport()->grab().toImage();
+    const auto color_close = [](const QColor &a, const QColor &b) {
+        return qAbs(a.red() - b.red()) <= 12
+            && qAbs(a.green() - b.green()) <= 12
+            && qAbs(a.blue() - b.blue()) <= 12;
+    };
+    // The surface owns a transparent Base, so no widget palette role is a
+    // meaningful backdrop: sample the painted backdrop directly from the grab
+    // and compare it to the palette-derived composite the surface paints
+    // (`historyScrollBg` at alpha 128 over the shell `windowBg`, per channel).
+    const auto sampled_backdrop = surface_image.pixelColor(
+        surface_image.width() / 2, surface_image.height() - 6);
+    const auto composite = [](const QColor &over, const QColor &under,
+            int alpha) {
+        const auto mix = [&](int a, int b) {
+            return (a * alpha + b * (255 - alpha)) / 255;
+        };
+        return QColor(mix(over.red(), under.red()),
+            mix(over.green(), under.green()), mix(over.blue(), under.blue()));
+    };
+    const auto expected_backdrop = composite(
+        st::historyScrollBg->c, st::windowBg->c, 128);
+    require(color_close(sampled_backdrop, expected_backdrop),
+        "the sampled chat backdrop pixel must match the palette-derived "
+        "composite the surface paints");
+    require(sampled_backdrop != QColor(Qt::white)
+            && sampled_backdrop != st::msgInBg->c
+            && sampled_backdrop != st::msgOutBg->c,
+        "the sampled chat backdrop must be distinct from white and from both "
+        "bubble colors");
+
+    struct BubbleTrace {
+        int min_x = -1, max_x = -1, min_y = -1, max_y = -1;
+        int widest_run = 0;
+    };
+    // Each row's bounds come only from its dominant contiguous target-colored
+    // run when that run is at least 20 pixels wide; sparse antialiased
+    // cross-color pixels never move the bubble bounds or widest span.
+    const auto trace_bubbles = [&](const QColor &target) {
+        auto trace = BubbleTrace();
+        for (auto y = 0; y != surface_image.height(); ++y) {
+            auto run = 0;
+            auto run_start = 0;
+            auto row_widest = 0;
+            auto row_widest_start = 0;
+            auto row_widest_end = 0;
+            for (auto x = 0; x != surface_image.width(); ++x) {
+                if (color_close(surface_image.pixelColor(x, y), target)) {
+                    if (run == 0) run_start = x;
+                    ++run;
+                    if (run > row_widest) {
+                        row_widest = run;
+                        row_widest_start = run_start;
+                        row_widest_end = x;
+                    }
+                } else {
+                    run = 0;
+                }
+            }
+            if (row_widest >= 20) {
+                if (trace.min_x < 0 || row_widest_start < trace.min_x) {
+                    trace.min_x = row_widest_start;
+                }
+                if (row_widest_end > trace.max_x) {
+                    trace.max_x = row_widest_end;
+                }
+                if (trace.min_y < 0 || y < trace.min_y) trace.min_y = y;
+                trace.max_y = y;
+                if (row_widest > trace.widest_run) {
+                    trace.widest_run = row_widest;
+                }
+            }
+        }
+        return trace;
+    };
+    const auto incoming = trace_bubbles(st::msgInBg->c);
+    const auto outgoing = trace_bubbles(st::msgOutBg->c);
+    require(incoming.min_y >= 0 && outgoing.min_y >= 0,
+        "the chat surface must render real incoming and outgoing bubble "
+        "components");
+    require((incoming.min_x + incoming.max_x) / 2 < surface_image.width() / 2
+            && (outgoing.min_x + outgoing.max_x) / 2
+                > surface_image.width() / 2,
+        "the incoming bubble must sit on the left and the outgoing bubble on "
+        "the right");
+    require(std::max(incoming.widest_run, outgoing.widest_run)
+            <= surface_image.width() * 3 / 4,
+        "the largest bubble span must stay at most 75% of the chat viewport");
+    // Roundedness is owned by the production drawRoundedRect source review and
+    // the real same-state render comparison, not by a brittle pixel heuristic;
+    // this journey proves the rendered bubble components are palette-derived
+    // and distinct, oppositely placed, bounded, and vertically spaced.
+    require(outgoing.min_y - incoming.max_y >= 2,
+        std::string("the incoming and outgoing bubbles must be separated by "
+            "real vertical spacing, not touching (incoming_min_y=")
+            + std::to_string(incoming.min_y)
+            + " incoming_max_y=" + std::to_string(incoming.max_y)
+            + " outgoing_min_y=" + std::to_string(outgoing.min_y)
+            + " outgoing_max_y=" + std::to_string(outgoing.max_y)
+            + " gap=" + std::to_string(outgoing.min_y - incoming.max_y)
+            + ")");
+
+    const auto composer_top = composer_input->mapTo(content, QPoint(0, 0)).y();
+    const auto conversation_bottom = conversation->mapTo(
+        content, QPoint(0, conversation->height())).y();
+    require(composer_input->isVisible() && send_button->isVisible()
+            && composer_top >= conversation_bottom - 40,
+        std::string("the lib_ui composer must sit at the bottom under the "
+            "conversation in one common ancestor coordinate system "
+            "(composer_top=")
+            + std::to_string(composer_top)
+            + " conversation_bottom="
+            + std::to_string(conversation_bottom)
+            + " composer_visible="
+            + std::to_string(composer_input->isVisible())
+            + " send_visible=" + std::to_string(send_button->isVisible())
+            + ")");
+
+    // 5. Stable existing object/accessibility anchors must survive the reset.
+    require(!conversation_heading->accessibleName().isEmpty()
+            && !conversation->accessibleName().isEmpty()
+            && !conversation_state->accessibleName().isEmpty()
+            && !composer_input->accessibleName().isEmpty()
+            && !send_button->accessibleName().isEmpty(),
+        "every existing conversation/composer anchor must keep its "
+        "accessibility identity");
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "theme-reset fixtures must be removed");
+}
+
 int main(int argc, char **argv) {
     if (argc != 2) {
         std::cerr << "usage: native_shell_test PROJECT_ROOT\n";
@@ -2748,6 +3022,8 @@ int main(int argc, char **argv) {
         verify_layout(shell, project_root / "commit-30-responsive-fixture");
         verify_selected_agent_dashboard_layout(
             shell, project_root / "commit-28-dashboard-fixture");
+        verify_telegram_theme_reset(
+            shell, project_root / "commit-31-theme-reset-fixture");
         std::cout << "native shell behavior: OK\n";
         return 0;
     } catch (const std::exception &error) {

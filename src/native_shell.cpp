@@ -27,6 +27,7 @@
 #include <QtCore/QVariant>
 #include <QtCore/QDir>
 #include <QtGui/QFont>
+#include <QtGui/QPainter>
 #include <QtWidgets/QBoxLayout>
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QDialog>
@@ -39,10 +40,12 @@
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QScrollBar>
 #include <QtWidgets/QSizePolicy>
+#include <QtWidgets/QTextEdit>
 
 #include <rpl/range.h>
 
 #include <algorithm>
+#include <array>
 #include <utility>
 
 namespace lingtai::desktop {
@@ -57,10 +60,14 @@ constexpr auto kDefaultWindowHeight = 720;
 // `computeColumnLayout` / `window.style`: the persistent list column is at
 // least 260px and the detail column at least 380px. The existing one-pixel
 // plain shadow separator between them is accounted locally rather than by
-// changing the source constants.
+// changing the source constants. In Normal mode the list is responsive: it
+// expands from the 260px minimum toward the screenshot's ~38.7% normal-width
+// proportion (`countDialogsWidthFromRatio`), clamped so the detail column
+// keeps its source-backed 380px minimum.
 constexpr auto kRosterColumnWidth = 260;
 constexpr auto kDetailColumnMinimumWidth = 380;
 constexpr auto kRosterSeparatorWidth = 1;
+constexpr auto kRosterWidthRatio = 0.387;
 constexpr auto kTwoColumnAvailableThreshold =
     kRosterColumnWidth + kDetailColumnMinimumWidth;
 
@@ -112,6 +119,93 @@ template <typename Widget>
 Widget *find_ui_child(QObject &root, const char *object_name) {
     return dynamic_cast<Widget *>(root.findChild<QObject *>(object_name));
 }
+
+// One LingTai-owned full-surface widget whose background is painted from the
+// shared lib_ui palette (never a raw white Qt surface): the right chat/content
+// pane fills `windowBg`, the same token the chat surface and top bar use.
+class PaletteSurface final : public Ui::RpWidget {
+public:
+    explicit PaletteSurface(QWidget *parent, style::color fill)
+    : Ui::RpWidget(parent)
+    , fill_(std::move(fill)) {
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        painter.fillRect(rect(), fill_);
+    }
+
+private:
+    style::color fill_;
+};
+
+// The one compact selected-Agent page navigation control: a checkable
+// two-line-free button that paints its selected and hover states from the same
+// shared palette the dialog list uses (`dialogsBgActive` selected,
+// `windowBgOver` hover), with the resting state left transparent so the chat
+// surface shows through.
+class PageNavButton final : public QPushButton {
+public:
+    explicit PageNavButton(QWidget *parent, const QString &text)
+    : QPushButton(text, parent) {
+        setCheckable(true);
+        setFixedHeight(28);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        if (isChecked()) {
+            painter.fillRect(rect(), st::dialogsBgActive);
+        } else if (isDown() || underMouse()) {
+            painter.fillRect(rect(), st::windowBgOver);
+        }
+        auto font = this->font();
+        font.setPointSize(11);
+        font.setWeight(isChecked() ? QFont::DemiBold : QFont::Normal);
+        painter.setFont(font);
+        painter.setPen(isChecked() ? st::windowFgActive : st::windowSubTextFg);
+        painter.drawText(rect(), Qt::AlignCenter, text());
+    }
+};
+
+// One compact palette-owned action button shared by the three detail-top-bar
+// actions (Back, Start Agent, Request sleep): it paints its resting/hover text
+// and backgrounds from the same shared lib_ui light-button tokens the dialog
+// actions use, and the disabled state from the existing disabled text token,
+// so the three controls never fall back to the raw platform button style.
+class PaletteActionButton final : public QPushButton {
+public:
+    explicit PaletteActionButton(QWidget *parent, const QString &text)
+    : QPushButton(text, parent) {
+        setFixedHeight(26);
+        setCursor(Qt::PointingHandCursor);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const auto radius = qMin(width(), height()) / 2;
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(!isEnabled()
+            ? st::defaultLightButton.textBg->c
+            : (isDown() || underMouse())
+                ? st::defaultLightButton.textBgOver->c
+                : st::defaultLightButton.textBg->c);
+        painter.drawRoundedRect(rect(), radius, radius);
+        auto font = this->font();
+        font.setPointSize(11);
+        painter.setFont(font);
+        painter.setPen(!isEnabled()
+            ? st::windowSubTextFg->c
+            : (isDown() || underMouse())
+                ? st::defaultLightButton.textFgOver->c
+                : st::defaultLightButton.textFg->c);
+        painter.drawText(rect(), Qt::AlignCenter, text());
+    }
+};
 
 // One shared structural owner for the three read-only selected-Agent source
 // sections (Agent activity, Task Card, Presets). Each section directly owns
@@ -447,7 +541,7 @@ NativeShell::NativeShell()
     separator->setAccessibleName(QStringLiteral("Project list divider"));
     shell_layout->addWidget(separator);
 
-    auto *content = new Ui::RpWidget(body);
+    auto *content = new PaletteSurface(body, st::windowBg);
     content_ = content;
     content->setObjectName("lingtai_desktop_content");
     content->setAccessibleName(QStringLiteral("Workspace content"));
@@ -455,8 +549,8 @@ NativeShell::NativeShell()
     shell_layout->addWidget(content, 1);
 
     auto *content_layout = new QVBoxLayout(content);
-    content_layout->setContentsMargins(24, 24, 24, 24);
-    content_layout->setSpacing(8);
+    content_layout->setContentsMargins(0, 0, 0, 0);
+    content_layout->setSpacing(0);
     auto *title = make_label(
         content,
         QStringLiteral("LingTai Desktop"),
@@ -512,7 +606,7 @@ NativeShell::NativeShell()
     content_layout->addWidget(empty_route_, 1);
 
     auto *empty_layout = new QVBoxLayout(empty_route_);
-    empty_layout->setContentsMargins(0, 0, 0, 0);
+    empty_layout->setContentsMargins(24, 24, 24, 24);
     empty_layout->setSpacing(12);
     auto *empty_title = make_flat_label(
         empty_route_,
@@ -537,13 +631,18 @@ NativeShell::NativeShell()
 
     auto *project_layout = new QVBoxLayout(project_route_);
     project_layout->setContentsMargins(0, 0, 0, 0);
-    project_layout->setSpacing(12);
-    project_layout->addWidget(make_label(
+    project_layout->setSpacing(0);
+    // The old full-width "Project" heading stays as a hidden semantic anchor:
+    // a selected project's right pane is now one chat-first surface whose
+    // identity lives in the top bar, not a dashboard heading.
+    auto *project_heading = make_label(
         project_route_,
         QStringLiteral("Project"),
         "lingtai_project_route_heading",
         18,
-        QFont::DemiBold));
+        QFont::DemiBold);
+    project_heading->hide();
+    project_layout->addWidget(project_heading);
     auto *selection_error = make_label(
         project_route_, QString(), "lingtai_agent_selection_error", 11,
         QFont::Medium);
@@ -557,7 +656,7 @@ NativeShell::NativeShell()
     directory->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     project_layout->addWidget(directory, 1);
     auto *directory_layout = new QHBoxLayout(directory);
-    directory_layout->setContentsMargins(0, 12, 0, 0);
+    directory_layout->setContentsMargins(0, 0, 0, 0);
 
     // The detail column carries more evidence than any window is tall, so it
     // scrolls like the roster instead of overflowing and overpainting itself.
@@ -572,42 +671,164 @@ NativeShell::NativeShell()
     detail_scroll->setWidget(detail);
     auto *detail_layout = new QVBoxLayout(detail);
     detail_layout->setContentsMargins(0, 0, 0, 0);
-    detail_layout->setSpacing(8);
-    auto *detail_header = new QHBoxLayout;
-    detail_header->setContentsMargins(0, 0, 0, 0);
-    detail_header->setSpacing(8);
-    detail_header->addWidget(make_label(
+    detail_layout->setSpacing(4);
+    // The old "Selected Agent" header heading stays as a hidden semantic
+    // anchor: the chat top bar below now owns the selected-Agent identity.
+    auto *detail_heading = make_label(
         detail, QStringLiteral("Selected Agent"),
-        "lingtai_agent_detail_heading", 14, QFont::DemiBold), 1);
-    // One lib_ui-styled Back control in the existing detail header, visible
-    // only in Telegram's narrow OneColumn detail view; it returns to the
-    // roster through the same narrow-mode path Telegram's history-back uses.
-    detail_back_button_ = new Ui::RoundButton(
-        detail,
-        rpl::single(QStringLiteral("Back")),
-        st::defaultLightButton);
-    detail_back_button_->setObjectName("lingtai_agent_detail_back");
-    detail_back_button_->setAccessibleName(QStringLiteral("Back to Agent list"));
-    detail_back_button_->addClickHandler([this] {
-        handle_detail_back();
-    });
-    detail_header->addWidget(detail_back_button_);
-    detail_layout->addLayout(detail_header);
+        "lingtai_agent_detail_heading", 14, QFont::DemiBold);
+    detail_heading->hide();
+    detail_layout->addWidget(detail_heading);
+
+    // One Telegram-like chat top bar: selected Agent identity and presence on
+    // the left, and the compact Start/Sleep controls plus the narrow-mode
+    // Back control on the right.
+    auto *top_bar = new QWidget(detail);
+    top_bar->setObjectName("lingtai_chat_top_bar");
+    top_bar->setAccessibleName(QStringLiteral("Selected Agent"));
+    auto *top_bar_layout = new QHBoxLayout(top_bar);
+    top_bar_layout->setContentsMargins(0, 0, 0, 0);
+    top_bar_layout->setSpacing(8);
+    auto *identity_column = new QVBoxLayout;
+    identity_column->setContentsMargins(0, 0, 0, 0);
+    identity_column->setSpacing(2);
     auto *presentation_name = make_label(
-        detail, QString(), "lingtai_selected_agent_presentation_name", 12,
-        QFont::Medium);
+        top_bar, QString(), "lingtai_selected_agent_presentation_name", 13,
+        QFont::DemiBold);
     presentation_name->setAccessibleName(
         QStringLiteral("Selected Agent presentation name"));
-    detail_layout->addWidget(presentation_name);
+    identity_column->addWidget(presentation_name);
     auto *detail_key = make_label(
-        detail, QString(), "lingtai_selected_agent_key", 12, QFont::Medium);
+        top_bar, QString(), "lingtai_selected_agent_key", 10);
     detail_key->setAccessibleName(QStringLiteral("Selected Agent key"));
-    detail_layout->addWidget(detail_key);
-    // The conversation is the product, so it sits directly under the selected
-    // Agent's name rather than below the source-facts labels.
+    identity_column->addWidget(detail_key);
+    top_bar_layout->addLayout(identity_column, 1);
+    // One compact palette-owned Back control in the chat top bar, visible only
+    // in Telegram's narrow OneColumn detail view; it returns to the roster
+    // through the same narrow-mode path Telegram's history-back uses.
+    detail_back_button_ = new PaletteActionButton(
+        top_bar, QStringLiteral("Back"));
+    detail_back_button_->setObjectName("lingtai_agent_detail_back");
+    detail_back_button_->setAccessibleName(QStringLiteral("Back to Agent list"));
+    QObject::connect(detail_back_button_, &QPushButton::clicked, [this] {
+        handle_detail_back();
+    });
+    top_bar_layout->addWidget(detail_back_button_);
+
+    // The one Step-6 action on the exact selected Agent: an explicit,
+    // nonblocking start for a selected non-human Agent whose current
+    // projection is not heartbeat-live. Hidden entirely (not merely
+    // disabled) for a live Agent, matching the product contract's "no
+    // Start action" rather than Request sleep's always-visible/disabled
+    // shape. The status label below shows only truthful, evidence-backed
+    // claims -- spawn acceptance is never "online" on its own.
+    auto *start_row = new Ui::RpWidget(top_bar);
+    start_row->setObjectName("lingtai_selected_agent_start_row");
+    start_row->setAccessibleName(QStringLiteral("Start Agent"));
+    auto *start_row_layout = new QHBoxLayout(start_row);
+    start_row_layout->setContentsMargins(0, 0, 0, 0);
+    start_row_layout->setSpacing(0);
+    auto *start_button = new PaletteActionButton(
+        start_row, QStringLiteral("Start Agent"));
+    start_button->setObjectName("lingtai_selected_agent_start_agent");
+    start_button->setAccessibleName(QStringLiteral("Start Agent"));
+    start_button->setAccessibleDescription(QStringLiteral(
+        "Starts the selected Agent's own configured runtime as a detached "
+        "local process. It does not provision, install, or repair a "
+        "runtime, and never auto-starts any Agent on its own."));
+    QObject::connect(start_button, &QPushButton::clicked, [this] {
+        handle_start_agent();
+    });
+    start_row_layout->addWidget(start_button);
+    // Reserve the action region's height from the row's own layout so the
+    // chat surface below never jumps when the Start button is hidden for a
+    // heartbeat-live Agent; visibility/enablement still track eligibility
+    // exactly, only the button is ever absent.
+    start_row->setMinimumHeight(start_row->sizeHint().height());
+    start_button->setVisible(false);
+    top_bar_layout->addWidget(start_row);
+
+    // The one Step-5 action on the exact selected Agent: reproduces only the
+    // canonical empty `.sleep` marker write plus a best-effort target-side
+    // observation. Disabled while ineligible or while a just-clicked
+    // observation is still pending; the status label below shows only
+    // truthful, evidence-backed claims, never a lifecycle status inferred
+    // from the write or a timeout alone.
+    auto *sleep_row = new Ui::RpWidget(top_bar);
+    sleep_row->setObjectName("lingtai_selected_agent_sleep_row");
+    sleep_row->setAccessibleName(QStringLiteral("Request sleep"));
+    auto *sleep_row_layout = new QHBoxLayout(sleep_row);
+    sleep_row_layout->setContentsMargins(0, 0, 0, 0);
+    sleep_row_layout->setSpacing(0);
+    auto *sleep_button = new PaletteActionButton(
+        sleep_row, QStringLiteral("Request sleep"));
+    sleep_button->setObjectName("lingtai_selected_agent_request_sleep");
+    sleep_button->setAccessibleName(QStringLiteral("Request sleep"));
+    sleep_button->setAccessibleDescription(QStringLiteral(
+        "Writes one empty local sleep-request marker for the selected "
+        "Agent. It does not queue, cancel, suspend, or restart anything."));
+    sleep_button->setEnabled(false);
+    QObject::connect(sleep_button, &QPushButton::clicked, [this] {
+        handle_request_sleep();
+    });
+    sleep_row_layout->addWidget(sleep_button);
+    top_bar_layout->addWidget(sleep_row);
+    detail_layout->addWidget(top_bar);
+
+    auto *start_status = make_label(
+        detail, QString(), "lingtai_selected_agent_start_status", 10);
+    start_status->setAccessibleName(QStringLiteral("Start Agent status"));
+    detail_layout->addWidget(start_status);
+    auto *sleep_status = make_label(
+        detail, QString(), "lingtai_selected_agent_sleep_status", 10);
+    sleep_status->setAccessibleName(QStringLiteral("Sleep request status"));
+    detail_layout->addWidget(sleep_status);
+
+    // One thin plain-shadow divider under the chat top bar, the same
+    // between-surface separator the shell uses for the roster column.
+    auto *top_bar_separator = new Ui::PlainShadow(detail);
+    top_bar_separator->setObjectName("lingtai_chat_top_bar_separator");
+    top_bar_separator->setAccessibleName(
+        QStringLiteral("Selected Agent top bar divider"));
+    top_bar_separator->setFixedHeight(st::lineWidth);
+    detail_layout->addWidget(top_bar_separator);
+
+    // One compact secondary page navigation: the chat is the default selected
+    // Agent surface, and Activity / Task Card / Presets each own one page so
+    // only one content surface shows at a time.
+    auto *pages_nav = new Ui::RpWidget(detail);
+    pages_nav->setObjectName("lingtai_agent_pages_nav");
+    pages_nav->setAccessibleName(QStringLiteral("Selected Agent pages"));
+    auto *pages_nav_layout = new QHBoxLayout(pages_nav);
+    pages_nav_layout->setContentsMargins(0, 4, 0, 4);
+    pages_nav_layout->setSpacing(4);
+    const auto nav_specs = std::array<std::pair<const char *, const char *>, 4>{{
+        std::pair{"lingtai_agent_page_nav_conversation", "Conversation"},
+        std::pair{"lingtai_agent_page_nav_activity", "Activity"},
+        std::pair{"lingtai_agent_page_nav_task_card", "Task Card"},
+        std::pair{"lingtai_agent_page_nav_presets", "Presets"},
+    }};
+    for (auto index = std::size_t{0}; index != nav_specs.size(); ++index) {
+        const auto &[object_name, text] = nav_specs[index];
+        auto *button = new PageNavButton(
+            pages_nav, QString::fromUtf8(text));
+        button->setObjectName(object_name);
+        button->setAccessibleName(QString::fromUtf8(text));
+        const auto page = static_cast<AgentDetailPage>(index);
+        QObject::connect(button, &QPushButton::clicked, [this, page] {
+            show_detail_page(page);
+        });
+        pages_nav_layout->addWidget(button, 1);
+        page_nav_buttons_.push_back(button);
+    }
+    detail_layout->addWidget(pages_nav);
+
+    // The conversation is the product, so it is the default page surface,
+    // directly under the page navigation rather than below a stack of source
+    // cards.
     detail_layout->addWidget(make_label(
         detail, QStringLiteral("Conversation"),
-        "lingtai_selected_agent_conversation_heading", 12, QFont::DemiBold));
+        "lingtai_selected_agent_conversation_heading", 11, QFont::DemiBold));
     auto *conversation = new ConversationSurface(detail);
     conversation->setObjectName("lingtai_selected_agent_conversation");
     conversation->setAccessibleName(
@@ -617,6 +838,9 @@ NativeShell::NativeShell()
         "read-only as plain text."));
     conversation->setMinimumHeight(180);
     conversation->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    // The surface's own paintEvent owns the visible backdrop and bubbles; its
+    // Base/Window palette roles stay transparent so the surface renders the
+    // shell's palette background rather than a widget-level white base.
     detail_layout->addWidget(conversation, 1);
 
     // The smallest visible composer, directly under the conversation it
@@ -665,95 +889,40 @@ NativeShell::NativeShell()
         QStringLiteral("Selected Agent conversation state"));
     detail_layout->addWidget(conversation_state);
 
-    // Each of the three bounded read-only selected-Agent source sections
-    // below is presented through the same local structural framing: one
-    // semibold heading, one read-only plain-text surface, one state line,
-    // and one thin plain-shadow separator, with the same inner margins and
-    // spacing. They remain three distinct sources and authorities and are
-    // never merged with each other or with the mailbox conversation.
-    add_dashboard_section(
-        detail, detail_layout, "activity", QStringLiteral("Agent activity"),
+    // Each of the three bounded read-only selected-Agent source sections is
+    // presented through the same local structural framing: one semibold
+    // heading, one read-only plain-text surface, one state line, and one thin
+    // plain-shadow separator. They remain three distinct sources and
+    // authorities and are never merged with each other or with the mailbox
+    // conversation; they move behind one compact secondary page host so they
+    // never stack under the chat surface.
+    auto *pages_host = new Ui::RpWidget(detail);
+    pages_host->setObjectName("lingtai_agent_pages_host");
+    pages_host->setAccessibleName(
+        QStringLiteral("Selected Agent secondary pages"));
+    auto *pages_host_layout = new QVBoxLayout(pages_host);
+    pages_host_layout->setContentsMargins(0, 0, 0, 0);
+    pages_host_layout->setSpacing(8);
+    secondary_pages_.push_back(add_dashboard_section(
+        pages_host, pages_host_layout, "activity",
+        QStringLiteral("Agent activity"),
         QStringLiteral("Selected Agent activity"),
         QStringLiteral("A bounded read-only snapshot of the selected Agent's "
-            "own visible activity, shown as plain text."));
-    add_dashboard_section(
-        detail, detail_layout, "task_card", QStringLiteral("Task Card"),
+            "own visible activity, shown as plain text.")).owner);
+    secondary_pages_.push_back(add_dashboard_section(
+        pages_host, pages_host_layout, "task_card", QStringLiteral("Task Card"),
         QStringLiteral("Selected Agent Task Card"),
         QStringLiteral("The selected Agent's current self-published Task Card "
-            "body, when active, shown read-only as plain text."));
-    add_dashboard_section(
-        detail, detail_layout, "preset_summary", QStringLiteral("Presets"),
+            "body, when active, shown read-only as plain text.")).owner);
+    secondary_pages_.push_back(add_dashboard_section(
+        pages_host, pages_host_layout, "preset_summary",
+        QStringLiteral("Presets"),
         QStringLiteral("Selected Agent Presets summary"),
         QStringLiteral("The selected Agent's own kernel-resolved preset policy "
             "and active effective configuration, shown read-only as plain "
-            "text."));
-
-    // The one Step-6 action on the exact selected Agent: an explicit,
-    // nonblocking start for a selected non-human Agent whose current
-    // projection is not heartbeat-live. Hidden entirely (not merely
-    // disabled) for a live Agent, matching the product contract's "no
-    // Start action" rather than Request sleep's always-visible/disabled
-    // shape. The status label below shows only truthful, evidence-backed
-    // claims -- spawn acceptance is never "online" on its own.
-    auto *start_row = new Ui::RpWidget(detail);
-    start_row->setObjectName("lingtai_selected_agent_start_row");
-    start_row->setAccessibleName(QStringLiteral("Start Agent"));
-    auto *start_row_layout = new QHBoxLayout(start_row);
-    start_row_layout->setContentsMargins(0, 0, 0, 0);
-    start_row_layout->setSpacing(8);
-    auto *start_button = new QPushButton(
-        QStringLiteral("Start Agent"), start_row);
-    start_button->setObjectName("lingtai_selected_agent_start_agent");
-    start_button->setAccessibleName(QStringLiteral("Start Agent"));
-    start_button->setAccessibleDescription(QStringLiteral(
-        "Starts the selected Agent's own configured runtime as a detached "
-        "local process. It does not provision, install, or repair a "
-        "runtime, and never auto-starts any Agent on its own."));
-    QObject::connect(start_button, &QPushButton::clicked, [this] {
-        handle_start_agent();
-    });
-    start_row_layout->addWidget(start_button);
-    // Reserve the action region's height from the row's own layout so the
-    // detail column below never jumps when the Start button is hidden for a
-    // heartbeat-live Agent; visibility/enablement still track eligibility
-    // exactly, only the button is ever absent.
-    start_row->setMinimumHeight(start_row->sizeHint().height());
-    start_button->setVisible(false);
-    detail_layout->addWidget(start_row);
-    auto *start_status = make_label(
-        detail, QString(), "lingtai_selected_agent_start_status", 10);
-    start_status->setAccessibleName(QStringLiteral("Start Agent status"));
-    detail_layout->addWidget(start_status);
-
-    // The one Step-5 action on the exact selected Agent: reproduces only the
-    // canonical empty `.sleep` marker write plus a best-effort target-side
-    // observation. Disabled while ineligible or while a just-clicked
-    // observation is still pending; the status label below shows only
-    // truthful, evidence-backed claims, never a lifecycle status inferred
-    // from the write or a timeout alone.
-    auto *sleep_row = new Ui::RpWidget(detail);
-    sleep_row->setObjectName("lingtai_selected_agent_sleep_row");
-    sleep_row->setAccessibleName(QStringLiteral("Request sleep"));
-    auto *sleep_row_layout = new QHBoxLayout(sleep_row);
-    sleep_row_layout->setContentsMargins(0, 0, 0, 0);
-    sleep_row_layout->setSpacing(8);
-    auto *sleep_button = new QPushButton(
-        QStringLiteral("Request sleep"), sleep_row);
-    sleep_button->setObjectName("lingtai_selected_agent_request_sleep");
-    sleep_button->setAccessibleName(QStringLiteral("Request sleep"));
-    sleep_button->setAccessibleDescription(QStringLiteral(
-        "Writes one empty local sleep-request marker for the selected "
-        "Agent. It does not queue, cancel, suspend, or restart anything."));
-    sleep_button->setEnabled(false);
-    QObject::connect(sleep_button, &QPushButton::clicked, [this] {
-        handle_request_sleep();
-    });
-    sleep_row_layout->addWidget(sleep_button);
-    detail_layout->addWidget(sleep_row);
-    auto *sleep_status = make_label(
-        detail, QString(), "lingtai_selected_agent_sleep_status", 10);
-    sleep_status->setAccessibleName(QStringLiteral("Sleep request status"));
-    detail_layout->addWidget(sleep_status);
+            "text.")).owner);
+    pages_host->hide();
+    detail_layout->addWidget(pages_host);
 
     auto *manifest_identity = make_label(
         detail, QString(), "lingtai_selected_agent_manifest_identity", 11);
@@ -781,6 +950,25 @@ NativeShell::NativeShell()
     detail_facts->setAccessibleName(QStringLiteral("Selected Agent facts"));
     detail_layout->addWidget(detail_facts);
     detail_layout->addStretch();
+
+    // The source-facts labels below the page host are read-only detail
+    // surfaces, not chat content: they stay present as anchors but are only
+    // revealed with the Presets page, so the chat-first surface stays clean.
+    for (const auto *facts_name : {
+            "lingtai_selected_agent_manifest_identity",
+            "lingtai_selected_agent_manifest_llm",
+            "lingtai_selected_agent_manifest_capabilities",
+            "lingtai_selected_agent_status_activity",
+            "lingtai_selected_agent_status_context",
+            "lingtai_selected_agent_facts" }) {
+        if (auto *label = window_->findChild<QLabel *>(facts_name)) {
+            label->hide();
+        }
+    }
+
+    // The chat is the default selected-Agent page; the page navigation and
+    // secondary surfaces start in that exact state.
+    show_detail_page(AgentDetailPage::conversation);
 
     // One simple view-scoped timer: it re-invokes the same stateless
     // snapshot reader every second so a same-selection append becomes
@@ -1269,6 +1457,7 @@ ProjectOpenOutcome NativeShell::open_project(
     pending_sleep_observation_.reset();
     pending_start_observation_.reset();
     refresh_route();
+    show_detail_page(AgentDetailPage::conversation);
     recompute_layout(window_->body()->width());
     return {
         .disposition = ProjectOpenDisposition::opened,
@@ -1795,6 +1984,7 @@ void NativeShell::handle_agent_selection(const fs::path &directory_key) {
     pending_start_observation_.reset();
     task_card_last_valid_.reset();
     render_roster();
+    show_detail_page(AgentDetailPage::conversation);
     recompute_layout(window_->body()->width());
     // Telegram's `HistoryWidget::setInnerFocus()`: a selected Agent focuses
     // the visible, enabled composer.
@@ -1821,8 +2011,11 @@ void NativeShell::handle_agent_selection(const fs::path &directory_key) {
 void NativeShell::recompute_layout(int body_width) {
     const auto available = body_width - kRosterSeparatorWidth;
     if (available >= kTwoColumnAvailableThreshold) {
+        auto roster_width = qRound(body_width * kRosterWidthRatio);
+        roster_width = std::clamp(roster_width,
+            kRosterColumnWidth, body_width - kDetailColumnMinimumWidth);
         agent_roster_->setVisible(true);
-        agent_roster_->setFixedWidth(kRosterColumnWidth);
+        agent_roster_->setFixedWidth(roster_width);
         separator_->setVisible(true);
         content_->setVisible(true);
         detail_back_button_->setVisible(false);
@@ -1851,8 +2044,62 @@ void NativeShell::handle_detail_back() {
     pending_start_observation_.reset();
     task_card_last_valid_.reset();
     render_roster();
+    show_detail_page(AgentDetailPage::conversation);
     recompute_layout(window_->body()->width());
     agent_roster_->focus_row(std::nullopt);
+}
+
+// Telegram's chat-first page switch: the conversation is the default
+// selected-Agent surface, and exactly one of Activity / Task Card / Presets
+// shows when its page is selected, so only one content surface dominates at a
+// time. The secondary pages and the read-only source-facts labels are direct
+// layout children (their object/accessibility anchors never move); switching
+// only flips visibility.
+void NativeShell::show_detail_page(AgentDetailPage page) {
+    auto *conversation_heading = window_->findChild<QLabel *>(
+        "lingtai_selected_agent_conversation_heading");
+    auto *conversation = window_->findChild<QTextEdit *>(
+        "lingtai_selected_agent_conversation");
+    auto *composer = window_->findChild<Ui::RpWidget *>("lingtai_composer");
+    auto *composer_status = window_->findChild<QLabel *>(
+        "lingtai_composer_status");
+    auto *conversation_state = window_->findChild<QLabel *>(
+        "lingtai_selected_agent_conversation_state");
+    auto *pages_host = window_->findChild<Ui::RpWidget *>(
+        "lingtai_agent_pages_host");
+    if (!conversation_heading || !conversation || !composer || !composer_status
+        || !conversation_state || !pages_host) {
+        return;
+    }
+    const auto on_conversation = page == AgentDetailPage::conversation;
+    conversation_heading->setVisible(on_conversation);
+    conversation->setVisible(on_conversation);
+    composer->setVisible(on_conversation);
+    composer_status->setVisible(on_conversation);
+    conversation_state->setVisible(on_conversation);
+    pages_host->setVisible(!on_conversation);
+    const auto facts_visible = page == AgentDetailPage::presets;
+    for (const auto *name : {
+            "lingtai_selected_agent_manifest_identity",
+            "lingtai_selected_agent_manifest_llm",
+            "lingtai_selected_agent_manifest_capabilities",
+            "lingtai_selected_agent_status_activity",
+            "lingtai_selected_agent_status_context",
+            "lingtai_selected_agent_facts" }) {
+        if (auto *label = window_->findChild<QLabel *>(name)) {
+            label->setVisible(facts_visible);
+        }
+    }
+    for (auto index = std::size_t{0}; index != secondary_pages_.size();
+            ++index) {
+        secondary_pages_[index]->setVisible(
+            page == static_cast<AgentDetailPage>(index + 1));
+    }
+    for (auto index = std::size_t{0}; index != page_nav_buttons_.size();
+            ++index) {
+        page_nav_buttons_[index]->setChecked(
+            page == static_cast<AgentDetailPage>(index));
+    }
 }
 // whatever `agents_` currently holds. Also reached through `render_roster()`
 // from a click or a timer tick, but only before either overwrites the
@@ -2116,8 +2363,18 @@ ProjectOpenOutcome NativeShell::show_open_error(
 void NativeShell::refresh_route() {
     // Both are stored pointers the constructor always sets before
     // refresh_route() can run, so neither branch here is ever reachable.
-    empty_route_->setVisible(!selection_state_.active_project().has_value());
-    project_route_->setVisible(selection_state_.active_project().has_value());
+    const auto project_active = selection_state_.active_project().has_value();
+    empty_route_->setVisible(!project_active);
+    project_route_->setVisible(project_active);
+    // The welcome branding only belongs to the no-project state: with a
+    // project open the right pane is one chat-first surface.
+    if (auto *title = window_->findChild<QLabel *>("lingtai_product_title")) {
+        title->setVisible(!project_active);
+    }
+    if (auto *purpose = window_->findChild<QLabel *>(
+            "lingtai_product_purpose")) {
+        purpose->setVisible(!project_active);
+    }
 }
 
 } // namespace lingtai::desktop

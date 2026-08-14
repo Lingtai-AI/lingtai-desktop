@@ -13,12 +13,13 @@ class QVBoxLayout;
 
 namespace lingtai::desktop {
 
-// The persistent 260px left project/Agent list column. It owns the project
-// identity header, the compact Open/New Project actions, and the scrollable
-// Agent rows; the selected-content pane lives outside this owner. Rows are a
-// fixed 62px with 10px/8px framing and show one primary name line plus one
-// compact manifest/role/presence state line, painted from the shared lib_ui
-// palette (`dialogsBgActive` selected, `dialogsBgOver` hover/pressed).
+// The persistent responsive left project/Agent list column. It owns the
+// project identity header, the compact Open/New Project actions, and the
+// scrollable Agent rows; the selected-content pane lives outside this owner.
+// Rows are a fixed 62px with 10px/8px framing and show one primary name line
+// plus one compact manifest/role/presence state line. The list surface and
+// every row state are painted from the shared lib_ui palette (`windowBgOver`
+// list field, `windowBgRipple` hover, `dialogsBgActive` selected).
 //
 // `set_rows` rebuilds the row tree only when the visible row set actually
 // changed; an unchanged projection refresh only updates checked state, so
@@ -43,6 +44,7 @@ public:
         const std::optional<std::filesystem::path> &key = std::nullopt);
 
 private:
+    void paintEvent(QPaintEvent *event) override;
     void update_state_label(const AgentSnapshot &snapshot);
     void update_checked_states(
         const std::optional<std::filesystem::path> &selected_key);

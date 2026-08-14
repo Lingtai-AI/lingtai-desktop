@@ -118,8 +118,8 @@ void AgentRowButton::paintEvent(QPaintEvent *) {
     painter.fillRect(rect(), selected
         ? st::dialogsBgActive
         : over
-            ? st::dialogsBgOver
-            : st::dialogsBg);
+            ? st::windowBgRipple
+            : st::windowBgOver);
 
     const auto lines = text().split(QLatin1Char('\n'));
     const auto text_rect = rect().adjusted(
@@ -260,6 +260,9 @@ AgentRoster::AgentRoster(QWidget *parent)
     scroll_->setObjectName("lingtai_agent_roster_scroll");
     scroll_->setAccessibleName(QStringLiteral("Agent roster rows"));
     scroll_->setWidgetResizable(true);
+    // The dialog-list surface paints one uniform light-gray field, so the
+    // scroll viewport must not fill a raw white Base surface over it.
+    scroll_->viewport()->setAutoFillBackground(false);
     roster_layout->addWidget(scroll_, 1);
     auto *rows = new Ui::RpWidget(scroll_);
     rows->setObjectName("lingtai_agent_roster_rows");
@@ -273,6 +276,11 @@ AgentRoster::AgentRoster(QWidget *parent)
 }
 
 AgentRoster::~AgentRoster() = default;
+
+void AgentRoster::paintEvent(QPaintEvent *) {
+    QPainter painter(this);
+    painter.fillRect(rect(), st::windowBgOver);
+}
 
 void AgentRoster::set_row_click_handler(RowClickHandler handler) {
     row_click_handler_ = std::move(handler);
@@ -353,6 +361,12 @@ void AgentRoster::set_rows(
         row->setChecked(selected_key && *selected_key == item.directory_key);
         row->setEnabled(item.manifest_kind == AgentManifestKind::valid);
         row->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        // The selected row resolves its selection color from the same shared
+        // palette token its paint uses, so the ownership is observable without
+        // replacing any inherited palette role.
+        auto row_palette = row->palette();
+        row_palette.setColor(QPalette::Highlight, st::dialogsBgActive->c);
+        row->setPalette(row_palette);
         const auto key = item.directory_key;
         QObject::connect(row, &QPushButton::clicked, [this, key] {
             if (row_click_handler_) {

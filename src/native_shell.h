@@ -27,8 +27,10 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 class QDialog;
+class QPushButton;
 class QTimer;
 
 namespace Ui {
@@ -47,6 +49,17 @@ enum class ProjectOpenDisposition {
 struct ProjectOpenOutcome {
     ProjectOpenDisposition disposition = ProjectOpenDisposition::failed;
     ProjectPathFailure failure = ProjectPathFailure::none;
+};
+
+// The one compact secondary page treatment for the selected Agent: the chat
+// (conversation) is the default surface, and the three read-only sources each
+// own one page behind a small nav row so only one content surface shows at a
+// time.
+enum class AgentDetailPage {
+    conversation,
+    activity,
+    task_card,
+    presets,
 };
 
 // C5-owned native composition. C1's WorkspaceSelectionState remains the only
@@ -123,6 +136,10 @@ private:
     // Telegram's OneColumn history-back path: the narrow detail returns to
     // the roster and drops the selection. No-op outside the narrow detail.
     void handle_detail_back();
+    // Switches the selected-Agent detail to exactly one page: the chat
+    // (conversation) by default, or one of the three read-only secondary
+    // sources, so only one content surface dominates at a time.
+    void show_detail_page(AgentDetailPage page);
     [[nodiscard]] ProjectOpenOutcome show_open_error(
         ProjectPathFailure failure,
         std::string message);
@@ -158,9 +175,9 @@ private:
     // roster mode and full-width in OneColumn detail mode.
     Ui::RpWidget *content_ = nullptr;
     Ui::PlainShadow *separator_ = nullptr;
-    // The one lib_ui-styled Back control in the detail header, visible only
-    // in Telegram's narrow OneColumn detail view.
-    Ui::RoundButton *detail_back_button_ = nullptr;
+    // The one compact palette-owned Back control in the detail header, visible
+    // only in Telegram's narrow OneColumn detail view.
+    QPushButton *detail_back_button_ = nullptr;
     Ui::RpWidget *empty_route_ = nullptr;
     Ui::RpWidget *project_route_ = nullptr;
     Ui::RpWidget *open_error_surface_ = nullptr;
@@ -194,6 +211,12 @@ private:
     QTimer *activity_timer_ = nullptr;
     std::optional<SleepObservation> pending_sleep_observation_;
     std::optional<StartObservation> pending_start_observation_;
+    // The one compact selected-Agent page navigation: exactly one nav control
+    // per AgentDetailPage, wired by the shell to `show_detail_page`. The
+    // three secondary section owners that the nav reveals are captured in the
+    // same construction order so `show_detail_page` can show exactly one.
+    std::vector<QPushButton *> page_nav_buttons_;
+    std::vector<Ui::RpWidget *> secondary_pages_;
     // The current selected target's last valid Task Card projection
     // (active or inactive), preserved only so a transient unavailable
     // observation does not clear or misreport it. Reset immediately on
