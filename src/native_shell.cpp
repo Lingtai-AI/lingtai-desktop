@@ -373,16 +373,16 @@ NativeShell::NativeShell()
     detail_layout->addWidget(make_label(
         detail, QStringLiteral("Selected Agent"),
         "lingtai_agent_detail_heading", 14, QFont::DemiBold));
-    auto *detail_key = make_label(
-        detail, QString(), "lingtai_selected_agent_key", 12, QFont::Medium);
-    detail_key->setAccessibleName(QStringLiteral("Selected Agent key"));
-    detail_layout->addWidget(detail_key);
     auto *presentation_name = make_label(
         detail, QString(), "lingtai_selected_agent_presentation_name", 12,
         QFont::Medium);
     presentation_name->setAccessibleName(
         QStringLiteral("Selected Agent presentation name"));
     detail_layout->addWidget(presentation_name);
+    auto *detail_key = make_label(
+        detail, QString(), "lingtai_selected_agent_key", 12, QFont::Medium);
+    detail_key->setAccessibleName(QStringLiteral("Selected Agent key"));
+    detail_layout->addWidget(detail_key);
     // The conversation is the product, so it sits directly under the selected
     // Agent's name rather than below the source-facts labels.
     detail_layout->addWidget(make_label(
@@ -1152,17 +1152,24 @@ void NativeShell::render_roster() {
         }
         return;
     }
-    selected_key->setText(path_text(detail_item->directory_key));
     const auto &identity = detail_item->identity;
-    presentation_name->setText(identity && identity->nickname
+    const auto key = path_text(detail_item->directory_key);
+    const auto title = identity && identity->nickname
             ? QString::fromStdString(*identity->nickname)
         : identity && identity->true_name
             ? QString::fromStdString(*identity->true_name)
-            : path_text(detail_item->directory_key));
+            : key;
+    presentation_name->setText(title);
+    const auto role_presence = QStringLiteral("role: %1 · presence: %2")
+        .arg(role_text(detail_item->role),
+            presence_text(detail_item->presence));
+    selected_key->setText(title == key
+        ? role_presence
+        : key + QStringLiteral(" · ") + role_presence);
     if (identity) {
         manifest_identity->setText(QStringLiteral(
-            "Manifest identity\ntrue name: %1\naddress: %2\nagent ID: %3\nstate: %4")
-            .arg(value_text(identity->true_name), value_text(identity->address),
+            "Manifest identity\naddress: %1\nagent ID: %2\nstate: %3")
+            .arg(value_text(identity->address),
                 value_text(identity->agent_id), value_text(identity->state)));
         manifest_llm->setText(QStringLiteral(
             "Manifest live LLM\nprovider: %1\nmodel: %2\nbase URL: %3\n"

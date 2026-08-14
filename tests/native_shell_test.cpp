@@ -450,27 +450,33 @@ void verify_open_project_behavior(
                 == std::optional<fs::path>(ampersand_key)
             && agent_row(window, ampersand_key)->isChecked()
             && !agent_row(window, plain_neighbor_key)->isChecked()
-            && label_text(window, "lingtai_selected_agent_key")
+            && label_text(window, "lingtai_selected_agent_presentation_name")
                 == QStringLiteral("A&B-agent")
+            && label_text(window, "lingtai_selected_agent_key")
+                == QStringLiteral("role: agent · presence: missing")
             && required_child<QLabel>(window, "lingtai_selected_agent_key")
                 ->textFormat() == Qt::PlainText,
-        "ampersand row selection must preserve exact C1, detail, and plain-text truth");
+        "a key-fallback header must show the directory key once and never "
+        "repeat it inside the detail header");
     require(tree_snapshot(roster.project) == roster_before_selection,
         "ampersand selection at its exact project-relative path must remain read-only");
     click_agent(window, "agent");
     require(shell.selection_state().selected_agent_directory_key()
             == std::optional<fs::path>("agent")
-            && agent_row(window, "agent")->isChecked()
-            && label_text(window, "lingtai_selected_agent_key") == "agent",
+            && agent_row(window, "agent")->isChecked(),
         "detail and highlight must derive from sole C1 selected-key truth");
     require(label_text(window, "lingtai_selected_agent_presentation_name")
             == QStringLiteral("Research Nickname"),
         "selected detail must prefer the manifest nickname as its presentation name");
+    require(label_text(window, "lingtai_selected_agent_key")
+            == QStringLiteral("agent · role: agent · presence: alive"),
+        "a distinct presentation title must keep one compact secondary line "
+        "with the directory key plus the existing role/presence summary");
     require(label_text(window, "lingtai_selected_agent_manifest_identity")
-            == QStringLiteral("Manifest identity\ntrue name: Immutable Agent Name\n"
-                "address: agent@example.test\nagent ID: manifest-agent-id\n"
-                "state: manifest-ready"),
-        "manifest identity must retain true name, address, ID, and state without status reconciliation");
+            == QStringLiteral("Manifest identity\naddress: agent@example.test\n"
+                "agent ID: manifest-agent-id\nstate: manifest-ready"),
+        "manifest identity must not repeat the true name already used as the "
+        "prominent title");
     require(label_text(window, "lingtai_selected_agent_manifest_llm")
             == QStringLiteral("Manifest live LLM\nprovider: openai\nmodel: gpt-test\n"
                 "base URL: https://api.example.test/v1\nAPI compatibility: openai\n"
@@ -2274,8 +2280,12 @@ void verify_persistent_roster_shell(
     require(shell.selection_state().selected_agent_directory_key()
                 == std::optional<fs::path>("alpha")
             && row->isChecked()
-            && label_text(window, "lingtai_selected_agent_key") == "alpha",
-        "Agent selection must still drive the same right detail");
+            && label_text(window, "lingtai_selected_agent_presentation_name")
+                == QStringLiteral("alpha")
+            && label_text(window, "lingtai_selected_agent_key")
+                == QStringLiteral("role: agent · presence: missing"),
+        "Agent selection must still drive the same right detail with a "
+        "key-fallback header that never repeats the directory key");
 
     // An unchanged projection refresh must not rebuild the row tree, so the
     // selected row keeps its identity, selected state, scroll, and focus.
