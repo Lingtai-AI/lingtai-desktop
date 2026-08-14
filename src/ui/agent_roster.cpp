@@ -5,6 +5,7 @@
 #include <QtCore/QString>
 #include <QtCore/QVariant>
 #include <QtGui/QFont>
+#include <QtGui/QKeyEvent>
 #include <QtGui/QPainter>
 #include <QtWidgets/QStyle>
 #include <QtWidgets/QStyleOptionFocusRect>
@@ -107,6 +108,7 @@ public:
 
 protected:
     void paintEvent(QPaintEvent *) override;
+    void keyPressEvent(QKeyEvent *event) override;
 };
 
 void AgentRowButton::paintEvent(QPaintEvent *) {
@@ -159,6 +161,22 @@ void AgentRowButton::paintEvent(QPaintEvent *) {
         style()->drawPrimitive(
             QStyle::PE_FrameFocusRect, &option, &painter, this);
     }
+}
+
+// Telegram activates a focused chats row on Return/Enter and routes it
+// through the exact same selection callback a click uses. QPushButton's own
+// key handling only activates autoDefault buttons, which these rows never
+// are, so a focused valid row's Return/Enter is forwarded through `click()`
+// to the existing clicked/selection path.
+void AgentRowButton::keyPressEvent(QKeyEvent *event) {
+    if ((event->key() == Qt::Key_Return
+            || event->key() == Qt::Key_Enter)
+        && isEnabled()) {
+        click();
+        event->accept();
+        return;
+    }
+    QPushButton::keyPressEvent(event);
 }
 
 QLabel *make_label(
@@ -344,6 +362,26 @@ void AgentRoster::set_rows(
         rows_layout_->addWidget(row);
     }
     rows_layout_->addStretch();
+}
+
+void AgentRoster::focus_row(
+        const std::optional<std::filesystem::path> &key) {
+    const auto key_text = key ? path_text(*key) : QString();
+    auto *target = static_cast<QPushButton *>(nullptr);
+    for (auto index = 0; index != rows_layout_->count(); ++index) {
+        auto *row = qobject_cast<QPushButton *>(
+            rows_layout_->itemAt(index)->widget());
+        if (!row || !row->isEnabled()) continue;
+        if (key && !key_text.isEmpty()
+            && row->property("directory_key").toString() != key_text) {
+            continue;
+        }
+        target = row;
+        break;
+    }
+    if (target) {
+        target->setFocus();
+    }
 }
 
 } // namespace lingtai::desktop

@@ -32,6 +32,7 @@ class QDialog;
 class QTimer;
 
 namespace Ui {
+class PlainShadow;
 class RpWidget;
 class RpWindow;
 } // namespace Ui
@@ -114,6 +115,14 @@ private:
     void render_agent_start_status();
     void handle_start_agent();
     void tick_agent_start_observation();
+    // Telegram's one mode recompute: derives OneColumn vs Normal from the
+    // body's available column space on every real resize, and shows exactly
+    // one full-width surface (roster or selected detail + Back) below the
+    // two-surface threshold.
+    void recompute_layout(int body_width);
+    // Telegram's OneColumn history-back path: the narrow detail returns to
+    // the roster and drops the selection. No-op outside the narrow detail.
+    void handle_detail_back();
     [[nodiscard]] ProjectOpenOutcome show_open_error(
         ProjectPathFailure failure,
         std::string message);
@@ -145,6 +154,13 @@ private:
     // project identity header, the compact Open/New Project actions, and the
     // Agent rows; the shell wires its row clicks and the action buttons.
     AgentRoster *agent_roster_ = nullptr;
+    // The flexible right content pane beside the roster, hidden in OneColumn
+    // roster mode and full-width in OneColumn detail mode.
+    Ui::RpWidget *content_ = nullptr;
+    Ui::PlainShadow *separator_ = nullptr;
+    // The one lib_ui-styled Back control in the detail header, visible only
+    // in Telegram's narrow OneColumn detail view.
+    Ui::RoundButton *detail_back_button_ = nullptr;
     Ui::RpWidget *empty_route_ = nullptr;
     Ui::RpWidget *project_route_ = nullptr;
     Ui::RpWidget *open_error_surface_ = nullptr;
@@ -164,6 +180,10 @@ private:
     // Owns the vendored composer input's Enter-to-send subscription for the
     // whole shell lifetime. The button click uses the button's own lifetime.
     rpl::lifetime submits_lifetime_;
+    // Owns the single body-resize mode recompute subscription for the whole
+    // shell lifetime; Telegram derives OneColumn vs Normal on every chats
+    // resize, so Desktop's one recompute rides the same event stream.
+    rpl::lifetime layout_lifetime_;
     // True while a New Project subprocess is pending (preset discovery or
     // spawn). While true the New Project and Open Project actions are
     // disabled so duplicate activation is impossible.

@@ -2314,38 +2314,135 @@ exit 0)",
     require(!cleanup_error, "bootstrap fixtures must be removed");
 }
 
-void verify_layout(lingtai::desktop::NativeShell &shell) {
+// The Commit-30 Telegram-derived responsive slice: one journey proves the
+// source-backed 380x480 minimum, the OneColumn <-> Normal transition at the
+// two-surface minima, the Return keyboard activation of a focused valid row
+// through the existing click callback, the detail Back path, and the
+// composer focus Telegram's HistoryWidget::setInnerFocus provides.
+void verify_layout(
+        lingtai::desktop::NativeShell &shell,
+        const fs::path &sandbox) {
     auto &window = shell.window();
-    auto *body = window.body().get();
     auto *sidebar = required_child<Ui::RpWidget>(
         window, "lingtai_desktop_sidebar");
     auto *content = required_child<Ui::RpWidget>(
         window, "lingtai_desktop_content");
+    auto *separator_widget = required_child<Ui::RpWidget>(
+        window, "lingtai_roster_separator");
+    auto *detail = required_child<Ui::RpWidget>(
+        window, "lingtai_agent_detail");
+    auto *back_button = required_ui_child<Ui::RoundButton>(
+        window, "lingtai_agent_detail_back");
+    auto *composer = static_cast<Ui::InputField *>(
+        required_child<QObject>(window, "lingtai_composer_input"));
 
-    require(window.minimumSize() == QSize(720, 480),
-        "window minimum size must protect the two-region layout");
-    window.resize(720, 480);
-    QCoreApplication::processEvents();
-    const auto narrow_content_width = content->width();
-    require(window.width() >= 720 && window.height() >= 480,
-        "window must honor its minimum size");
+    require(window.minimumSize() == QSize(380, 480),
+        "window minimum size must be Telegram's source-backed 380x480");
+
+    const auto project = sandbox / "project";
+    write_file(project / ".lingtai/human/.agent.json",
+        R"({"agent_id":"20260101-000000-h001","agent_name":"Ted",)"
+        R"("address":"human","state":"active"})");
+    write_file(project / ".lingtai/alpha/.agent.json",
+        R"({"admin":{},"agent_id":"20260712-191609-a001",)"
+        R"("agent_name":"alpha","address":"alpha","state":"active"})");
+    write_file(project / ".lingtai/beta/.agent.json",
+        R"({"admin":{},"agent_id":"20260712-191609-b001",)"
+        R"("agent_name":"beta","address":"beta","state":"active"})");
+    const auto fixture_before = tree_snapshot(project);
+    const auto outcome = shell.open_project(project, std::nullopt);
+    require(outcome.disposition == ProjectOpenDisposition::opened,
+        "the responsive fixture project must open");
+    require(tree_snapshot(project) == fixture_before,
+        "opening the responsive fixture must remain read-only");
+
+    // Wide: both surfaces visible, Back hidden, roster 260, detail >= 380.
+    require(sidebar->isVisible() && content->isVisible(),
+        "a wide window must show roster and detail together");
+    require(!back_button->isVisible(),
+        "Back must stay hidden in wide two-column mode");
     require(sidebar->width() == 260,
-        "sidebar must remain bounded");
-    require(sidebar->height() == content->height()
-            && sidebar->height() == body->height(),
-        "sidebar and content must fill the body");
-    require(sidebar->geometry().right() < content->geometry().left(),
-        "sidebar and content must be distinct regions");
+        "wide mode must keep the roster at the source-backed 260px");
+    require(detail->width() >= 380,
+        "wide mode must keep the detail column at least 380px");
 
+    // Narrow to the 380x480 minimum: exactly one surface, the roster.
+    window.resize(380, 480);
+    QCoreApplication::processEvents();
+    require(window.width() >= 380 && window.height() >= 480,
+        "window must honor its 380x480 minimum");
+    require(sidebar->isVisible() && !content->isVisible(),
+        "a narrow window must show only the roster surface");
+    require(!separator_widget->isVisible(),
+        "a narrow window must hide the column separator");
+
+    // Keyboard-activating a focused valid row with Return uses the existing
+    // selection path: detail replaces the roster, Back appears, and the
+    // composer is focused.
+    auto *row = agent_row(window, "alpha");
+    row->setFocus();
+    auto return_key = QKeyEvent(
+        QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(row, &return_key);
+    QCoreApplication::processEvents();
+    require(shell.selection_state().selected_agent_directory_key()
+            == std::optional<fs::path>("alpha"),
+        "Return must activate the focused valid Agent row");
+    require(!sidebar->isVisible() && content->isVisible(),
+        "a selected Agent in a narrow window must replace the roster with "
+        "the detail");
+    require(back_button->isVisible(),
+        "a selected Agent in a narrow window must expose Back");
+    require(window.focusWidget() == composer->rawTextEdit(),
+        "selecting an Agent must focus the composer");
+
+    // Narrow -> wide shows both and keeps the selection; wide -> narrow with
+    // the active selected Agent keeps the detail.
     window.resize(1200, 800);
     QCoreApplication::processEvents();
+    require(shell.selection_state().selected_agent_directory_key()
+                == std::optional<fs::path>("alpha")
+            && sidebar->isVisible() && content->isVisible()
+            && !back_button->isVisible(),
+        "widening must show both surfaces and keep the selected Agent");
+    require(sidebar->width() == 260 && detail->width() >= 380,
+        "wide mode must keep roster 260 and detail at least 380 after "
+        "narrowing");
+
+    window.resize(380, 480);
+    QCoreApplication::processEvents();
+    require(!sidebar->isVisible() && content->isVisible()
+            && back_button->isVisible(),
+        "narrowing with an active selected Agent must keep the detail");
+
+    // Back returns to the roster and focuses a usable row.
+    back_button->clicked(Qt::NoModifier, Qt::LeftButton);
+    QCoreApplication::processEvents();
+    require(!shell.selection_state().selected_agent_directory_key(),
+        "Back must clear the narrow-window selection");
+    require(sidebar->isVisible() && !content->isVisible()
+            && !back_button->isVisible(),
+        "Back must return a narrow window to the roster surface");
+    auto *focus = window.focusWidget();
+    require(focus && qobject_cast<QPushButton *>(focus),
+        "Back must return keyboard focus to a usable roster row");
+
+    // Widen once more: both surfaces return, Back hides, roster 260 and
+    // detail at least 380.
+    window.resize(1200, 800);
+    QCoreApplication::processEvents();
+    require(sidebar->isVisible() && content->isVisible(),
+        "a wide window must show roster and detail together after narrow");
+    require(!back_button->isVisible(),
+        "Back must stay hidden in wide two-column mode");
     require(sidebar->width() == 260,
-        "sidebar width must stay bounded after resize");
-    require(content->width() > narrow_content_width,
-        "content region must absorb added window width");
-    require(sidebar->height() == content->height()
-            && sidebar->height() == body->height(),
-        "both regions must continue filling the resized body");
+        "wide roster must be exactly 260px after narrow");
+    require(detail->width() >= 380,
+        "wide detail must stay at least 380px after narrow");
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "responsive fixtures must be removed");
 }
 
 // The Commit-24 shell slice: one persistent 260px left project/Agent list
@@ -2648,7 +2745,7 @@ int main(int argc, char **argv) {
             shell, project_root / "commit-18-task-card-fixture");
         verify_agent_preset_summary_panel(
             shell, project_root / "commit-19-preset-summary-fixture");
-        verify_layout(shell);
+        verify_layout(shell, project_root / "commit-30-responsive-fixture");
         verify_selected_agent_dashboard_layout(
             shell, project_root / "commit-28-dashboard-fixture");
         std::cout << "native shell behavior: OK\n";

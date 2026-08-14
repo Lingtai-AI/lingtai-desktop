@@ -36,6 +36,11 @@ public:
     void set_rows(const AgentSnapshot &snapshot,
         const std::optional<std::filesystem::path> &selected_key);
     void set_row_click_handler(RowClickHandler handler);
+    // Keyboard focus: focuses the enabled row for `key` when present,
+    // otherwise the first enabled (valid-manifest) row. The narrow OneColumn
+    // Back path hands keyboard navigation back to the roster through this.
+    void focus_row(
+        const std::optional<std::filesystem::path> &key = std::nullopt);
 
 private:
     void update_state_label(const AgentSnapshot &snapshot);

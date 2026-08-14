@@ -48,10 +48,21 @@
 namespace lingtai::desktop {
 namespace {
 
-constexpr auto kMinimumWindowWidth = 720;
+constexpr auto kMinimumWindowWidth = 380;
 constexpr auto kMinimumWindowHeight = 480;
 constexpr auto kDefaultWindowWidth = 1100;
 constexpr auto kDefaultWindowHeight = 720;
+
+// Telegram's source-backed two-surface minima, from the pinned
+// `computeColumnLayout` / `window.style`: the persistent list column is at
+// least 260px and the detail column at least 380px. The existing one-pixel
+// plain shadow separator between them is accounted locally rather than by
+// changing the source constants.
+constexpr auto kRosterColumnWidth = 260;
+constexpr auto kDetailColumnMinimumWidth = 380;
+constexpr auto kRosterSeparatorWidth = 1;
+constexpr auto kTwoColumnAvailableThreshold =
+    kRosterColumnWidth + kDetailColumnMinimumWidth;
 
 namespace fs = std::filesystem;
 
@@ -431,11 +442,13 @@ NativeShell::NativeShell()
     // selected-content pane, matching the pinned shell's between-column
     // `_sideShadow` geometry.
     auto *separator = new Ui::PlainShadow(body);
+    separator_ = separator;
     separator->setObjectName("lingtai_roster_separator");
     separator->setAccessibleName(QStringLiteral("Project list divider"));
     shell_layout->addWidget(separator);
 
     auto *content = new Ui::RpWidget(body);
+    content_ = content;
     content->setObjectName("lingtai_desktop_content");
     content->setAccessibleName(QStringLiteral("Workspace content"));
     content->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -560,9 +573,26 @@ NativeShell::NativeShell()
     auto *detail_layout = new QVBoxLayout(detail);
     detail_layout->setContentsMargins(0, 0, 0, 0);
     detail_layout->setSpacing(8);
-    detail_layout->addWidget(make_label(
+    auto *detail_header = new QHBoxLayout;
+    detail_header->setContentsMargins(0, 0, 0, 0);
+    detail_header->setSpacing(8);
+    detail_header->addWidget(make_label(
         detail, QStringLiteral("Selected Agent"),
-        "lingtai_agent_detail_heading", 14, QFont::DemiBold));
+        "lingtai_agent_detail_heading", 14, QFont::DemiBold), 1);
+    // One lib_ui-styled Back control in the existing detail header, visible
+    // only in Telegram's narrow OneColumn detail view; it returns to the
+    // roster through the same narrow-mode path Telegram's history-back uses.
+    detail_back_button_ = new Ui::RoundButton(
+        detail,
+        rpl::single(QStringLiteral("Back")),
+        st::defaultLightButton);
+    detail_back_button_->setObjectName("lingtai_agent_detail_back");
+    detail_back_button_->setAccessibleName(QStringLiteral("Back to Agent list"));
+    detail_back_button_->addClickHandler([this] {
+        handle_detail_back();
+    });
+    detail_header->addWidget(detail_back_button_);
+    detail_layout->addLayout(detail_header);
     auto *presentation_name = make_label(
         detail, QString(), "lingtai_selected_agent_presentation_name", 12,
         QFont::Medium);
@@ -903,8 +933,18 @@ NativeShell::NativeShell()
         }, submits_lifetime_);
     bootstrap_dialog_->hide();
 
+    // The one Telegram-derived mode recompute: Telegram's
+    // `SessionController` re-derives OneColumn vs Normal on every chats
+    // resize, so the body's own lifetime-owned size stream drives the same
+    // single local recompute.
+    window_->body()->sizeValue()
+        | rpl::on_next([this](QSize size) {
+            recompute_layout(size.width());
+        }, layout_lifetime_);
+
     refresh_route();
     render_roster();
+    recompute_layout(window_->body()->width());
 }
 
 NativeShell::~NativeShell() = default;
@@ -912,12 +952,14 @@ NativeShell::~NativeShell() = default;
 void NativeShell::show() {
     refresh_route();
     window_->show();
+    recompute_layout(window_->body()->width());
 }
 
 void NativeShell::show_offscreen() {
     refresh_route();
     window_->setAttribute(Qt::WA_DontShowOnScreen, true);
     window_->show();
+    recompute_layout(window_->body()->width());
 }
 
 void NativeShell::set_open_project_request_handler(
@@ -1227,6 +1269,7 @@ ProjectOpenOutcome NativeShell::open_project(
     pending_sleep_observation_.reset();
     pending_start_observation_.reset();
     refresh_route();
+    recompute_layout(window_->body()->width());
     return {
         .disposition = ProjectOpenDisposition::opened,
         .failure = ProjectPathFailure::none,
@@ -1752,13 +1795,65 @@ void NativeShell::handle_agent_selection(const fs::path &directory_key) {
     pending_start_observation_.reset();
     task_card_last_valid_.reset();
     render_roster();
+    recompute_layout(window_->body()->width());
+    // Telegram's `HistoryWidget::setInnerFocus()`: a selected Agent focuses
+    // the visible, enabled composer.
+    if (auto *composer = static_cast<Ui::InputField *>(
+            window_->findChild<QObject *>("lingtai_composer_input"))) {
+        if (composer->isVisible() && composer->isEnabled()) {
+            composer->setFocus();
+        }
+    }
     if (error) {
         error->clear();
         error->hide();
     }
 }
 
-// Reflects only the eligibility of the exact current selection against
+// Telegram's one mode recompute, fed by the body's own size stream: below
+// the source-backed two-surface threshold (`260 + 380` available column
+// pixels after the existing one-pixel separator) exactly one full-width
+// surface is shown -- the roster until an Agent is selected, then the detail
+// with Back; at or above it roster + separator + detail all show and Back is
+// hidden. A selected Agent is the sole state that decides which narrow
+// surface is active, so a wide->narrow resize with an active selection keeps
+// the detail, exactly as Telegram keeps the active chat in OneColumn.
+void NativeShell::recompute_layout(int body_width) {
+    const auto available = body_width - kRosterSeparatorWidth;
+    if (available >= kTwoColumnAvailableThreshold) {
+        agent_roster_->setVisible(true);
+        agent_roster_->setFixedWidth(kRosterColumnWidth);
+        separator_->setVisible(true);
+        content_->setVisible(true);
+        detail_back_button_->setVisible(false);
+        return;
+    }
+    const auto detail_active =
+        selection_state_.selected_agent_directory_key().has_value();
+    agent_roster_->setVisible(!detail_active);
+    agent_roster_->setFixedWidth(detail_active
+        ? kRosterColumnWidth
+        : std::max(body_width, kRosterColumnWidth));
+    separator_->setVisible(false);
+    content_->setVisible(detail_active);
+    detail_back_button_->setVisible(detail_active);
+}
+
+// Telegram's OneColumn history-back path: the narrow detail returns to the
+// roster, drops the selection, and hands keyboard focus to a usable roster
+// row. Guarded by Back's own visibility, so the wide two-column layout
+// (where Back is hidden) can never be deselected through this path.
+void NativeShell::handle_detail_back() {
+    if (!detail_back_button_ || !detail_back_button_->isVisible()) return;
+    selection_state_.clear_agent_selection();
+    reset_composer();
+    pending_sleep_observation_.reset();
+    pending_start_observation_.reset();
+    task_card_last_valid_.reset();
+    render_roster();
+    recompute_layout(window_->body()->width());
+    agent_roster_->focus_row(std::nullopt);
+}
 // whatever `agents_` currently holds. Also reached through `render_roster()`
 // from a click or a timer tick, but only before either overwrites the
 // button/status with its own more specific write/observation text, so this
