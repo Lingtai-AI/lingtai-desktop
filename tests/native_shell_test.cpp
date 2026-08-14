@@ -2857,23 +2857,13 @@ void verify_telegram_theme_reset(
     };
     // The surface owns a transparent Base, so no widget palette role is a
     // meaningful backdrop: sample the painted backdrop directly from the grab
-    // and compare it to the palette-derived composite the surface paints
-    // (`historyScrollBg` at alpha 128 over the shell `windowBg`, per channel).
+    // and compare it to the light lib_ui palette token the surface paints
+    // (`windowBgOver`, the shared warm-neutral field used across the shell).
     const auto sampled_backdrop = surface_image.pixelColor(
         surface_image.width() / 2, surface_image.height() - 6);
-    const auto composite = [](const QColor &over, const QColor &under,
-            int alpha) {
-        const auto mix = [&](int a, int b) {
-            return (a * alpha + b * (255 - alpha)) / 255;
-        };
-        return QColor(mix(over.red(), under.red()),
-            mix(over.green(), under.green()), mix(over.blue(), under.blue()));
-    };
-    const auto expected_backdrop = composite(
-        st::historyScrollBg->c, st::windowBg->c, 128);
-    require(color_close(sampled_backdrop, expected_backdrop),
-        "the sampled chat backdrop pixel must match the palette-derived "
-        "composite the surface paints");
+    require(color_close(sampled_backdrop, st::windowBgOver->c),
+        "the sampled chat backdrop pixel must match the light lib_ui palette "
+        "token the surface paints");
     require(sampled_backdrop != QColor(Qt::white)
             && sampled_backdrop != st::msgInBg->c
             && sampled_backdrop != st::msgOutBg->c,

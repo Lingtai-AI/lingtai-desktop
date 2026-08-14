@@ -32,7 +32,6 @@ constexpr auto kMinMessageWidth = 160;
 constexpr auto kBubbleHPadding = 10;
 constexpr auto kBubbleVPadding = 4;
 constexpr auto kBubbleRadius = 8;
-constexpr auto kBackdropOverlayAlpha = 0x80;
 constexpr auto kMessageBlockProperty = QTextFormat::UserProperty + 1;
 
 QTextBlockFormat message_block_format(bool outgoing, int viewport_width) {
@@ -200,10 +199,10 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
     auto *surface_viewport = viewport();
     QPainter painter(surface_viewport);
     painter.setClipRect(event->rect());
-    painter.fillRect(event->rect(), st::windowBg);
-    auto scroll_overlay = QColor(st::historyScrollBg->c);
-    scroll_overlay.setAlpha(kBackdropOverlayAlpha);
-    painter.fillRect(event->rect(), scroll_overlay);
+    // The chat backdrop is the existing light palette token (windowBgOver),
+    // the same warm-neutral field the shell list surface paints, so the
+    // non-bubble area reads light rather than a forced-alpha composite.
+    painter.fillRect(event->rect(), st::windowBgOver);
 
     const auto h_offset = horizontalScrollBar()->value();
     const auto v_offset = verticalScrollBar()->value();
