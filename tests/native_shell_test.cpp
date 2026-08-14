@@ -9,7 +9,10 @@
 #include <QtCore/QThread>
 #include <QtGui/QColor>
 #include <QtGui/QPalette>
+#include <QtGui/QTextBlock>
 #include <QtGui/QTextCursor>
+#include <QtGui/QTextDocument>
+#include <QtGui/QTextFormat>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QDialog>
@@ -873,6 +876,38 @@ void verify_selected_agent_conversation(
         "mail for another conversation must be absent");
     require(state->text() == QStringLiteral("2 messages · 1 skipped"),
         "the compact state must show the count and the generic skipped count");
+
+    // The real QTextDocument must expose the two directions as distinct
+    // message blocks: the incoming row under its sender header and the
+    // outgoing row under the "You" header, oppositely aligned with distinct
+    // real backgrounds.
+    auto incoming_block = QTextBlock();
+    auto outgoing_block = QTextBlock();
+    for (auto block = surface->document()->begin();
+            block != surface->document()->end();
+            block = block.next()) {
+        if (block.text().startsWith(QStringLiteral("Telegram Bot ·"))) {
+            incoming_block = block;
+        } else if (block.text().startsWith(QStringLiteral("You ·"))) {
+            outgoing_block = block;
+        }
+    }
+    require(incoming_block.isValid() && outgoing_block.isValid(),
+        "the conversation must expose real incoming and outgoing message blocks");
+    const auto incoming_alignment = incoming_block.blockFormat().alignment();
+    const auto outgoing_alignment = outgoing_block.blockFormat().alignment();
+    require((incoming_alignment == Qt::AlignLeft
+                && outgoing_alignment == Qt::AlignRight)
+            || (incoming_alignment == Qt::AlignRight
+                && outgoing_alignment == Qt::AlignLeft),
+        "incoming and outgoing message blocks must be oppositely aligned");
+    const auto incoming_background = incoming_block.blockFormat().background();
+    const auto outgoing_background = outgoing_block.blockFormat().background();
+    require(incoming_background.style() != Qt::NoBrush
+            && outgoing_background.style() != Qt::NoBrush
+            && incoming_background.color() != outgoing_background.color(),
+        "incoming and outgoing message blocks must have distinct real backgrounds");
+
     require(tree_snapshot(project) == fixture_before,
         "opening and selecting the first Agent must never write to the project");
 
@@ -960,6 +995,33 @@ void verify_selected_agent_conversation(
         "the newly arrived reply must be visible: the pane must follow the "
         "bottom when the human was already there, not leave the reply below "
         "the fold");
+
+    // A human scrolled above the bottom before a real append must keep that
+    // exact non-bottom position: only a human already at the bottom follows
+    // the new bottom.
+    conversation_scrollbar->setValue(conversation_scrollbar->maximum() / 2);
+    const auto scrolled_value = conversation_scrollbar->value();
+    require(scrolled_value > 0
+            && scrolled_value < conversation_scrollbar->maximum(),
+        "the human must be established above the bottom before the "
+        "scrolled-up append");
+    write_file(mailbox / "inbox" / "20260807T193100-sc01" / "message.json",
+        conversation_envelope("telegram-bot", "human", "Re: scrolled up",
+            "Scrolled-up reply text.", "received_at", "2026-08-07T19:31:00Z"));
+    const auto scrolled_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!surface->toPlainText().contains(
+                QStringLiteral("Scrolled-up reply text."))
+            && std::chrono::steady_clock::now() < scrolled_deadline) {
+        QThread::msleep(50);
+        QCoreApplication::processEvents();
+    }
+    require(surface->toPlainText().contains(
+                QStringLiteral("Scrolled-up reply text.")),
+        "a scrolled-up append must still surface through the real one-second "
+        "view timer");
+    require(conversation_scrollbar->value() == scrolled_value,
+        "a scrolled-up append must preserve the prior non-bottom position");
     const auto after_reply = tree_snapshot(project);
 
     // A valid route whose Agent has no mail is an ordinary empty conversation.

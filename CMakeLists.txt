@@ -176,7 +176,8 @@ target_include_directories(lingtai_desktop_core PUBLIC
 add_library(lingtai_desktop_native_shell STATIC
     src/native_shell.cpp
     src/project_bootstrap.cpp
-    src/ui/agent_roster.cpp)
+    src/ui/agent_roster.cpp
+    src/ui/conversation_surface.cpp)
 init_target(lingtai_desktop_native_shell)
 target_include_directories(lingtai_desktop_native_shell PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src")

@@ -8,6 +8,7 @@
 #include "direct_mail_publisher.h"
 
 #include "styles/palette.h"
+#include "ui/conversation_surface.h"
 #include "ui/rp_widget.h"
 #include "ui/widgets/rp_window.h"
 #include "ui/widgets/shadow.h"
@@ -388,15 +389,13 @@ NativeShell::NativeShell()
     detail_layout->addWidget(make_label(
         detail, QStringLiteral("Conversation"),
         "lingtai_selected_agent_conversation_heading", 12, QFont::DemiBold));
-    auto *conversation = new QPlainTextEdit(detail);
+    auto *conversation = new ConversationSurface(detail);
     conversation->setObjectName("lingtai_selected_agent_conversation");
     conversation->setAccessibleName(
         QStringLiteral("Selected Agent conversation"));
     conversation->setAccessibleDescription(QStringLiteral(
         "The current direct conversation with the selected Agent, shown "
         "read-only as plain text."));
-    conversation->setReadOnly(true);
-    conversation->setLineWrapMode(QPlainTextEdit::WidgetWidth);
     conversation->setMinimumHeight(180);
     conversation->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     detail_layout->addWidget(conversation, 1);
@@ -1251,7 +1250,7 @@ void NativeShell::render_roster() {
 // selected Agent. It reads the human's own mailbox and infers nothing about
 // delivery, replies, or unread state.
 void NativeShell::render_conversation() {
-    auto *surface = window_->findChild<QPlainTextEdit *>(
+    auto *surface = window_->findChild<ConversationSurface *>(
         "lingtai_selected_agent_conversation");
     auto *state = window_->findChild<QLabel *>(
         "lingtai_selected_agent_conversation_state");
@@ -1260,23 +1259,6 @@ void NativeShell::render_conversation() {
     auto *send_button = window_->findChild<QPushButton *>(
         "lingtai_composer_send_button");
     if (!surface || !state || !composer_input || !send_button) return;
-    // Replace the document only when content actually changed (an identical
-    // refresh must not reset scroll/selection); on a real change, follow the
-    // new bottom only if the human was already there. Mirrors mail.go's
-    // AtBottom/GotoBottom guard and Telegram's wasAtBottom-gated
-    // updateHistoryGeometry.
-    const auto show = [&](const QString &text, const QString &compact) {
-        if (surface->toPlainText() != text) {
-            auto *scrollbar = surface->verticalScrollBar();
-            const auto previous_value = scrollbar->value();
-            const auto was_at_bottom = previous_value >= scrollbar->maximum();
-            surface->setPlainText(text);
-            scrollbar->setValue(was_at_bottom
-                ? scrollbar->maximum()
-                : std::min(previous_value, scrollbar->maximum()));
-        }
-        state->setText(compact);
-    };
     // Composer enablement only; never touches typed text or send status, so a
     // refresh right after a send does not erase the status it just set.
     const auto set_composer_eligible = [&](bool eligible) {
@@ -1286,8 +1268,9 @@ void NativeShell::render_conversation() {
 
     if (!selection_state_.active_project()
         || !selection_state_.selected_agent_directory_key()) {
-        show(QStringLiteral("Select an Agent to see your conversation."),
-            QString());
+        surface->set_plain_state(QStringLiteral(
+            "Select an Agent to see your conversation."));
+        state->setText(QString());
         set_composer_eligible(false);
         return;
     }
@@ -1295,9 +1278,9 @@ void NativeShell::render_conversation() {
         *selection_state_.active_project(), agents_,
         selection_state_.selected_agent_directory_key());
     if (!route) {
-        show(QStringLiteral(
-                "No conversation is available for this selection."),
-            QString());
+        surface->set_plain_state(QStringLiteral(
+                "No conversation is available for this selection."));
+        state->setText(QString());
         set_composer_eligible(false);
         return;
     }
@@ -1309,18 +1292,12 @@ void NativeShell::render_conversation() {
     const auto them = presentation_name && !presentation_name->text().isEmpty()
         ? presentation_name->text()
         : path_text(route->target_directory_key);
-    auto blocks = QStringList();
-    for (const auto &message : history.messages) {
-        auto block = QStringLiteral("%1 · %2")
-            .arg(message.outgoing ? QStringLiteral("You") : them,
-                QString::fromStdString(message.timestamp));
-        if (!message.subject.empty()) {
-            block += QLatin1Char('\n')
-                + QString::fromStdString(message.subject);
-        }
-        // Message text stays literal: the surface never interprets markup.
-        block += QLatin1Char('\n') + QString::fromStdString(message.text);
-        blocks.push_back(block);
+    // The owner rebuilds only on real change and owns the exact was-at-bottom
+    // capture plus scroll restoration; composer code stays untouched.
+    if (history.messages.empty()) {
+        surface->set_plain_state(QStringLiteral("No messages yet."));
+    } else {
+        surface->set_conversation(them, history.messages);
     }
     const auto count = history.messages.size();
     auto compact = count == 1
@@ -1329,8 +1306,7 @@ void NativeShell::render_conversation() {
     if (history.skipped > 0) {
         compact += QStringLiteral(" · %1 skipped").arg(history.skipped);
     }
-    show(blocks.isEmpty() ? QStringLiteral("No messages yet.")
-                          : blocks.join(QStringLiteral("\n\n")), compact);
+    state->setText(compact);
 }
 
 // Called only when the selected target actually changes (a fresh project open
