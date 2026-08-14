@@ -174,7 +174,8 @@ target_include_directories(lingtai_desktop_core PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
 add_library(lingtai_desktop_native_shell STATIC
-    src/native_shell.cpp)
+    src/native_shell.cpp
+    src/project_bootstrap.cpp)
 init_target(lingtai_desktop_native_shell)
 target_include_directories(lingtai_desktop_native_shell PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -186,6 +187,7 @@ target_compile_options(lingtai_desktop_native_shell PRIVATE
 target_link_libraries(lingtai_desktop_native_shell
     PUBLIC lingtai_desktop_core
     PRIVATE desktop-app::lib_ui
+        Qt6::Core
         lingtai_desktop_agent_projection lingtai_desktop_conversation
         lingtai_desktop_mail_publisher lingtai_desktop_agent_activity
         lingtai_desktop_agent_sleep lingtai_desktop_agent_launch

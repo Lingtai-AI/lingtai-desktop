@@ -10,6 +10,8 @@
 #include <QtGui/QPalette>
 #include <QtGui/QTextCursor>
 #include <QtWidgets/QApplication>
+#include <QtWidgets/QComboBox>
+#include <QtWidgets/QDialog>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLayout>
 #include <QtWidgets/QLineEdit>
@@ -1853,6 +1855,308 @@ void verify_agent_preset_summary_panel(
     require(!cleanup_error, "Presets fixtures must be removed");
 }
 
+// Writes one executable POSIX fixture executable used only by the Commit-22
+// New Project journey. It records its exact separate argv, then dispatches
+// on `$1` (`presets` or `spawn <dir> --preset <name>`) to the two caller-
+// provided shell fragments. It never runs a real TUI and never touches a
+// real project/Agent/config/credential.
+void write_fixture_tui(
+        const fs::path &tui_path,
+        const fs::path &argv_record,
+        std::string_view presets_fragment,
+        std::string_view spawn_fragment) {
+    auto script = std::string("#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"")
+        + argv_record.string() + "\"\n"
+        + "if [ \"$1\" = \"presets\" ]; then\n"
+        + std::string(presets_fragment) + "\nfi\n"
+        + "if [ \"$1\" = \"spawn\" ]; then\n"
+        + std::string(spawn_fragment) + "\nfi\n"
+        + "exit 2\n";
+    write_file(tui_path, script);
+    std::error_code error;
+    fs::permissions(tui_path,
+        fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec
+            | fs::perms::others_read | fs::perms::others_exec,
+        fs::perm_options::replace, error);
+    require(!error, "fixture TUI must be made executable");
+}
+
+std::string fixture_tui_argv(const std::vector<std::string> &args) {
+    auto text = std::string();
+    for (const auto &arg : args) {
+        text += arg + "\n";
+    }
+    return text;
+}
+
+// The Commit-22 journey: a user starting with no project can explicitly
+// create a new project and its first Agent through the canonical TUI
+// headless `presets`/`spawn` surface. The smallest native assertion first:
+// the no-project window must expose a visible `New Project` action beside
+// `Open Project`.
+void verify_first_project_bootstrap(
+        lingtai::desktop::NativeShell &shell,
+        const fs::path &sandbox) {
+    auto &window = shell.window();
+    auto *new_project_button = required_child<QPushButton>(
+        window, "lingtai_new_project_button");
+    require(new_project_button->isVisible(),
+        "no-project state must expose a visible New Project action");
+    require(new_project_button->text() == QStringLiteral("New Project\u2026"),
+        "new project affordance text changed");
+    require(new_project_button->accessibleName() == "New Project",
+        "new project affordance needs a static accessible name");
+    auto *open_button = required_child<QPushButton>(
+        window, "lingtai_open_project_button");
+    require(open_button->isVisible(),
+        "no-project state must keep the Open Project action visible");
+    auto *status = required_child<QLabel>(
+        window, "lingtai_bootstrap_status");
+    auto *dialog = required_child<QDialog>(
+        window, "lingtai_new_project_dialog");
+    auto *destination_input = required_child<QLineEdit>(
+        window, "lingtai_bootstrap_destination_input");
+    auto *preset_chooser = required_child<QComboBox>(
+        window, "lingtai_bootstrap_preset_chooser");
+    auto *create_start = required_child<QPushButton>(
+        window, "lingtai_bootstrap_create_start");
+    required_child<QPushButton>(window, "lingtai_bootstrap_cancel");
+    auto *dialog_status = required_child<QLabel>(
+        window, "lingtai_bootstrap_dialog_status");
+    auto *browse_button = required_child<QPushButton>(
+        window, "lingtai_bootstrap_destination_browse");
+    auto *dialog_note = required_child<QLabel>(
+        window, "lingtai_bootstrap_dialog_note");
+    require(browse_button->text() == QStringLiteral("Browse\u2026"),
+        "destination row must offer a Browse affordance");
+    require(create_start->text() == QStringLiteral("Create & Start"),
+        "the committing dialog action must be explicitly Create & Start");
+    require(dialog_note->text().contains(QStringLiteral("first Agent")),
+        "the dialog note must truthfully state the first-Agent naming rule");
+
+    const auto argv_record = sandbox / "tui-argv.txt";
+    fs::create_directories(sandbox);
+    const auto destination = fs::canonical(sandbox) / "created-project";
+    const auto success_tui = sandbox / "tui-success";
+    // A real fixture process: records its exact argv; `presets` prints the
+    // current two-entry JSON contract and `spawn <dir> --preset <name>`
+    // creates a minimal valid returned project and emits valid launch JSON.
+    write_fixture_tui(success_tui, argv_record,
+        R"(printf '%s' '{"presets":[{"name":"alpha","description":"Alpha preset","tier":"t1","source":"template","path":"/tmp/a.json"},{"name":"beta","description":"Beta preset","tier":"t2","source":"saved","path":"/tmp/b.json"}]}'
+exit 0)",
+        R"(mkdir -p "$2/.lingtai/agent"
+printf '%s' '{"admin":{}}' > "$2/.lingtai/agent/.agent.json"
+printf '%s' "{\"status\":\"launched\",\"project_dir\":\"$2\",\"agent_name\":\"agent\",\"agent_dir\":\"$2/.lingtai/agent\",\"preset\":\"$4\",\"recipe\":\"plain\",\"pid\":0}"
+exit 0)");
+    shell.set_tui_executable(success_tui);
+
+    // Evidence 1: no-project window exposes New Project; clicking it runs the
+    // exact separate argv `presets` and keeps the UI responsive/pending.
+    auto open_requests = std::size_t{0};
+    shell.set_open_project_request_handler([&] { ++open_requests; });
+    new_project_button->click();
+    require(status->text() == QStringLiteral("Discovering presets…"),
+        "a pending discovery must show one truthful phase status");
+    require(!new_project_button->isEnabled() && !open_button->isEnabled(),
+        "duplicate New Project and Open Project must be disabled while pending");
+    QCoreApplication::processEvents();
+    const auto presets_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (read_file(argv_record) != fixture_tui_argv({"presets"})
+            && std::chrono::steady_clock::now() < presets_deadline) {
+        QThread::msleep(20);
+    }
+    require(read_file(argv_record) == fixture_tui_argv({"presets"}),
+        "clicking New Project must run the exact separate argv `presets`");
+    open_button->click();
+    require(open_requests == 0,
+        "Open Project must not fire while New Project is pending");
+
+    // Evidence 2: valid preset JSON populates the dialog; dismissing it via
+    // the real QDialog rejected path (standard window close control / Escape)
+    // must be the same no-spawn cancellation and must re-enable actions.
+    const auto dialog_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!dialog->isVisible()
+            && std::chrono::steady_clock::now() < dialog_deadline) {
+        QThread::msleep(20);
+        QCoreApplication::processEvents();
+    }
+    require(dialog->isVisible(),
+        "valid preset discovery must show the New Project dialog");
+    require(preset_chooser->count() == 2
+            && preset_chooser->itemText(0) == "alpha"
+            && preset_chooser->itemText(1) == "beta",
+        "the preset chooser must list the returned preset names");
+    dialog->reject();
+    QCoreApplication::processEvents();
+    require(!dialog->isVisible() && new_project_button->isEnabled()
+            && open_button->isEnabled(),
+        "dismissing the dialog via reject() must close it and re-enable both "
+        "actions");
+    require(read_file(argv_record) == fixture_tui_argv({"presets"}),
+        "dismissing the dialog must perform no spawn at all");
+
+    // Evidence 3: a destination plus the selected non-first preset and
+    // Create & Start produces the exact separate spawn argv, with duplicate
+    // New/Open actions staying disabled while pending.
+    new_project_button->click();
+    QCoreApplication::processEvents();
+    while (!dialog->isVisible()
+            && std::chrono::steady_clock::now() < dialog_deadline) {
+        QThread::msleep(20);
+        QCoreApplication::processEvents();
+    }
+    require(dialog->isVisible(), "the second discovery must reopen the dialog");
+    create_start->click();
+    QCoreApplication::processEvents();
+    require(dialog_status->text().contains(QStringLiteral("nonempty")),
+        "Create & Start with no destination must refuse with a concise "
+        "dialog status");
+    destination_input->setText(path_text(destination));
+    preset_chooser->setCurrentIndex(1); // beta: non-first preset
+    create_start->click();
+    require(status->text() == QStringLiteral(
+                "Creating project and starting Agent…"),
+        "a pending spawn must show one truthful phase status");
+    require(!new_project_button->isEnabled() && !open_button->isEnabled(),
+        "duplicate New/Open actions must stay disabled while spawn is pending");
+    QCoreApplication::processEvents();
+    const auto spawn_argv = std::vector<std::string>{
+        "spawn", path_text(destination).toStdString(),
+        "--preset", "beta"};
+    const auto spawn_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (read_file(argv_record)
+                != fixture_tui_argv({"presets", "presets"})
+                    + fixture_tui_argv(spawn_argv)
+            && std::chrono::steady_clock::now() < spawn_deadline) {
+        QThread::msleep(20);
+    }
+    require(read_file(argv_record)
+            == fixture_tui_argv({"presets", "presets"})
+                + fixture_tui_argv(spawn_argv),
+        "Create & Start must run the exact separate argv `spawn <destination> "
+        "--preset beta` with no shell joining");
+
+    // Evidence 4: fixture success creates a minimal valid returned project,
+    // emits valid launch JSON, and Desktop attaches that exact returned
+    // project and reports created+started.
+    const auto attached_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (status->text() != QStringLiteral("Project created and Agent started.")
+            && std::chrono::steady_clock::now() < attached_deadline) {
+        QThread::msleep(20);
+        QCoreApplication::processEvents();
+    }
+    require(status->text() == QStringLiteral(
+                "Project created and Agent started."),
+        "spawn success must report the concise created-and-started status");
+    require(shell.selection_state().active_project()
+            && shell.selection_state().active_project()->root()
+                == fs::canonical(destination),
+        "Desktop must attach the exact returned project directory");
+    require(!dialog->isVisible(),
+        "a successful spawn must close the New Project dialog");
+
+    // Evidence 5: a nonzero structured spawn failure must leave the currently
+    // attached project unchanged, re-enable actions, and show the structured
+    // error plus a generic partial-state warning.
+    const auto fail_argv_record = sandbox / "tui-fail-argv.txt";
+    const auto fail_tui = sandbox / "tui-fail";
+    write_fixture_tui(fail_tui, fail_argv_record,
+        R"(printf '%s' '{"presets":[{"name":"alpha","description":"Alpha preset","tier":"t1","source":"template","path":"/tmp/a.json"},{"name":"beta","description":"Beta preset","tier":"t2","source":"saved","path":"/tmp/b.json"}]}'
+exit 0)",
+        R"(printf '%s\n' 'warning: recipe copy: fixture recipe copy failed' >&2
+printf '%s\n' '{' >&2
+printf '%s\n' '  "error": "fixture spawn refused",' >&2
+printf '%s\n' '  "code": "launch_failed"' >&2
+printf '%s\n' '}' >&2
+exit 7)");
+    shell.set_tui_executable(fail_tui);
+    const auto attached_root = fs::canonical(destination);
+    new_project_button->click();
+    QCoreApplication::processEvents();
+    while (!dialog->isVisible()
+            && std::chrono::steady_clock::now() < dialog_deadline) {
+        QThread::msleep(20);
+        QCoreApplication::processEvents();
+    }
+    require(dialog->isVisible(),
+        "the failing fixture's discovery must still show the dialog");
+    destination_input->setText(path_text(sandbox / "partial-destination"));
+    preset_chooser->setCurrentIndex(0);
+    create_start->click();
+    QCoreApplication::processEvents();
+    const auto failure_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!status->text().contains(QStringLiteral("launch_failed"))
+            && std::chrono::steady_clock::now() < failure_deadline) {
+        QThread::msleep(20);
+        QCoreApplication::processEvents();
+    }
+    require(status->text().contains(QStringLiteral("launch_failed"))
+            && status->text().contains(
+                QStringLiteral("fixture spawn refused"))
+            && status->text().contains(QStringLiteral(
+                "partially initialized LingTai project")),
+        "a structured spawn failure must surface the code and error plus the "
+        "generic partial-state warning");
+    require(shell.selection_state().active_project()
+            && shell.selection_state().active_project()->root() == attached_root,
+        "a spawn failure must leave the currently attached project unchanged");
+    require(new_project_button->isEnabled() && open_button->isEnabled(),
+        "a spawn failure must re-enable both actions");
+    require(!dialog->isVisible(),
+        "a failed spawn must close the New Project dialog");
+    require(fs::exists(fail_argv_record)
+            && read_file(fail_argv_record)
+                == fixture_tui_argv({"presets"})
+                    + fixture_tui_argv({"spawn",
+                        path_text(sandbox / "partial-destination").toStdString(),
+                        "--preset", "alpha"}),
+        "the failing spawn must still run the exact separate spawn argv");
+
+    // Evidence 6: one malformed preset-list case fails closed before any
+    // dialog or spawn.
+    const auto malformed_argv_record = sandbox / "tui-malformed-argv.txt";
+    const auto malformed_tui = sandbox / "tui-malformed";
+    write_fixture_tui(malformed_tui, malformed_argv_record,
+        R"(printf '%s' '{this is not json'
+exit 0)",
+        R"(exit 9)");
+    shell.set_tui_executable(malformed_tui);
+    new_project_button->click();
+    QCoreApplication::processEvents();
+    const auto malformed_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (read_file(malformed_argv_record) != fixture_tui_argv({"presets"})
+            && std::chrono::steady_clock::now() < malformed_deadline) {
+        QThread::msleep(20);
+    }
+    require(read_file(malformed_argv_record) == fixture_tui_argv({"presets"}),
+        "the malformed-presets fixture must be invoked with the exact argv");
+    const auto fail_closed_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!status->text().contains(QStringLiteral("could not be used"))
+            && std::chrono::steady_clock::now() < fail_closed_deadline) {
+        QThread::msleep(20);
+        QCoreApplication::processEvents();
+    }
+    require(status->text().contains(QStringLiteral("could not be used")),
+        "malformed preset output must fail closed with one concise failure");
+    require(!dialog->isVisible() && new_project_button->isEnabled()
+            && open_button->isEnabled(),
+        "a malformed preset list must never show the dialog and must "
+        "re-enable actions");
+    require(read_file(malformed_argv_record) == fixture_tui_argv({"presets"}),
+        "a malformed preset list must never reach spawn");
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "bootstrap fixtures must be removed");
+}
+
 void verify_layout(lingtai::desktop::NativeShell &shell) {
     auto &window = shell.window();
     auto *body = window.body().get();
@@ -1907,6 +2211,8 @@ int main(int argc, char **argv) {
         shell.show_offscreen();
         QCoreApplication::processEvents();
         verify_semantics_and_request(shell, project_root);
+        verify_first_project_bootstrap(
+            shell, project_root / "commit-22-bootstrap-fixture");
         verify_open_project_behavior(
             shell, project_root / "commit-7-open-project-fixtures");
         verify_selected_agent_conversation(

@@ -44,6 +44,18 @@ The build wrapper builds `lingtai_desktop_smoke` and the focused behavior
 contracts. The smoke runner sets Qt's offscreen platform plugin and requires the
 executable's `LINGTAI_LIB_UI_FULL_TARGET_SMOKE_OK` marker.
 
+## First-project bootstrap
+
+A user starting with no LingTai project can explicitly create a new project and
+its first Agent without dropping to the terminal. The Desktop delegates the
+whole creation to the canonical TUI headless surface: it runs the configured
+`lingtai-tui presets` subprocess (exact separate argv, never a shell string),
+shows one small dialog for the destination folder and preset choice, and on an
+explicit `Create & Start` runs the exact `lingtai-tui spawn <destination>
+--preset <name>` argv. The returned project is attached only through the
+existing project-open path. Desktop still does not manually write project or
+Agent configuration and never adds an Agent to an existing network.
+
 ## Dependency boundary
 
 The machine-readable exact lock is

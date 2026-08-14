@@ -1,6 +1,7 @@
 #include "native_shell.h"
 
 #include <QtCore/QDir>
+#include <QtCore/QStandardPaths>
 #include <QtCore/QTimer>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QFileDialog>
@@ -36,6 +37,15 @@ int main(int argc, char **argv) {
         static_cast<void>(shell.open_project(
             std::filesystem::path(selected.toStdU16String())));
     });
+    // The shipped default configured TUI executable for the explicit New
+    // Project flow: the `lingtai-tui` found on PATH, resolved once at
+    // startup. This is a path to a subprocess, never a shell command string.
+    const auto configured_tui = QStandardPaths::findExecutable(
+        QStringLiteral("lingtai-tui"));
+    if (!configured_tui.isEmpty()) {
+        shell.set_tui_executable(
+            std::filesystem::path(configured_tui.toStdU16String()));
+    }
     if (offscreen_mode) {
         shell.show_offscreen();
     } else {

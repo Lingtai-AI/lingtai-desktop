@@ -4,6 +4,7 @@
 #include "agent_projection.h"
 #include "agent_sleep.h"
 #include "agent_task_card.h"
+#include "project_bootstrap.h"
 #include "workspace_selection.h"
 
 #include <chrono>
@@ -13,6 +14,7 @@
 #include <optional>
 #include <string>
 
+class QDialog;
 class QTimer;
 
 namespace Ui {
@@ -47,6 +49,11 @@ public:
     void show();
     void show_offscreen();
     void set_open_project_request_handler(OpenProjectRequestHandler handler);
+    // The one Desktop-configured TUI executable for explicit first-project
+    // bootstrap: the shipped `lingtai-tui` or a focused test fixture. It is
+    // never interpreted as a shell command string; only exact separate argv
+    // is ever passed to it. Defaults to empty (New Project fails closed).
+    void set_tui_executable(std::filesystem::path executable);
     // Application composition's one concrete fallback interpreter, used only
     // when a selected Agent's own `init.json.venv_path` is absent or its
     // platform Python does not exist. Defaults to an empty path.
@@ -69,6 +76,15 @@ public:
 
 private:
     void request_open_project();
+    void request_new_project();
+    void handle_presets_finished(PresetDiscoveryResult result);
+    void handle_spawn_finished(SpawnOutcome outcome);
+    void handle_create_and_start();
+    void handle_cancel_bootstrap();
+    void handle_browse_destination();
+    void set_bootstrap_actions_enabled(bool enabled);
+    void set_bootstrap_status(const QString &text);
+    void show_bootstrap_dialog(const std::vector<PresetEntry> &presets);
     void refresh_route();
     void render_roster();
     void render_conversation();
@@ -118,6 +134,20 @@ private:
     AgentSnapshot agents_;
     OpenProjectRequestHandler open_project_request_handler_;
     std::filesystem::path agent_start_fallback_python_;
+    // One narrow injectable dependency: the configured TUI executable used
+    // only by the explicit New Project flow.
+    std::filesystem::path tui_executable_;
+    // The one async owner of the headless `presets`/`spawn` subprocess calls.
+    // Owned by the shell; no PID, lock, retry, or rollback machinery.
+    std::unique_ptr<ProjectBootstrapRunner> bootstrap_runner_;
+    // The one small Desktop-owned New Project dialog, built once in the
+    // constructor and hidden until a successful preset discovery.
+    QDialog *bootstrap_dialog_ = nullptr;
+    Ui::RpWidget *bootstrap_status_surface_ = nullptr;
+    // True while a New Project subprocess is pending (preset discovery or
+    // spawn). While true the New Project and Open Project actions are
+    // disabled so duplicate activation is impossible.
+    bool bootstrap_pending_ = false;
     // View-scoped: exists only for the shell's own lifetime, re-invokes the
     // same stateless snapshot reader every second, and owns no cursor/offset
     // state of its own.

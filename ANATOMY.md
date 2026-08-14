@@ -22,6 +22,7 @@ src/agent_task_card.{h,cpp}            stateless read-only selected-Agent Task C
 src/agent_preset_summary.{h,cpp}       stateless read-only selected-Agent kernel-resolved Presets policy/effective reader
 src/agent_sleep.{h,cpp}                one selected-Agent .sleep marker write + best-effort applied observation
 src/agent_launch.{h,cpp}               one selected-Agent detached, shell-free `lingtai run` start
+src/project_bootstrap.{h,cpp}          async exact-argv `presets`/`spawn` headless runner + JSON parse
 tests/posix_descriptor_primitives_test.cpp descriptor ownership/no-follow contract
 tests/agent_projection_test.cpp        composite discovery/role/presence/status/no-write contract
 tests/direct_conversation_route_test.cpp pure route/eligibility contract
@@ -77,14 +78,18 @@ probe, policy, or panel, and a valid selection is immediately eligible to
 compose and send.
 
 Application composition in `src/main.cpp` owns the real native directory
-picker and the one concrete Desktop fallback interpreter passed to
-`set_agent_start_fallback_python`. Cancel is a no-op; a nonempty choice is
-passed to the shell with no selected Agent. The shell performs no project,
-registry, or Desktop-state writes beyond three explicit user-triggered
-actions: one composer send through `send_direct_mail`, one Request sleep
-marker write through `request_agent_sleep`, and one Start Agent detached
-launch through `start_agent`, which also creates the selected Agent's own
-`logs/` directory so its redirected `agent.log` has somewhere to land.
+picker, the one concrete Desktop fallback interpreter passed to
+`set_agent_start_fallback_python`, and the one configured TUI executable
+passed to `set_tui_executable` (resolved once from PATH as `lingtai-tui`).
+Cancel is a no-op; a nonempty choice is passed to the shell with no selected
+Agent. The shell performs no project, registry, or Desktop-state writes
+beyond three explicit user-triggered actions: one composer send through
+`send_direct_mail`, one Request sleep marker write through
+`request_agent_sleep`, and one Start Agent detached launch through
+`start_agent`, which also creates the selected Agent's own `logs/` directory
+so its redirected `agent.log` has somewhere to land. Explicit first-project
+bootstrap delegates to the TUI headless `presets`/`spawn` surface through
+`ProjectBootstrapRunner`; Desktop itself never writes a project/Agent/config.
 
 `WorkspaceSelectionState` is C1's sole owner of the optional accepted active
 project and optional selected Agent directory key, and the sole same-root/
@@ -418,6 +423,52 @@ itself, which this shell has no PID to kill or cancel -- so a late result
 can never surface under a different selection. Start Agent never auto-
 starts any Agent on its own, never claims readiness beyond heartbeat
 liveness, and never retries, scans processes, or manages a launch ID.
+
+`ProjectBootstrapRunner` is the one async, shell-free owner of the two exact
+headless TUI calls that implement explicit first-project bootstrap:
+`<exe> presets` and `<exe> spawn <destination> --preset <name>`. Each call
+starts exactly one nonblocking `QProcess` with the exact separate argv -- never
+a shell string and never a joined command line -- and reports exactly one
+result through the one per-call callback. It parses only the current JSON
+contracts: `presets` requires a top-level `presets` array whose usable entries
+have a nonempty `name` (description/tier/source/path are presentation facts
+kept verbatim), and `spawn` requires exit 0 plus `status == "launched"` and a
+nonempty `project_dir`; the returned `pid` is deliberately ignored as an
+ownership/liveness authority. A nonzero exit, malformed body, missing array,
+or empty list fails closed with a structured `code`/`error` when the TUI
+provided one, otherwise a concise generic message. The real TUI may print plain
+`warning:` lines (e.g. `warning: recipe copy: ...`) to stderr before its
+`WriteError` JSON, so the structured error is parsed from the final/current
+nonempty JSON block of stderr rather than the whole stream. It tracks no PID,
+retry,
+lock, rollback, or lifecycle state, and owns no dialog or UI.
+
+`NativeShell` composes one `New Project…` action in the sidebar beside `Open
+Project…`, always available before any project is attached and reachable from
+either route. The configured TUI executable is one narrow injectable
+dependency set by application composition in `src/main.cpp` from the
+`lingtai-tui` found on PATH (or by a focused test fixture); an empty executable
+makes New Project fail closed with one concise status. Clicking it disables
+both New/Open actions and shows one truthful pending phase status while
+`<exe> presets` runs. On successful nonempty discovery a small Desktop-owned
+dialog appears with a destination text field, a Browse button, a preset
+chooser populated from the returned names (description/tier/source as display
+help), an explicit `Create & Start` and `Cancel`, and a truthful note that a
+new project is created, its first Agent named from the destination folder by
+default, and started. Any user dismissal of the dialog -- `Cancel`, the
+standard window close control, or Escape -- is the same no-spawn cancellation
+and re-enables both actions. `Create & Start` requires a
+nonempty destination and preset, then invokes the exact separate spawn argv
+(no `--agent-name`/`--language`; current TUI defaults control them) while the
+whole bootstrap flow remains pending. On success the returned `project_dir` is
+attached only through the existing `open_project` path and the status reports
+`Project created and Agent started.`. On spawn failure/nonzero/malformed
+success the currently attached project is left unchanged, both actions are
+re-enabled, the structured `code`/`error` (or a concise process/parse error)
+is surfaced, and the status states generically that the destination may
+contain a partially initialized LingTai project -- with no rollback, retry, or
+recovery. The flow adds no Add-Agent-in-project action, manual scaffold/config
+writes, preset editor, credentials, provisioning, or lifecycle framework.
 
 Qt is external rather than fetched or committed. Configure resolves the exact
 Qt 6.11.1 prefix from `QT_ROOT` or the documented `$HOME/Qt/6.11.1/macos`
