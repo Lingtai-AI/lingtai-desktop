@@ -79,6 +79,63 @@ QLabel *make_label(
     return label;
 }
 
+// One shared structural owner for the three read-only selected-Agent source
+// sections (Agent activity, Task Card, Presets). Each section directly owns
+// its own semibold heading, read-only plain-text surface, state line, and one
+// thin plain-shadow separator, with the same inner margins and spacing, so the
+// three distinct sources share one consistent local framing instead of three
+// hand-built heading/surface/state sequences.
+struct DashboardSection {
+    Ui::RpWidget *owner = nullptr;
+    QLabel *heading = nullptr;
+    QPlainTextEdit *surface = nullptr;
+    QLabel *state = nullptr;
+};
+
+constexpr auto kDashboardSectionSurfaceHeight = 140;
+
+DashboardSection add_dashboard_section(
+        Ui::RpWidget *detail,
+        QVBoxLayout *detail_layout,
+        const char *kind,
+        const QString &heading_text,
+        const QString &surface_accessible_name,
+        const QString &surface_accessible_description) {
+    const auto base = QStringLiteral("lingtai_selected_agent_")
+        + QString::fromLatin1(kind);
+    auto *owner = new Ui::RpWidget(detail);
+    owner->setObjectName(base + QStringLiteral("_section"));
+    owner->setAccessibleName(heading_text);
+    auto *layout = new QVBoxLayout(owner);
+    layout->setContentsMargins(0, 8, 0, 8);
+    layout->setSpacing(6);
+    auto *heading = make_label(
+        owner, heading_text,
+        (base + QStringLiteral("_heading")).toUtf8().constData(), 12,
+        QFont::DemiBold);
+    layout->addWidget(heading);
+    auto *surface = new QPlainTextEdit(owner);
+    surface->setObjectName(base);
+    surface->setAccessibleName(surface_accessible_name);
+    surface->setAccessibleDescription(surface_accessible_description);
+    surface->setReadOnly(true);
+    surface->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+    surface->setMinimumHeight(kDashboardSectionSurfaceHeight);
+    layout->addWidget(surface);
+    auto *state = make_label(
+        owner, QString(), (base + QStringLiteral("_state")).toUtf8().constData(),
+        10);
+    state->setAccessibleName(surface_accessible_name + QStringLiteral(" state"));
+    layout->addWidget(state);
+    auto *separator = new Ui::PlainShadow(owner);
+    separator->setObjectName((base + QStringLiteral("_separator")).toUtf8().constData());
+    separator->setAccessibleName(heading_text + QStringLiteral(" divider"));
+    separator->setFixedHeight(st::lineWidth);
+    layout->addWidget(separator);
+    detail_layout->addWidget(owner);
+    return {owner, heading, surface, state};
+}
+
 QString path_text(const fs::path &path) {
     const auto bytes = path.u8string();
     return QString::fromUtf8(
@@ -562,75 +619,28 @@ NativeShell::NativeShell()
         QStringLiteral("Selected Agent conversation state"));
     detail_layout->addWidget(conversation_state);
 
-    // A separate, distinct, bounded read-only snapshot of the selected
-    // Agent's own logs/events.jsonl. It is a different source and authority
-    // from the mailbox conversation above and is never merged into it.
-    detail_layout->addWidget(make_label(
-        detail, QStringLiteral("Agent activity"),
-        "lingtai_selected_agent_activity_heading", 12, QFont::DemiBold));
-    auto *activity = new QPlainTextEdit(detail);
-    activity->setObjectName("lingtai_selected_agent_activity");
-    activity->setAccessibleName(QStringLiteral("Selected Agent activity"));
-    activity->setAccessibleDescription(QStringLiteral(
-        "A bounded read-only snapshot of the selected Agent's own visible "
-        "activity, shown as plain text."));
-    activity->setReadOnly(true);
-    activity->setLineWrapMode(QPlainTextEdit::WidgetWidth);
-    activity->setMinimumHeight(140);
-    detail_layout->addWidget(activity);
-    auto *activity_state = make_label(
-        detail, QString(), "lingtai_selected_agent_activity_state", 10);
-    activity_state->setAccessibleName(
-        QStringLiteral("Selected Agent activity state"));
-    detail_layout->addWidget(activity_state);
-
-    // A separate, distinct, bounded read-only projection of the selected
-    // Agent's own self-published Task Card. It is a different source and
-    // authority from both the mailbox conversation and Agent Activity above
-    // and is never merged into either.
-    detail_layout->addWidget(make_label(
-        detail, QStringLiteral("Task Card"),
-        "lingtai_selected_agent_task_card_heading", 12, QFont::DemiBold));
-    auto *task_card = new QPlainTextEdit(detail);
-    task_card->setObjectName("lingtai_selected_agent_task_card");
-    task_card->setAccessibleName(QStringLiteral("Selected Agent Task Card"));
-    task_card->setAccessibleDescription(QStringLiteral(
-        "The selected Agent's current self-published Task Card body, when "
-        "active, shown read-only as plain text."));
-    task_card->setReadOnly(true);
-    task_card->setLineWrapMode(QPlainTextEdit::WidgetWidth);
-    task_card->setMinimumHeight(120);
-    detail_layout->addWidget(task_card);
-    auto *task_card_state = make_label(
-        detail, QString(), "lingtai_selected_agent_task_card_state", 10);
-    task_card_state->setAccessibleName(
-        QStringLiteral("Selected Agent Task Card state"));
-    detail_layout->addWidget(task_card_state);
-
-    // A separate, distinct, bounded read-only projection of the selected
-    // Agent's own kernel-published resolved preset policy/effective
-    // configuration. It is a different source and authority from the
-    // mailbox conversation, Agent Activity, and Task Card above and is
-    // never merged into any of them; it never dereferences an allowed ref.
-    detail_layout->addWidget(make_label(
-        detail, QStringLiteral("Presets"),
-        "lingtai_selected_agent_preset_summary_heading", 12, QFont::DemiBold));
-    auto *preset_summary = new QPlainTextEdit(detail);
-    preset_summary->setObjectName("lingtai_selected_agent_preset_summary");
-    preset_summary->setAccessibleName(
-        QStringLiteral("Selected Agent Presets summary"));
-    preset_summary->setAccessibleDescription(QStringLiteral(
-        "The selected Agent's own kernel-resolved preset policy and active "
-        "effective configuration, shown read-only as plain text."));
-    preset_summary->setReadOnly(true);
-    preset_summary->setLineWrapMode(QPlainTextEdit::WidgetWidth);
-    preset_summary->setMinimumHeight(140);
-    detail_layout->addWidget(preset_summary);
-    auto *preset_summary_state = make_label(
-        detail, QString(), "lingtai_selected_agent_preset_summary_state", 10);
-    preset_summary_state->setAccessibleName(
-        QStringLiteral("Selected Agent Presets summary state"));
-    detail_layout->addWidget(preset_summary_state);
+    // Each of the three bounded read-only selected-Agent source sections
+    // below is presented through the same local structural framing: one
+    // semibold heading, one read-only plain-text surface, one state line,
+    // and one thin plain-shadow separator, with the same inner margins and
+    // spacing. They remain three distinct sources and authorities and are
+    // never merged with each other or with the mailbox conversation.
+    add_dashboard_section(
+        detail, detail_layout, "activity", QStringLiteral("Agent activity"),
+        QStringLiteral("Selected Agent activity"),
+        QStringLiteral("A bounded read-only snapshot of the selected Agent's "
+            "own visible activity, shown as plain text."));
+    add_dashboard_section(
+        detail, detail_layout, "task_card", QStringLiteral("Task Card"),
+        QStringLiteral("Selected Agent Task Card"),
+        QStringLiteral("The selected Agent's current self-published Task Card "
+            "body, when active, shown read-only as plain text."));
+    add_dashboard_section(
+        detail, detail_layout, "preset_summary", QStringLiteral("Presets"),
+        QStringLiteral("Selected Agent Presets summary"),
+        QStringLiteral("The selected Agent's own kernel-resolved preset policy "
+            "and active effective configuration, shown read-only as plain "
+            "text."));
 
     // The one Step-6 action on the exact selected Agent: an explicit,
     // nonblocking start for a selected non-human Agent whose current
@@ -653,11 +663,16 @@ NativeShell::NativeShell()
         "Starts the selected Agent's own configured runtime as a detached "
         "local process. It does not provision, install, or repair a "
         "runtime, and never auto-starts any Agent on its own."));
-    start_button->setVisible(false);
     QObject::connect(start_button, &QPushButton::clicked, [this] {
         handle_start_agent();
     });
     start_row_layout->addWidget(start_button);
+    // Reserve the action region's height from the row's own layout so the
+    // detail column below never jumps when the Start button is hidden for a
+    // heartbeat-live Agent; visibility/enablement still track eligibility
+    // exactly, only the button is ever absent.
+    start_row->setMinimumHeight(start_row->sizeHint().height());
+    start_button->setVisible(false);
     detail_layout->addWidget(start_row);
     auto *start_status = make_label(
         detail, QString(), "lingtai_selected_agent_start_status", 10);

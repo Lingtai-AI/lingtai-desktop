@@ -10,6 +10,7 @@
 #include <QtCore/QString>
 #include <QtCore/QThread>
 #include <QtGui/QColor>
+#include <QtGui/QFont>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QPalette>
 #include <QtGui/QTextBlock>
@@ -2409,6 +2410,147 @@ void verify_persistent_roster_shell(
 
 } // namespace
 
+struct DashboardSectionShape {
+    Ui::RpWidget *owner = nullptr;
+    QLayout *layout = nullptr;
+    QLabel *heading = nullptr;
+    QPlainTextEdit *surface = nullptr;
+    QLabel *state = nullptr;
+    Ui::PlainShadow *separator = nullptr;
+};
+
+// Captures one of the three shared selected-Agent source sections by its
+// `lingtai_selected_agent_<kind>` family of object names.
+DashboardSectionShape dashboard_section(QWidget &window, const char *kind) {
+    const auto base = QStringLiteral("lingtai_selected_agent_")
+        + QString::fromLatin1(kind);
+    auto result = DashboardSectionShape{};
+    result.owner = required_child<Ui::RpWidget>(
+        window, (base + QStringLiteral("_section")).toUtf8().constData());
+    result.layout = result.owner->layout();
+    require(result.layout != nullptr,
+        "every dashboard section must own one inner layout");
+    result.heading = required_child<QLabel>(
+        *result.owner,
+        (base + QStringLiteral("_heading")).toUtf8().constData());
+    result.surface = required_child<QPlainTextEdit>(
+        *result.owner, base.toUtf8().constData());
+    result.state = required_child<QLabel>(
+        *result.owner, (base + QStringLiteral("_state")).toUtf8().constData());
+    auto *separator_widget = required_child<Ui::RpWidget>(
+        *result.owner, (base + QStringLiteral("_separator")).toUtf8().constData());
+    result.separator = dynamic_cast<Ui::PlainShadow *>(separator_widget);
+    require(result.separator != nullptr,
+        "each dashboard section must use the same Ui::PlainShadow separator");
+    return result;
+}
+
+// The Commit-28 cut: the three selected-Agent read-only sources (Activity,
+// Task Card, Presets) are presented through one shared local section framing,
+// and the Start/Sleep action region keeps stable geometry when the selected
+// Agent switches between heartbeat-live (no Start action) and start-eligible
+// stale/missing (Start action present).
+void verify_selected_agent_dashboard_layout(
+        lingtai::desktop::NativeShell &shell,
+        const fs::path &sandbox) {
+    auto &window = shell.window();
+    const auto activity = dashboard_section(window, "activity");
+    const auto task_card = dashboard_section(window, "task_card");
+    const auto preset_summary = dashboard_section(window, "preset_summary");
+
+    for (const auto *section : { &activity, &task_card, &preset_summary }) {
+        require(section->heading->parent() == section->owner
+                && section->surface->parent() == section->owner
+                && section->state->parent() == section->owner
+                && section->separator->parent() == section->owner,
+            "each dashboard section must directly own its heading, surface, "
+            "state, and separator");
+        require(section->heading->font().weight() == QFont::DemiBold,
+            "each dashboard heading must stay semibold");
+        require(section->surface->isReadOnly(),
+            "each dashboard surface must stay read-only");
+        require(!section->heading->accessibleName().isEmpty()
+                && !section->surface->accessibleName().isEmpty()
+                && !section->state->accessibleName().isEmpty(),
+            "each dashboard section must stay accessible");
+    }
+
+    const auto section_margins = activity.layout->contentsMargins();
+    const auto section_spacing = activity.layout->spacing();
+    require(task_card.layout->contentsMargins() == section_margins
+            && preset_summary.layout->contentsMargins() == section_margins,
+        "all dashboard sections must share one structural margin treatment");
+    require(task_card.layout->spacing() == section_spacing
+            && preset_summary.layout->spacing() == section_spacing,
+        "all dashboard sections must share one structural spacing treatment");
+
+    const auto surface_minimum = activity.surface->minimumHeight();
+    require(task_card.surface->minimumHeight() == surface_minimum
+            && preset_summary.surface->minimumHeight() == surface_minimum,
+        "all dashboard surfaces must share one consistent minimum height");
+
+    const auto separator_minimum = activity.separator->minimumHeight();
+    require(separator_minimum > 0
+            && separator_minimum == activity.separator->maximumHeight(),
+        "each dashboard separator must be one fixed thin line");
+    require(task_card.separator->minimumHeight() == separator_minimum
+            && preset_summary.separator->minimumHeight() == separator_minimum,
+        "all dashboard separators must share one structural treatment");
+
+    const auto project = sandbox / "project";
+    const auto fresh_heartbeat = [] {
+        return std::to_string(std::chrono::duration<double>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+    };
+    write_file(project / ".lingtai/agent-aa/.agent.json",
+        R"({"admin":{},"state":"idle"})");
+    write_file(project / ".lingtai/agent-aa/.agent.heartbeat",
+        fresh_heartbeat());
+    write_file(project / ".lingtai/agent-bb/.agent.json",
+        R"({"admin":{},"state":"idle"})");
+    write_file(project / ".lingtai/agent-bb/.agent.heartbeat",
+        std::to_string(std::chrono::duration<double>(
+            std::chrono::system_clock::now().time_since_epoch()).count()
+            - 3600.0));
+
+    static_cast<void>(shell.open_project(project, std::nullopt));
+
+    auto *start_button = required_child<QPushButton>(
+        window, "lingtai_selected_agent_start_agent");
+    auto *start_row = required_child<Ui::RpWidget>(
+        window, "lingtai_selected_agent_start_row");
+    auto *sleep_row = required_child<Ui::RpWidget>(
+        window, "lingtai_selected_agent_sleep_row");
+    auto *manifest_identity = required_child<QLabel>(
+        window, "lingtai_selected_agent_manifest_identity");
+
+    click_agent(window, "agent-aa");
+    QCoreApplication::processEvents();
+    require(!start_button->isVisible(),
+        "a heartbeat-live selected Agent must show no Start action at all");
+    const auto live_region_height = start_row->height();
+    const auto live_anchor = manifest_identity->geometry().top();
+    const auto live_sleep_top = sleep_row->geometry().top();
+
+    click_agent(window, "agent-bb");
+    QCoreApplication::processEvents();
+    require(start_button->isVisible() && start_button->isEnabled(),
+        "a start-eligible stale selected Agent must offer the Start action");
+    require(start_row->height() == live_region_height,
+        "the Start action region must keep stable geometry when the Start "
+        "button appears or disappears");
+    require(sleep_row->geometry().top() == live_sleep_top,
+        "the Request sleep row must keep stable geometry when the Start "
+        "button appears or disappears");
+    require(manifest_identity->geometry().top() == live_anchor,
+        "downstream detail content must not jump when the Start button "
+        "appears or disappears");
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "dashboard fixtures must be removed");
+}
+
 int main(int argc, char **argv) {
     if (argc != 2) {
         std::cerr << "usage: native_shell_test PROJECT_ROOT\n";
@@ -2448,6 +2590,8 @@ int main(int argc, char **argv) {
         verify_agent_preset_summary_panel(
             shell, project_root / "commit-19-preset-summary-fixture");
         verify_layout(shell);
+        verify_selected_agent_dashboard_layout(
+            shell, project_root / "commit-28-dashboard-fixture");
         std::cout << "native shell behavior: OK\n";
         return 0;
     } catch (const std::exception &error) {
