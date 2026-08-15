@@ -26,24 +26,45 @@ constexpr auto kDocumentMargin = 8;
 constexpr auto kMessageEdgeMargin = 12;
 constexpr auto kMessageTopMargin = 4;
 constexpr auto kMessageBottomMargin = 18;
-constexpr auto kMessageCapRatio = 0.72;
+constexpr auto kMessageRatio = 0.72;
 constexpr auto kMinMessageWidth = 160;
+constexpr auto kMessageAbsoluteCap = 640;
+constexpr auto kReadingColumnMax = 900;
+constexpr auto kNarrowViewportWidth = 480;
 constexpr auto kBubbleHPadding = 11;
 constexpr auto kBubbleVPadding = 8;
 constexpr auto kBubbleRadius = 8;
 constexpr auto kMessageBlockProperty = QTextFormat::UserProperty + 1;
 
+// One shared message width for a given viewport. At the explicit narrow
+// breakpoint the block is near-full (the viewport minus the two fixed edge
+// gutters) instead of the ordinary ratio; otherwise the block lives inside the
+// centered reading column at the ordinary 72% ratio, with the existing 160px
+// lower bound and the absolute readable cap, never wider than the column.
+int message_block_width(int viewport_width) {
+    if (viewport_width < kNarrowViewportWidth) {
+        return qMax(0, viewport_width - 2 * kMessageEdgeMargin);
+    }
+    const auto column = qMin(viewport_width, kReadingColumnMax);
+    return qBound(
+        kMinMessageWidth,
+        int(column * kMessageRatio),
+        kMessageAbsoluteCap);
+}
+
 QTextBlockFormat message_block_format(bool outgoing, int viewport_width) {
     auto format = QTextBlockFormat();
     format.setAlignment(outgoing ? Qt::AlignRight : Qt::AlignLeft);
-    const auto cap = qMax(
-        kMessageCapRatio * viewport_width,
-        qreal(kMinMessageWidth));
-    const auto opposite = qMax(
-        qreal(kMessageEdgeMargin),
-        viewport_width - cap - kMessageEdgeMargin);
-    format.setLeftMargin(outgoing ? opposite : kMessageEdgeMargin);
-    format.setRightMargin(outgoing ? kMessageEdgeMargin : opposite);
+    const auto width = message_block_width(viewport_width);
+    // Derive one outer gutter (the centered reading column's offset plus the
+    // fixed edge gutter) and one inner remainder, then cross-assign them so
+    // incoming stays left-anchored and outgoing right-anchored inside the same
+    // column rather than centering each message individually.
+    const auto column = qMin(viewport_width, kReadingColumnMax);
+    const auto outer = (viewport_width - column) / 2 + kMessageEdgeMargin;
+    const auto inner = qMax(outer, viewport_width - width - outer);
+    format.setLeftMargin(outgoing ? inner : outer);
+    format.setRightMargin(outgoing ? outer : inner);
     format.setTopMargin(kMessageTopMargin);
     format.setBottomMargin(kMessageBottomMargin);
     format.setProperty(kMessageBlockProperty, true);
@@ -172,7 +193,7 @@ void ConversationSurface::rebuild_document(
 
     // One message per QTextBlock; the header/subject/body lines are separated
     // inside the block so the standard layout honors the block alignment and
-    // the margins bound each message near 72% of the viewport width.
+    // the margins bound each message to the shared reading-column width.
     const auto separator = QString(QChar::LineSeparator);
     const auto viewport_width = viewport()->width();
     auto first_block = true;
@@ -271,13 +292,15 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
 
 void ConversationSurface::resizeEvent(QResizeEvent *event) {
     QTextEdit::resizeEvent(event);
-    // Quantize the viewport-bounded message width so a live resize only
-    // reflows when the bound meaningfully changes, not on every pixel step.
-    const auto cap = int(viewport()->width() * kMessageCapRatio / 8) * 8;
-    if (cap == message_cap_width_) {
+    // Quantize the viewport/layout width so a live resize only reflows when
+    // the bound meaningfully changes. This follows the full layout width, not
+    // just the capped message width: on a very wide pane the centered reading
+    // column's outer gutters keep moving after the message cap stops.
+    const auto width = int(viewport()->width() / 8) * 8;
+    if (width == last_layout_width_) {
         return;
     }
-    message_cap_width_ = cap;
+    last_layout_width_ = width;
     if (!last_messages_.empty()) {
         rebuild_document(last_messages_);
     }

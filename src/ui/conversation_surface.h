@@ -40,7 +40,8 @@ protected:
     // Fills the viewport with the chat backdrop, paints the rounded message
     // bubbles behind the text, then lets the document layout draw the text.
     void paintEvent(QPaintEvent *event) override;
-    // Recomputes the viewport-bounded message width and reflows the document.
+    // Recomputes the centered reading-column message width and reflows the
+    // document when the quantized layout width meaningfully changes.
     void resizeEvent(QResizeEvent *event) override;
 
 private:
@@ -52,7 +53,7 @@ private:
     QString them_;
     std::vector<DirectConversationMessage> last_messages_;
     QString last_plain_state_;
-    int message_cap_width_ = 0;
+    int last_layout_width_ = 0;
 };
 
 } // namespace lingtai::desktop

@@ -107,12 +107,20 @@ Enabled/checked/keyboard (`agent_roster.cpp:377-395`, `184-193`):
 
 ### Text and bubble layout
 
-`rebuild_document` (`conversation_surface.cpp:159-216`) writes one
+`rebuild_document` (`conversation_surface.cpp:180-237`) writes one
 `QTextBlock` per message in the caller's order:
 
-- Alignment left (incoming) or right (outgoing); margins bound each message to
-  `max(0.72 × viewport width, 160px)`, with 12px edge and 4px/18px top/bottom
-  margins (`message_block_format`, `conversation_surface.cpp:36-51`).
+- Alignment left (incoming) or right (outgoing) inside a centered shared
+  reading column (maximum 900px). At the explicit narrow breakpoint (viewport
+  below 480px) each block is near-full: the viewport minus the two 12px edge
+  gutters. Otherwise `message_block_width` applies the ordinary 72% ratio to
+  the column with the 160px lower bound and the absolute readable cap of 640px,
+  never wider than the column. One outer gutter (the centered-column offset
+  plus the 12px edge) and one inner remainder are derived and cross-assigned in
+  `message_block_format` so incoming stays left-anchored and outgoing
+  right-anchored inside the same column rather than centering each message
+  individually, with 4px/18px top/bottom margins
+  (`conversation_surface.cpp:44-72`).
 - Header line `You · <timestamp>` for outgoing, `<them> · <timestamp>` for
   incoming: the author/name is its own 15px DemiBold fragment in the out/in
   text color, then the literal ` · <timestamp>` at 13px Normal in
@@ -138,6 +146,8 @@ offset by the current scroll so bubbles stay aligned with text; finally
   its bottom; after the rebuild it snaps to the new bottom only if the human
   was already there, otherwise it clamps the prior value
   (`conversation_surface.cpp:164-166`, `213-215`).
-- `resizeEvent` reflows only when the quantized message cap
-  (`int(width × 0.72 / 8) × 8`) changes; a live pixel-by-pixel resize does not
-  rebuild   (`conversation_surface.cpp:272-284`).
+- `resizeEvent` reflows only when the quantized viewport/layout width
+  (`int(width / 8) × 8`) changes; a live pixel-by-pixel resize does not rebuild.
+  It follows the full layout width rather than the capped message width because
+  a wide pane's centered column outer gutters keep moving after the message cap
+  stops (`conversation_surface.cpp:293-307`).

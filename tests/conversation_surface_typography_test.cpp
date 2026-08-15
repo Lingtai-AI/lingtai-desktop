@@ -6,17 +6,21 @@
 
 #include "direct_conversation_history.h"
 
+#include <QtCore/QCoreApplication>
 #include <QtGui/QFont>
 #include <QtGui/QTextBlock>
+#include <QtGui/QTextBlockFormat>
 #include <QtGui/QTextCharFormat>
 #include <QtGui/QTextDocument>
 #include <QtGui/QTextFragment>
 #include <QtWidgets/QApplication>
 
+#include <cmath>
 #include <cstddef>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace lingtai::desktop {
@@ -89,6 +93,132 @@ void require_hierarchy(
             + std::to_string(body_size) + "px, timestamp "
             + std::to_string(timestamp_size) + "px, subject "
             + std::to_string(subject_size) + "px)");
+    }
+}
+
+struct MessageGeometry {
+    double left;
+    double right;
+    double content_width;
+    double content_ratio;
+};
+
+MessageGeometry message_geometry(
+        const QTextBlock &block, int viewport_width) {
+    const auto format = block.blockFormat();
+    const auto left = format.leftMargin();
+    const auto right = format.rightMargin();
+    const auto content_width = double(viewport_width) - left - right;
+    return {left, right, content_width, content_width / double(viewport_width)};
+}
+
+std::pair<MessageGeometry, MessageGeometry> measure_at_width(int width) {
+    ConversationSurface surface;
+    surface.resize(width, 480);
+    surface.show();
+    QCoreApplication::processEvents();
+
+    std::vector<DirectConversationMessage> messages;
+    messages.push_back({
+        .id = "in-1",
+        .outgoing = false,
+        .timestamp = "2026-08-07T18:48:52Z",
+        .subject = "Slice done",
+        .text = "PR published, not merged.",
+    });
+    messages.push_back({
+        .id = "out-1",
+        .outgoing = true,
+        .timestamp = "2026-08-07T19:00:00Z",
+        .subject = "Re: Slice done",
+        .text = "Thanks, reviewing tomorrow.",
+    });
+    surface.set_conversation(QStringLiteral("Telegram Bot"), messages);
+
+    auto incoming = QTextBlock();
+    auto outgoing = QTextBlock();
+    for (auto block = surface.document()->begin(); block.isValid();
+         block = block.next()) {
+        if (block.text().startsWith(QStringLiteral("Telegram Bot ·"))) {
+            incoming = block;
+        } else if (block.text().startsWith(QStringLiteral("You ·"))) {
+            outgoing = block;
+        }
+    }
+    if (!incoming.isValid() || !outgoing.isValid()) {
+        throw std::runtime_error(
+            "the surface must render one incoming and one outgoing message "
+            "block for the responsive width contract");
+    }
+    const auto viewport_width = surface.viewport()->width();
+    return {
+        message_geometry(incoming, viewport_width),
+        message_geometry(outgoing, viewport_width),
+    };
+}
+
+void verify_responsive_width() {
+    // Very wide: both messages must share one centered reading column while
+    // keeping opposite anchors inside it, and the message width is capped
+    // near the design's ~636px readable target instead of stretching with the
+    // pane. The shared column is proven by cross-direction symmetry: the
+    // incoming outer-left matches the outgoing outer-right and the incoming
+    // inner-right matches the outgoing inner-left.
+    const auto wide = measure_at_width(1600);
+    const auto wide_in = wide.first;
+    const auto wide_out = wide.second;
+    if (!(wide_in.left < wide_in.right
+            && wide_out.right < wide_out.left)) {
+        throw std::runtime_error(
+            "at a very wide viewport the messages must keep opposite anchors "
+            "inside the shared reading column, incoming left and outgoing "
+            "right");
+    }
+    if (std::abs(wide_in.left - wide_out.right) > 2.0
+        || std::abs(wide_in.right - wide_out.left) > 2.0) {
+        throw std::runtime_error(
+            "at a very wide viewport the messages must share one centered "
+            "reading column: incoming outer-left must match outgoing "
+            "outer-right and incoming inner-right must match outgoing "
+            "inner-left");
+    }
+    if (wide_in.content_width < 580.0 || wide_in.content_width > 700.0
+        || wide_out.content_width < 580.0
+        || wide_out.content_width > 700.0) {
+        throw std::runtime_error(
+            "at a very wide viewport the message width must stop at an "
+            "absolute readable cap around 636px, but it stretches "
+            "with the pane");
+    }
+
+    // Normal: incoming/outgoing stay opposite-aligned and keep the
+    // approximate 65-75% pane share.
+    const auto normal = measure_at_width(640);
+    const auto normal_in = normal.first;
+    const auto normal_out = normal.second;
+    if (!(normal_in.left < normal_in.right
+            && normal_out.right < normal_out.left)) {
+        throw std::runtime_error(
+            "at a normal viewport the messages must stay opposite-aligned, "
+            "incoming left and outgoing right");
+    }
+    if (normal_in.content_ratio < 0.65 || normal_in.content_ratio > 0.75
+        || normal_out.content_ratio < 0.65
+        || normal_out.content_ratio > 0.75) {
+        throw std::runtime_error(
+            "at a normal viewport the message width must keep its "
+            "approximate 65-75% pane share");
+    }
+
+    // Narrow: the message width becomes near-full rather than the fixed 72%.
+    const auto narrow = measure_at_width(320);
+    const auto narrow_in = narrow.first;
+    const auto narrow_out = narrow.second;
+    if (narrow_in.content_ratio < 0.90
+        || narrow_out.content_ratio < 0.90) {
+        throw std::runtime_error(
+            "at a narrow viewport the message width must become near-full "
+            "(~90%+) instead of the current 72%");
     }
 }
 
@@ -181,6 +311,7 @@ int run_typography_test(int argc, char **argv) {
         ConversationSurface surface;
         surface.resize(640, 480);
         verify_typography(surface, QStringLiteral("Telegram Bot"));
+        verify_responsive_width();
         std::cout << "conversation surface typography: OK\n";
         return 0;
     } catch (const std::exception &error) {

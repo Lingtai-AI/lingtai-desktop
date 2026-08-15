@@ -93,22 +93,31 @@ Public ports (`src/ui/conversation_surface.h:26-37`):
 - `set_plain_state(QString text)` — one plain centered state for the
   selection/no-route/empty cases (`conversation_surface.cpp:113-127`).
 
-View-only state (`conversation_surface.h:52-55`): the last accepted `them_`,
-`last_messages_`, `last_plain_state_`, and the quantized `message_cap_width_`
+View-only state (`conversation_surface.h:52-56`): the last accepted `them_`,
+`last_messages_`, `last_plain_state_`, and the quantized `last_layout_width_`
 used to avoid reflowing on every pixel of a live resize. There is no document
 model here beyond what Qt's `QTextDocument` owns; blocks are rebuilt
 programmatically from the caller rows.
 
-Painting/layout (`conversation_surface.cpp:218-270`): `paintEvent` fills the
+Painting/layout (`conversation_surface.cpp:239-307`): `paintEvent` fills the
 viewport with the `st::windowBgOver` chat backdrop, paints rounded bubbles
 (`st::msgOutBg`/`st::msgInBg`, radius 8) behind message blocks, then delegates
 to `QTextEdit::paintEvent` so text keeps native scroll translation, selection,
-and copy. `resizeEvent` quantizes the viewport-bounded message width and
-reflows only when the bound meaningfully changes. `rebuild_document`
-(`conversation_surface.cpp:159-216`) writes one `QTextBlock` per message
-(incoming left / outgoing right, capped near 72% of viewport width) with a
-header line (author 15px DemiBold plus the timestamp at 13px Normal), an
-optional subject line (13px Medium), and a literal body (14px Normal).
+and copy. `resizeEvent` quantizes the viewport/layout width and reflows only
+when that bound meaningfully changes — following the full layout width, not
+just the capped message width, because a wide pane's centered column gutters
+keep moving after the message cap stops. `rebuild_document`
+(`conversation_surface.cpp:180-237`) writes one `QTextBlock` per message
+(incoming left / outgoing right) with a header line (author 15px DemiBold plus
+the timestamp at 13px Normal), an optional subject line (13px Medium), and a
+literal body (14px Normal). Messages live inside a centered shared reading
+column (maximum 900px): at the explicit narrow breakpoint (below 480px) each
+block is near-full (viewport minus the two 12px edge gutters); otherwise the
+ordinary 72% ratio applies with the 160px lower bound and the absolute
+readable cap of 640px, and one outer gutter plus one inner remainder are
+derived and cross-assigned so incoming stays left-anchored and outgoing
+right-anchored inside the same column (`message_block_format` and
+`message_block_width`, `conversation_surface.cpp:44-72`).
 
 Build ownership: `CMakeLists.txt:180` compiles `src/ui/conversation_surface.cpp`
 into `lingtai_desktop_native_shell`.
