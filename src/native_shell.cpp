@@ -15,6 +15,7 @@
 #include "ui/effects/animations.h"
 #include "ui/integration.h"
 #include "ui/rp_widget.h"
+#include "ui/style/style_core_palette.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/labels.h"
@@ -27,7 +28,10 @@
 #include <QtCore/QVariant>
 #include <QtCore/QDir>
 #include <QtGui/QFont>
+#include <QtGui/QGuiApplication>
 #include <QtGui/QPainter>
+#include <QtGui/QPalette>
+#include <QtGui/QStyleHints>
 #include <QtWidgets/QBoxLayout>
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QDialog>
@@ -442,6 +446,71 @@ public:
 
 };
 
+bool system_prefers_dark_palette() {
+    const auto scheme = QGuiApplication::styleHints()->colorScheme();
+    if (scheme == Qt::ColorScheme::Dark) return true;
+    if (scheme == Qt::ColorScheme::Light) return false;
+    const auto palette = QGuiApplication::palette();
+    return palette.color(QPalette::WindowText).lightness()
+        > palette.color(QPalette::Window).lightness();
+}
+
+void apply_telegram_night_palette() {
+    const auto set = [](const char *name, const char *hex) {
+        const auto color = QColor(QString::fromLatin1(hex));
+        const auto result = style::main_palette::setColor(
+            QLatin1String(name),
+            static_cast<uchar>(color.red()),
+            static_cast<uchar>(color.green()),
+            static_cast<uchar>(color.blue()),
+            static_cast<uchar>(color.alpha()));
+        Q_ASSERT(result == style::palette::SetResult::Ok
+            || result == style::palette::SetResult::Duplicate);
+        (void)result;
+    };
+
+    set("windowBg", "#17212b");
+    set("windowFg", "#f5f5f5");
+    set("windowBgOver", "#232e3c");
+    set("windowBgRipple", "#24303d");
+    set("windowFgOver", "#f5f5f5");
+    set("windowSubTextFg", "#708499");
+    set("windowSubTextFgOver", "#7f91a4");
+    set("windowBoldFg", "#e9e8e8");
+    set("windowBoldFgOver", "#e9e8e8");
+    set("windowBgActive", "#2b5278");
+    set("windowFgActive", "#ffffff");
+    set("windowActiveTextFg", "#6ab3f3");
+    set("activeButtonBg", "#2b5278");
+    set("activeButtonBgOver", "#356487");
+    set("activeButtonBgRipple", "#3b6d91");
+    set("activeButtonFg", "#ffffff");
+    set("activeButtonFgOver", "#ffffff");
+    set("activeLineFg", "#6ab3f3");
+    set("lightButtonBg", "#17212b");
+    set("lightButtonBgOver", "#232e3c");
+    set("lightButtonBgRipple", "#24303d");
+    set("lightButtonFg", "#6ab3f3");
+    set("lightButtonFgOver", "#6ab3f3");
+    set("placeholderFg", "#708499");
+    set("placeholderFgActive", "#7f91a4");
+    set("inputBorderFg", "#24303d");
+    set("dialogsBg", "#17212b");
+    set("dialogsNameFg", "#f5f5f5");
+    set("dialogsNameFgOver", "#f5f5f5");
+    set("dialogsNameFgActive", "#ffffff");
+    set("dialogsTextFg", "#7f91a4");
+    set("dialogsTextFgOver", "#7f91a4");
+    set("dialogsTextFgActive", "#e4ecf2");
+    set("dialogsBgOver", "#202b36");
+    set("dialogsBgActive", "#2b5278");
+    set("historyTextInFg", "#f5f5f5");
+    set("historyTextOutFg", "#e4ecf2");
+    set("msgInBg", "#182533");
+    set("msgOutBg", "#2b5278");
+    set("msgServiceFg", "#708499");
+}
+
 std::unique_ptr<Ui::RpWindow> make_native_window() {
     // Install the adapters before any vendored widget is constructed, unless
     // a hosting environment already installed them.
@@ -467,6 +536,9 @@ std::unique_ptr<Ui::RpWindow> make_native_window() {
     // those styles) are constructed only after this function returns.
     static const auto palette_started = [] {
         style::internal::init_palette(style::kScaleDefault);
+        if (system_prefers_dark_palette()) {
+            apply_telegram_night_palette();
+        }
         return true;
     }();
     (void)palette_started;

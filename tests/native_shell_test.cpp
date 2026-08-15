@@ -17,6 +17,7 @@
 #include <QtGui/QKeyEvent>
 #include <QtGui/QPalette>
 #include <QtGui/QPixmap>
+#include <QtGui/QStyleHints>
 #include <QtGui/QTextBlock>
 #include <QtGui/QTextCursor>
 #include <QtGui/QTextDocument>
@@ -244,6 +245,7 @@ void click_agent(QWidget &window, std::string_view key) {
 }
 
 void verify_dark_application_palette_inheritance(const fs::path &sandbox) {
+    QGuiApplication::styleHints()->setColorScheme(Qt::ColorScheme::Dark);
     const auto window_surface = QColor(QStringLiteral("#121820"));
     const auto window_ink = QColor(QStringLiteral("#F1F5F9"));
     const auto text_surface = QColor(QStringLiteral("#0B1118"));
@@ -261,6 +263,12 @@ void verify_dark_application_palette_inheritance(const fs::path &sandbox) {
     const auto palette_scope = ScopedApplicationPalette(dark_palette);
     lingtai::desktop::NativeShell shell;
     auto &window = shell.window();
+    require(st::windowBg->c == QColor(QStringLiteral("#17212b"))
+            && st::windowFg->c == QColor(QStringLiteral("#f5f5f5"))
+            && st::dialogsBgActive->c == QColor(QStringLiteral("#2b5278"))
+            && st::msgInBg->c == QColor(QStringLiteral("#182533"))
+            && st::msgOutBg->c == QColor(QStringLiteral("#2b5278")),
+        "a system-dark startup must select Telegram's canonical night palette");
     auto *body = window.body().get();
     auto *sidebar = required_child<Ui::RpWidget>(
         window, "lingtai_desktop_sidebar");
@@ -2863,8 +2871,8 @@ void verify_telegram_theme_reset(
     const auto sampled_backdrop = surface_image.pixelColor(
         surface_image.width() / 2, surface_image.height() - 6);
     require(color_close(sampled_backdrop, st::windowBgOver->c),
-        "the sampled chat backdrop pixel must match the light lib_ui palette "
-        "token the surface paints");
+        "the sampled chat backdrop pixel must match the lib_ui palette token "
+        "the surface paints");
     require(sampled_backdrop != QColor(Qt::white)
             && sampled_backdrop != st::msgInBg->c
             && sampled_backdrop != st::msgOutBg->c,
@@ -2887,7 +2895,7 @@ void verify_telegram_theme_reset(
             auto row_widest_start = 0;
             auto row_widest_end = 0;
             for (auto x = 0; x != surface_image.width(); ++x) {
-                if (color_close(surface_image.pixelColor(x, y), target)) {
+                if (surface_image.pixelColor(x, y) == target) {
                     if (run == 0) run_start = x;
                     ++run;
                     if (run > row_widest) {
