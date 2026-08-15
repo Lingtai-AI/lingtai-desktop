@@ -29,7 +29,7 @@ Entry point and composition root:
   Public seams are the two setters (`set_tui_executable`,
   `set_agent_start_fallback_python`), `open_project`, and the read-only
   `window()` / `selection_state()` accessors; `smoke_ready()` is real product
-  readiness used only by `main.cpp`'s `--smoke` path (`native_shell.h:103`).
+  readiness used only by `main.cpp`'s `--smoke` path (`native_shell.h:100`).
 - `crl_integration.cpp` — the owned parent `crl` update producer: exactly one
   `crl::on_main_update_requests()` returning `rpl::never<>()` (no update
   source in the bounded smoke).
@@ -58,11 +58,6 @@ Domain readers/projections (stateless, read-only, one source each):
   filesystem access.
 - `direct_conversation_history.{h,cpp}` — `read_direct_conversation`: reads
   the human's own `mailbox` `inbox`/`sent`/`outbox` `message.json` rows.
-- `agent_activity.{h,cpp}` — `read_agent_activity`: bounded suffix read of
-  the selected Agent's `logs/events.jsonl`, projecting the public
-  diary/tool_call/tool_result allowlist.
-- `agent_task_card.{h,cpp}` — `read_agent_task_card`: reads
-  `taskcard/status` and, only when exactly `active`, `taskcard/taskcard.md`.
 - `agent_preset_summary.{h,cpp}` — `read_agent_preset_summary`: reads the
   kernel-published `system/manifest.resolved.json` v1 envelope plus an
   `init.json` mtime staleness comparison.
@@ -97,8 +92,8 @@ keeps the parent summary):
   in smoke mode consumes `smoke_ready()` and emits the ordered markers.
 - `NativeShell` → readers/owners: the shell is the sole caller of
   `project_agents`, `resolve_direct_conversation_route`,
-  `read_direct_conversation`, `send_direct_mail`, `read_agent_activity`,
-  `read_agent_task_card`, `read_agent_preset_summary`,
+  `read_direct_conversation`, `send_direct_mail`,
+  `read_agent_preset_summary`,
   `request_agent_sleep` + the baseline/observe pair, `start_agent`, and the
   `ProjectBootstrapRunner` calls. The click handlers rerun `project_agents`
   once at the click boundary and update the sole `agents_` snapshot.
@@ -107,7 +102,7 @@ keeps the parent summary):
   `clear_agent_selection`) and re-derives every visible route from the model;
   the model performs no reads.
 - Readers → `posix_internal`: `agent_projection`, `direct_conversation_history`,
-  `direct_mail_publisher`, `agent_activity`, `agent_task_card`,
+  `direct_mail_publisher`,
   `agent_preset_summary`, and `agent_sleep` all consume the shared
   descriptor primitives as a private dependency. `project_attachment` and
   `workspace_selection` do not (pure `std::filesystem`/state).
@@ -127,8 +122,6 @@ Owned library targets (`CMakeLists.txt`) and their source membership:
 - `lingtai_desktop_direct_route` — `direct_conversation_route.cpp`.
 - `lingtai_desktop_conversation` — `direct_conversation_history.cpp`.
 - `lingtai_desktop_mail_publisher` — `direct_mail_publisher.cpp`.
-- `lingtai_desktop_agent_activity` — `agent_activity.cpp`.
-- `lingtai_desktop_agent_task_card` — `agent_task_card.cpp`.
 - `lingtai_desktop_agent_preset_summary` — `agent_preset_summary.cpp`.
 - `lingtai_desktop_agent_sleep` — `agent_sleep.cpp`.
 - `lingtai_desktop_agent_launch` — `agent_launch.cpp`.
@@ -147,10 +140,9 @@ they are the shell's presentation layer and own no domain reads or writes.
   and the optional selected Agent directory key. It is the only in-process
   persistent model; a fresh open preserves selection only for the same
   canonical root (`workspace_selection.cpp:20`).
-- `NativeShell` holds one `agents_` snapshot (the sole roster owner), the two
-  click-armed pending observations (`SleepObservation` at most 3 s,
-  `StartObservation` at most 10 s), and one same-target
-  `task_card_last_valid_` view state. All three are discarded on project open
+- `NativeShell` holds one `agents_` snapshot (the sole roster owner) and the
+  two click-armed pending observations (`SleepObservation` at most 3 s,
+  `StartObservation` at most 10 s). All are discarded on project open
   or selection change and are never persisted.
 - No reader or owner keeps durable cursors or ledgers; every read is one
   independent stateless observation. Owned boundaries: the direct local leaf
@@ -171,5 +163,5 @@ they are the shell's presentation layer and own no domain reads or writes.
 - `NativeShell` installs three process-lifetime adapters before any vendored
   widget is constructed (`base::Integration`, `Ui::Integration`, and the
   animations manager) and starts the palette before the window is built
-  (`native_shell.cpp:514`). This is glue for the pinned toolkit, not product
+  (`native_shell.cpp:543-548`). This is glue for the pinned toolkit, not product
   logic.

@@ -38,7 +38,7 @@ test proves. This file descends into `tests/` itself.
   signatures and exact return types (`workspace_selection_test.cpp:261-269`,
   `project_attachment_test.cpp:36`, `direct_conversation_route_test.cpp:99`).
   Every owned test target compiles under
-  `-Wall -Wextra -Werror -pedantic` (`CMakeLists.txt:342-415`).
+  `-Wall -Wextra -Werror -pedantic` (`CMakeLists.txt:310-374`).
 
 ### 2. Pure/domain unit tests (no Qt, no network, injected fixture roots)
 
@@ -63,11 +63,6 @@ touches a real Agent or project, and none depends on a network or provider.
   ctest. Read-only mailbox rows, membership, order, collapse, no-write.
 - `tests/direct_mail_publisher_test.cpp` — `direct_mail_publisher` ctest.
   One exclusive outbox leaf, schema, nonoverwrite, fail-closed containment.
-- `tests/agent_activity_test.cpp` — `agent_activity` ctest. Bounded suffix
-  read and public allowlist of the selected Agent's `events.jsonl`.
-- `tests/agent_task_card_test.cpp` — `agent_task_card` ctest. Exact
-  `active`/`inactive`/`unavailable` projection of the selected Agent's
-  `taskcard/` artifacts.
 - `tests/agent_preset_summary_test.cpp` — `agent_preset_summary` ctest.
   `resolved`/`stale`/`unavailable` projection of the selected Agent's
   `manifest.resolved.json`.
@@ -78,15 +73,15 @@ touches a real Agent or project, and none depends on a network or provider.
 
 - `tests/native_shell_test.cpp` — `native_shell_behavior` ctest. The single
   real-Qt contract: it links `lingtai_desktop_native_shell` +
-  `desktop-app::lib_ui` + `src/crl_integration.cpp` (`CMakeLists.txt:467-478`),
+  `desktop-app::lib_ui` + `src/crl_integration.cpp` (`CMakeLists.txt:418-429`),
   constructs a real `QApplication`, shows the real `NativeShell`
   off-screen (`shell.show_offscreen()`), and drives the real widgets to
   prove shell semantics, named regions, geometry, the composer send flow,
   the dashboard sections, Request sleep, Start Agent, layout modes, and the
   no-write rule. On macOS it runs with `QT_QPA_PLATFORM=cocoa`, elsewhere
-  with `offscreen` (`CMakeLists.txt:485-491`). Its fixture root is
+  with `offscreen` (`CMakeLists.txt:436-442`). Its fixture root is
   `native-shell-no-write-fixture`, created by CMake and used by the test as
-  its working directory (`CMakeLists.txt:480-484`). `project_tree` snapshots
+  its working directory (`CMakeLists.txt:431-435`). `project_tree` snapshots
   surround the specific read-only, no-escape, and no-write cases — and any
   explicit outside symlink target the test names — proving those fixtures
   remain unchanged through those operations; the write journeys (composer
@@ -94,13 +89,24 @@ touches a real Agent or project, and none depends on a network or provider.
   the exact intended in-fixture mutations on the synthetic
   `commit-N-...-fixture` trees the test itself creates. The working
   directory is an injected path, not an OS or process sandbox.
+- `tests/native_shell_destinations_test.cpp` — `native_shell_destinations`
+  ctest. The one focused Repair3 destination contract: it links the same
+  shell + `desktop-app::lib_ui` + `src/crl_integration.cpp`
+  (`CMakeLists.txt:444-464`), constructs a fresh real `QApplication` and
+  `NativeShell` with no project and no external fixture, and proves only
+  that the removed Activity and Task Card destinations have no surviving
+  page-nav button, panel surface, heading, state line, or section owner,
+  that the page navigation retains exactly Conversation + Presets, and that
+  the low-level `lingtai_selected_agent_status_activity` fact label stays
+  present with its stable identity. It runs with the platform Qt plugin like
+  `native_shell_behavior`.
 
 ### 4. Process-level smoke/persistence
 
 - `tests/test_native_shell.py` — `native_shell` ctest. Runs the built
   `lingtai_desktop_smoke` executable (`src/main.cpp` + `src/crl_integration.cpp`,
-  `CMakeLists.txt:453-459`) via `$<TARGET_FILE:lingtai_desktop_smoke>`
-  (`CMakeLists.txt:461-465`) as a real subprocess: `--smoke` proves the
+  `CMakeLists.txt:404-410`) via `$<TARGET_FILE:lingtai_desktop_smoke>`
+  (`CMakeLists.txt:412-416`) as a real subprocess: `--smoke` proves the
   ordered readiness/success markers and named regions on the real shell,
   and `--offscreen` proves normal mode persists (does not exit). The
   `./scripts/smoke.py` wrapper runs the same `--smoke` with the Qt plugin
@@ -110,7 +116,7 @@ touches a real Agent or project, and none depends on a network or provider.
 
 Each ctest registers one executable (or Python script) against one fixture
 path under the build directory; the test itself creates and removes its
-sandbox within that root (`CMakeLists.txt:418-491`):
+sandbox within that root (`CMakeLists.txt:375-442`):
 
 | Test file | Target / executable | ctest name | Fixture (build dir) |
 | --- | --- | --- | --- |
@@ -122,11 +128,10 @@ sandbox within that root (`CMakeLists.txt:418-491`):
 | `direct_conversation_route_test.cpp` | `lingtai_direct_conversation_route_test` | `direct_conversation_route` | `direct-conversation-route-fixture` |
 | `direct_conversation_history_test.cpp` | `lingtai_direct_conversation_history_test` | `direct_conversation_history` | `direct-conversation-history-fixture` |
 | `direct_mail_publisher_test.cpp` | `lingtai_direct_mail_publisher_test` | `direct_mail_publisher` | `direct-mail-publisher-fixture` |
-| `agent_activity_test.cpp` | `lingtai_agent_activity_test` | `agent_activity` | `agent-activity-fixture` |
-| `agent_task_card_test.cpp` | `lingtai_agent_task_card_test` | `agent_task_card` | `agent-task-card-fixture` |
 | `agent_preset_summary_test.cpp` | `lingtai_agent_preset_summary_test` | `agent_preset_summary` | `agent-preset-summary-fixture` |
 | `agent_sleep_test.cpp` | `lingtai_agent_sleep_test` | `agent_sleep` | `agent-sleep-fixture` |
 | `native_shell_test.cpp` | `lingtai_native_shell_test` | `native_shell_behavior` | `native-shell-no-write-fixture` (CMake-created) |
+| `native_shell_destinations_test.cpp` | `lingtai_native_shell_destinations_test` | `native_shell_destinations` | — |
 | `test_native_shell.py` | `lingtai_desktop_smoke` (built) | `native_shell` | `$<TARGET_FILE:lingtai_desktop_smoke>` |
 
 ## Fixture and data ownership
@@ -140,8 +145,8 @@ sandbox within that root (`CMakeLists.txt:418-491`):
   registry, or settings file.
 - The fixture trees are exact byte/type images (shared `tree_snapshot`
   helpers in `direct_conversation_history_test.cpp:41`,
-  `direct_mail_publisher_test.cpp:40`, `agent_activity_test.cpp:51`,
-  `agent_task_card_test.cpp:42`, `agent_preset_summary_test.cpp:44`,
+  `direct_mail_publisher_test.cpp:40`,
+  `agent_preset_summary_test.cpp:44`,
   `agent_sleep_test.cpp:51`), so "reading/writing never mutates" is proven
   against the real tree: the snapshot establishes that the snapshotted
   fixture — and any explicit outside symlink target the test names, e.g.
@@ -167,7 +172,7 @@ sandbox within that root (`CMakeLists.txt:418-491`):
   target, so a Qt dependency sneaking into a Qt-free consumer (or any
   unused/ambiguous construct) fails at compile time, not at runtime.
 - `native_shell_behavior` runs with the CMake-created fixture directory as
-  `std::filesystem::current_path` (`native_shell_test.cpp:3036-3038`) and
+  `std::filesystem::current_path` (`native_shell_test.cpp:2928`) and
   compares `project_tree` around the specific read-only, no-escape, and
   no-write cases, proving the snapshotted fixture (and any explicit outside
   symlink target the test names) remains unchanged through those operations;

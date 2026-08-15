@@ -30,18 +30,18 @@ its code.
 
 - The palette is started once, before the window is built: if the system
   prefers dark (Qt `colorScheme()` dark/light, with a palette-lightness
-  fallback, `system_prefers_dark_palette`, `native_shell.cpp:450`), the
+  fallback, `system_prefers_dark_palette`, `native_shell.cpp:448`), the
   shell applies Telegram's canonical night palette
-  (`apply_telegram_night_palette`, `native_shell.cpp:459`); otherwise the
+  (`apply_telegram_night_palette`, `native_shell.cpp:457`); otherwise the
   default light palette is used. This honors the system appearance at
   startup.
 - The same system appearance is followed live: `QStyleHints`
   `colorSchemeChanged` (with an `ApplicationPaletteChange` event fallback)
-  reruns `apply_system_palette` (`native_shell.cpp:515`), which resets to
+  reruns `apply_system_palette` (`native_shell.cpp:513`), which resets to
   the default light palette and only then applies the canonical night
   palette when the system prefers dark; the conversation is then
   re-rendered and the window and its descendant widgets repainted
-  (`refresh_system_palette`, `native_shell.cpp:1233`). No fixed user theme
+  (`refresh_system_palette`, `native_shell.cpp:1215`). No fixed user theme
   or config is mutated — the active palette is always re-derived from the
   current system appearance.
 - The Telegram visual-oracle boundary: every painted token (list field,
@@ -56,8 +56,8 @@ its code.
   row click is the sole selection entry point (`handle_agent_selection`);
   only rows whose manifest is `valid` are selectable, and any other click
   shows `lingtai_agent_selection_error`.
-- Selecting an Agent clears the composer, the pending sleep/start
-  observations, and the preserved Task Card, resets to the conversation page,
+- Selecting an Agent clears the composer and the pending sleep/start
+  observations, resets to the conversation page,
   recomputes the layout, and focuses the composer when visible/enabled.
 - The detail title is the manifest `nickname`, else `agent_name`, else the
   directory key; the subtitle shows the key (when it differs) plus
@@ -72,7 +72,7 @@ its code.
   project/roster/selection and show a transient `lingtai_project_open_error`
   message.
 - A one-second view-scoped `QTimer` (the only poller) re-invokes the same
-  stateless readers for conversation, activity, Task Card, and Presets, and
+  stateless readers for conversation and Presets, and
   keeps the Request-sleep / Start-Agent button states honest; it never
   carries a cursor or offset.
 - Roster state label: `Roster unavailable` when the scan is not complete,
@@ -105,7 +105,7 @@ its code.
   current project unchanged and states the destination may contain a
   partially initialized project. Desktop never writes project/Agent/config.
   Anchor: `ProjectBootstrapRunner` parse rules (`project_bootstrap.cpp:53`),
-  shell handlers (`native_shell.cpp:1258`).
+  shell handlers (`native_shell.cpp:1286-1399`).
 
 ## Composer and conversation
 
@@ -126,19 +126,8 @@ its code.
 
 ## Dashboard sections
 
-- Exactly one selected-Agent page shows at a time: Conversation (default),
-  Activity, Task Card, or Presets, via the four-button nav row.
-- Activity (`read_agent_activity`): bounded 512 KiB suffix of the selected
-  Agent's `logs/events.jsonl`; projects public diary text and completed
-  tool_call/tool_result rows, at most 100, in file order; unknown/excluded
-  types are filtered and malformed complete rows increment one `skipped`
-  count.
-- Task Card (`read_agent_task_card`): reads `taskcard/status` (exact bytes
-  `active`/`inactive`) and, only when `active`, a bounded nonblank UTF-8
-  `taskcard/taskcard.md` body; every other observation is `unavailable`. The
-  shell preserves one same-target last-valid projection so a transient
-  `unavailable` does not clear it, and clears it on exact `inactive`, open,
-  or selection change.
+- Exactly one selected-Agent page shows at a time: Conversation (default) or
+  Presets, via the two-button nav row.
 - Presets (`read_agent_preset_summary`): reads the kernel-published
   `system/manifest.resolved.json` v1 envelope and projects active/default/
   allowed refs plus the active effective LLM/context/capabilities, with

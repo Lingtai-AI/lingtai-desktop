@@ -10,7 +10,7 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
 
 - `src/` owns the Qt adaptation surface and every leaf seam named in the root
   `ANATOMY.md`. Each seam is one library with one public function/class
-  (declared `CMakeLists.txt:211-337`).
+  (declared `CMakeLists.txt:211-308`).
 - `src/ui/` owns the two LingTai widgets: `AgentRoster` and
   `ConversationSurface`. They are owned product UI, not Telegram screens.
 - `tests/` owns the repository's observable-behavior contracts and the two
@@ -39,8 +39,8 @@ its folder.
 - The read, route, and action seams under `src/`, each with the single
   free function/class in its header:
   `project_agents`, `resolve_direct_conversation_route`,
-  `read_direct_conversation`, `send_direct_mail`, `read_agent_activity`,
-  `read_agent_task_card`, `read_agent_preset_summary`, `request_agent_sleep`
+  `read_direct_conversation`, `send_direct_mail`,
+  `read_agent_preset_summary`, `request_agent_sleep`
   (+ its two observation functions), `start_agent`, `ProjectBootstrapRunner`.
 - `NativeShell` is the one composition root C5 owns; it proposes transitions
   only through `WorkspaceSelectionState`.
@@ -53,10 +53,9 @@ its folder.
   import, no protocol, no account). Its only interface is on-disk artifacts
   under an accepted `.lingtai` project plus two subprocess surfaces.
 - Producer-side artifact contracts live in the kernel repo and are normative
-  for shape: `taskcard/{status,taskcard.md}`
-  (`src/lingtai/tools/task_card/CONTRACT.md`), the append-only
-  `logs/events.jsonl` journal (`src/lingtai/kernel/event_journal/CONTRACT.md`),
-  the mailbox envelope, `system/manifest.resolved.json`, and the `.sleep`
+  for shape: the append-only `logs/events.jsonl` journal
+  (`src/lingtai/kernel/event_journal/CONTRACT.md`), the mailbox envelope,
+  `system/manifest.resolved.json`, and the `.sleep`
   marker. Desktop reads these read-only; it writes only its own outbox leaf,
   the `.sleep` marker, and the started Agent's `logs/` directory.
 - The TUI executable (`lingtai-tui`) is invoked only through `NativeShell`'s

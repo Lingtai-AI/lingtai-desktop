@@ -47,8 +47,8 @@ bool open_selected_agent_directory(
     return directory.get() >= 0;
 }
 
-// Opens the selected Agent's own `logs/events.jsonl`, mirroring the same
-// walk `read_agent_activity` uses. `logs` is opened, never created.
+// Opens the selected Agent's own `logs/events.jsonl` for sleep observation.
+// `logs` is opened, never created.
 bool open_events_file(
         const ProjectAttachment &attachment,
         const fs::path &selected_directory_key,

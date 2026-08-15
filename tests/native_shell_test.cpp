@@ -1306,94 +1306,12 @@ void verify_composer_send_behavior(
     require(!cleanup_error, "composer fixtures must be removed");
 }
 
-// The Step-4 Agent Activity slice: a separate bounded read-only snapshot of
-// the selected Agent's own `logs/events.jsonl`, distinct from the mailbox
-// conversation above. Covers no-selection, real selection, a same-selection
-// live append becoming visible through the real one-second timer with no
-// reselection, and A->B replacement leaving no A text behind.
-void verify_agent_activity_panel(
-        lingtai::desktop::NativeShell &shell,
-        const fs::path &sandbox) {
-    auto &window = shell.window();
-    auto *heading = required_child<QLabel>(
-        window, "lingtai_selected_agent_activity_heading");
-    auto *surface = required_child<QPlainTextEdit>(
-        window, "lingtai_selected_agent_activity");
-    auto *state = required_child<QLabel>(
-        window, "lingtai_selected_agent_activity_state");
-
-    require(surface->isReadOnly(), "the Activity surface must be read-only");
-    require(!surface->accessibleName().isEmpty()
-            && !heading->accessibleName().isEmpty()
-            && !state->accessibleName().isEmpty(),
-        "the Activity surface must be accessible");
-    require(surface->objectName() != required_child<QTextEdit>(
-                window, "lingtai_selected_agent_conversation")->objectName(),
-        "Activity must be a distinct surface from the mailbox conversation");
-
-    const auto project = sandbox / "project";
-    write_file(project / ".lingtai/human/.agent.json",
-        R"({"agent_id":"20260101-000000-h001","agent_name":"Ted",)"
-        R"("address":"human","state":"active"})");
-    const auto target_a = project / ".lingtai/telegram-bot";
-    write_file(target_a / ".agent.json",
-        R"({"admin":{},"agent_id":"20260712-191609-d0c8",)"
-        R"("agent_name":"telegram-bot","nickname":"Telegram Bot",)"
-        R"("address":"telegram-bot","state":"active"})");
-    const auto target_b = project / ".lingtai/issue-643";
-    write_file(target_b / ".agent.json",
-        R"({"admin":{},"agent_id":"20260712-191610-q001",)"
-        R"("agent_name":"issue-643","address":"issue-643","state":"active"})");
-
-    const auto events_a = target_a / "logs/events.jsonl";
-    write_file(events_a,
-        R"({"type":"diary","text":"AGENT_A_FIRST <b>&amp;</b> not-a-tag"})"
-        "\n");
-    const auto events_b = target_b / "logs/events.jsonl";
-    write_file(events_b, R"({"type":"diary","text":"AGENT_B_ONLY"})" "\n");
-
-    static_cast<void>(shell.open_project(project, std::nullopt));
-    require(!surface->toPlainText().contains(QStringLiteral("AGENT_A_FIRST")),
-        "no Agent is selected yet, so no Activity text may render");
-
-    click_agent(window, "telegram-bot");
-    require(surface->toPlainText().contains(
-                QStringLiteral("AGENT_A_FIRST <b>&amp;</b> not-a-tag")),
-        "selecting Agent A must render A's own bounded public Activity, "
-        "literally as plain text with no markup interpretation");
-
-    // Append a complete new row with no reselection, then wait for the real
-    // one-second timer: only a live timer tick can make this visible, and
-    // the reader journey alone cannot prove it.
-    append_file(events_a, R"({"type":"diary","text":"AGENT_A_APPENDED"})" "\n");
-    const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (!surface->toPlainText().contains(QStringLiteral("AGENT_A_APPENDED"))
-            && std::chrono::steady_clock::now() < deadline) {
-        QThread::msleep(50);
-        QCoreApplication::processEvents();
-    }
-    require(surface->toPlainText().contains(QStringLiteral("AGENT_A_APPENDED")),
-        "an appended row must become visible through the real one-second "
-        "timer with no reselection");
-
-    click_agent(window, "issue-643");
-    require(surface->toPlainText().contains(QStringLiteral("AGENT_B_ONLY")),
-        "selecting Agent B must render B's own Activity");
-    require(!surface->toPlainText().contains(QStringLiteral("AGENT_A")),
-        "A's Activity text must never remain visible after selecting B");
-
-    std::error_code cleanup_error;
-    fs::remove_all(sandbox, cleanup_error);
-    require(!cleanup_error, "Activity fixtures must be removed");
-}
-
 // The Step-5 Request sleep action row: one button plus one status label
-// after Activity, before the low-level manifest/status facts. Covers
-// no-selection disablement, a real write targeting exactly the selected
-// Agent, the immediate "Sleep requested." text, the real one-second timer
-// observing a simulated target-side application, A->B->A carrying no stale
-// result, and one representative ineligible (stale) selection writing
+// in the selected-Agent detail, before the low-level manifest/status facts.
+// Covers no-selection disablement, a real write targeting exactly the
+// selected Agent, the immediate "Sleep requested." text, the real one-second
+// timer observing a simulated target-side application, A->B->A carrying no
+// stale result, and one representative ineligible (stale) selection writing
 // nothing.
 void verify_request_sleep_action(
         lingtai::desktop::NativeShell &shell,
@@ -1794,128 +1712,13 @@ void verify_start_agent_action(
     require(!cleanup_error, "Start Agent fixtures must be removed");
 }
 
-// The Step-18 read-only selected-Agent Task Card panel: one heading,
-// surface, and state label distinct from Agent Activity. Covers exact
-// active-body rendering, a changed body refreshing through the real
-// one-second timer with no reselection, a transient unavailable
-// observation preserving the same target's last valid active projection,
-// exact inactive clearing a preserved active body, and selection isolation
-// (B must never show A's card).
-void verify_agent_task_card_panel(
-        lingtai::desktop::NativeShell &shell,
-        const fs::path &sandbox) {
-    auto &window = shell.window();
-    auto *heading = required_child<QLabel>(
-        window, "lingtai_selected_agent_task_card_heading");
-    auto *surface = required_child<QPlainTextEdit>(
-        window, "lingtai_selected_agent_task_card");
-    auto *state = required_child<QLabel>(
-        window, "lingtai_selected_agent_task_card_state");
-
-    require(surface->isReadOnly(), "the Task Card surface must be read-only");
-    require(!surface->accessibleName().isEmpty()
-            && !heading->accessibleName().isEmpty()
-            && !state->accessibleName().isEmpty(),
-        "the Task Card surface must be accessible");
-    require(surface->objectName() != required_child<QPlainTextEdit>(
-                window, "lingtai_selected_agent_activity")->objectName(),
-        "Task Card must be a distinct surface from Agent Activity");
-
-    const auto project = sandbox / "project";
-    write_file(project / ".lingtai/human/.agent.json",
-        R"({"agent_id":"20260101-000000-h001","agent_name":"Ted",)"
-        R"("address":"human","state":"active"})");
-    const auto target_a = project / ".lingtai/telegram-bot";
-    write_file(target_a / ".agent.json",
-        R"({"admin":{},"agent_id":"20260712-191609-d0c8",)"
-        R"("agent_name":"telegram-bot","nickname":"Telegram Bot",)"
-        R"("address":"telegram-bot","state":"active"})");
-    const auto target_b = project / ".lingtai/issue-643";
-    write_file(target_b / ".agent.json",
-        R"({"admin":{},"agent_id":"20260712-191610-q001",)"
-        R"("agent_name":"issue-643","address":"issue-643","state":"active"})");
-
-    const auto status_a = target_a / "taskcard" / "status";
-    const auto body_a = target_a / "taskcard" / "taskcard.md";
-    write_file(status_a, "active");
-    write_file(body_a, "TASK_CARD_A_V1");
-
-    static_cast<void>(shell.open_project(project, std::nullopt));
-    require(!surface->toPlainText().contains(QStringLiteral("TASK_CARD_A")),
-        "no Agent is selected yet, so no Task Card text may render");
-
-    click_agent(window, "telegram-bot");
-    require(surface->toPlainText() == QStringLiteral("TASK_CARD_A_V1"),
-        "selecting Agent A must render A's own active Task Card body, "
-        "literally as plain text");
-    require(state->text() == QStringLiteral("Active"),
-        "an exact active projection must show the active state label");
-
-    // A changed body must become visible through the real one-second timer
-    // with no reselection, mirroring Agent Activity's own append journey.
-    write_file(body_a, "TASK_CARD_A_V2");
-    {
-        const auto deadline =
-            std::chrono::steady_clock::now() + std::chrono::seconds(3);
-        while (surface->toPlainText() != QStringLiteral("TASK_CARD_A_V2")
-                && std::chrono::steady_clock::now() < deadline) {
-            QThread::msleep(50);
-            QCoreApplication::processEvents();
-        }
-        require(surface->toPlainText() == QStringLiteral("TASK_CARD_A_V2"),
-            "a changed active body must refresh through the real "
-            "one-second timer");
-    }
-
-    // A transient unavailable observation (an active status with a
-    // now-blank body) must preserve the same target's last valid
-    // projection rather than clearing or erroring it.
-    write_file(body_a, "");
-    QThread::msleep(1200);
-    QCoreApplication::processEvents();
-    require(surface->toPlainText() == QStringLiteral("TASK_CARD_A_V2"),
-        "a transient invalid observation must preserve the same target's "
-        "last valid active body rather than clearing or erroring it");
-    require(state->text() == QStringLiteral("Active"),
-        "the preserved last-good projection must keep its active state "
-        "label");
-
-    // Exact inactive must clear the preserved active body.
-    write_file(status_a, "inactive");
-    {
-        const auto deadline =
-            std::chrono::steady_clock::now() + std::chrono::seconds(3);
-        while (state->text() != QStringLiteral("Inactive")
-                && std::chrono::steady_clock::now() < deadline) {
-            QThread::msleep(50);
-            QCoreApplication::processEvents();
-        }
-        require(state->text() == QStringLiteral("Inactive"),
-            "an exact inactive status must clear the preserved active "
-            "body through the real one-second timer");
-    }
-    require(!surface->toPlainText().contains(QStringLiteral("TASK_CARD_A")),
-        "an exact inactive projection must never keep showing a preserved "
-        "active body as current");
-
-    // Selecting B must never show A's Task Card content.
-    click_agent(window, "issue-643");
-    require(!surface->toPlainText().contains(QStringLiteral("TASK_CARD_A")),
-        "selecting a different Agent must never retain the previous "
-        "selection's Task Card content");
-
-    std::error_code cleanup_error;
-    fs::remove_all(sandbox, cleanup_error);
-    require(!cleanup_error, "Task Card fixtures must be removed");
-}
-
 // The Step-19 read-only selected-Agent Presets summary panel: one heading,
-// surface, and state label distinct from both Task Card and Agent Activity.
-// Covers exact resolved rendering (ordered allowed refs, independent
-// active/default badges, active-effective fields, kernel provenance), a
-// changed artifact becoming visible through the real one-second timer with
-// no reselection, and selection isolation -- B, with no published artifact,
-// must never show A's summary and must show "Not yet published".
+// surface, and state label distinct from the mailbox conversation. Covers
+// exact resolved rendering (ordered allowed refs, independent active/default
+// badges, active-effective fields, kernel provenance), a changed artifact
+// becoming visible through the real one-second timer with no reselection,
+// and selection isolation -- B, with no published artifact, must never show
+// A's summary and must show "Not yet published".
 void verify_agent_preset_summary_panel(
         lingtai::desktop::NativeShell &shell,
         const fs::path &sandbox) {
@@ -1932,9 +1735,9 @@ void verify_agent_preset_summary_panel(
             && !heading->accessibleName().isEmpty()
             && !state->accessibleName().isEmpty(),
         "the Presets surface must be accessible");
-    require(surface->objectName() != required_child<QPlainTextEdit>(
-                window, "lingtai_selected_agent_task_card")->objectName(),
-        "Presets must be a distinct surface from Task Card");
+    require(surface->objectName() != required_child<QTextEdit>(
+                window, "lingtai_selected_agent_conversation")->objectName(),
+        "Presets must be a distinct surface from the conversation");
 
     const auto project = sandbox / "project";
     write_file(project / ".lingtai/human/.agent.json",
@@ -2669,57 +2472,39 @@ DashboardSectionShape dashboard_section(QWidget &window, const char *kind) {
     return result;
 }
 
-// The Commit-28 cut: the three selected-Agent read-only sources (Activity,
-// Task Card, Presets) are presented through one shared local section framing,
-// and the Start/Sleep action region keeps stable geometry when the selected
-// Agent switches between heartbeat-live (no Start action) and start-eligible
+// The Commit-28 cut: the one retained selected-Agent read-only source
+// (Presets) is presented through the shared local section framing, and the
+// Start/Sleep action region keeps stable geometry when the selected Agent
+// switches between heartbeat-live (no Start action) and start-eligible
 // stale/missing (Start action present).
 void verify_selected_agent_dashboard_layout(
         lingtai::desktop::NativeShell &shell,
         const fs::path &sandbox) {
     auto &window = shell.window();
-    const auto activity = dashboard_section(window, "activity");
-    const auto task_card = dashboard_section(window, "task_card");
     const auto preset_summary = dashboard_section(window, "preset_summary");
 
-    for (const auto *section : { &activity, &task_card, &preset_summary }) {
-        require(section->heading->parent() == section->owner
-                && section->surface->parent() == section->owner
-                && section->state->parent() == section->owner
-                && section->separator->parent() == section->owner,
-            "each dashboard section must directly own its heading, surface, "
-            "state, and separator");
-        require(section->heading->font().weight() == QFont::DemiBold,
-            "each dashboard heading must stay semibold");
-        require(section->surface->isReadOnly(),
-            "each dashboard surface must stay read-only");
-        require(!section->heading->accessibleName().isEmpty()
-                && !section->surface->accessibleName().isEmpty()
-                && !section->state->accessibleName().isEmpty(),
-            "each dashboard section must stay accessible");
-    }
+    const auto *section = &preset_summary;
+    require(section->heading->parent() == section->owner
+            && section->surface->parent() == section->owner
+            && section->state->parent() == section->owner
+            && section->separator->parent() == section->owner,
+        "the Presets dashboard section must directly own its heading, "
+        "surface, state, and separator");
+    require(section->heading->font().weight() == QFont::DemiBold,
+        "the Presets dashboard heading must stay semibold");
+    require(section->surface->isReadOnly(),
+        "the Presets dashboard surface must stay read-only");
+    require(!section->heading->accessibleName().isEmpty()
+            && !section->surface->accessibleName().isEmpty()
+            && !section->state->accessibleName().isEmpty(),
+        "the Presets dashboard section must stay accessible");
+    require(section->surface->minimumHeight() > 0,
+        "the Presets dashboard surface must keep a consistent minimum height");
 
-    const auto section_margins = activity.layout->contentsMargins();
-    const auto section_spacing = activity.layout->spacing();
-    require(task_card.layout->contentsMargins() == section_margins
-            && preset_summary.layout->contentsMargins() == section_margins,
-        "all dashboard sections must share one structural margin treatment");
-    require(task_card.layout->spacing() == section_spacing
-            && preset_summary.layout->spacing() == section_spacing,
-        "all dashboard sections must share one structural spacing treatment");
-
-    const auto surface_minimum = activity.surface->minimumHeight();
-    require(task_card.surface->minimumHeight() == surface_minimum
-            && preset_summary.surface->minimumHeight() == surface_minimum,
-        "all dashboard surfaces must share one consistent minimum height");
-
-    const auto separator_minimum = activity.separator->minimumHeight();
+    const auto separator_minimum = preset_summary.separator->minimumHeight();
     require(separator_minimum > 0
-            && separator_minimum == activity.separator->maximumHeight(),
-        "each dashboard separator must be one fixed thin line");
-    require(task_card.separator->minimumHeight() == separator_minimum
-            && preset_summary.separator->minimumHeight() == separator_minimum,
-        "all dashboard separators must share one structural treatment");
+            && separator_minimum == preset_summary.separator->maximumHeight(),
+        "the Presets dashboard separator must be one fixed thin line");
 
     const auto project = sandbox / "project";
     const auto fresh_heartbeat = [] {
@@ -2775,16 +2560,72 @@ void verify_selected_agent_dashboard_layout(
     require(!cleanup_error, "dashboard fixtures must be removed");
 }
 
+// The Repair3 removal contract: the Agent Activity and Task Card destinations
+// are gone from the selected-Agent shell, so their page-nav buttons and their
+// panel surfaces/state lines/section owners must be absent; the page
+// navigation retains exactly Conversation + Presets; and the low-level
+// `status_activity` fact label (distinct from the removed Agent Activity
+// destination) stays present with its stable identity.
+void verify_removed_activity_and_task_card_destinations(
+        lingtai::desktop::NativeShell &shell) {
+    auto &window = shell.window();
+
+    // Absence: neither removed destination may expose a page-nav button.
+    require(window.findChild<QPushButton *>("lingtai_agent_page_nav_activity")
+            == nullptr,
+        "the Activity page-nav button must be absent");
+    require(window.findChild<QPushButton *>("lingtai_agent_page_nav_task_card")
+            == nullptr,
+        "the Task Card page-nav button must be absent");
+    // Nor any of their panel surfaces, headings, state lines, or section
+    // owners.
+    for (const char *name : {
+            "lingtai_selected_agent_activity",
+            "lingtai_selected_agent_activity_heading",
+            "lingtai_selected_agent_activity_state",
+            "lingtai_selected_agent_activity_section",
+            "lingtai_selected_agent_task_card",
+            "lingtai_selected_agent_task_card_heading",
+            "lingtai_selected_agent_task_card_state",
+            "lingtai_selected_agent_task_card_section" }) {
+        require(window.findChild<QObject *>(name) == nullptr,
+            std::string("the removed panel surface must be absent: ") + name);
+    }
+
+    // The page navigation retains exactly Conversation + Presets.
+    required_child<QPushButton>(window, "lingtai_agent_page_nav_conversation");
+    required_child<QPushButton>(window, "lingtai_agent_page_nav_presets");
+    auto page_nav_count = 0;
+    for (const auto *button : window.findChildren<QPushButton *>()) {
+        if (button->objectName().startsWith(
+                QStringLiteral("lingtai_agent_page_nav_"))) {
+            ++page_nav_count;
+        }
+    }
+    require(page_nav_count == 2,
+        "the selected-Agent page navigation must retain exactly two "
+        "buttons: Conversation and Presets");
+
+    // The low-level selected-Agent status_activity fact label remains present
+    // with its stable identity; its exact projected state semantics stay
+    // proven by the retained open-project journey above.
+    auto *status_activity = required_child<QLabel>(
+        window, "lingtai_selected_agent_status_activity");
+    require(status_activity->accessibleName()
+            == QStringLiteral("Status activity"),
+        "the low-level selected-Agent status_activity fact label must retain "
+        "its stable identity");
+}
+
 // The Commit-31 cut: one coherent Telegram-family theme/layout reset for the
 // normal-width chats shell. A wide window must give the dialog list a
 // source-backed responsive width beyond its 260px minimum, all major surfaces
 // and the selected row must be owned by the shared lib_ui palette (not raw
 // white Qt surfaces), the selected-Agent detail must be chat-first -- the
-// conversation dominates while Activity / Task Card / Presets sit behind one
-// compact secondary page navigation so only one content surface shows at a
-// time -- the conversation must be a real bubble surface with a lib_ui-owned
-// composer at the bottom, and every existing object/accessibility anchor must
-// survive the reset.
+// conversation dominates while Presets sits behind one compact secondary page
+// navigation so only one content surface shows at a time -- the conversation
+// must be a real bubble surface with a lib_ui-owned composer at the bottom,
+// and every existing object/accessibility anchor must survive the reset.
 void verify_telegram_theme_reset(
         lingtai::desktop::NativeShell &shell,
         const fs::path &sandbox) {
@@ -2803,10 +2644,6 @@ void verify_telegram_theme_reset(
         window, "lingtai_composer_input");
     auto *send_button = required_ui_child<Ui::RoundButton>(
         window, "lingtai_composer_send_button");
-    auto *activity_owner = required_child<Ui::RpWidget>(
-        window, "lingtai_selected_agent_activity_section");
-    auto *task_card_owner = required_child<Ui::RpWidget>(
-        window, "lingtai_selected_agent_task_card_section");
     auto *preset_owner = required_child<Ui::RpWidget>(
         window, "lingtai_selected_agent_preset_summary_section");
 
@@ -2867,8 +2704,8 @@ void verify_telegram_theme_reset(
         "shared lib_ui palette");
 
     // 3. Chat-first page instead of simultaneous dashboard stacking: the
-    // conversation surface dominates the detail while the three read-only
-    // secondary sources sit behind one compact page navigation.
+    // conversation surface dominates the detail while the Presets read-only
+    // source sits behind one compact page navigation.
     click_agent(window, "alpha");
     require(shell.selection_state().selected_agent_directory_key()
             == std::optional<fs::path>("alpha"),
@@ -2876,35 +2713,32 @@ void verify_telegram_theme_reset(
     require(conversation->isVisible(),
         "the conversation must be the visible default content of a selected "
         "Agent");
-    require(!activity_owner->isVisible()
-            && !task_card_owner->isVisible()
-            && !preset_owner->isVisible(),
-        "Activity, Task Card and Presets must not stack under the "
-        "conversation in the chat-first detail");
+    require(!preset_owner->isVisible(),
+        "Presets must not stack under the conversation in the chat-first "
+        "detail");
 
     auto *pages_nav = required_child<Ui::RpWidget>(
         window, "lingtai_agent_pages_nav");
-    auto *activity_nav = required_child<QPushButton>(
-        window, "lingtai_agent_page_nav_activity");
     auto *conversation_nav = required_child<QPushButton>(
         window, "lingtai_agent_page_nav_conversation");
-    require(pages_nav->isVisible() && conversation_nav->isVisible(),
+    auto *presets_nav = required_child<QPushButton>(
+        window, "lingtai_agent_page_nav_presets");
+    require(pages_nav->isVisible() && conversation_nav->isVisible()
+            && presets_nav->isVisible(),
         "the compact secondary page navigation must be reachable in the "
         "selected-Agent detail");
-    activity_nav->click();
+    presets_nav->click();
     QCoreApplication::processEvents();
-    require(activity_owner->isVisible()
-            && !task_card_owner->isVisible()
-            && !preset_owner->isVisible()
+    require(preset_owner->isVisible()
             && !conversation->isVisible(),
-        "activating the Activity page must show exactly that one secondary "
+        "activating the Presets page must show exactly that one secondary "
         "surface");
     conversation_nav->click();
     QCoreApplication::processEvents();
     require(conversation->isVisible()
-            && !activity_owner->isVisible(),
+            && !preset_owner->isVisible(),
         "returning to the Conversation page must restore the chat surface "
-        "and hide every secondary page");
+        "and hide the secondary page");
 
     // 4. Bubble/composer ownership, black-box: only the rendered viewport
     // pixels and public Qt behavior are consulted -- never document or block
@@ -3102,6 +2936,7 @@ int main(int argc, char **argv) {
         shell.show_offscreen();
         QCoreApplication::processEvents();
         verify_live_system_palette(shell);
+        verify_removed_activity_and_task_card_destinations(shell);
         verify_semantics_and_request(shell, project_root);
         verify_persistent_roster_shell(
             shell, project_root / "commit-24-roster-shell-fixture");
@@ -3113,14 +2948,10 @@ int main(int argc, char **argv) {
             shell, project_root / "commit-13-conversation-fixture");
         verify_composer_send_behavior(
             shell, project_root / "commit-14-composer-fixture");
-        verify_agent_activity_panel(
-            shell, project_root / "commit-15-activity-fixture");
         verify_request_sleep_action(
             shell, project_root / "commit-16-sleep-fixture");
         verify_start_agent_action(
             shell, project_root / "commit-17-start-fixture");
-        verify_agent_task_card_panel(
-            shell, project_root / "commit-18-task-card-fixture");
         verify_agent_preset_summary_panel(
             shell, project_root / "commit-19-preset-summary-fixture");
         verify_layout(shell, project_root / "commit-30-responsive-fixture");

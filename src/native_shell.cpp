@@ -1,9 +1,7 @@
 #include "native_shell.h"
 
-#include "agent_activity.h"
 #include "agent_preset_summary.h"
 #include "agent_sleep.h"
-#include "agent_task_card.h"
 #include "direct_conversation_history.h"
 #include "direct_mail_publisher.h"
 
@@ -212,12 +210,12 @@ protected:
     }
 };
 
-// One shared structural owner for the three read-only selected-Agent source
-// sections (Agent activity, Task Card, Presets). Each section directly owns
-// its own semibold heading, read-only plain-text surface, state line, and one
-// thin plain-shadow separator, with the same inner margins and spacing, so the
-// three distinct sources share one consistent local framing instead of three
-// hand-built heading/surface/state sequences.
+// One shared structural owner for the one retained read-only selected-Agent
+// source section (Presets). Each section directly owns its own semibold
+// heading, read-only plain-text surface, state line, and one thin plain-shadow
+// separator, with the same inner margins and spacing, so the retained source
+// uses one consistent local framing instead of a hand-built
+// heading/surface/state sequence.
 struct DashboardSection {
     Ui::RpWidget *owner = nullptr;
     QLabel *heading = nullptr;
@@ -872,18 +870,16 @@ NativeShell::NativeShell()
     detail_layout->addWidget(top_bar_separator);
 
     // One compact secondary page navigation: the chat is the default selected
-    // Agent surface, and Activity / Task Card / Presets each own one page so
-    // only one content surface shows at a time.
+    // Agent surface, and Presets owns one page so only one content surface
+    // shows at a time.
     auto *pages_nav = new Ui::RpWidget(detail);
     pages_nav->setObjectName("lingtai_agent_pages_nav");
     pages_nav->setAccessibleName(QStringLiteral("Selected Agent pages"));
     auto *pages_nav_layout = new QHBoxLayout(pages_nav);
     pages_nav_layout->setContentsMargins(0, 4, 0, 4);
     pages_nav_layout->setSpacing(4);
-    const auto nav_specs = std::array<std::pair<const char *, const char *>, 4>{{
+    const auto nav_specs = std::array<std::pair<const char *, const char *>, 2>{{
         std::pair{"lingtai_agent_page_nav_conversation", "Conversation"},
-        std::pair{"lingtai_agent_page_nav_activity", "Activity"},
-        std::pair{"lingtai_agent_page_nav_task_card", "Task Card"},
         std::pair{"lingtai_agent_page_nav_presets", "Presets"},
     }};
     for (auto index = std::size_t{0}; index != nav_specs.size(); ++index) {
@@ -967,13 +963,12 @@ NativeShell::NativeShell()
         QStringLiteral("Selected Agent conversation state"));
     detail_layout->addWidget(conversation_state);
 
-    // Each of the three bounded read-only selected-Agent source sections is
+    // The one retained bounded read-only selected-Agent source section is
     // presented through the same local structural framing: one semibold
     // heading, one read-only plain-text surface, one state line, and one thin
-    // plain-shadow separator. They remain three distinct sources and
-    // authorities and are never merged with each other or with the mailbox
-    // conversation; they move behind one compact secondary page host so they
-    // never stack under the chat surface.
+    // plain-shadow separator. It remains a distinct source and authority and
+    // is never merged with the mailbox conversation; it moves behind the
+    // compact secondary page host so it never stacks under the chat surface.
     auto *pages_host = new Ui::RpWidget(detail);
     pages_host->setObjectName("lingtai_agent_pages_host");
     pages_host->setAccessibleName(
@@ -981,17 +976,6 @@ NativeShell::NativeShell()
     auto *pages_host_layout = new QVBoxLayout(pages_host);
     pages_host_layout->setContentsMargins(0, 0, 0, 0);
     pages_host_layout->setSpacing(8);
-    secondary_pages_.push_back(add_dashboard_section(
-        pages_host, pages_host_layout, "activity",
-        QStringLiteral("Agent activity"),
-        QStringLiteral("Selected Agent activity"),
-        QStringLiteral("A bounded read-only snapshot of the selected Agent's "
-            "own visible activity, shown as plain text.")).owner);
-    secondary_pages_.push_back(add_dashboard_section(
-        pages_host, pages_host_layout, "task_card", QStringLiteral("Task Card"),
-        QStringLiteral("Selected Agent Task Card"),
-        QStringLiteral("The selected Agent's current self-published Task Card "
-            "body, when active, shown read-only as plain text.")).owner);
     secondary_pages_.push_back(add_dashboard_section(
         pages_host, pages_host_layout, "preset_summary",
         QStringLiteral("Presets"),
@@ -1056,8 +1040,6 @@ NativeShell::NativeShell()
     activity_timer_->setInterval(1000);
     QObject::connect(activity_timer_, &QTimer::timeout, [this] {
         render_conversation();
-        render_agent_activity();
-        render_agent_task_card();
         render_agent_preset_summary();
         if (pending_sleep_observation_) {
             tick_agent_sleep_observation();
@@ -1542,9 +1524,6 @@ ProjectOpenOutcome NativeShell::open_project(
     agents_ = std::move(agents);
     window_->findChild<QLabel *>("lingtai_project_root")
         ->setText(path_text(canonical_root));
-    // A fresh open must never let a prior target's preserved Task Card
-    // projection surface under the newly opened project/selection.
-    task_card_last_valid_.reset();
     render_roster();
     auto *selection_error = window_->findChild<QLabel *>(
         "lingtai_agent_selection_error");
@@ -1653,8 +1632,6 @@ void NativeShell::render_roster() {
         selected_facts->setText(QStringLiteral(
             "Choose a valid manifest row to inspect its detail."));
         render_conversation();
-        render_agent_activity();
-        render_agent_task_card();
         render_agent_preset_summary();
         render_agent_sleep_status();
         render_agent_start_status();
@@ -1748,8 +1725,6 @@ void NativeShell::render_roster() {
         .arg(manifest_text(detail_item->manifest_kind),
             role_text(detail_item->role), presence_text(detail_item->presence)));
     render_conversation();
-    render_agent_activity();
-    render_agent_task_card();
     render_agent_preset_summary();
     render_agent_sleep_status();
     render_agent_start_status();
@@ -1835,126 +1810,13 @@ void NativeShell::reset_composer() {
     }
 }
 
-// Shows a bounded read-only snapshot of the selected Agent's own visible
-// activity: public diary text plus reduced tool call/result rows. This is a
-// distinct source and surface from the mailbox conversation above, refreshed
-// on the same explicit open/selection paths plus the one-second timer.
-void NativeShell::render_agent_activity() {
-    auto *surface = window_->findChild<QPlainTextEdit *>(
-        "lingtai_selected_agent_activity");
-    auto *state = window_->findChild<QLabel *>(
-        "lingtai_selected_agent_activity_state");
-    if (!surface || !state) return;
-    const auto show = [&](const QString &text, const QString &compact) {
-        surface->setPlainText(text);
-        state->setText(compact);
-    };
-
-    if (!selection_state_.active_project()
-        || !selection_state_.selected_agent_directory_key()) {
-        show(QStringLiteral("Select an Agent to see its activity."),
-            QString());
-        return;
-    }
-    const auto snapshot = read_agent_activity(
-        *selection_state_.active_project(),
-        *selection_state_.selected_agent_directory_key());
-    if (!snapshot.available) {
-        show(QStringLiteral("No activity is available for this selection."),
-            QString());
-        return;
-    }
-
-    auto blocks = QStringList();
-    for (const auto &row : snapshot.rows) {
-        auto block = QString();
-        if (row.is_tool) {
-            block = QStringLiteral("Tool · %1")
-                .arg(QString::fromStdString(row.tool_name));
-            if (!row.tool_action.empty()) {
-                block += QStringLiteral(" (%1)")
-                    .arg(QString::fromStdString(row.tool_action));
-            }
-            block += row.tool_status == AgentActivityToolStatus::success
-                ? QStringLiteral(" — success")
-                : row.tool_status == AgentActivityToolStatus::error
-                    ? QStringLiteral(" — error")
-                    : QStringLiteral(" — unknown");
-            if (row.tool_elapsed_ms) {
-                block += QStringLiteral(" (%1 ms)").arg(*row.tool_elapsed_ms);
-            }
-        } else {
-            block = QStringLiteral("Agent · %1")
-                .arg(QString::fromStdString(row.text));
-        }
-        if (!row.timestamp_text.empty()) {
-            block += QStringLiteral("\n%1")
-                .arg(QString::fromStdString(row.timestamp_text));
-        }
-        blocks.push_back(block);
-    }
-    auto compact = QStringLiteral("%1 row(s)").arg(snapshot.rows.size());
-    if (snapshot.skipped > 0) {
-        compact += QStringLiteral(" · some activity records were skipped");
-    }
-    show(blocks.isEmpty() ? QStringLiteral("No activity yet.")
-                          : blocks.join(QStringLiteral("\n\n")), compact);
-}
-
-// Shows the selected Agent's current self-published Task Card: only
-// `taskcard/status` and, when exactly `active`, `taskcard/taskcard.md`. It
-// is a distinct source and surface from both the mailbox conversation and
-// Agent Activity, refreshed on the same explicit open/selection paths plus
-// the one-second timer. A transient unavailable observation for the same
-// selected target preserves the last valid active/inactive projection
-// rather than clearing or erroring it; only an exact inactive status or a
-// project/selection change clears a preserved active body.
-void NativeShell::render_agent_task_card() {
-    auto *surface = window_->findChild<QPlainTextEdit *>(
-        "lingtai_selected_agent_task_card");
-    auto *state = window_->findChild<QLabel *>(
-        "lingtai_selected_agent_task_card_state");
-    if (!surface || !state) return;
-    const auto show = [&](const QString &text, const QString &compact) {
-        if (surface->toPlainText() != text) surface->setPlainText(text);
-        if (state->text() != compact) state->setText(compact);
-    };
-
-    if (!selection_state_.active_project()
-        || !selection_state_.selected_agent_directory_key()) {
-        task_card_last_valid_.reset();
-        show(QStringLiteral("Select an Agent to see its Task Card."),
-            QString());
-        return;
-    }
-
-    const auto snapshot = read_agent_task_card(
-        *selection_state_.active_project(),
-        *selection_state_.selected_agent_directory_key());
-    if (snapshot.state != AgentTaskCardState::unavailable) {
-        task_card_last_valid_ = snapshot;
-    }
-    const auto &projected = snapshot.state != AgentTaskCardState::unavailable
-        ? snapshot
-        : task_card_last_valid_.value_or(AgentTaskCardSnapshot{});
-
-    if (projected.state == AgentTaskCardState::active) {
-        show(QString::fromStdString(projected.body), QStringLiteral("Active"));
-    } else if (projected.state == AgentTaskCardState::inactive) {
-        show(QStringLiteral("No active Task Card."), QStringLiteral("Inactive"));
-    } else {
-        show(QStringLiteral("Task Card unavailable."), QString());
-    }
-}
-
 // Shows the selected Agent's own kernel-published resolved preset policy
 // and active effective configuration: only `system/manifest.resolved.json`.
-// It is a distinct source and surface from the mailbox conversation, Agent
-// Activity, and Task Card above, refreshed on the same explicit open/
-// selection paths plus the one-second timer. Unlike Task Card, there is no
-// last-valid preservation: every observation is shown exactly as read, so
-// an absent/stale/unavailable current observation never keeps a prior
-// target's projection visible.
+// It is a distinct source and surface from the mailbox conversation above,
+// refreshed on the same explicit open/selection paths plus the one-second
+// timer. Every observation is shown exactly as read, so an absent/stale/
+// unavailable current observation never keeps a prior target's projection
+// visible.
 void NativeShell::render_agent_preset_summary() {
     auto *surface = window_->findChild<QPlainTextEdit *>(
         "lingtai_selected_agent_preset_summary");
@@ -2080,11 +1942,10 @@ void NativeShell::handle_agent_selection(const fs::path &directory_key) {
     }
     reset_composer();
     // A selection change must never let a prior target's pending sleep or
-    // Start observation, terminal result, or preserved Task Card
-    // projection surface under the newly selected Agent.
+    // Start observation or terminal result surface under the newly selected
+    // Agent.
     pending_sleep_observation_.reset();
     pending_start_observation_.reset();
-    task_card_last_valid_.reset();
     render_roster();
     show_detail_page(AgentDetailPage::conversation);
     recompute_layout(window_->body()->width());
@@ -2144,7 +2005,6 @@ void NativeShell::handle_detail_back() {
     reset_composer();
     pending_sleep_observation_.reset();
     pending_start_observation_.reset();
-    task_card_last_valid_.reset();
     render_roster();
     show_detail_page(AgentDetailPage::conversation);
     recompute_layout(window_->body()->width());
@@ -2152,11 +2012,11 @@ void NativeShell::handle_detail_back() {
 }
 
 // Telegram's chat-first page switch: the conversation is the default
-// selected-Agent surface, and exactly one of Activity / Task Card / Presets
-// shows when its page is selected, so only one content surface dominates at a
-// time. The secondary pages and the read-only source-facts labels are direct
-// layout children (their object/accessibility anchors never move); switching
-// only flips visibility.
+// selected-Agent surface, and exactly one of Conversation / Presets shows
+// when its page is selected, so only one content surface dominates at a time.
+// The secondary pages and the read-only source-facts labels are direct layout
+// children (their object/accessibility anchors never move); switching only
+// flips visibility.
 void NativeShell::show_detail_page(AgentDetailPage page) {
     auto *conversation_heading = window_->findChild<QLabel *>(
         "lingtai_selected_agent_conversation_heading");

@@ -37,14 +37,13 @@ prefix (`CMakeLists.txt:67-70`), and declares the owned libraries:
   link edge of its own (`CMakeLists.txt:203-209`).
 - `lingtai_desktop_agent_projection`, `lingtai_desktop_direct_route`,
   `lingtai_desktop_conversation`, `lingtai_desktop_mail_publisher`,
-  `lingtai_desktop_agent_activity`, `lingtai_desktop_agent_task_card`,
   `lingtai_desktop_agent_preset_summary`, `lingtai_desktop_agent_sleep`,
   `lingtai_desktop_agent_launch` — one library per read/write seam
-  (`CMakeLists.txt:211-337`).
+  (`CMakeLists.txt:211-308`).
 - `lingtai_desktop_native_shell` — C5 composition linking the above with
   `desktop-app::lib_ui` (`CMakeLists.txt:176-196`).
 - `lingtai_desktop_smoke` — `src/main.cpp` + `src/crl_integration.cpp`
-  executable (`CMakeLists.txt:453-459`).
+  executable (`CMakeLists.txt:404-410`).
 
 Qt/lib_ui is the only external linked GUI SDK/build dependency. It is
 resolved from `QT_ROOT` or the documented `$HOME/Qt/6.11.1/macos` default
@@ -61,12 +60,12 @@ emits `LINGTAI_NATIVE_SHELL_READY` and `LINGTAI_LIB_UI_FULL_TARGET_SMOKE_OK`
 before exiting (`src/main.cpp:55-83`). `src/crl_integration.cpp` supplies the
 bounded no-emission parent `crl` update producer the smoke needs.
 
-- `src/native_shell.{h,cpp}` — `NativeShell` (`src/native_shell.h:67`), the
+- `src/native_shell.{h,cpp}` — `NativeShell` (`src/native_shell.h:64`), the
   one C5-owned composition: `WorkspaceSelectionState` C1 truth, the 260px
-  `AgentRoster` column, the `ConversationSurface` chat, three secondary
-  read-only pages (`AgentDetailPage`, `src/native_shell.h:58-63`), the
+  `AgentRoster` column, the `ConversationSurface` chat, the one secondary
+  read-only page (`AgentDetailPage`, `src/native_shell.h:53-60`), the
   one-second view-scoped `QTimer`, and the sleep/start pending observations
-  (`src/native_shell.h:151-166`). Route into `src/ANATOMY.md`.
+  (`src/native_shell.h:149-164`). Route into `src/ANATOMY.md`.
 - `src/workspace_selection.{h,cpp}` — `WorkspaceSelectionState`
   (`src/workspace_selection.h:20`), the sole active-project/selected-Agent
   transition owner (C1).
@@ -86,12 +85,6 @@ bounded no-emission parent `crl` update producer the smoke needs.
   (`src/direct_conversation_history.h:41`): read-only mailbox rows.
 - `src/direct_mail_publisher.{h,cpp}` — `send_direct_mail`
   (`src/direct_mail_publisher.h:22`): one exclusive human outbox leaf.
-- `src/agent_activity.{h,cpp}` — `read_agent_activity`
-  (`src/agent_activity.h:51`): stateless read-only `logs/events.jsonl`
-  projection.
-- `src/agent_task_card.{h,cpp}` — `read_agent_task_card`
-  (`src/agent_task_card.h:30`): stateless read-only
-  `taskcard/{status,taskcard.md}` projection.
 - `src/agent_preset_summary.{h,cpp}` — `read_agent_preset_summary`
   (`src/agent_preset_summary.h:67`): stateless read-only
   `system/manifest.resolved.json` policy/effective projection.
@@ -121,9 +114,9 @@ Both are owned LingTai widgets, not Telegram screens. Route into
 ## Owned tests (`tests/`)
 
 Each C++ contract executable maps to one ctest name (declared
-`CMakeLists.txt:418-491`): `project_attachment`, `agent_projection`,
+`CMakeLists.txt:375-442`): `project_attachment`, `agent_projection`,
 `direct_conversation_route`, `direct_conversation_history`,
-`direct_mail_publisher`, `agent_activity`, `agent_task_card`,
+`direct_mail_publisher`,
 `agent_preset_summary`, `agent_sleep`, `posix_descriptor_primitives`,
 `workspace_selection`, `native_shell_behavior`, plus the Python gates
 `native_shell` (process persistence + smoke-order, `tests/test_native_shell.py`)
@@ -142,9 +135,8 @@ two subprocess surfaces. Producer-side contracts live in the kernel repo
   `init.json` — read by `agent_projection` / `agent_launch`.
 - `.lingtai/<human key>/mailbox/{inbox,sent,outbox}` — read/written by
   `direct_conversation_history` / `direct_mail_publisher`.
-- `.lingtai/<key>/logs/events.jsonl` — read by `agent_activity` / `agent_sleep`.
-- `.lingtai/<key>/taskcard/{status,taskcard.md}` — read by `agent_task_card`
-  (kernel producer contract: `src/lingtai/tools/task_card/CONTRACT.md`).
+- `.lingtai/<key>/logs/events.jsonl` — read by `agent_sleep` (sleep
+  observation) as the selected Agent's own event journal.
 - `.lingtai/<key>/system/manifest.resolved.json` — read by
   `agent_preset_summary`.
 - `.lingtai/<key>/.sleep` — the one sleep leaf written by `agent_sleep`.

@@ -46,10 +46,6 @@ Reads (no writes, no durable state):
   `std::optional<DirectConversationRoute>` (`direct_conversation_route.h`).
 - `read_direct_conversation(route)` → `DirectConversationHistory`
   (`direct_conversation_history.h`).
-- `read_agent_activity(attachment, key)` → `AgentActivitySnapshot`
-  (`agent_activity.h`).
-- `read_agent_task_card(attachment, key)` → `AgentTaskCardSnapshot`
-  (`agent_task_card.h`).
 - `read_agent_preset_summary(attachment, key)` → `AgentPresetSummary`
   (`agent_preset_summary.h`).
 
@@ -91,9 +87,8 @@ caller proposes typed transitions only; the model performs no reads.
 
 1. **One source of ownership per behavior.** Roster truth lives only in
    `WorkspaceSelectionState` + the sole `agents_` snapshot; conversation rows
-   only in `read_direct_conversation`; activity only in `read_agent_activity`;
-   Task Card only in `read_agent_task_card`; Presets only in
-   `read_agent_preset_summary`. No second owner exists.
+   only in `read_direct_conversation`;
+   Presets only in `read_agent_preset_summary`. No second owner exists.
 2. **Readers read.** Every reader opens its source one no-follow leaf at a
    time through `posix_internal`, bounds the actual read, and never writes.
    A missing/unreadable/unsafe source reduces to a coarse state; one bad
@@ -130,8 +125,6 @@ paths and names are in [`../ANATOMY.md`](../ANATOMY.md) and `CMakeLists.txt`:
 - `tests/direct_conversation_route_test.cpp` — `direct_conversation_route`.
 - `tests/direct_conversation_history_test.cpp` — `direct_conversation_history`.
 - `tests/direct_mail_publisher_test.cpp` — `direct_mail_publisher`.
-- `tests/agent_activity_test.cpp` — `agent_activity`.
-- `tests/agent_task_card_test.cpp` — `agent_task_card`.
 - `tests/agent_preset_summary_test.cpp` — `agent_preset_summary`.
 - `tests/agent_sleep_test.cpp` — `agent_sleep`.
 - `tests/posix_descriptor_primitives_test.cpp` — `posix_descriptor_primitives`.

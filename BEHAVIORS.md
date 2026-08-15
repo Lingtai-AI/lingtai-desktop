@@ -42,10 +42,10 @@ restate per-owner behavior; owner-level detail lives in `src/`, `src/ui/`, and
   repository never links the `lingtai` Python package; kernel contact is
   exclusively on-disk `.lingtai` artifacts plus the exact-argv
   `lingtai-tui`/`python -m lingtai run` subprocesses. Enforced by link graph
-  (`CMakeLists.txt:169-337`) and review.
+  (`CMakeLists.txt:169-308`) and review.
 - **Repro-5 — Read seams write nothing.** Every read projection
-  (`project_agents`, `read_direct_conversation`, `read_agent_activity`,
-  `read_agent_task_card`, `read_agent_preset_summary`,
+  (`project_agents`, `read_direct_conversation`,
+  `read_agent_preset_summary`,
   `resolve_direct_conversation_route`) is `noexcept` and writes no project
   tree, proven per seam by its C++ contract test below.
 - **Repro-6 — No pending-observation lies.** A Request-sleep or Start-Agent
@@ -68,8 +68,6 @@ restate per-owner behavior; owner-level detail lives in `src/`, `src/ui/`, and
 | Pure route eligibility | `tests/direct_conversation_route_test.cpp` (`direct_conversation_route`) | `ctest --test-dir build -R '^direct_conversation_route$'` |
 | Mailbox read contract | `tests/direct_conversation_history_test.cpp` (`direct_conversation_history`) | `ctest --test-dir build -R '^direct_conversation_history$'` |
 | Outbox publisher (TUI envelope oracle) | `tests/direct_mail_publisher_test.cpp` (`direct_mail_publisher`) | `ctest --test-dir build -R '^direct_mail_publisher$'` |
-| Activity snapshot | `tests/agent_activity_test.cpp` (`agent_activity`) | `ctest --test-dir build -R '^agent_activity$'` |
-| Task Card projection | `tests/agent_task_card_test.cpp` (`agent_task_card`) | `ctest --test-dir build -R '^agent_task_card$'` |
 | Presets summary projection | `tests/agent_preset_summary_test.cpp` (`agent_preset_summary`) | `ctest --test-dir build -R '^agent_preset_summary$'` |
 | Sleep marker + observation | `tests/agent_sleep_test.cpp` (`agent_sleep`) | `ctest --test-dir build -R '^agent_sleep$'` |
 | Repro-6 stale-observation rule | `tests/agent_sleep_test.cpp`, `tests/native_shell_test.cpp` | ctest names above |

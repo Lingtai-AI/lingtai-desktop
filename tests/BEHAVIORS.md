@@ -22,8 +22,6 @@ ctest --test-dir build --output-on-failure -R '^agent_projection$'
 ctest --test-dir build --output-on-failure -R '^direct_conversation_route$'
 ctest --test-dir build --output-on-failure -R '^direct_conversation_history$'
 ctest --test-dir build --output-on-failure -R '^direct_mail_publisher$'
-ctest --test-dir build --output-on-failure -R '^agent_activity$'
-ctest --test-dir build --output-on-failure -R '^agent_task_card$'
 ctest --test-dir build --output-on-failure -R '^agent_preset_summary$'
 ctest --test-dir build --output-on-failure -R '^agent_sleep$'
 ctest --test-dir build --output-on-failure -R '^posix_descriptor_primitives$'
@@ -100,17 +98,6 @@ Qt plugin path set and an 8 s watchdog.
   fields, pre-existing content untouched, a fresh id per send, and a blocked
   or symlinked outbox failing closed with no outside write
   (`direct_mail_publisher_test.cpp:91-207`).
-- `agent_activity` proves the bounded suffix projection: exact selected-Agent
-  binding, file-order allowlist (public diary + completed tool_call/tool_result
-  only), partial-tail completion on the next stateless snapshot, the 512 KiB
-  actual-read bound ignoring a larger prefix, a 100-row cap, and malformed
-  complete rows counted once without hiding valid neighbors
-  (`agent_activity_test.cpp:120-303`).
-- `agent_task_card` proves exact `active`/`inactive`/`unavailable`
-  projection bound to the selected key, nonblank UTF-8 body unchanged on
-  active, no body on inactive, and a symlinked `taskcard` component reducing
-  to unavailable with no outside body and no write
-  (`agent_task_card_test.cpp:77-125`).
 - `agent_preset_summary` proves `resolved` (exact ordered allowed refs with
   independent active/default badges, narrow active-effective fields,
   optional `context_limit` omission still resolved), `stale` (supported
@@ -132,7 +119,7 @@ Qt plugin path set and an 8 s watchdog.
   restoration, live light/dark scheme transitions sampling the current
   representative palette tokens/assertions, open-project behavior, shell
   semantics and named regions, selected-Agent conversation, composer send,
-  Agent Activity / Request sleep / Start Agent / Task Card / Presets panels,
+  Request sleep / Start Agent / Presets panels,
   first-project bootstrap, layout modes, the persistent roster shell, the
   dashboard layout, and the Telegram theme reset — all against synthetic
   `commit-N-...-fixture` trees under the CMake-created no-write fixture.
@@ -142,6 +129,12 @@ Qt plugin path set and an 8 s watchdog.
   assert the exact intended in-fixture mutations
   (`verify_composer_send_behavior`, `verify_request_sleep_action`,
   `verify_first_project_bootstrap`).
+- The removed Activity and Task Card destinations are proven absent: their
+  page-nav buttons, panel surfaces, headings, state lines, and section owners
+  have no surviving widget anchors, the page navigation retains exactly
+  Conversation + Presets, and the low-level
+  `lingtai_selected_agent_status_activity` fact label stays present with its
+  stable identity (`verify_removed_activity_and_task_card_destinations`).
 - In the selected-Agent conversation, one incoming mail fixture carries a real
   decoded JSON newline (U+000A) in its body; the one incoming multiline mail
   plus the one outgoing mail still occupy exactly two aligned message
@@ -166,7 +159,7 @@ Every test here runs on fixture trees, a fake display, or a subprocess with
 the real shell shown off-screen. None of them establish:
 
 - **Real terminal bytes.** No test starts a real `lingtai run` kernel, writes
-  to a real Agent's `events.jsonl`/`mailbox`/`taskcard`, or reads a real
+  to a real Agent's `events.jsonl`/`mailbox`, or reads a real
   agent's actual bytes. The `agent_sleep` observation and the
   `project_agents` heartbeat are proven against fixture files with pinned
   timestamps, never against a live kernel. Inside `native_shell_behavior`

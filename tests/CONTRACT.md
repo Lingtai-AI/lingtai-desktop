@@ -106,8 +106,6 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
 - `tests/direct_conversation_route_test.cpp` — `direct_conversation_route`.
 - `tests/direct_conversation_history_test.cpp` — `direct_conversation_history`.
 - `tests/direct_mail_publisher_test.cpp` — `direct_mail_publisher`.
-- `tests/agent_activity_test.cpp` — `agent_activity`.
-- `tests/agent_task_card_test.cpp` — `agent_task_card`.
 - `tests/agent_preset_summary_test.cpp` — `agent_preset_summary`.
 - `tests/agent_sleep_test.cpp` — `agent_sleep`.
 - `tests/native_shell_test.cpp` — `native_shell_behavior` (links the shell +

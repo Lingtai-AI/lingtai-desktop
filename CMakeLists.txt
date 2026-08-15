@@ -191,9 +191,9 @@ target_link_libraries(lingtai_desktop_native_shell
     PRIVATE desktop-app::lib_ui
         Qt6::Core
         lingtai_desktop_agent_projection lingtai_desktop_conversation
-        lingtai_desktop_mail_publisher lingtai_desktop_agent_activity
-        lingtai_desktop_agent_sleep lingtai_desktop_agent_launch
-        lingtai_desktop_agent_task_card lingtai_desktop_agent_preset_summary)
+        lingtai_desktop_mail_publisher lingtai_desktop_agent_sleep
+        lingtai_desktop_agent_launch
+        lingtai_desktop_agent_preset_summary)
 
 # Internal POSIX descriptor/no-follow primitives. No Qt, no project model, and
 # deliberately no link edge of its own: it is the shared safety mechanism every
@@ -257,35 +257,6 @@ target_compile_options(lingtai_desktop_mail_publisher PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_desktop_mail_publisher
     PUBLIC lingtai_desktop_direct_route
-    PRIVATE Qt6::Core lingtai_desktop_posix_primitives)
-
-# The one Agent Activity reader owner: it turns the selected Agent's own
-# `logs/events.jsonl` into a bounded, stateless, read-only snapshot. It reads
-# no other source and owns no presentation.
-add_library(lingtai_desktop_agent_activity STATIC
-    src/agent_activity.cpp)
-init_target(lingtai_desktop_agent_activity)
-target_include_directories(lingtai_desktop_agent_activity PUBLIC
-    "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_compile_options(lingtai_desktop_agent_activity PRIVATE
-    -Wall -Wextra -Werror -pedantic)
-target_link_libraries(lingtai_desktop_agent_activity
-    PUBLIC lingtai_desktop_core
-    PRIVATE Qt6::Core lingtai_desktop_posix_primitives)
-
-# The one Task Card reader owner: it turns the selected Agent's own two
-# channel-facing `taskcard/{status,taskcard.md}` artifacts into a bounded,
-# stateless, read-only projection. It reads no other source and owns no
-# presentation or last-valid preservation policy.
-add_library(lingtai_desktop_agent_task_card STATIC
-    src/agent_task_card.cpp)
-init_target(lingtai_desktop_agent_task_card)
-target_include_directories(lingtai_desktop_agent_task_card PUBLIC
-    "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_compile_options(lingtai_desktop_agent_task_card PRIVATE
-    -Wall -Wextra -Werror -pedantic)
-target_link_libraries(lingtai_desktop_agent_task_card
-    PUBLIC lingtai_desktop_core
     PRIVATE Qt6::Core lingtai_desktop_posix_primitives)
 
 # The one Presets summary reader owner: it turns the selected Agent's own
@@ -364,20 +335,6 @@ target_compile_options(lingtai_direct_mail_publisher_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_direct_mail_publisher_test PRIVATE
     lingtai_desktop_mail_publisher)
-add_executable(lingtai_agent_activity_test
-    tests/agent_activity_test.cpp)
-init_target(lingtai_agent_activity_test)
-target_compile_options(lingtai_agent_activity_test PRIVATE
-    -Wall -Wextra -Werror -pedantic)
-target_link_libraries(lingtai_agent_activity_test PRIVATE
-    lingtai_desktop_agent_activity)
-add_executable(lingtai_agent_task_card_test
-    tests/agent_task_card_test.cpp)
-init_target(lingtai_agent_task_card_test)
-target_compile_options(lingtai_agent_task_card_test PRIVATE
-    -Wall -Wextra -Werror -pedantic)
-target_link_libraries(lingtai_agent_task_card_test PRIVATE
-    lingtai_desktop_agent_task_card)
 add_executable(lingtai_agent_preset_summary_test
     tests/agent_preset_summary_test.cpp)
 init_target(lingtai_agent_preset_summary_test)
@@ -431,12 +388,6 @@ add_test(NAME direct_conversation_history
 add_test(NAME direct_mail_publisher
     COMMAND lingtai_direct_mail_publisher_test
         "${CMAKE_CURRENT_BINARY_DIR}/direct-mail-publisher-fixture")
-add_test(NAME agent_activity
-    COMMAND lingtai_agent_activity_test
-        "${CMAKE_CURRENT_BINARY_DIR}/agent-activity-fixture")
-add_test(NAME agent_task_card
-    COMMAND lingtai_agent_task_card_test
-        "${CMAKE_CURRENT_BINARY_DIR}/agent-task-card-fixture")
 add_test(NAME agent_preset_summary
     COMMAND lingtai_agent_preset_summary_test
         "${CMAKE_CURRENT_BINARY_DIR}/agent-preset-summary-fixture")
@@ -487,5 +438,27 @@ if(APPLE)
         ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
 else()
     set_tests_properties(native_shell_behavior PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
+add_executable(lingtai_native_shell_destinations_test
+    tests/native_shell_destinations_test.cpp
+    src/crl_integration.cpp)
+init_target(lingtai_native_shell_destinations_test)
+target_compile_options(lingtai_native_shell_destinations_test PRIVATE
+    -Wall -Wextra -Werror -pedantic
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-unused-parameter>
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-deprecated-this-capture>
+    $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-unused-parameter>)
+target_link_libraries(lingtai_native_shell_destinations_test PRIVATE
+    lingtai_desktop_native_shell
+    desktop-app::lib_ui)
+add_test(NAME native_shell_destinations
+    COMMAND lingtai_native_shell_destinations_test)
+if(APPLE)
+    set_tests_properties(native_shell_destinations PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
+else()
+    set_tests_properties(native_shell_destinations PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()

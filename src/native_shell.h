@@ -3,7 +3,6 @@
 #include "agent_launch.h"
 #include "agent_projection.h"
 #include "agent_sleep.h"
-#include "agent_task_card.h"
 #include "project_bootstrap.h"
 #include "ui/agent_roster.h"
 #include "workspace_selection.h"
@@ -52,13 +51,11 @@ struct ProjectOpenOutcome {
 };
 
 // The one compact secondary page treatment for the selected Agent: the chat
-// (conversation) is the default surface, and the three read-only sources each
-// own one page behind a small nav row so only one content surface shows at a
-// time.
+// (conversation) is the default surface, and the one retained read-only
+// source (Presets) owns one page behind a small nav row so only one content
+// surface shows at a time.
 enum class AgentDetailPage {
     conversation,
-    activity,
-    task_card,
     presets,
 };
 
@@ -116,11 +113,9 @@ private:
     void refresh_route();
     void render_roster();
     void render_conversation();
-    void render_agent_activity();
     // Reapplies the generated light or canonical Telegram Night palette after
     // the host appearance changes, then refreshes palette-backed descendants.
     void refresh_system_palette();
-    void render_agent_task_card();
     void render_agent_preset_summary();
     void reset_composer();
     void handle_send_message();
@@ -140,8 +135,8 @@ private:
     // the roster and drops the selection. No-op outside the narrow detail.
     void handle_detail_back();
     // Switches the selected-Agent detail to exactly one page: the chat
-    // (conversation) by default, or one of the three read-only secondary
-    // sources, so only one content surface dominates at a time.
+    // (conversation) by default, or the one retained read-only source
+    // (Presets), so only one content surface dominates at a time.
     void show_detail_page(AgentDetailPage page);
     [[nodiscard]] ProjectOpenOutcome show_open_error(
         ProjectPathFailure failure,
@@ -216,15 +211,10 @@ private:
     std::optional<StartObservation> pending_start_observation_;
     // The one compact selected-Agent page navigation: exactly one nav control
     // per AgentDetailPage, wired by the shell to `show_detail_page`. The
-    // three secondary section owners that the nav reveals are captured in the
+    // secondary section owners that the nav reveals are captured in the
     // same construction order so `show_detail_page` can show exactly one.
     std::vector<QPushButton *> page_nav_buttons_;
     std::vector<Ui::RpWidget *> secondary_pages_;
-    // The current selected target's last valid Task Card projection
-    // (active or inactive), preserved only so a transient unavailable
-    // observation does not clear or misreport it. Reset immediately on
-    // project open or Agent selection change; never persisted.
-    std::optional<AgentTaskCardSnapshot> task_card_last_valid_;
 };
 
 } // namespace lingtai::desktop
