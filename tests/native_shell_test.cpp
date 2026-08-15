@@ -2264,8 +2264,10 @@ exit 7)");
     const auto attached_root = fs::canonical(destination);
     new_project_button->click();
     QCoreApplication::processEvents();
+    const auto fail_dialog_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
     while (!dialog->isVisible()
-            && std::chrono::steady_clock::now() < dialog_deadline) {
+            && std::chrono::steady_clock::now() < fail_dialog_deadline) {
         QThread::msleep(20);
         QCoreApplication::processEvents();
     }
