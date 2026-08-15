@@ -3062,6 +3062,115 @@ void verify_telegram_theme_reset(
     require(!cleanup_error, "theme-reset fixtures must be removed");
 }
 
+// The M4 modern-composer presentation contract, defined as one focused
+// relational geometry journey. At a representative wide state the
+// `lingtai_composer` lane is horizontally centered in its
+// `lingtai_agent_detail` owner -- narrower than that owner with real,
+// symmetric side insets -- rather than a full-width detail strip; at the
+// narrow 380 minimum it relaxes to near-full width relative to the same
+// owner. The `lingtai_composer_input` and `lingtai_composer_send_button`
+// controls remain one compact, vertically aligned action row inside the
+// lane, and the `lingtai_composer_status` read-out is owned by the lane (a
+// descendant of `lingtai_composer`), never a separate detail row. All
+// geometry is relational to current object names in one common ancestor
+// coordinate system; no screenshot pixels are consulted.
+void verify_modern_composer_surface(
+        lingtai::desktop::NativeShell &shell,
+        const fs::path &sandbox) {
+    auto &window = shell.window();
+    auto *detail = required_child<Ui::RpWidget>(
+        window, "lingtai_agent_detail");
+    auto *composer = required_child<Ui::RpWidget>(
+        window, "lingtai_composer");
+    auto *composer_input = required_ui_child<Ui::InputField>(
+        window, "lingtai_composer_input");
+    auto *send_button = required_ui_child<Ui::RoundButton>(
+        window, "lingtai_composer_send_button");
+    auto *composer_status = required_child<QLabel>(
+        window, "lingtai_composer_status");
+
+    const auto project = sandbox / "project";
+    write_file(project / ".lingtai/human/.agent.json",
+        R"({"agent_id":"20260101-000000-h001","agent_name":"Ted",)"
+        R"("address":"human","state":"active"})");
+    write_file(project / ".lingtai/alpha/.agent.json",
+        R"({"admin":{},"agent_id":"20260712-191609-a001",)"
+        R"("agent_name":"alpha","address":"alpha","state":"active"})");
+    const auto fixture_before = tree_snapshot(project);
+    const auto outcome = shell.open_project(project, std::nullopt);
+    require(outcome.disposition == ProjectOpenDisposition::opened,
+        "the modern-composer fixture project must open");
+    require(tree_snapshot(project) == fixture_before,
+        "opening the modern-composer fixture must remain read-only");
+    click_agent(window, "alpha");
+    require(shell.selection_state().selected_agent_directory_key()
+                == std::optional<fs::path>("alpha"),
+        "the modern-composer fixture Agent must be selectable");
+
+    // The empty/status read-out is owned by the composer lane, not a
+    // separate dashboard row under the detail.
+    auto *status_owner = composer_status->parent();
+    while (status_owner != nullptr && status_owner != composer) {
+        status_owner = status_owner->parent();
+    }
+    require(status_owner == composer,
+        "lingtai_composer_status must be a descendant of "
+        "lingtai_composer, never a separate detail row");
+
+    // Wide state: the lane is a centered, bounded surface narrower than its
+    // detail owner, with real symmetric side insets.
+    window.resize(1200, 800);
+    QCoreApplication::processEvents();
+    require(composer->isVisible() && composer_input->isVisible()
+            && send_button->isVisible(),
+        "the modern composer and its action row must be visible in a wide "
+        "detail");
+    const auto composer_left = composer->mapTo(detail, QPoint(0, 0)).x();
+    const auto composer_right = composer->mapTo(
+        detail, QPoint(composer->width(), 0)).x();
+    const auto left_inset = composer_left;
+    const auto right_inset = detail->width() - composer_right;
+    require(composer->width() < detail->width(),
+        "a wide detail must bound the composer lane rather than span the "
+        "whole detail surface");
+    require(left_inset > 0 && right_inset > 0,
+        "a wide detail must frame the composer lane with real side insets");
+    require(qAbs(left_inset - right_inset) <= 2,
+        "a wide detail must center the composer lane with symmetric side "
+        "insets");
+
+    // The input and Send action stay one compact aligned action row inside
+    // the lane.
+    require(composer_input->parent() == composer
+            && send_button->parent() == composer,
+        "the composer input and Send action must be owned by the composer "
+        "lane");
+    const auto input_rect = QRect(
+        composer_input->mapTo(composer, QPoint(0, 0)),
+        composer_input->size());
+    const auto send_rect = QRect(
+        send_button->mapTo(composer, QPoint(0, 0)),
+        send_button->size());
+    require(qAbs(input_rect.center().y() - send_rect.center().y()) <= 2,
+        "the composer input and Send action must align on one compact row");
+    require(input_rect.right() < send_rect.left(),
+        "the composer input must sit to the left of Send in the same row");
+
+    // Narrow 380 minimum: the lane relaxes to near-full width relative to
+    // the same detail owner.
+    window.resize(380, 480);
+    QCoreApplication::processEvents();
+    require(composer->isVisible() && composer_input->isVisible()
+            && send_button->isVisible(),
+        "the modern composer must stay visible at the narrow minimum");
+    require(composer->width() * 4 >= detail->width() * 3,
+        "a narrow detail must let the composer lane grow near-full");
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "modern-composer fixtures must be removed");
+}
+
 // The R4 RED: the selected-Agent chat top bar must drop its secondary
 // `lingtai_selected_agent_key` metadata before any primary control when the
 // actual header width is constrained. A wide actual header shows the
@@ -3220,16 +3329,20 @@ void verify_responsive_header_priority(
 
 int main(int argc, char **argv) {
     // Test-local execution modes: the exact binary with a fresh fixture root
-    // and one literal flag runs only the R1 resizable-sidebar or R4
-    // responsive-header journey, so the warm RED/GREEN never has to pass the
-    // unrelated accepted-base debt.
+    // and one literal flag runs only the R1 resizable-sidebar, R4
+    // responsive-header, or M4 modern-composer journey, so the warm
+    // RED/GREEN never has to pass the unrelated accepted-base debt.
     const auto responsive_sidebar_only = argc == 3
         && std::string_view(argv[2]) == "--responsive-sidebar-only";
     const auto responsive_header_only = argc == 3
         && std::string_view(argv[2]) == "--responsive-header-only";
-    if (argc != 2 && !responsive_sidebar_only && !responsive_header_only) {
+    const auto modern_composer_only = argc == 3
+        && std::string_view(argv[2]) == "--modern-composer-only";
+    if (argc != 2 && !responsive_sidebar_only && !responsive_header_only
+            && !modern_composer_only) {
         std::cerr << "usage: native_shell_test PROJECT_ROOT "
-                     "[--responsive-sidebar-only|--responsive-header-only]\n";
+                     "[--responsive-sidebar-only|--responsive-header-only|"
+                     "--modern-composer-only]\n";
         return 2;
     }
     try {
@@ -3249,6 +3362,15 @@ int main(int argc, char **argv) {
             shell.show_offscreen();
             QCoreApplication::processEvents();
             verify_responsive_header_priority(shell, project_root);
+            std::cout << "native shell behavior: OK\n";
+            return 0;
+        }
+        if (modern_composer_only) {
+            lingtai::desktop::NativeShell shell;
+            shell.show_offscreen();
+            QCoreApplication::processEvents();
+            verify_modern_composer_surface(
+                shell, project_root / "commit-m4-composer-surface-fixture");
             std::cout << "native shell behavior: OK\n";
             return 0;
         }
@@ -3286,6 +3408,8 @@ int main(int argc, char **argv) {
             shell, project_root / "commit-28-dashboard-fixture");
         verify_telegram_theme_reset(
             shell, project_root / "commit-31-theme-reset-fixture");
+        verify_modern_composer_surface(
+            shell, project_root / "commit-m4-composer-surface-fixture");
         std::cout << "native shell behavior: OK\n";
         return 0;
     } catch (const std::exception &error) {
