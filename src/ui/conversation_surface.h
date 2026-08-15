@@ -40,8 +40,8 @@ protected:
     // Fills the viewport with the chat backdrop, paints the rounded message
     // bubbles behind the text, then lets the document layout draw the text.
     void paintEvent(QPaintEvent *event) override;
-    // Recomputes the centered reading-column message width and reflows the
-    // document when the quantized layout width meaningfully changes.
+    // Recomputes the content-driven message widths and reflows the document
+    // when the quantized layout width meaningfully changes.
     void resizeEvent(QResizeEvent *event) override;
 
 private:

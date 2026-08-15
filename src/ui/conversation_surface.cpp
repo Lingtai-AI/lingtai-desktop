@@ -4,6 +4,7 @@
 #include "styles/palette.h"
 
 #include <QtGui/QFont>
+#include <QtGui/QFontMetricsF>
 #include <QtGui/QPainter>
 #include <QtGui/QPaintEvent>
 #include <QtGui/QPalette>
@@ -25,7 +26,10 @@ namespace {
 constexpr auto kDocumentMargin = 8;
 constexpr auto kMessageEdgeMargin = 12;
 constexpr auto kMessageTopMargin = 4;
-constexpr auto kMessageBottomMargin = 18;
+// The combined 4px/30px vertical margins leave at least the test-pinned 14px
+// rendered gap between consecutive bubbles: the 34px text-to-text distance
+// minus the 8px vertical bubble padding drawn on each of the two bubbles.
+constexpr auto kMessageBottomMargin = 30;
 constexpr auto kMessageRatio = 0.72;
 constexpr auto kMinMessageWidth = 160;
 constexpr auto kMessageAbsoluteCap = 640;
@@ -36,11 +40,12 @@ constexpr auto kBubbleVPadding = 8;
 constexpr auto kBubbleRadius = 8;
 constexpr auto kMessageBlockProperty = QTextFormat::UserProperty + 1;
 
-// One shared message width for a given viewport. At the explicit narrow
-// breakpoint the block is near-full (the viewport minus the two fixed edge
-// gutters) instead of the ordinary ratio; otherwise the block lives inside the
-// centered reading column at the ordinary 72% ratio, with the existing 160px
-// lower bound and the absolute readable cap, never wider than the column.
+// The shared lane maximum for a given viewport: the widest any one message may
+// be. At the explicit narrow breakpoint the lane is near-full (the viewport
+// minus the two fixed edge gutters) instead of the ordinary ratio; otherwise
+// the lane lives inside the centered reading column at the ordinary 72% ratio,
+// with the existing 160px lower bound and the absolute readable cap, never
+// wider than the column.
 int message_block_width(int viewport_width) {
     if (viewport_width < kNarrowViewportWidth) {
         return qMax(0, viewport_width - 2 * kMessageEdgeMargin);
@@ -52,14 +57,18 @@ int message_block_width(int viewport_width) {
         kMessageAbsoluteCap);
 }
 
-QTextBlockFormat message_block_format(bool outgoing, int viewport_width) {
+QTextBlockFormat message_block_format(
+        bool outgoing,
+        int viewport_width,
+        int width) {
     auto format = QTextBlockFormat();
     format.setAlignment(outgoing ? Qt::AlignRight : Qt::AlignLeft);
-    const auto width = message_block_width(viewport_width);
     // Derive one outer gutter (the centered reading column's offset plus the
     // fixed edge gutter) and one inner remainder, then cross-assign them so
     // incoming stays left-anchored and outgoing right-anchored inside the same
-    // column rather than centering each message individually.
+    // column rather than centering each message individually. Each message
+    // keeps the shared outer anchor while its inner edge follows its own
+    // content-driven width.
     const auto column = qMin(viewport_width, kReadingColumnMax);
     const auto outer = (viewport_width - column) / 2 + kMessageEdgeMargin;
     const auto inner = qMax(outer, viewport_width - width - outer);
@@ -112,6 +121,48 @@ QTextCharFormat body_format(bool outgoing) {
     font.setWeight(QFont::Normal);
     format.setFont(font);
     return format;
+}
+
+// A message's own natural content width: the widest single rendered line of
+// its visible text (the sender · timestamp header, the optional subject, and
+// every body line), measured with the exact same fonts rebuild_document
+// applies. The caller adds the existing horizontal bubble padding, so a short
+// message owns a visibly narrower lane than a longer one in the same state
+// instead of every message stretching to the shared lane maximum.
+int message_content_width(
+        const DirectConversationMessage &message,
+        const QString &them) {
+    const auto outgoing = message.outgoing;
+    auto widest = 0.0;
+    const auto header = QFontMetricsF(sender_format(outgoing).font())
+            .horizontalAdvance(outgoing ? QStringLiteral("You") : them)
+        + QFontMetricsF(secondary_format().font()).horizontalAdvance(
+            QStringLiteral(" · %1")
+                .arg(QString::fromStdString(message.timestamp)));
+    widest = qMax(widest, header);
+
+    if (!message.subject.empty()) {
+        const auto subject_metrics = QFontMetricsF(
+            subject_format(outgoing).font());
+        widest = qMax(widest,
+            subject_metrics.horizontalAdvance(
+                QString::fromStdString(message.subject)));
+    }
+
+    // The body is measured line by line: the same paragraph-delimiter
+    // normalization rebuild_document applies, so only the widest single line
+    // contributes instead of an unwrapped paragraph.
+    const auto body_metrics = QFontMetricsF(body_format(outgoing).font());
+    const auto body_lines = QString::fromStdString(message.text)
+        .replace(QStringLiteral("\r\n"), QString(QChar::LineSeparator))
+        .replace(QChar::LineFeed, QString(QChar::LineSeparator))
+        .replace(QChar::CarriageReturn, QString(QChar::LineSeparator))
+        .replace(QChar::ParagraphSeparator, QString(QChar::LineSeparator))
+        .split(QChar::LineSeparator);
+    for (const auto &line : body_lines) {
+        widest = qMax(widest, body_metrics.horizontalAdvance(line));
+    }
+    return int(widest + 0.5);
 }
 
 } // namespace
@@ -196,10 +247,19 @@ void ConversationSurface::rebuild_document(
     // the margins bound each message to the shared reading-column width.
     const auto separator = QString(QChar::LineSeparator);
     const auto viewport_width = viewport()->width();
+    const auto lane_max = message_block_width(viewport_width);
     auto first_block = true;
     for (const auto &message : messages) {
         const auto outgoing = message.outgoing;
-        const auto block_format = message_block_format(outgoing, viewport_width);
+        // Each message's width is content-driven: its own widest visible line
+        // plus the existing horizontal bubble padding, clamped between the
+        // modest 160px lower bound and the shared responsive lane maximum.
+        const auto width = qBound(
+            qMin(kMinMessageWidth, lane_max),
+            message_content_width(message, them_) + 2 * kBubbleHPadding,
+            lane_max);
+        const auto block_format = message_block_format(
+            outgoing, viewport_width, width);
         if (first_block) {
             cursor.setBlockFormat(block_format);
             first_block = false;
