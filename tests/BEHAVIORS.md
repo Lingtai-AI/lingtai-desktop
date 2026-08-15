@@ -129,16 +129,19 @@ Qt plugin path set and an 8 s watchdog.
 
 - `native_shell_behavior` proves the composed shell on a real `QApplication`
   with the real widgets shown off-screen: dark palette inheritance and
-  restoration, open-project behavior, shell semantics and named regions,
-  selected-Agent conversation, composer send, Agent Activity / Request sleep
-  / Start Agent / Task Card / Presets panels, first-project bootstrap,
-  layout modes, the persistent roster shell, the dashboard layout, and the
-  Telegram theme reset — all against synthetic `commit-N-...-fixture` trees
-  under the CMake-created no-write fixture. Read-only, no-escape, and
-  no-write cases use `project_tree` snapshots proving the snapshotted
-  fixture (and any explicit outside symlink target the test names) remains
-  unchanged; the send/sleep/bootstrap write journeys assert the exact
-  intended in-fixture mutations (`native_shell_test.cpp:3041-3073`).
+  restoration, live light/dark scheme transitions sampling the current
+  representative palette tokens/assertions, open-project behavior, shell
+  semantics and named regions, selected-Agent conversation, composer send,
+  Agent Activity / Request sleep / Start Agent / Task Card / Presets panels,
+  first-project bootstrap, layout modes, the persistent roster shell, the
+  dashboard layout, and the Telegram theme reset — all against synthetic
+  `commit-N-...-fixture` trees under the CMake-created no-write fixture.
+  Read-only, no-escape, and no-write cases use `project_tree` snapshots
+  proving the snapshotted fixture (and any explicit outside symlink target
+  the test names) remains unchanged; the send/sleep/bootstrap write journeys
+  assert the exact intended in-fixture mutations
+  (`verify_composer_send_behavior`, `verify_request_sleep_action`,
+  `verify_first_project_bootstrap`).
 
 ### Process-level smoke/persistence
 
@@ -168,8 +171,10 @@ the real shell shown off-screen. None of them establish:
   the real shell but off-screen (`show_offscreen()`, `WA_DontShowOnScreen`
   on Cocoa, Qt offscreen elsewhere). No test renders to a visible display or
   asserts what a human sees; pixel-level or perceptual acceptance is not
-  proven here. The palette/theme assertions sample specific current tokens
-  and states (dark palette inheritance, the theme-reset check); they do not
+  proven here. The palette/theme assertions drive live light and dark scheme
+  transitions through the real-Qt journey and sample exactly the current
+  representative palette tokens and states (dark palette inheritance, the
+  live light/dark scheme transition, the theme-reset check); they do not
   prove complete visible Telegram parity or every painted pixel/token.
 - **Real platform widgets' OS behavior beyond what the fixture exercises.**
   The real `Ui::RpWindow`/`Ui::RpWidget` composition is exercised, but not
