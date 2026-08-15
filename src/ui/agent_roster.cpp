@@ -159,7 +159,7 @@ void AgentRowButton::paintEvent(QPaintEvent *) {
     painter.drawText(primary_rect, flags, lines.value(0));
 
     auto secondary_font = font();
-    secondary_font.setPointSize(10);
+    secondary_font.setPointSize(13);
     painter.setFont(secondary_font);
     painter.setPen(selected
         ? st::dialogsTextFgActive

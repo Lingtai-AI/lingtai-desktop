@@ -49,9 +49,11 @@ Painting (`agent_roster.cpp:127-177`):
 
 - Fill: selected → `st::dialogsBgActive`; down or hovered → `st::windowBgRipple`;
   otherwise `st::windowBgOver`.
-- Primary line (13pt DemiBold) and secondary line (10pt) pick their pen from
-  the same three-state ladder: `st::dialogsNameFg…` / `st::dialogsTextFg…`
-  (Active / Over / plain).
+- Primary line (13pt DemiBold) and secondary line (13pt normal) pick their pen
+  from the same three-state ladder: `st::dialogsNameFg…` / `st::dialogsTextFg…`
+  (Active / Over / plain); the name and secondary share the mature same-size
+  13pt two-line scale, differentiated only by DemiBold-vs-normal weight and
+  primary-vs-secondary palette.
 - A `PE_FrameFocusRect` is painted when the row has focus.
 - The row palette `Highlight` is set to `st::dialogsBgActive` so selection
   color resolves from the same token its paint uses

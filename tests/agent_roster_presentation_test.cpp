@@ -5,14 +5,20 @@
 #include "ui/rp_widget.h"
 #include "ui/style/style_core_scale.h"
 
+#include <QtCore/QCoreApplication>
 #include <QtCore/QString>
+#include <QtGui/QColor>
+#include <QtGui/QImage>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLayout>
 #include <QtWidgets/QPushButton>
 
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <iostream>
+#include <map>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -58,6 +64,104 @@ QPushButton *agent_row(QWidget &widget, std::string_view key) {
         }
     }
     return nullptr;
+}
+
+constexpr double kInkDistance = 48.0;
+constexpr double kSecondaryScaleRatio = 0.90;
+
+QColor sample_idle_background(const QImage &image, double dpr) {
+    // The idle row background fills the whole row; the text rect only ever
+    // covers x10..width-10, y8..54, so every pixel outside it is safe to
+    // sample, and the most common such pixel is the row's idle background.
+    std::map<QRgb, int> counts;
+    const auto min_x = int(10.0 * dpr);
+    const auto max_x = image.width() - int(10.0 * dpr);
+    const auto min_y = int(8.0 * dpr);
+    const auto max_y = int(54.0 * dpr);
+    for (auto y = 0; y != image.height(); ++y) {
+        for (auto x = 0; x != image.width(); ++x) {
+            if (x >= min_x && x < max_x && y >= min_y && y < max_y) {
+                continue;
+            }
+            ++counts[image.pixel(x, y)];
+        }
+    }
+    auto best = image.pixel(0, 0);
+    auto best_count = 0;
+    for (const auto &[rgb, count] : counts) {
+        if (count > best_count) {
+            best = rgb;
+            best_count = count;
+        }
+    }
+    return QColor(best);
+}
+
+double band_ink_span(const QImage &image, double dpr,
+        const QColor &background, double logical_min_y, double logical_max_y) {
+    // Only the x10..width-10 text column counts; any pixel at least
+    // kInkDistance RGB away from the idle background is glyph ink, and the
+    // physical min/max y span converts back to logical pixels so the result
+    // is devicePixelRatio-agnostic.
+    const auto min_x = int(10.0 * dpr);
+    const auto max_x = image.width() - int(10.0 * dpr);
+    const auto min_y = int(logical_min_y * dpr);
+    const auto max_y = int(logical_max_y * dpr);
+    auto ink_min = std::optional<int>();
+    auto ink_max = std::optional<int>();
+    for (auto y = min_y; y < max_y && y < image.height(); ++y) {
+        for (auto x = min_x; x < max_x && x < image.width(); ++x) {
+            const auto pixel = image.pixelColor(x, y);
+            const auto dr = pixel.red() - background.red();
+            const auto dg = pixel.green() - background.green();
+            const auto db = pixel.blue() - background.blue();
+            const auto distance = std::sqrt(
+                double(dr * dr + dg * dg + db * db));
+            if (distance >= kInkDistance) {
+                if (!ink_min.has_value()) {
+                    ink_min = y;
+                }
+                ink_max = y;
+            }
+        }
+    }
+    if (!ink_min.has_value() || !ink_max.has_value()) {
+        return 0.0;
+    }
+    return (double(*ink_max + 1) / dpr) - (double(*ink_min) / dpr);
+}
+
+void verify_secondary_roster_text_matches_primary_scale() {
+    AgentSnapshot snapshot;
+    snapshot.scan = AgentScanState::complete;
+    snapshot.items = { make_row("MMMMMMMM", AgentRole::main) };
+
+    QWidget parent;
+    AgentRoster roster(&parent);
+    roster.set_rows(snapshot, std::nullopt);
+    roster.resize(260, roster.height());
+    roster.show();
+    QCoreApplication::processEvents();
+
+    auto *button = agent_row(roster, "MMMMMMMM");
+    require(button != nullptr, "the glyph-rich row must render for grab");
+    button->clearFocus();
+    roster.clearFocus();
+
+    const auto image = button->grab().toImage();
+    const auto dpr = std::max(1.0, double(image.devicePixelRatio()));
+
+    const auto background = sample_idle_background(image, dpr);
+    const auto primary_span = band_ink_span(
+        image, dpr, background, 8.0, 31.0);
+    const auto secondary_span = band_ink_span(
+        image, dpr, background, 31.0, 54.0);
+    require(primary_span > 0.0 && secondary_span > 0.0,
+        "the rendered row must show glyph ink in both the primary and "
+        "secondary text bands");
+    require(secondary_span >= primary_span * kSecondaryScaleRatio,
+        "the secondary roster text must render at the same mature visual "
+        "scale as the primary");
 }
 
 void verify_human_hidden_from_roster() {
@@ -107,6 +211,8 @@ void verify_human_hidden_from_roster() {
     require(agent_row(roster, "c-agent")->isChecked()
             && !agent_row(roster, "b-main")->isChecked(),
         "selection must still bind to the caller's real-Agent key");
+
+    verify_secondary_roster_text_matches_primary_scale();
 }
 
 } // namespace
