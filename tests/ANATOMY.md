@@ -1,0 +1,176 @@
+# `tests/` anatomy
+
+`tests/` is the repository-owned automated test surface: every automated
+proof of Desktop product behavior in this tree lives here, and nothing else
+in the tree proves product behavior automatically. It does not replace
+human-visible acceptance, which stays outside synthetic/offscreen
+automation (see [`tests/BEHAVIORS.md`](BEHAVIORS.md)). The folder is
+deliberately small and deliberately flat —
+one file per owned CMake target, two Python contracts — and every test
+belongs to exactly one of four proof layers: **repository/build/static
+contracts**, **pure/domain unit tests**, **real-Qt `native_shell_behavior`**,
+or **process-level smoke/persistence**. The layer decides how the test is
+run, what it can honestly claim, and what it must not claim. See the
+repository map [`../ANATOMY.md`](../ANATOMY.md) for the top-level build
+graph, and the source docs [`../src/ANATOMY.md`](../src/ANATOMY.md),
+[`../src/CONTRACT.md`](../src/CONTRACT.md), and
+[`../src/BEHAVIORS.md`](../src/BEHAVIORS.md) for the production owners each
+test proves. This file descends into `tests/` itself.
+
+## Proof layers
+
+### 1. Repository/build/static contracts
+
+- `tests/test_repository_contract.py` — the sole owner of pinned dependency
+  provenance and tracked-artifact hygiene: it asserts the exact
+  `cmake/desktop-app-toolkit-lock.json` pins (Qt 6.11.1, the
+  `tdesktop_commit`, and the seven pinned toolkit commits) and that no
+  `.deps/`, `build/`, `Qt/`, or `/tmp/` path and no leaked
+  `/tmp/lingtai-lib-ui-validation` marker is tracked by git. It is run with
+  `python3 -m unittest tests.test_repository_contract`, deliberately not as
+  a ctest: it is a repository contract, not a product behavior, and it is
+  deliberately not a repository-shape or CMake-source assertion suite.
+- Compile-time guards embedded in unit tests: `workspace_selection_test.cpp`
+  and `direct_conversation_route_test.cpp` start with
+  `#ifdef QT_CORE_LIB / #error` so a Qt-core dependency leaking into a
+  Qt-free consumer fails the build, and `posix_descriptor_primitives_test.cpp`
+  does the same for the internal seam. `static_assert`s pin `noexcept`
+  signatures and exact return types (`workspace_selection_test.cpp:261-269`,
+  `project_attachment_test.cpp:36`, `direct_conversation_route_test.cpp:99`).
+  Every owned test target compiles under
+  `-Wall -Wextra -Werror -pedantic` (`CMakeLists.txt:342-415`).
+
+### 2. Pure/domain unit tests (no Qt, no network, injected fixture roots)
+
+The majority of `tests/`: each compiles against exactly one owned library
+target, takes one fixture-root argument from ctest, builds its own project
+tree inside that root, and proves a bounded read/write/derivation contract.
+No test in this layer links Qt (the readers deliberately do not), no test
+touches a real Agent or project, and none depends on a network or provider.
+
+- `tests/posix_descriptor_primitives_test.cpp` — `posix_descriptor_primitives`
+  ctest. Move-only descriptor/directory-stream ownership, shared read flags,
+  `safe_leaf` validation, one-leaf-at-a-time opens.
+- `tests/project_attachment_test.cpp` — `project_attachment` ctest.
+  Containment seam: canonical roots, typed failures, symlink/no-escape rules.
+- `tests/workspace_selection_test.cpp` — `workspace_selection` ctest. C1
+  model: activation/selection/clear transitions, no-write proof.
+- `tests/agent_projection_test.cpp` — `agent_projection` ctest. The one
+  composite discovery/role/presence/status projection.
+- `tests/direct_conversation_route_test.cpp` — `direct_conversation_route`
+  ctest. Pure route/eligibility derivation; no filesystem access.
+- `tests/direct_conversation_history_test.cpp` — `direct_conversation_history`
+  ctest. Read-only mailbox rows, membership, order, collapse, no-write.
+- `tests/direct_mail_publisher_test.cpp` — `direct_mail_publisher` ctest.
+  One exclusive outbox leaf, schema, nonoverwrite, fail-closed containment.
+- `tests/agent_activity_test.cpp` — `agent_activity` ctest. Bounded suffix
+  read and public allowlist of the selected Agent's `events.jsonl`.
+- `tests/agent_task_card_test.cpp` — `agent_task_card` ctest. Exact
+  `active`/`inactive`/`unavailable` projection of the selected Agent's
+  `taskcard/` artifacts.
+- `tests/agent_preset_summary_test.cpp` — `agent_preset_summary` ctest.
+  `resolved`/`stale`/`unavailable` projection of the selected Agent's
+  `manifest.resolved.json`.
+- `tests/agent_sleep_test.cpp` — `agent_sleep` ctest. Exact-target `.sleep`
+  marker write plus the baseline/observe pair.
+
+### 3. Real-Qt `native_shell_behavior`
+
+- `tests/native_shell_test.cpp` — `native_shell_behavior` ctest. The single
+  real-Qt contract: it links `lingtai_desktop_native_shell` +
+  `desktop-app::lib_ui` + `src/crl_integration.cpp` (`CMakeLists.txt:467-478`),
+  constructs a real `QApplication`, shows the real `NativeShell`
+  off-screen (`shell.show_offscreen()`), and drives the real widgets to
+  prove shell semantics, named regions, geometry, the composer send flow,
+  the dashboard sections, Request sleep, Start Agent, layout modes, and the
+  no-write rule. On macOS it runs with `QT_QPA_PLATFORM=cocoa`, elsewhere
+  with `offscreen` (`CMakeLists.txt:485-491`). Its fixture root is
+  `native-shell-no-write-fixture`, created by CMake and used by the test as
+  its working directory (`CMakeLists.txt:480-484`). `project_tree` snapshots
+  surround the specific read-only, no-escape, and no-write cases — and any
+  explicit outside symlink target the test names — proving those fixtures
+  remain unchanged through those operations; the write journeys (composer
+  send/outbox, Request sleep marker, New Project/bootstrap) instead assert
+  the exact intended in-fixture mutations on the synthetic
+  `commit-N-...-fixture` trees the test itself creates. The working
+  directory is an injected path, not an OS or process sandbox.
+
+### 4. Process-level smoke/persistence
+
+- `tests/test_native_shell.py` — `native_shell` ctest. Runs the built
+  `lingtai_desktop_smoke` executable (`src/main.cpp` + `src/crl_integration.cpp`,
+  `CMakeLists.txt:453-459`) via `$<TARGET_FILE:lingtai_desktop_smoke>`
+  (`CMakeLists.txt:461-465`) as a real subprocess: `--smoke` proves the
+  ordered readiness/success markers and named regions on the real shell,
+  and `--offscreen` proves normal mode persists (does not exit). The
+  `./scripts/smoke.py` wrapper runs the same `--smoke` with the Qt plugin
+  path set and an 8 s timeout.
+
+## CMake/ctest mapping
+
+Each ctest registers one executable (or Python script) against one fixture
+path under the build directory; the test itself creates and removes its
+sandbox within that root (`CMakeLists.txt:418-491`):
+
+| Test file | Target / executable | ctest name | Fixture (build dir) |
+| --- | --- | --- | --- |
+| `test_repository_contract.py` | Python `unittest` (no target) | manual: `python3 -m unittest tests.test_repository_contract` | — |
+| `posix_descriptor_primitives_test.cpp` | `lingtai_posix_descriptor_primitives_test` | `posix_descriptor_primitives` | `posix-descriptor-primitives-fixture` |
+| `project_attachment_test.cpp` | `lingtai_project_attachment_test` | `project_attachment` | `project-attachment-fixture` |
+| `workspace_selection_test.cpp` | `lingtai_workspace_selection_test` | `workspace_selection` | `workspace-selection-fixture` |
+| `agent_projection_test.cpp` | `lingtai_agent_projection_test` | `agent_projection` | `agent-projection-fixture` |
+| `direct_conversation_route_test.cpp` | `lingtai_direct_conversation_route_test` | `direct_conversation_route` | `direct-conversation-route-fixture` |
+| `direct_conversation_history_test.cpp` | `lingtai_direct_conversation_history_test` | `direct_conversation_history` | `direct-conversation-history-fixture` |
+| `direct_mail_publisher_test.cpp` | `lingtai_direct_mail_publisher_test` | `direct_mail_publisher` | `direct-mail-publisher-fixture` |
+| `agent_activity_test.cpp` | `lingtai_agent_activity_test` | `agent_activity` | `agent-activity-fixture` |
+| `agent_task_card_test.cpp` | `lingtai_agent_task_card_test` | `agent_task_card` | `agent-task-card-fixture` |
+| `agent_preset_summary_test.cpp` | `lingtai_agent_preset_summary_test` | `agent_preset_summary` | `agent-preset-summary-fixture` |
+| `agent_sleep_test.cpp` | `lingtai_agent_sleep_test` | `agent_sleep` | `agent-sleep-fixture` |
+| `native_shell_test.cpp` | `lingtai_native_shell_test` | `native_shell_behavior` | `native-shell-no-write-fixture` (CMake-created) |
+| `test_native_shell.py` | `lingtai_desktop_smoke` (built) | `native_shell` | `$<TARGET_FILE:lingtai_desktop_smoke>` |
+
+## Fixture and data ownership
+
+- Every domain ctest passes its own `CMAKE_CURRENT_BINARY_DIR/<name>-fixture`
+  path as the sole argv argument; the test `remove_all`s it, rebuilds a
+  synthetic project tree, and `remove_all`s it again at the end. Expected
+  test writes stay under the injected fixture trees by dependency and path
+  injection — the fixture root is the only path handed to the code under
+  test — and no test touches a real `.lingtai` project, real Agent,
+  registry, or settings file.
+- The fixture trees are exact byte/type images (shared `tree_snapshot`
+  helpers in `direct_conversation_history_test.cpp:41`,
+  `direct_mail_publisher_test.cpp:40`, `agent_activity_test.cpp:51`,
+  `agent_task_card_test.cpp:42`, `agent_preset_summary_test.cpp:44`,
+  `agent_sleep_test.cpp:51`), so "reading/writing never mutates" is proven
+  against the real tree: the snapshot establishes that the snapshotted
+  fixture — and any explicit outside symlink target the test names, e.g.
+  `outside_before` — remains unchanged. It is not an OS or process sandbox
+  and does not claim nothing can leak to an arbitrary unobserved outside
+  path.
+- The Qt-aware tests are not run under the domain layer: `native_shell_test`
+  needs the full `lib_ui` link edge and `test_native_shell.py` needs the
+  built smoke executable, so both are registered as their own ctests and run
+  with the platform Qt plugin.
+- Production ownership is deliberately not duplicated here: the readers,
+  writers, and the C1 model are all named and owned in
+  [`../src/ANATOMY.md`](../src/ANATOMY.md). This file records only the test
+  side of each edge — which file proves which target, with which ctest name.
+
+## Notes
+
+- `test_repository_contract.py` is the one deliberate non-ctest: keeping it a
+  manual `python3 -m unittest` keeps the automated product-behavior suite
+  purely CMake/ctest-driven while still guarding the lock file and
+  tracked-artifact hygiene on every validation pass (`../AGENTS.md`).
+- The `-Wall -Wextra -Werror -pedantic` flags apply to every owned test
+  target, so a Qt dependency sneaking into a Qt-free consumer (or any
+  unused/ambiguous construct) fails at compile time, not at runtime.
+- `native_shell_behavior` runs with the CMake-created fixture directory as
+  `std::filesystem::current_path` (`native_shell_test.cpp:3036-3038`) and
+  compares `project_tree` around the specific read-only, no-escape, and
+  no-write cases, proving the snapshotted fixture (and any explicit outside
+  symlink target the test names) remains unchanged through those operations;
+  the send/sleep/bootstrap write journeys assert the exact intended
+  in-fixture mutations instead. The working directory is an injected path,
+  not an OS or process sandbox.
