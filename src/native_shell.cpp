@@ -7,6 +7,7 @@
 #include "direct_conversation_history.h"
 #include "direct_mail_publisher.h"
 
+#include "base/event_filter.h"
 #include "base/integration.h"
 
 #include "styles/palette.h"
@@ -511,6 +512,13 @@ void apply_telegram_night_palette() {
     set("msgServiceFg", "#708499");
 }
 
+void apply_system_palette() {
+    style::main_palette::reset();
+    if (system_prefers_dark_palette()) {
+        apply_telegram_night_palette();
+    }
+}
+
 std::unique_ptr<Ui::RpWindow> make_native_window() {
     // Install the adapters before any vendored widget is constructed, unless
     // a hosting environment already installed them.
@@ -536,9 +544,7 @@ std::unique_ptr<Ui::RpWindow> make_native_window() {
     // those styles) are constructed only after this function returns.
     static const auto palette_started = [] {
         style::internal::init_palette(style::kScaleDefault);
-        if (system_prefers_dark_palette()) {
-            apply_telegram_night_palette();
-        }
+        apply_system_palette();
         return true;
     }();
     (void)palette_started;
@@ -1202,12 +1208,36 @@ NativeShell::NativeShell()
             recompute_layout(size.width());
         }, layout_lifetime_);
 
+    QObject::connect(
+        QGuiApplication::styleHints(),
+        &QStyleHints::colorSchemeChanged,
+        window_.get(),
+        [this] { refresh_system_palette(); });
+    base::install_event_filter(
+        window_.get(),
+        qGuiApp,
+        [this](not_null<QEvent *> event) {
+            if (event->type() == QEvent::ApplicationPaletteChange) {
+                refresh_system_palette();
+            }
+            return base::EventFilterResult::Continue;
+        });
+
     refresh_route();
     render_roster();
     recompute_layout(window_->body()->width());
 }
 
 NativeShell::~NativeShell() = default;
+
+void NativeShell::refresh_system_palette() {
+    apply_system_palette();
+    render_conversation();
+    window_->update();
+    for (auto *widget : window_->findChildren<QWidget *>()) {
+        widget->update();
+    }
+}
 
 void NativeShell::show() {
     refresh_route();

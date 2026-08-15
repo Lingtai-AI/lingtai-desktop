@@ -117,6 +117,9 @@ private:
     void render_roster();
     void render_conversation();
     void render_agent_activity();
+    // Reapplies the generated light or canonical Telegram Night palette after
+    // the host appearance changes, then refreshes palette-backed descendants.
+    void refresh_system_palette();
     void render_agent_task_card();
     void render_agent_preset_summary();
     void reset_composer();

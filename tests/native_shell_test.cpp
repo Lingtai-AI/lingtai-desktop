@@ -360,6 +360,29 @@ void verify_dark_application_palette_inheritance(const fs::path &sandbox) {
     require(!cleanup_error, "palette fixture must be removed");
 }
 
+void verify_live_system_palette(lingtai::desktop::NativeShell &shell) {
+    static_cast<void>(shell);
+    auto *style_hints = QGuiApplication::styleHints();
+
+    style_hints->setColorScheme(Qt::ColorScheme::Light);
+    QApplication::processEvents();
+    require(st::windowBg->c == QColor("#ffffff")
+            && st::windowFg->c == QColor("#000000")
+            && st::msgInBg->c == QColor("#ffffff")
+            && st::msgOutBg->c == QColor("#effdde"),
+        "a live system-light change must restore Telegram's canonical light "
+        "palette");
+
+    style_hints->setColorScheme(Qt::ColorScheme::Dark);
+    QApplication::processEvents();
+    require(st::windowBg->c == QColor("#17212b")
+            && st::windowFg->c == QColor("#f5f5f5")
+            && st::msgInBg->c == QColor("#182533")
+            && st::msgOutBg->c == QColor("#2b5278"),
+        "a live system-dark change must select Telegram's canonical night "
+        "palette");
+}
+
 void verify_open_project_behavior(
         lingtai::desktop::NativeShell &shell,
         const fs::path &sandbox) {
@@ -3045,6 +3068,7 @@ int main(int argc, char **argv) {
         lingtai::desktop::NativeShell shell;
         shell.show_offscreen();
         QCoreApplication::processEvents();
+        verify_live_system_palette(shell);
         verify_semantics_and_request(shell, project_root);
         verify_persistent_roster_shell(
             shell, project_root / "commit-24-roster-shell-fixture");
