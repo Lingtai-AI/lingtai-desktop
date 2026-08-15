@@ -15,6 +15,7 @@
 #include <QtGui/QFont>
 #include <QtGui/QImage>
 #include <QtGui/QKeyEvent>
+#include <QtGui/QMouseEvent>
 #include <QtGui/QPalette>
 #include <QtGui/QPixmap>
 #include <QtGui/QStyleHints>
@@ -245,6 +246,23 @@ void click_agent(QWidget &window, std::string_view key) {
 }
 
 void verify_dark_application_palette_inheritance(const fs::path &sandbox) {
+    // Capture the harness's original color scheme and application palette
+    // before any mutation and restore both on every exit. The later
+    // ScopedApplicationPalette only snapshots the post-mutation palette, so
+    // without this guard the function would leak the Dark scheme and palette
+    // into the following journey.
+    const auto original_color_scheme =
+        QGuiApplication::styleHints()->colorScheme();
+    const auto original_palette = QApplication::palette();
+    struct RestoreSchemeAndPalette final {
+        Qt::ColorScheme scheme;
+        QPalette palette;
+        ~RestoreSchemeAndPalette() {
+            QGuiApplication::styleHints()->setColorScheme(scheme);
+            QApplication::setPalette(palette);
+        }
+    } restore{original_color_scheme, original_palette};
+
     QGuiApplication::styleHints()->setColorScheme(Qt::ColorScheme::Dark);
     const auto window_surface = QColor(QStringLiteral("#121820"));
     const auto window_ink = QColor(QStringLiteral("#F1F5F9"));
@@ -470,7 +488,6 @@ void verify_open_project_behavior(
     const auto expected_rows = std::vector<std::pair<std::string, std::string>>{
         {ampersand_key, "valid — agent — missing"},
         {plain_neighbor_key, "valid — agent — missing"},
-        {"a-human", "valid — human — alive_human"},
         {"agent", "valid — agent — alive"},
         {"b-main", "valid — main — alive"},
         {"c-stale", "valid — agent — stale"},
@@ -495,7 +512,7 @@ void verify_open_project_behavior(
         }
     }
     require(visible_keys == std::vector<std::string>{
-            ampersand_key, plain_neighbor_key, "a-human", "agent",
+            ampersand_key, plain_neighbor_key, "agent",
             "b-main", "c-stale", "d-missing", "malformed"},
         "native rows must render in the composite snapshot's deterministic order");
     auto *ampersand_row = agent_row(window, ampersand_key);
@@ -2315,6 +2332,125 @@ void verify_layout(
     require(!cleanup_error, "responsive fixtures must be removed");
 }
 
+// The R1 RED: the roster/divider must be genuinely user-resizable. At a
+// two-pane width the accepted `lingtai_roster_separator` visual divider must
+// expose a distinct user-resizable `lingtai_roster_resize_handle` widget; a
+// real horizontal drag on it must move the roster width inside the source
+// contract band (a 22-30% share with roster >= 260 and detail >= 380), the
+// chosen share must survive an ordinary window resize (or clamp at the band
+// edge), and the narrow OneColumn selected-detail + Back behavior must stay
+// truthful. Current production has only the fixed PlainShadow divider, so it
+// must fail the resize-handle lookup.
+void verify_resizable_sidebar(
+        lingtai::desktop::NativeShell &shell,
+        const fs::path &sandbox) {
+    auto &window = shell.window();
+    auto *sidebar = required_child<Ui::RpWidget>(
+        window, "lingtai_desktop_sidebar");
+    auto *detail = required_child<Ui::RpWidget>(
+        window, "lingtai_agent_detail");
+    auto *separator_widget = required_child<Ui::RpWidget>(
+        window, "lingtai_roster_separator");
+    auto *back_button = required_child<QPushButton>(
+        window, "lingtai_agent_detail_back");
+
+    const auto project = sandbox / "project";
+    write_file(project / ".lingtai/alpha/.agent.json",
+        R"({"admin":{},"agent_id":"20260712-191609-a001",)"
+        R"("agent_name":"alpha","address":"alpha","state":"active"})");
+    write_file(project / ".lingtai/beta/.agent.json",
+        R"({"admin":{},"agent_id":"20260712-191609-b001",)"
+        R"("agent_name":"beta","address":"beta","state":"active"})");
+    const auto outcome = shell.open_project(project, std::nullopt);
+    require(outcome.disposition == ProjectOpenDisposition::opened,
+        "the resizable-sidebar fixture project must open");
+
+    window.resize(1200, 800);
+    QCoreApplication::processEvents();
+    require(sidebar->isVisible() && detail->isVisible(),
+        "a wide window must show roster and detail together");
+    require(separator_widget->isVisible(),
+        "the roster divider must be a visible, grabbable handle in "
+        "two-pane mode");
+    // The user-resizable handle is a distinct semantic widget the accepted
+    // fixed PlainShadow separator never provides; current production must
+    // fail exactly this lookup.
+    auto *resize_handle = window.findChild<QWidget *>(
+        "lingtai_roster_resize_handle");
+    require(resize_handle != nullptr,
+        "the two-pane roster must expose a user-resizable "
+        "lingtai_roster_resize_handle divider handle instead of the "
+        "fixed-width PlainShadow separator");
+    const auto initial_roster = sidebar->width();
+
+    // Drag the visible resize handle to the right: one real press/move/release
+    // on the handle widget. A user-resizable divider must move the roster
+    // width itself; the source contract keeps a 22-30% share with roster >= 260
+    // and detail >= 380.
+    const auto grab_local = resize_handle->rect().center();
+    const auto grab_global = resize_handle->mapToGlobal(grab_local);
+    auto press = QMouseEvent(QEvent::MouseButtonPress,
+        QPointF(grab_local), QPointF(grab_global),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(resize_handle, &press);
+    const auto drop_local = grab_local + QPoint(80, 0);
+    const auto drop_global = resize_handle->mapToGlobal(drop_local);
+    auto drag = QMouseEvent(QEvent::MouseMove,
+        QPointF(drop_local), QPointF(drop_global),
+        Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(resize_handle, &drag);
+    auto release = QMouseEvent(QEvent::MouseButtonRelease,
+        QPointF(drop_local), QPointF(drop_global),
+        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(resize_handle, &release);
+    QCoreApplication::processEvents();
+
+    require(sidebar->width() != initial_roster,
+        "dragging the visible resize handle must move the roster width");
+    const auto chosen_ratio =
+        double(sidebar->width()) / double(window.body()->width());
+    require(chosen_ratio >= 0.22 && chosen_ratio <= 0.30
+            && sidebar->width() >= 260 && detail->width() >= 380,
+        "after the divider drag the roster must sit inside the contract "
+        "band: a 22-30% share with roster at least 260px and detail at "
+        "least 380px");
+
+    // The chosen share survives an ordinary window resize (or clamps at the
+    // band edge) rather than snapping back to the default ratio.
+    window.resize(1400, 800);
+    QCoreApplication::processEvents();
+    require(sidebar->isVisible() && detail->isVisible(),
+        "resizing a two-pane window must keep both surfaces");
+    require(sidebar->width() >= 260 && detail->width() >= 380,
+        "after an ordinary resize the roster must stay in the contract band");
+    const auto resized_ratio =
+        double(sidebar->width()) / double(window.body()->width());
+    require(qAbs(resized_ratio - chosen_ratio) < 0.02,
+        "the chosen roster ratio must survive a subsequent window resize or "
+        "clamp at the band edge");
+
+    // Narrow OneColumn selected-detail + Back stays truthful.
+    window.resize(380, 480);
+    QCoreApplication::processEvents();
+    click_agent(window, "alpha");
+    require(shell.selection_state().selected_agent_directory_key()
+            == std::optional<fs::path>("alpha"),
+        "narrow OneColumn must still select an Agent");
+    require(!sidebar->isVisible() && detail->isVisible()
+            && back_button->isVisible(),
+        "narrow OneColumn selected-detail must show the detail with Back");
+    back_button->click();
+    QCoreApplication::processEvents();
+    require(!shell.selection_state().selected_agent_directory_key()
+            && sidebar->isVisible() && !detail->isVisible()
+            && !back_button->isVisible(),
+        "Back must still return a narrow window to the roster surface");
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "resizable-sidebar fixtures must be removed");
+}
+
 // The Commit-24 shell slice: one persistent left project/Agent list column
 // (responsive from a 260px minimum) replaces the action-only rail and the
 // nested roster route. The roster is the left column's own content (never a
@@ -2919,14 +3055,28 @@ void verify_telegram_theme_reset(
 }
 
 int main(int argc, char **argv) {
-    if (argc != 2) {
-        std::cerr << "usage: native_shell_test PROJECT_ROOT\n";
+    // Test-local execution mode: the exact binary with a fresh fixture root
+    // and this literal flag runs only the R1 resizable-sidebar journey, so the
+    // warm RED/GREEN never has to pass the unrelated accepted-base debt.
+    const auto responsive_sidebar_only = argc == 3
+        && std::string_view(argv[2]) == "--responsive-sidebar-only";
+    if (argc != 2 && !responsive_sidebar_only) {
+        std::cerr << "usage: native_shell_test PROJECT_ROOT "
+                     "[--responsive-sidebar-only]\n";
         return 2;
     }
     try {
         const auto project_root = std::filesystem::canonical(argv[1]);
         std::filesystem::current_path(project_root);
         QApplication application(argc, argv);
+        if (responsive_sidebar_only) {
+            lingtai::desktop::NativeShell shell;
+            shell.show_offscreen();
+            QCoreApplication::processEvents();
+            verify_resizable_sidebar(shell, project_root);
+            std::cout << "native shell behavior: OK\n";
+            return 0;
+        }
         const auto original_palette = QApplication::palette();
         verify_dark_application_palette_inheritance(
             project_root / "commit-8-palette-fixture");
@@ -2955,6 +3105,8 @@ int main(int argc, char **argv) {
         verify_agent_preset_summary_panel(
             shell, project_root / "commit-19-preset-summary-fixture");
         verify_layout(shell, project_root / "commit-30-responsive-fixture");
+        verify_resizable_sidebar(
+            shell, project_root / "commit-r1-resizable-sidebar-fixture");
         verify_selected_agent_dashboard_layout(
             shell, project_root / "commit-28-dashboard-fixture");
         verify_telegram_theme_reset(

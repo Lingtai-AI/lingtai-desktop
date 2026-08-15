@@ -31,6 +31,7 @@
 class QDialog;
 class QPushButton;
 class QTimer;
+class QWidget;
 
 namespace Ui {
 class PlainShadow;
@@ -169,6 +170,13 @@ private:
     // project identity header, the compact Open/New Project actions, and the
     // Agent rows; the shell wires its row clicks and the action buttons.
     AgentRoster *agent_roster_ = nullptr;
+    // The one 8px-wide semantic drag handle between the roster column and its
+    // one-pixel shadow separator; it owns no state beyond the runtime-only
+    // resize ratio below.
+    QWidget *roster_resize_handle_ = nullptr;
+    // The runtime-only roster width ratio re-derived from real drags, clamped
+    // to 22%-30% of the body; never persisted.
+    double roster_width_ratio_ = 0.26;
     // The flexible right content pane beside the roster, hidden in OneColumn
     // roster mode and full-width in OneColumn detail mode.
     Ui::RpWidget *content_ = nullptr;

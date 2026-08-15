@@ -26,10 +26,15 @@ Entry point and composition root:
 - `native_shell.{h,cpp}` — the C5 composition owner: owns one `Ui::RpWindow`,
   the roster column, the content pane, the New Project dialog, the composer,
   the one-second refresh timer, and the two click-armed pending observations.
-  Public seams are the two setters (`set_tui_executable`,
-  `set_agent_start_fallback_python`), `open_project`, and the read-only
-  `window()` / `selection_state()` accessors; `smoke_ready()` is real product
-  readiness used only by `main.cpp`'s `--smoke` path (`native_shell.h:100`).
+  The roster column is separated from the content pane by one semantic 8px
+  drag handle (`lingtai_roster_resize_handle`, distinct from the one-pixel
+  `Ui::PlainShadow` `lingtai_roster_separator` that follows it) whose drags
+  re-derive a runtime-only 22%-30% roster width ratio over the absolute
+  260px / 380px two-surface minima. Public seams are the two setters
+  (`set_tui_executable`, `set_agent_start_fallback_python`), `open_project`,
+  and the read-only `window()` / `selection_state()` accessors;
+  `smoke_ready()` is real product readiness used only by `main.cpp`'s `--smoke`
+  path (`native_shell.h:100`).
 - `crl_integration.cpp` — the owned parent `crl` update producer: exactly one
   `crl::on_main_update_requests()` returning `rpl::never<>()` (no update
   source in the bounded smoke).

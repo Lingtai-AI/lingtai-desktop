@@ -81,11 +81,18 @@ its code.
 ## Layout
 
 - Telegram's two-mode derive is reproduced from the body's width: at or above
-  `260 + 380` available pixels the roster + separator + detail all show and
-  the list expands from its 260 px minimum toward a ~38.7% ratio; below it
-  exactly one full-width surface shows — roster until an Agent is selected,
-  then detail with a Back control (`recompute_layout`). Back is the narrow
-  history-back path: it drops the selection and returns to the roster.
+  `260 + 380` usable pixels (after the roster's one semantic 8px drag handle
+  `lingtai_roster_resize_handle`, distinct from the one-pixel `Ui::PlainShadow`
+  separator that follows it) the roster + handle + separator + detail all
+  show, and the list expands from its 260 px absolute minimum toward a stored
+  runtime-only ratio clamped to 22%-30% of the body while the detail keeps its
+  380 px absolute minimum. A real drag on the handle re-derives that ratio, so
+  a subsequent resize in the wide view keeps the chosen proportion; the ratio
+  is never persisted. Below the threshold exactly one full-width surface shows
+  — roster until an Agent is selected, then detail with a Back control
+  (`recompute_layout`), and the handle is hidden. Back is the narrow
+  history-back path: it drops the selection and returns to the roster,
+  unchanged.
 
 ## New Project (TUI functional boundary)
 

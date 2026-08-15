@@ -21,13 +21,15 @@
 #include "ui/widgets/rp_window.h"
 #include "ui/widgets/shadow.h"
 
+#include <QtCore/QDir>
+#include <QtCore/QPoint>
 #include <QtCore/QString>
 #include <QtCore/QStringList>
 #include <QtCore/QTimer>
 #include <QtCore/QVariant>
-#include <QtCore/QDir>
 #include <QtGui/QFont>
 #include <QtGui/QGuiApplication>
+#include <QtGui/QMouseEvent>
 #include <QtGui/QPainter>
 #include <QtGui/QPalette>
 #include <QtGui/QStyleHints>
@@ -44,6 +46,7 @@
 #include <QtWidgets/QScrollBar>
 #include <QtWidgets/QSizePolicy>
 #include <QtWidgets/QTextEdit>
+#include <QtWidgets/QWidget>
 
 #include <rpl/range.h>
 
@@ -61,16 +64,19 @@ constexpr auto kDefaultWindowHeight = 720;
 
 // Telegram's source-backed two-surface minima, from the pinned
 // `computeColumnLayout` / `window.style`: the persistent list column is at
-// least 260px and the detail column at least 380px. The existing one-pixel
-// plain shadow separator between them is accounted locally rather than by
-// changing the source constants. In Normal mode the list is responsive: it
-// expands from the 260px minimum toward the screenshot's ~38.7% normal-width
-// proportion (`countDialogsWidthFromRatio`), clamped so the detail column
-// keeps its source-backed 380px minimum.
+// least 260px and the detail column at least 380px. The one semantic 8px
+// drag handle between the roster column and detail pane, and the one-pixel
+// plain shadow separator that follows it, are accounted locally rather than
+// by changing the source constants. In Normal mode the list is responsive: it expands from the
+// 260px minimum toward the runtime-only stored ratio (clamped to 22%-30% of
+// the body), clamped so the detail column keeps its source-backed 380px
+// minimum.
 constexpr auto kRosterColumnWidth = 260;
 constexpr auto kDetailColumnMinimumWidth = 380;
 constexpr auto kRosterSeparatorWidth = 1;
-constexpr auto kRosterWidthRatio = 0.387;
+constexpr auto kMinimumRosterWidthRatio = 0.22;
+constexpr auto kMaximumRosterWidthRatio = 0.30;
+constexpr auto kRosterResizeHandleWidth = 8;
 constexpr auto kTwoColumnAvailableThreshold =
     kRosterColumnWidth + kDetailColumnMinimumWidth;
 
@@ -141,6 +147,58 @@ protected:
 
 private:
     style::color fill_;
+};
+
+// One LingTai-owned semantic drag handle for the roster column: a fixed 8px
+// strip between the roster and its one-pixel shadow that reports only the
+// pointer's current global x while the primary button is held, so the shell
+// can re-derive the runtime-only roster width ratio. It paints nothing and is
+// deliberately distinct from the passive `Ui::PlainShadow` that follows it.
+class RosterResizeHandle final : public QWidget {
+public:
+    using GlobalXCallback = std::function<void(int global_x)>;
+
+    explicit RosterResizeHandle(QWidget *parent, GlobalXCallback callback)
+    : QWidget(parent)
+    , callback_(std::move(callback)) {
+        setFixedWidth(kRosterResizeHandleWidth);
+        setCursor(Qt::SplitHCursor);
+        auto policy = sizePolicy();
+        policy.setVerticalPolicy(QSizePolicy::Expanding);
+        setSizePolicy(policy);
+    }
+
+protected:
+    void mousePressEvent(QMouseEvent *event) override {
+        if (event->button() == Qt::LeftButton) {
+            dragging_ = true;
+            event->accept();
+            return;
+        }
+        QWidget::mousePressEvent(event);
+    }
+
+    void mouseMoveEvent(QMouseEvent *event) override {
+        if (dragging_) {
+            callback_(event->globalPosition().toPoint().x());
+            event->accept();
+            return;
+        }
+        QWidget::mouseMoveEvent(event);
+    }
+
+    void mouseReleaseEvent(QMouseEvent *event) override {
+        if (event->button() == Qt::LeftButton) {
+            dragging_ = false;
+            event->accept();
+            return;
+        }
+        QWidget::mouseReleaseEvent(event);
+    }
+
+private:
+    GlobalXCallback callback_;
+    bool dragging_ = false;
 };
 
 // The one compact selected-Agent page navigation control: a checkable
@@ -607,6 +665,33 @@ NativeShell::NativeShell()
         });
     }
     shell_layout->addWidget(agent_roster_);
+
+    // One semantic drag handle between the roster and its shadow: a fixed 8px
+    // strip that reports the pointer's real global x while the primary button
+    // is held, so the shell re-derives the runtime-only roster width ratio. It
+    // is distinct from the passive one-pixel shadow that immediately follows
+    // it.
+    auto *resize_handle = new RosterResizeHandle(body, [this, body](int global_x) {
+        const auto body_width = body->width();
+        const auto usable = body_width - kRosterResizeHandleWidth
+            - kRosterSeparatorWidth;
+        if (usable < kTwoColumnAvailableThreshold) return;
+        const auto local_x = body->mapFromGlobal(QPoint(global_x, 0)).x();
+        const auto chosen_px = std::clamp(local_x,
+            kRosterColumnWidth,
+            body_width - kDetailColumnMinimumWidth
+                - kRosterResizeHandleWidth - kRosterSeparatorWidth);
+        roster_width_ratio_ = std::clamp(
+            double(chosen_px) / double(body_width),
+            kMinimumRosterWidthRatio, kMaximumRosterWidthRatio);
+        recompute_layout(body_width);
+    });
+    roster_resize_handle_ = resize_handle;
+    resize_handle->setObjectName("lingtai_roster_resize_handle");
+    resize_handle->setAccessibleName(QStringLiteral("Resize Agent list"));
+    resize_handle->setAccessibleDescription(QStringLiteral(
+        "Drag to resize the Agent list"));
+    shell_layout->addWidget(resize_handle);
 
     // One thin lib_ui shadow separates the persistent list column from the
     // selected-content pane, matching the pinned shell's between-column
@@ -1947,21 +2032,26 @@ void NativeShell::handle_agent_selection(const fs::path &directory_key) {
 }
 
 // Telegram's one mode recompute, fed by the body's own size stream: below
-// the source-backed two-surface threshold (`260 + 380` available column
-// pixels after the existing one-pixel separator) exactly one full-width
-// surface is shown -- the roster until an Agent is selected, then the detail
-// with Back; at or above it roster + separator + detail all show and Back is
-// hidden. A selected Agent is the sole state that decides which narrow
-// surface is active, so a wide->narrow resize with an active selection keeps
-// the detail, exactly as Telegram keeps the active chat in OneColumn.
+// the source-backed two-surface threshold (`260 + 380` usable column pixels
+// after the one-pixel separator and the 8px drag handle) exactly one
+// full-width surface is shown -- the roster until an Agent is selected, then
+// the detail with Back; at or above it roster + handle + separator + detail
+// all show and Back is hidden. A selected Agent is the sole state that
+// decides which narrow surface is active, so a wide->narrow resize with an
+// active selection keeps the detail, exactly as Telegram keeps the active
+// chat in OneColumn.
 void NativeShell::recompute_layout(int body_width) {
-    const auto available = body_width - kRosterSeparatorWidth;
+    const auto available = body_width - kRosterResizeHandleWidth
+        - kRosterSeparatorWidth;
     if (available >= kTwoColumnAvailableThreshold) {
-        auto roster_width = qRound(body_width * kRosterWidthRatio);
+        auto roster_width = qRound(body_width * roster_width_ratio_);
         roster_width = std::clamp(roster_width,
-            kRosterColumnWidth, body_width - kDetailColumnMinimumWidth);
+            kRosterColumnWidth,
+            body_width - kDetailColumnMinimumWidth
+                - kRosterResizeHandleWidth - kRosterSeparatorWidth);
         agent_roster_->setVisible(true);
         agent_roster_->setFixedWidth(roster_width);
+        roster_resize_handle_->setVisible(true);
         separator_->setVisible(true);
         content_->setVisible(true);
         detail_back_button_->setVisible(false);
@@ -1973,6 +2063,7 @@ void NativeShell::recompute_layout(int body_width) {
     agent_roster_->setFixedWidth(detail_active
         ? kRosterColumnWidth
         : std::max(body_width, kRosterColumnWidth));
+    if (roster_resize_handle_) roster_resize_handle_->setVisible(false);
     separator_->setVisible(false);
     content_->setVisible(detail_active);
     detail_back_button_->setVisible(detail_active);
