@@ -7,12 +7,14 @@
 #include "direct_conversation_history.h"
 
 #include <QtCore/QCoreApplication>
+#include <QtGui/QAbstractTextDocumentLayout>
 #include <QtGui/QFont>
 #include <QtGui/QTextBlock>
 #include <QtGui/QTextBlockFormat>
 #include <QtGui/QTextCharFormat>
 #include <QtGui/QTextDocument>
 #include <QtGui/QTextFragment>
+#include <QtGui/QTextLayout>
 #include <QtWidgets/QApplication>
 
 #include <cmath>
@@ -118,20 +120,35 @@ std::pair<MessageGeometry, MessageGeometry> measure_at_width(int width) {
     surface.show();
     QCoreApplication::processEvents();
 
+    // Genuinely long realistic multi-clause content: under the content-driven
+    // width contract these messages must naturally occupy and clamp to the
+    // existing shared lane (the 640px wide cap, the ordinary 72% ratio at the
+    // normal viewport, and the near-full narrow width) instead of shrinking to
+    // a short line, so the shared-lane assertions below stay reachable.
     std::vector<DirectConversationMessage> messages;
     messages.push_back({
         .id = "in-1",
         .outgoing = false,
         .timestamp = "2026-08-07T18:48:52Z",
-        .subject = "Slice done",
-        .text = "PR published, not merged.",
+        .subject = "Direct-message projection is ready for review",
+        .text = "The direct-message projection now routes the selected "
+                "agent's conversation through the existing reader, and the "
+                "message body is left literally untouched so the reviewer "
+                "sees the exact stored text instead of a re-interpreted "
+                "rendering, which matters because the test fixtures "
+                "intentionally carry punctuation that a naive formatter "
+                "would reshape.",
     });
     messages.push_back({
         .id = "out-1",
         .outgoing = true,
         .timestamp = "2026-08-07T19:00:00Z",
-        .subject = "Re: Slice done",
-        .text = "Thanks, reviewing tomorrow.",
+        .subject = "Re: Direct-message projection is ready for review",
+        .text = "I pulled the branch and ran the focused conversation tests "
+                "against the fixture corpus, and everything passes on a "
+                "clean checkout, so please go ahead and leave any inline "
+                "notes directly on the changed lines before we merge it "
+                "into the mainline later this afternoon.",
     });
     surface.set_conversation(QStringLiteral("Telegram Bot"), messages);
 
@@ -219,6 +236,188 @@ void verify_responsive_width() {
         throw std::runtime_error(
             "at a narrow viewport the message width must become near-full "
             "(~90%+) instead of the current 72%");
+    }
+}
+
+// Rebuilds the painted bubble for one message block from the same detected
+// rendered bounds paintEvent uses: the union of every laid-out line's natural
+// text rect translated into document coordinates, padded by the surface's
+// bubble padding. Gaps between these rects are therefore the actual visible
+// rhythm of the rendered stream, expressed relationally rather than as
+// screenshot coordinates.
+constexpr double kBubblePadding = 8.0;
+
+QRectF message_bubble_rect(const QTextBlock &block) {
+    const auto *layout = block.layout();
+    auto text_bounds = QRectF();
+    for (auto i = 0; i != layout->lineCount(); ++i) {
+        const auto line = layout->lineAt(i);
+        const auto line_bounds = line.naturalTextRect()
+            .translated(layout->position());
+        text_bounds = text_bounds.isNull()
+            ? line_bounds
+            : text_bounds.united(line_bounds);
+    }
+    return text_bounds.adjusted(
+        -kBubblePadding, -kBubblePadding, kBubblePadding, kBubblePadding);
+}
+
+void verify_content_geometry() {
+    ConversationSurface surface;
+    surface.resize(1600, 480);
+    surface.show();
+    QCoreApplication::processEvents();
+
+    // One genuinely long incoming message and one genuinely short outgoing
+    // message in the same wide state.
+    std::vector<DirectConversationMessage> messages;
+    messages.push_back({
+        .id = "in-long",
+        .outgoing = false,
+        .timestamp = "2026-08-07T18:48:52Z",
+        .subject = "Long report",
+        .text = "This is a genuinely long incoming message whose body wraps "
+                "well inside the accepted readable cap, so a content-driven "
+                "renderer bounds it near the maximum and keeps it inside the "
+                "shared centered reading column instead of stretching with "
+                "the pane at a very wide window.",
+    });
+    messages.push_back({
+        .id = "out-short",
+        .outgoing = true,
+        .timestamp = "2026-08-07T19:00:00Z",
+        .subject = "Re: Long report",
+        .text = "OK, go ahead.",
+    });
+    surface.set_conversation(QStringLiteral("Telegram Bot"), messages);
+    surface.document()->documentLayout()->documentSize();
+    QCoreApplication::processEvents();
+
+    QTextBlock long_block;
+    QTextBlock short_block;
+    for (auto block = surface.document()->begin(); block.isValid();
+         block = block.next()) {
+        if (block.text().contains(
+                QStringLiteral("This is a genuinely long incoming"))) {
+            long_block = block;
+        } else if (block.text().contains(QStringLiteral("OK, go ahead."))) {
+            short_block = block;
+        }
+    }
+    if (!long_block.isValid() || !short_block.isValid()) {
+        throw std::runtime_error(
+            "the surface must render one genuinely long and one genuinely "
+            "short message block for the content-driven width contract");
+    }
+
+    const auto viewport_width = surface.viewport()->width();
+    const auto long_geometry = message_geometry(long_block, viewport_width);
+    const auto short_geometry = message_geometry(short_block, viewport_width);
+
+    // Message widths are content-driven: in the same wide surface a genuinely
+    // short message must render with a visibly narrower allocated width than
+    // a longer message's, instead of every message owning the same fixed
+    // 640px cap. The assertion is relational, not a screenshot width.
+    if (!(short_geometry.content_width
+            <= long_geometry.content_width * 0.75)) {
+        throw std::runtime_error(
+            "message widths must be content-driven: in the same wide surface "
+            "a genuinely short message must render visibly narrower than a "
+            "longer message, but both still own the same fixed allocated "
+            "width (short "
+            + std::to_string(short_geometry.content_width) + "px vs long "
+            + std::to_string(long_geometry.content_width) + "px)");
+    }
+
+    // The shared centered lane's stable outer anchors and the opposite
+    // incoming/outgoing directions stay intact for both messages under the
+    // accepted R3 wide bounds. Only the outer lane equality is pinned: the two
+    // messages share the centered lane's outer anchor pair, while their inner
+    // edges differ with each message's content width.
+    if (!(long_geometry.left < long_geometry.right
+            && short_geometry.right < short_geometry.left)) {
+        throw std::runtime_error(
+            "at a very wide viewport the long and short messages must keep "
+            "opposite anchors, incoming left and outgoing right");
+    }
+    if (std::abs(long_geometry.left - short_geometry.right) > 2.0) {
+        throw std::runtime_error(
+            "at a very wide viewport the long and short messages must share "
+            "the centered reading column's stable outer anchors, while their "
+            "inner edges differ with each message's content width");
+    }
+}
+
+void verify_turn_rhythm() {
+    ConversationSurface surface;
+    surface.resize(1600, 480);
+    surface.show();
+    QCoreApplication::processEvents();
+
+    std::vector<DirectConversationMessage> messages;
+    messages.push_back({
+        .id = "in-1",
+        .outgoing = false,
+        .timestamp = "2026-08-07T18:48:52Z",
+        .subject = "Slice done",
+        .text = "PR published, not merged.",
+    });
+    messages.push_back({
+        .id = "out-1",
+        .outgoing = true,
+        .timestamp = "2026-08-07T19:00:00Z",
+        .subject = "Re: Slice done",
+        .text = "Thanks, reviewing tomorrow.",
+    });
+    messages.push_back({
+        .id = "in-2",
+        .outgoing = false,
+        .timestamp = "2026-08-07T19:01:00Z",
+        .subject = "Follow-up",
+        .text = "Could you also update the CHANGELOG before we merge?",
+    });
+    messages.push_back({
+        .id = "out-2",
+        .outgoing = true,
+        .timestamp = "2026-08-07T19:02:00Z",
+        .subject = "Re: Follow-up",
+        .text = "Sure, will do.",
+    });
+    surface.set_conversation(QStringLiteral("Telegram Bot"), messages);
+    surface.document()->documentLayout()->documentSize();
+    QCoreApplication::processEvents();
+
+    std::vector<QTextBlock> message_blocks;
+    for (auto block = surface.document()->begin(); block.isValid();
+         block = block.next()) {
+        if (block.text().startsWith(QStringLiteral("Telegram Bot ·"))
+            || block.text().startsWith(QStringLiteral("You ·"))) {
+            message_blocks.push_back(block);
+        }
+    }
+    if (message_blocks.size() < 2) {
+        throw std::runtime_error(
+            "the surface must render at least two consecutive message blocks "
+            "for the turn-rhythm contract");
+    }
+
+    // Ordinary consecutive turns keep a deliberate nonzero vertical rhythm in
+    // the rendered stream rather than appearing fused. It is expressed
+    // relationally from the detected rendered bubble bounds: the visible gap
+    // between consecutive bubbles must be at least one body-pixel-size of
+    // separation, not a screenshot coordinate.
+    constexpr double kBodyPixelSize = 14.0;
+    for (auto i = std::size_t{1}; i != message_blocks.size(); ++i) {
+        const auto gap = message_bubble_rect(message_blocks[i]).top()
+            - message_bubble_rect(message_blocks[i - 1]).bottom();
+        if (gap < kBodyPixelSize) {
+            throw std::runtime_error(
+                "ordinary consecutive turns must keep a deliberate nonzero "
+                "vertical rhythm in the rendered stream instead of appearing "
+                "fused: the visible gap between consecutive bubbles is "
+                + std::to_string(gap) + "px, below the body size "
+                + std::to_string(kBodyPixelSize) + "px");
+        }
     }
 }
 
@@ -312,6 +511,8 @@ int run_typography_test(int argc, char **argv) {
         surface.resize(640, 480);
         verify_typography(surface, QStringLiteral("Telegram Bot"));
         verify_responsive_width();
+        verify_content_geometry();
+        verify_turn_rhythm();
         std::cout << "conversation surface typography: OK\n";
         return 0;
     } catch (const std::exception &error) {
