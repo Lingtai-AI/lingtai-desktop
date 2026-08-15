@@ -29,37 +29,41 @@ root `../../ANATOMY.md`.
 The persistent left project/Agent list column. It owns the project identity
 header, the compact Open/New Project action row, and the scrollable Agent rows;
 the selected-content pane lives outside this owner. Fixed width 260px
-(`kRosterColumnWidth`, `agent_roster.cpp:23`).
+(`kRosterColumnWidth`, `agent_roster.cpp:24`). Its visible rows omit the
+human pseudo-agent: the shared `AgentSnapshot` keeps the human (routing,
+mailbox, and selected-detail truth consume it), and only this presentation
+filters the row out.
 
-Public ports (`src/ui/agent_roster.h:27-44`):
+Public ports (`src/ui/agent_roster.h:30-47`):
 
 - `set_rows(AgentSnapshot, optional<path> selected_key)` — the single data input;
   accepts an already-produced `AgentSnapshot` plus the caller-chosen selected
-  directory key. Rebuilds rows only when the visible model changed; an
-  unchanged refresh updates only checked states (`agent_roster.cpp:311-379`).
+  directory key. Rebuilds rows only when the visible (human-omitted) model
+  changed; an unchanged refresh updates only checked states
+  (`agent_roster.cpp:325-396`).
 - `set_row_click_handler(RowClickHandler)` — the only explicit custom callback
   port; `RowClickHandler` is `std::function<void(const std::filesystem::path &)>`
-  (`agent_roster.h:29`). Each enabled row's `clicked` signal forwards its
-  `directory_key` through the handler (`agent_roster.cpp:370-375`).
+  (`agent_roster.h:32`). Each enabled row's `clicked` signal forwards its
+  `directory_key` through the handler (`agent_roster.cpp:388-392`).
 - `focus_row(optional<path> key = nullopt)` — keyboard focus: focuses the
   enabled row for `key`, else the first enabled row; the narrow OneColumn Back
-  path hands navigation back to the roster through this (`agent_roster.cpp:381-399`).
-- Non-copyable (`agent_roster.h:34-35`).
+  path hands navigation back to the roster through this (`agent_roster.cpp:398-414`).
+- Non-copyable (`agent_roster.h:37-38`).
 
-View-only state (`agent_roster.h:52-56`): the stored handler, the roster status
+View-only state (`agent_roster.h:55-60`): the stored handler, the roster status
 `QLabel`, the `QScrollArea`, the rows `QVBoxLayout`, and the last accepted
 `AgentSnapshot` (`visible_snapshot_`) used only to detect an unchanged model.
 There is no selected-key member: selection is caller-provided on every
 `set_rows`/refresh and re-derived from it.
 
-Layout composition (`agent_roster.cpp:201-276`): brand label, project-root
+Layout composition (`agent_roster.cpp:214-290`): brand label, project-root
 label, the Open/New action row (the shell wires their clicks; the owner only
-composes them, `agent_roster.cpp:219-240`), a Workspace label, an Agents
+composes them, `agent_roster.cpp:236-252`), a Workspace label, an Agents
 heading, the roster status label, and a scroll area holding the rows widget.
 Every element carries a static accessible/object name used by the shell's
 semantic tests.
 
-Painting (`agent_roster.cpp:280-283` and `114-164`): the owner fills the
+Painting (`agent_roster.cpp:293-296` and `127-177`): the owner fills the
 `st::windowBgOver` list field; each `AgentRowButton` (a checkable `QPushButton`)
 paints selected/hover/pressed/plain fill and two-line text from the shared
 lib_ui palette tokens (`st::dialogsBgActive`, `st::windowBgRipple`,

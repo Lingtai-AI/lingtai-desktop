@@ -42,6 +42,9 @@ side-effecting function returns one coarse result enum.
 Reads (no writes, no durable state):
 
 - `project_agents(attachment)` → `AgentSnapshot` (`agent_projection.h`).
+  The snapshot is shared live truth and keeps the human pseudo-agent row
+  (routing, mailbox, and selected-detail truth consume it); only the
+  `AgentRoster` presentation omits that row.
 - `resolve_direct_conversation_route(attachment, snapshot, key)` →
   `std::optional<DirectConversationRoute>` (`direct_conversation_route.h`).
 - `read_direct_conversation(route)` → `DirectConversationHistory`

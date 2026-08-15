@@ -21,6 +21,9 @@ namespace lingtai::desktop {
 // every row state are painted from the shared lib_ui palette (`windowBgOver`
 // list field, `windowBgRipple` hover, `dialogsBgActive` selected).
 //
+// The visible rows omit the human pseudo-agent: the shared `AgentSnapshot`
+// keeps the human for routing/mailbox/detail truth, but the roster never
+// renders it as a row, and the status label counts only the visible rows.
 // `set_rows` rebuilds the row tree only when the visible row set actually
 // changed; an unchanged projection refresh only updates checked state, so
 // scroll, focus, and row identity survive the shell's one-second refresh.

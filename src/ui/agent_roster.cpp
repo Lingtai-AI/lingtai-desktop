@@ -15,6 +15,7 @@
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QVBoxLayout>
 
+#include <algorithm>
 #include <utility>
 
 namespace lingtai::desktop {
@@ -24,6 +25,18 @@ constexpr auto kRosterColumnWidth = 260;
 constexpr auto kRowHeight = 62;
 constexpr auto kRowHorizontalFrame = 10;
 constexpr auto kRowVerticalFrame = 8;
+
+// The presentation row set: the shared snapshot keeps the human pseudo-agent
+// (routing, mailbox, and detail truth consume it), but the roster never
+// renders a human row, so the visible rows omit `AgentRole::human` while
+// preserving the snapshot's deterministic order.
+std::vector<AgentRow> visible_rows(const AgentSnapshot &snapshot) {
+    auto rows = snapshot.items;
+    rows.erase(std::remove_if(rows.begin(), rows.end(),
+        [](const AgentRow &item) { return item.role == AgentRole::human; }),
+        rows.end());
+    return rows;
+}
 
 QString path_text(const std::filesystem::path &path) {
     const auto bytes = path.u8string();
@@ -287,12 +300,13 @@ void AgentRoster::set_row_click_handler(RowClickHandler handler) {
 }
 
 void AgentRoster::update_state_label(const AgentSnapshot &snapshot) {
+    const auto visible = visible_rows(snapshot);
     roster_state_->setText(snapshot.scan != AgentScanState::complete
         ? QStringLiteral("Roster unavailable")
-        : snapshot.items.empty()
+        : visible.empty()
             ? QStringLiteral("No Agents found — scan complete")
             : QStringLiteral("%1 Agent(s) — scan complete")
-                .arg(snapshot.items.size()));
+                .arg(visible.size()));
 }
 
 void AgentRoster::update_checked_states(
@@ -317,14 +331,17 @@ void AgentRoster::set_rows(
     // diagnostic match what is already shown. In that case only the checked
     // state may have moved: never rebuild the row tree, so an unchanged
     // one-second projection refresh preserves scroll, focus, and row identity.
-    const auto rows_match = snapshot.items.size()
-        == visible_snapshot_.items.size();
+    // The comparison and the row tree both cover the visible set (the human
+    // pseudo-agent omitted), so a human-only projection change never churns
+    // the real rows.
+    const auto visible = visible_rows(snapshot);
+    const auto shown = visible_rows(visible_snapshot_);
+    const auto rows_match = visible.size() == shown.size();
     auto model_unchanged = rows_match;
     if (rows_match) {
-        for (auto index = std::size_t{0}; index != snapshot.items.size();
-                ++index) {
-            const auto &before = visible_snapshot_.items[index];
-            const auto &after = snapshot.items[index];
+        for (auto index = std::size_t{0}; index != visible.size(); ++index) {
+            const auto &before = shown[index];
+            const auto &after = visible[index];
             if (before.directory_key != after.directory_key
                 || before.manifest_kind != after.manifest_kind
                 || before.role != after.role
@@ -345,8 +362,8 @@ void AgentRoster::set_rows(
         delete child->widget();
         delete child;
     }
-    for (auto index = std::size_t{0}; index != snapshot.items.size(); ++index) {
-        const auto &item = snapshot.items[index];
+    for (auto index = std::size_t{0}; index != visible.size(); ++index) {
+        const auto &item = visible[index];
         auto button_key = path_text(item.directory_key);
         button_key.replace(QLatin1Char('&'), QStringLiteral("&&"));
         auto *row = new AgentRowButton(rows_layout_->parentWidget());

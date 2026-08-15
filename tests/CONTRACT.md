@@ -110,6 +110,9 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
 - `tests/agent_sleep_test.cpp` — `agent_sleep`.
 - `tests/native_shell_test.cpp` — `native_shell_behavior` (links the shell +
   `lib_ui` + `crl_integration.cpp`; the real-Qt layer).
+- `tests/agent_roster_presentation_test.cpp` — `agent_roster_presentation`
+  (links the shell + `lib_ui` + `crl_integration.cpp`; the real-Qt widget
+  layer, proving the roster presentation boundary directly).
 - `tests/test_native_shell.py` — `native_shell` (process persistence and
   smoke-order via the built smoke executable).
 - `tests/test_repository_contract.py` — manual `python3 -m unittest

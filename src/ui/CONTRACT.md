@@ -7,10 +7,14 @@ below is grounded in the widget source.
 ## Render caller state, emit callbacks — nothing else
 
 - **Render only.** `AgentRoster::set_rows` accepts an already-produced
-  `AgentSnapshot` and an optional selected key (`agent_roster.h:37-38`);
+  `AgentSnapshot` and an optional selected key (`agent_roster.h:40-41`);
   `ConversationSurface::set_conversation` accepts a presentation name and the
   existing direct-conversation rows (`conversation_surface.h:32-34`). Neither
-  widget discovers, reads, or derives any project/Agent truth.
+  widget discovers, reads, or derives any project/Agent truth. The roster
+  renders every non-human member of the snapshot and never the human
+  pseudo-agent: the human stays in the shared `AgentSnapshot` (routing,
+  mailbox, and selected-detail truth consume it), only the roster
+  presentation omits its row.
 - **One explicit custom callback port.** The roster's `RowClickHandler`
   forwards a row's `directory_key` on a click
   (`agent_roster.cpp:370-375`); `ConversationSurface` has no callback port and
@@ -40,7 +44,7 @@ below is grounded in the widget source.
 - **No subprocesses.** No `QProcess`, no `lingtai` invocation, no launch. (The
   shell's `start_agent`/`ProjectBootstrapRunner` live in parent `src/`.)
 - **No duplicate domain model.** The roster stores only the snapshot it was
-  given for change detection (`visible_snapshot_`, `agent_roster.h:56`);
+  given for change detection (`visible_snapshot_`, `agent_roster.h:59`);
   `AgentRowButton` is presentation-only. The conversation surface reuses the
   caller's `DirectConversationMessage` rows verbatim and adds no message or
   conversation model of its own.

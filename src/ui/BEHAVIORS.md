@@ -8,37 +8,44 @@ not a repair plan and make no forward claims.
 
 ### Roster status label
 
-`update_state_label` (`agent_roster.cpp:289-296`) sets exactly one of:
+`update_state_label` (`agent_roster.cpp:302-311`) counts the visible rows —
+the snapshot with the human pseudo-agent omitted (`visible_rows`,
+`agent_roster.cpp:33-41`) — and sets exactly one of:
 
 - `Roster unavailable` when `snapshot.scan != AgentScanState::complete`;
-- `No Agents found — scan complete` when the scan is complete and the list is
-  empty;
-- `N Agent(s) — scan complete` otherwise.
+- `No Agents found — scan complete` when the scan is complete and no visible
+  row remains;
+- `N Agent(s) — scan complete` otherwise, with `N` the visible row count.
 
 ### Row rebuild vs. checked-state-only refresh
 
-`set_rows` (`agent_roster.cpp:311-379`) compares the incoming snapshot against
-`visible_snapshot_` field by field (`directory_key`, `manifest_kind`, `role`,
-`presence`, `manifest_diagnostic`) with equal size
-(`agent_roster.cpp:320-337`). Two outcomes:
+`set_rows` (`agent_roster.cpp:325-396`) renders only the visible rows: it
+derives the presentation set by omitting the human pseudo-agent
+(`visible_rows`, `agent_roster.cpp:33-41`) and compares the incoming visible
+set against the previously shown visible set field by field
+(`directory_key`, `manifest_kind`, `role`, `presence`,
+`manifest_diagnostic`) with equal size (`agent_roster.cpp:337-351`). Two
+outcomes:
 
 - **Unchanged model:** only `update_checked_states(selected_key)` runs
-  (`agent_roster.cpp:339-342`). The row tree, scroll position, focus, and row
-  identity are preserved across the shell's one-second refresh.
+  (`agent_roster.cpp:352-355`). The row tree, scroll position, focus, and row
+  identity are preserved across the shell's one-second refresh; a human-only
+  projection change never churns the real rows.
 - **Changed model:** the row tree is torn down and rebuilt in snapshot order
-  (`agent_roster.cpp:344-377`), then a stretch is appended.
+  with the human omitted (`agent_roster.cpp:361-391`), then a stretch is
+  appended.
 
 ### Row composition and visual states
 
 Each row is an `AgentRowButton`, a checkable `QPushButton` fixed at 62px height
-with `Qt::StrongFocus` (`agent_roster.cpp:101-112`). Its text is two lines,
-`key\nmanifest — role — presence` (`agent_roster.cpp:357`, `82-86`), where the
+with `Qt::StrongFocus` (`agent_roster.cpp:114-125`). Its text is two lines,
+`key\nmanifest — role — presence` (`agent_roster.cpp:374`, `95-99`), where the
 presence value is the raw projection kind (`alive_human`/`alive`/`stale`/
-`missing`/`invalid`/`unavailable`/`unknown`, `agent_roster.cpp:54-65`). The
+`missing`/`invalid`/`unavailable`/`unknown`, `agent_roster.cpp:67-78`). The
 accessible description appends `manifest diagnostic: …` when the row carries a
-nonempty diagnostic (`agent_roster.cpp:88-94`, `358`).
+nonempty diagnostic (`agent_roster.cpp:92-99`, `375`).
 
-Painting (`agent_roster.cpp:114-164`):
+Painting (`agent_roster.cpp:127-177`):
 
 - Fill: selected → `st::dialogsBgActive`; down or hovered → `st::windowBgRipple`;
   otherwise `st::windowBgOver`.
@@ -48,9 +55,9 @@ Painting (`agent_roster.cpp:114-164`):
 - A `PE_FrameFocusRect` is painted when the row has focus.
 - The row palette `Highlight` is set to `st::dialogsBgActive` so selection
   color resolves from the same token its paint uses
-  (`agent_roster.cpp:364-369`).
+  (`agent_roster.cpp:384-386`).
 
-Enabled/checked/keyboard (`agent_roster.cpp:360-375`, `171-180`):
+Enabled/checked/keyboard (`agent_roster.cpp:377-395`, `184-193`):
 
 - A row is enabled only when its already-projected `manifest_kind == valid`;
   malformed/unsafe rows are visible but disabled.
@@ -61,14 +68,14 @@ Enabled/checked/keyboard (`agent_roster.cpp:360-375`, `171-180`):
 ### Click and focus routing
 
 - A clicked enabled row forwards its `directory_key` through the one custom
-  `RowClickHandler` (`agent_roster.cpp:370-375`); no other custom callback is
+  `RowClickHandler` (`agent_roster.cpp:388-392`); no other custom callback is
   emitted. The Open/New Project child `QPushButton`s expose their standard Qt
   `clicked` signals, which the owner composes but does not connect
-  (`agent_roster.cpp:219-240`); `NativeShell` finds them by object name and
+  (`agent_roster.cpp:236-252`); `NativeShell` finds them by object name and
   wires them (`native_shell.cpp:593-603`).
 - `focus_row(key)` focuses the first enabled row whose `directory_key` equals
   `key`, or the first enabled row when no key is given; disabled rows are
-  skipped (`agent_roster.cpp:381-399`).
+  skipped (`agent_roster.cpp:398-414`).
 
 ## ConversationSurface
 

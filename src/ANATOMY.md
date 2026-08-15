@@ -81,7 +81,10 @@ keeps the parent summary):
 
 - `ui/agent_roster.{h,cpp}` — `AgentRoster`: the persistent left list column
   (project identity header, Open/New Project actions, scrollable 62px rows);
-  rebuilds its row tree only when the visible model changes.
+  rebuilds its row tree only when the visible model changes. Its visible rows
+  omit the human pseudo-agent: `project_agents` still emits the human row in
+  the shared snapshot (routing, mailbox, and selected-detail truth consume
+  it), and only the roster presentation filters it out.
 - `ui/conversation_surface.{h,cpp}` — `ConversationSurface`: a read-only
   `QTextEdit` that renders the direct-conversation rows as plain-text
   blocks with palette-backed bubbles.

@@ -69,10 +69,10 @@ touches a real Agent or project, and none depends on a network or provider.
 - `tests/agent_sleep_test.cpp` — `agent_sleep` ctest. Exact-target `.sleep`
   marker write plus the baseline/observe pair.
 
-### 3. Real-Qt `native_shell_behavior`
+### 3. Real-Qt widget/shell contracts
 
-- `tests/native_shell_test.cpp` — `native_shell_behavior` ctest. The single
-  real-Qt contract: it links `lingtai_desktop_native_shell` +
+- `tests/native_shell_test.cpp` — `native_shell_behavior` ctest. The
+  real-Qt shell contract: it links `lingtai_desktop_native_shell` +
   `desktop-app::lib_ui` + `src/crl_integration.cpp` (`CMakeLists.txt:418-429`),
   constructs a real `QApplication`, shows the real `NativeShell`
   off-screen (`shell.show_offscreen()`), and drives the real widgets to
@@ -100,6 +100,18 @@ touches a real Agent or project, and none depends on a network or provider.
   the low-level `lingtai_selected_agent_status_activity` fact label stays
   present with its stable identity. It runs with the platform Qt plugin like
   `native_shell_behavior`.
+- `tests/agent_roster_presentation_test.cpp` — `agent_roster_presentation`
+  ctest. The widget contract for the roster presentation boundary: it links
+  `lingtai_desktop_native_shell` + `desktop-app::lib_ui` +
+  `src/crl_integration.cpp` (`CMakeLists.txt:466-486`), constructs a real
+  `QApplication`, builds an `AgentRoster` directly, and feeds it an
+  `AgentSnapshot` containing the human pseudo-agent plus real Agents to prove
+  the visible roster rows omit the human while retaining every real Agent in
+  deterministic snapshot order, count only visible Agents in the roster state
+  label, and keep selection bound to real-Agent keys. The human is a
+  projection member but never a roster row. On macOS it runs with
+  `QT_QPA_PLATFORM=cocoa`, elsewhere with `offscreen`
+  (`CMakeLists.txt:480-486`).
 
 ### 4. Process-level smoke/persistence
 
@@ -116,7 +128,7 @@ touches a real Agent or project, and none depends on a network or provider.
 
 Each ctest registers one executable (or Python script) against one fixture
 path under the build directory; the test itself creates and removes its
-sandbox within that root (`CMakeLists.txt:375-442`):
+sandbox within that root (`CMakeLists.txt:375-486`):
 
 | Test file | Target / executable | ctest name | Fixture (build dir) |
 | --- | --- | --- | --- |
@@ -132,6 +144,7 @@ sandbox within that root (`CMakeLists.txt:375-442`):
 | `agent_sleep_test.cpp` | `lingtai_agent_sleep_test` | `agent_sleep` | `agent-sleep-fixture` |
 | `native_shell_test.cpp` | `lingtai_native_shell_test` | `native_shell_behavior` | `native-shell-no-write-fixture` (CMake-created) |
 | `native_shell_destinations_test.cpp` | `lingtai_native_shell_destinations_test` | `native_shell_destinations` | — |
+| `agent_roster_presentation_test.cpp` | `lingtai_agent_roster_presentation_test` | `agent_roster_presentation` | — |
 | `test_native_shell.py` | `lingtai_desktop_smoke` (built) | `native_shell` | `$<TARGET_FILE:lingtai_desktop_smoke>` |
 
 ## Fixture and data ownership

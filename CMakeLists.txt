@@ -462,3 +462,25 @@ else()
     set_tests_properties(native_shell_destinations PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
+
+add_executable(lingtai_agent_roster_presentation_test
+    tests/agent_roster_presentation_test.cpp
+    src/crl_integration.cpp)
+init_target(lingtai_agent_roster_presentation_test)
+target_compile_options(lingtai_agent_roster_presentation_test PRIVATE
+    -Wall -Wextra -Werror -pedantic
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-unused-parameter>
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-deprecated-this-capture>
+    $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-unused-parameter>)
+target_link_libraries(lingtai_agent_roster_presentation_test PRIVATE
+    lingtai_desktop_native_shell
+    desktop-app::lib_ui)
+add_test(NAME agent_roster_presentation
+    COMMAND lingtai_agent_roster_presentation_test)
+if(APPLE)
+    set_tests_properties(agent_roster_presentation PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
+else()
+    set_tests_properties(agent_roster_presentation PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
