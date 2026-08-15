@@ -80,6 +80,13 @@ constexpr auto kRosterResizeHandleWidth = 8;
 constexpr auto kTwoColumnAvailableThreshold =
     kRosterColumnWidth + kDetailColumnMinimumWidth;
 
+// The one bounded composer lane is a centered surface narrower than the
+// detail pane: it relaxes to near-full width at the detail's source-backed
+// 380px minimum and plateaus at a visibly narrower lane (85%) once the
+// detail reaches 1000px, with symmetric side insets throughout.
+constexpr auto kComposerWideDetailWidth = 1000;
+constexpr auto kComposerWideWidthRatio = 0.85;
+
 namespace fs = std::filesystem;
 
 QLabel *make_label(
@@ -1016,15 +1023,25 @@ NativeShell::NativeShell()
     // shell's palette background rather than a widget-level white base.
     detail_layout->addWidget(conversation, 1);
 
-    // The smallest visible composer, directly under the conversation it
-    // sends into: one vendored single-line input and one explicit Send
-    // action, both submitting through the same send path.
+    // The one bounded modern composer surface, directly under the
+    // conversation it sends into: the lane owns its compact input/Send action
+    // row and the send-status read-out immediately below it, so it stays one
+    // self-contained composer rather than a full-width detail strip. The lane
+    // is horizontally centered with symmetric side insets, recomputed from
+    // the actual detail width by the same body-resize owner that drives the
+    // responsive sidebar/header.
     auto *composer = new Ui::RpWidget(detail);
+    composer_ = composer;
     composer->setObjectName("lingtai_composer");
     composer->setAccessibleName(QStringLiteral("Send a message"));
-    auto *composer_layout = new QHBoxLayout(composer);
+    auto *composer_layout = new QVBoxLayout(composer);
     composer_layout->setContentsMargins(0, 0, 0, 0);
-    composer_layout->setSpacing(8);
+    composer_layout->setSpacing(4);
+    // The one compact aligned action row: one vendored single-line input and
+    // one explicit Send action, both owned by the composer lane and both
+    // submitting through the same send path.
+    auto *composer_action_row = new QHBoxLayout;
+    composer_action_row->setSpacing(8);
     auto *composer_input = new Ui::InputField(
         composer,
         st::defaultInputField,
@@ -1034,7 +1051,7 @@ NativeShell::NativeShell()
     composer_input->setAccessibleName(QStringLiteral("Message"));
     composer_input->setMinHeight(36);
     composer_input->setEnabled(false);
-    composer_layout->addWidget(composer_input, 1);
+    composer_action_row->addWidget(composer_input, 1);
     auto *send_button = new Ui::RoundButton(
         composer,
         rpl::single(QStringLiteral("Send")),
@@ -1045,12 +1062,15 @@ NativeShell::NativeShell()
     send_button->addClickHandler([this] {
         handle_send_message();
     });
-    composer_layout->addWidget(send_button);
-    detail_layout->addWidget(composer);
+    composer_action_row->addWidget(send_button);
+    composer_layout->addLayout(composer_action_row);
+    // The send status is owned by the lane itself, immediately below the
+    // action row -- never a separate detail row.
     auto *composer_status = make_label(
-        detail, QString(), "lingtai_composer_status", 10);
+        composer, QString(), "lingtai_composer_status", 10);
     composer_status->setAccessibleName(QStringLiteral("Send status"));
-    detail_layout->addWidget(composer_status);
+    composer_layout->addWidget(composer_status);
+    detail_layout->addWidget(composer, 0, Qt::AlignHCenter);
     composer_input->submits()
         | rpl::on_next([this] {
             handle_send_message();
@@ -2069,8 +2089,10 @@ void NativeShell::recompute_layout(int body_width) {
         separator_->setVisible(true);
         content_->setVisible(true);
         detail_back_button_->setVisible(false);
-        update_top_bar_fit(body_width - roster_width
-            - kRosterResizeHandleWidth - kRosterSeparatorWidth);
+        const auto detail_width = body_width - roster_width
+            - kRosterResizeHandleWidth - kRosterSeparatorWidth;
+        update_composer_width(detail_width);
+        update_top_bar_fit(detail_width);
         return;
     }
     const auto detail_active =
@@ -2083,6 +2105,7 @@ void NativeShell::recompute_layout(int body_width) {
     separator_->setVisible(false);
     content_->setVisible(detail_active);
     detail_back_button_->setVisible(detail_active);
+    update_composer_width(body_width);
     update_top_bar_fit(body_width);
 }
 
@@ -2103,6 +2126,23 @@ void NativeShell::update_top_bar_fit(int detail_width) {
     if (!was_visible) selected_agent_key_->setVisible(true);
     const auto fits = chat_top_bar_->sizeHint().width() <= detail_width;
     selected_agent_key_->setVisible(fits);
+}
+
+// The one bounded composer lane, re-entered on every recompute (and so on
+// every real resize and selection change): its width relaxes toward
+// near-full as the actual detail width approaches the source-backed 380px
+// minimum and plateaus at a visibly narrower lane (85%) once the detail is
+// wide, keeping the lane centered by its own layout alignment with real
+// symmetric side insets. Object names, the input/Send row, and the status
+// wording are never touched.
+void NativeShell::update_composer_width(int detail_width) {
+    if (!composer_) return;
+    const auto ramp = std::clamp(
+        double(detail_width - kDetailColumnMinimumWidth)
+            / double(kComposerWideDetailWidth - kDetailColumnMinimumWidth),
+        0.0, 1.0);
+    const auto ratio = 1.0 - (1.0 - kComposerWideWidthRatio) * ramp;
+    composer_->setFixedWidth(qRound(detail_width * ratio));
 }
 
 // Telegram's OneColumn history-back path: the narrow detail returns to the

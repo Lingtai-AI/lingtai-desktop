@@ -142,6 +142,10 @@ private:
     // derived by `recompute_layout`, restoring it as soon as it fits again.
     // Primary controls, the presentation name, and fonts are never touched.
     void update_top_bar_fit(int detail_width);
+    // Recomputes the one bounded composer lane's width from the actual detail
+    // width just derived by `recompute_layout`: near-full at the narrow
+    // minimum, a visibly narrower symmetric-centered lane at wide detail.
+    void update_composer_width(int detail_width);
     // Switches the selected-Agent detail to exactly one page: the chat
     // (conversation) by default, or the one retained read-only source
     // (Presets), so only one content surface dominates at a time.
@@ -197,6 +201,10 @@ private:
     // hide/restore only the secondary key.
     QWidget *chat_top_bar_ = nullptr;
     QLabel *selected_agent_key_ = nullptr;
+    // The one bounded composer lane, retained so the same body-resize owner
+    // that drives the responsive sidebar/header recomputes its width from
+    // the actual detail width on every real resize.
+    Ui::RpWidget *composer_ = nullptr;
     Ui::RpWidget *empty_route_ = nullptr;
     Ui::RpWidget *project_route_ = nullptr;
     Ui::RpWidget *open_error_surface_ = nullptr;
