@@ -1,0 +1,115 @@
+# `src/ui/` — observed behaviors
+
+Current observable behavior only, for `AgentRoster` and `ConversationSurface`,
+with exact source anchors. These describe what the source does today; they are
+not a repair plan and make no forward claims.
+
+## AgentRoster
+
+### Roster status label
+
+`update_state_label` (`agent_roster.cpp:289-296`) sets exactly one of:
+
+- `Roster unavailable` when `snapshot.scan != AgentScanState::complete`;
+- `No Agents found — scan complete` when the scan is complete and the list is
+  empty;
+- `N Agent(s) — scan complete` otherwise.
+
+### Row rebuild vs. checked-state-only refresh
+
+`set_rows` (`agent_roster.cpp:311-379`) compares the incoming snapshot against
+`visible_snapshot_` field by field (`directory_key`, `manifest_kind`, `role`,
+`presence`, `manifest_diagnostic`) with equal size
+(`agent_roster.cpp:320-337`). Two outcomes:
+
+- **Unchanged model:** only `update_checked_states(selected_key)` runs
+  (`agent_roster.cpp:339-342`). The row tree, scroll position, focus, and row
+  identity are preserved across the shell's one-second refresh.
+- **Changed model:** the row tree is torn down and rebuilt in snapshot order
+  (`agent_roster.cpp:344-377`), then a stretch is appended.
+
+### Row composition and visual states
+
+Each row is an `AgentRowButton`, a checkable `QPushButton` fixed at 62px height
+with `Qt::StrongFocus` (`agent_roster.cpp:101-112`). Its text is two lines,
+`key\nmanifest — role — presence` (`agent_roster.cpp:357`, `82-86`), where the
+presence value is the raw projection kind (`alive_human`/`alive`/`stale`/
+`missing`/`invalid`/`unavailable`/`unknown`, `agent_roster.cpp:54-65`). The
+accessible description appends `manifest diagnostic: …` when the row carries a
+nonempty diagnostic (`agent_roster.cpp:88-94`, `358`).
+
+Painting (`agent_roster.cpp:114-164`):
+
+- Fill: selected → `st::dialogsBgActive`; down or hovered → `st::windowBgRipple`;
+  otherwise `st::windowBgOver`.
+- Primary line (13pt DemiBold) and secondary line (10pt) pick their pen from
+  the same three-state ladder: `st::dialogsNameFg…` / `st::dialogsTextFg…`
+  (Active / Over / plain).
+- A `PE_FrameFocusRect` is painted when the row has focus.
+- The row palette `Highlight` is set to `st::dialogsBgActive` so selection
+  color resolves from the same token its paint uses
+  (`agent_roster.cpp:364-369`).
+
+Enabled/checked/keyboard (`agent_roster.cpp:360-375`, `171-180`):
+
+- A row is enabled only when its already-projected `manifest_kind == valid`;
+  malformed/unsafe rows are visible but disabled.
+- The row is checked when the caller's `selected_key` equals its `directory_key`.
+- Return/Enter on a focused enabled row calls `click()`, which flows into the
+  clicked → selection handler exactly like a mouse click.
+
+### Click and focus routing
+
+- A clicked enabled row forwards its `directory_key` through the one custom
+  `RowClickHandler` (`agent_roster.cpp:370-375`); no other custom callback is
+  emitted. The Open/New Project child `QPushButton`s expose their standard Qt
+  `clicked` signals, which the owner composes but does not connect
+  (`agent_roster.cpp:219-240`); `NativeShell` finds them by object name and
+  wires them (`native_shell.cpp:593-603`).
+- `focus_row(key)` focuses the first enabled row whose `directory_key` equals
+  `key`, or the first enabled row when no key is given; disabled rows are
+  skipped (`agent_roster.cpp:381-399`).
+
+## ConversationSurface
+
+### Content replacement and no-op refresh
+
+- `set_plain_state(text)` is a no-op if the text already matches
+  `last_plain_state_`; otherwise it clears any conversation and centers the
+  plain text (`conversation_surface.cpp:100-114`).
+- `set_conversation(them, messages)` is a no-op when `them` matches and
+  `same_content` finds equal size and equal `id`/`outgoing`/`timestamp`/
+  `subject`/`text` per row (`conversation_surface.cpp:116-132`, `134-144`).
+  Otherwise the document is rebuilt, preserving scroll as below.
+
+### Text and bubble layout
+
+`rebuild_document` (`conversation_surface.cpp:146-195`) writes one
+`QTextBlock` per message in the caller's order:
+
+- Alignment left (incoming) or right (outgoing); margins bound each message to
+  `max(0.72 × viewport width, 160px)`, with 12px edge and 4px/18px top/bottom
+  margins (`message_block_format`, `conversation_surface.cpp:36-51`).
+- Header line `You · <timestamp>` for outgoing, `<them> · <timestamp>` for
+  incoming, styled with `st::msgServiceFg` at 10pt
+  (`conversation_surface.cpp:176-181`, `53-60`).
+- Optional subject line (11pt Medium) using `st::historyTextOutFg` /
+  `st::historyTextInFg` (`conversation_surface.cpp:182-186`, `62-71`).
+- Body (12pt) in the same out/in text colors, inserted literally — the surface
+  never interprets markup (`conversation_surface.cpp:187-189`, `73-81`).
+
+`paintEvent` (`conversation_surface.cpp:197-249`) fills the viewport with the
+`st::windowBgOver` chat backdrop, then paints an 8px-radius rounded bubble
+behind each message block (`st::msgOutBg` outgoing, `st::msgInBg` incoming),
+offset by the current scroll so bubbles stay aligned with text; finally
+`QTextEdit::paintEvent` draws the text with native selection/copy behavior.
+
+### Scroll and resize
+
+- Before a rebuild, the surface records whether the vertical scrollbar sat at
+  its bottom; after the rebuild it snaps to the new bottom only if the human
+  was already there, otherwise it clamps the prior value
+  (`conversation_surface.cpp:151-153`, `192-194`).
+- `resizeEvent` reflows only when the quantized message cap
+  (`int(width × 0.72 / 8) × 8`) changes; a live pixel-by-pixel resize does not
+  rebuild (`conversation_surface.cpp:251-263`).
