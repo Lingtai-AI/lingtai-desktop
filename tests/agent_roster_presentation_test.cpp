@@ -8,6 +8,7 @@
 #include <QtCore/QCoreApplication>
 #include <QtCore/QString>
 #include <QtGui/QColor>
+#include <QtGui/QFontMetricsF>
 #include <QtGui/QImage>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QLabel>
@@ -68,6 +69,10 @@ QPushButton *agent_row(QWidget &widget, std::string_view key) {
 
 constexpr double kInkDistance = 48.0;
 constexpr double kSecondaryScaleRatio = 0.90;
+constexpr double kAvatarDiameter = 40.0;
+constexpr double kRowVerticalFrame = 8.0;
+constexpr double kRowHorizontalFrame = 10.0;
+constexpr double kAvatarTextGap = 10.0;
 
 QColor sample_idle_background(const QImage &image, double dpr) {
     // The idle row background fills the whole row; the text rect only ever
@@ -99,12 +104,13 @@ QColor sample_idle_background(const QImage &image, double dpr) {
 
 double band_ink_span(const QImage &image, double dpr,
         const QColor &background, double logical_min_y, double logical_max_y) {
-    // Only the x10..width-10 text column counts; any pixel at least
-    // kInkDistance RGB away from the idle background is glyph ink, and the
-    // physical min/max y span converts back to logical pixels so the result
-    // is devicePixelRatio-agnostic.
-    const auto min_x = int(10.0 * dpr);
-    const auto max_x = image.width() - int(10.0 * dpr);
+    // Only the text column starting after the leading avatar column counts;
+    // any pixel at least kInkDistance RGB away from the idle background is
+    // glyph ink, and the physical min/max y span converts back to logical
+    // pixels so the result is devicePixelRatio-agnostic.
+    const auto min_x = int((kRowHorizontalFrame + kAvatarDiameter
+        + kAvatarTextGap) * dpr);
+    const auto max_x = image.width() - int(kRowHorizontalFrame * dpr);
     const auto min_y = int(logical_min_y * dpr);
     const auto max_y = int(logical_max_y * dpr);
     auto ink_min = std::optional<int>();
@@ -129,6 +135,36 @@ double band_ink_span(const QImage &image, double dpr,
         return 0.0;
     }
     return (double(*ink_max + 1) / dpr) - (double(*ink_min) / dpr);
+}
+
+// The leading avatar disc is a solid single-color fill distinct from the idle
+// row background. Text glyph ink is thin, multi-shade, and never forms a
+// contiguous fill, so the single most frequent non-background color in the
+// leading strip is the avatar disc's solid fill, and its count is DPR-scaled
+// to the strip area.
+int leading_avatar_fill(const QImage &image, double dpr,
+        const QColor &background) {
+    std::map<QRgb, int> counts;
+    const auto min_x = int(10.0 * dpr);
+    const auto max_x = int((10.0 + kAvatarDiameter) * dpr);
+    for (auto y = 0; y != image.height(); ++y) {
+        for (auto x = min_x; x < max_x && x < image.width(); ++x) {
+            const auto pixel = image.pixelColor(x, y);
+            const auto dr = pixel.red() - background.red();
+            const auto dg = pixel.green() - background.green();
+            const auto db = pixel.blue() - background.blue();
+            if (std::sqrt(double(dr * dr + dg * dg + db * db))
+                    >= kInkDistance) {
+                ++counts[pixel.rgb()];
+            }
+        }
+    }
+    auto best = 0;
+    for (const auto &[rgb, count] : counts) {
+        (void)rgb;
+        best = std::max(best, count);
+    }
+    return best;
 }
 
 void verify_secondary_roster_text_matches_primary_scale() {
@@ -215,6 +251,67 @@ void verify_human_hidden_from_roster() {
     verify_secondary_roster_text_matches_primary_scale();
 }
 
+void verify_intrinsic_roster_row_behavior() {
+    // One long display/directory key at the constrained 260px roster width is
+    // the intrinsic-row contract: the row leads with a fixed-diameter circular
+    // avatar visibly distinct from the row background, derives its height from
+    // avatar + two font lines + stable padding instead of a hard min=max62
+    // box, keeps the full untruncated directory truth in the accessible
+    // surface while the visible text column stays bounded, and needs no
+    // public/test-only production seam.
+    const auto key = std::string(
+        "org/lingtai/workspaces/very/long/agent/display/name/for/elision");
+    AgentSnapshot snapshot;
+    snapshot.scan = AgentScanState::complete;
+    snapshot.items = { make_row(key, AgentRole::agent) };
+
+    QWidget parent;
+    AgentRoster roster(&parent);
+    roster.set_rows(snapshot, std::nullopt);
+    roster.resize(260, roster.height());
+    roster.show();
+    QCoreApplication::processEvents();
+
+    auto *row = agent_row(roster, key);
+    require(row != nullptr, "the long-name roster row must render for grab");
+    row->clearFocus();
+    roster.clearFocus();
+
+    const auto image = row->grab().toImage();
+    const auto dpr = std::max(1.0, double(image.devicePixelRatio()));
+
+    require(row->minimumHeight() != row->maximumHeight(),
+        "the roster row must not be a hard min=max62 box: its height must be "
+        "intrinsic from avatar + two font lines + stable padding");
+    require(row->sizeHint().height() >= kAvatarDiameter
+            + 2 * kRowVerticalFrame,
+        "the intrinsic row sizeHint must accommodate the fixed avatar disc "
+        "plus the stable vertical framing");
+
+    const auto background = sample_idle_background(image, dpr);
+    const auto strip_area = int(kAvatarDiameter * dpr) * image.height();
+    require(leading_avatar_fill(image, dpr, background) >= strip_area / 4,
+        "the leading region must render a fixed-diameter solid circular "
+        "avatar disc visibly distinct from the row background");
+
+    const auto full_key = QString::fromUtf8(key.data(), key.size());
+    require(row->accessibleName().contains(full_key),
+        "the full untruncated directory key must stay in the accessible name "
+        "while the visible text column is bounded");
+
+    require(row->width() <= 260,
+        "the roster row must stay bounded within the 260px roster column");
+
+    const auto visible_column = row->width() - int(kAvatarDiameter)
+        - 2 * int(kRowHorizontalFrame);
+    QFontMetricsF metrics(row->font());
+    require(metrics.horizontalAdvance(full_key) > double(visible_column),
+        "the long full key must be wider than the available visible text "
+        "column, so the visible name has to be constrained to fit; the "
+        "ellipsis glyph itself is bound by source review of the production "
+        "elidedText call, not pixel-claimed here");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -223,6 +320,7 @@ int main(int argc, char **argv) {
         QApplication application(argc, argv);
         style::internal::init_palette(style::kScaleDefault);
         verify_human_hidden_from_roster();
+        verify_intrinsic_roster_row_behavior();
         std::cout << "agent roster presentation: OK\n";
         return 0;
     } catch (const std::exception &error) {

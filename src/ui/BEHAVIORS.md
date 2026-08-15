@@ -37,27 +37,41 @@ outcomes:
 
 ### Row composition and visual states
 
-Each row is an `AgentRowButton`, a checkable `QPushButton` fixed at 62px height
-with `Qt::StrongFocus` (`agent_roster.cpp:114-125`). Its text is two lines,
-`key\nmanifest — role — presence` (`agent_roster.cpp:374`, `95-99`), where the
-presence value is the raw projection kind (`alive_human`/`alive`/`stale`/
+Each row is an `AgentRowButton`, a checkable `QPushButton` whose intrinsic
+preferred height is the larger of the fixed 40px avatar (`kAvatarDiameter`) and
+the two 13pt line metrics, plus the 8px vertical frame top/bottom
+(`sizeHint`, `agent_roster.cpp:130-141`); its size policy is expanding/preferred
+(`agent_roster.cpp:118-122`, `433`), with `Qt::StrongFocus`
+(`agent_roster.cpp:121`). Its text is two lines, `key\nmanifest — role —
+presence` (`agent_roster.cpp:421`, `97-101`), where the presence value is the
+raw projection kind (`alive_human`/`alive`/`stale`/
 `missing`/`invalid`/`unavailable`/`unknown`, `agent_roster.cpp:67-78`). The
 accessible description appends `manifest diagnostic: …` when the row carries a
-nonempty diagnostic (`agent_roster.cpp:92-99`, `375`).
+nonempty diagnostic (`agent_roster.cpp:103-109`, `422`).
 
-Painting (`agent_roster.cpp:127-177`):
+Painting (`agent_roster.cpp:143-230`):
 
 - Fill: selected → `st::dialogsBgActive`; down or hovered → `st::windowBgRipple`;
   otherwise `st::windowBgOver`.
-- Primary line (13pt DemiBold) and secondary line (13pt normal) pick their pen
+- A fixed leading circular avatar/initial: the 40px circle is filled from the
+  name-text three-state ladder (`st::dialogsNameFgActive`/`Over`/plain), and
+  the first visible initial — the leading character of the first line with its
+  doubled `&&` folded back to `&`, trimmed and upper-cased — is drawn centered
+  in 13pt DemiBold with the row-background token
+  (`st::dialogsBgActive`/`st::windowBgRipple`/`st::windowBgOver`) as pen.
+- The text column begins at the avatar's right edge plus 1px and the 10px
+  `kAvatarTextGap`, then the remaining row width, split into a top half
+  (`primary_rect`) and bottom half (`secondary_rect`). Primary line (13pt
+  DemiBold, `&&`→`&` visible) and secondary line (13pt normal) pick their pen
   from the same three-state ladder: `st::dialogsNameFg…` / `st::dialogsTextFg…`
-  (Active / Over / plain); the name and secondary share the mature same-size
-  13pt two-line scale, differentiated only by DemiBold-vs-normal weight and
-  primary-vs-secondary palette.
+  (Active / Over / plain); both lines are right-elided with
+  `QFontMetrics(font).elidedText(..., Qt::ElideRight, width)` at paint time and
+  drawn without mnemonic processing. The row's full `text()`,
+  accessibleName/Description, and properties are unchanged.
 - A `PE_FrameFocusRect` is painted when the row has focus.
 - The row palette `Highlight` is set to `st::dialogsBgActive` so selection
   color resolves from the same token its paint uses
-  (`agent_roster.cpp:384-386`).
+  (`agent_roster.cpp:431-433`).
 
 Enabled/checked/keyboard (`agent_roster.cpp:377-395`, `184-193`):
 

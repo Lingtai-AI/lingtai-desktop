@@ -63,11 +63,16 @@ heading, the roster status label, and a scroll area holding the rows widget.
 Every element carries a static accessible/object name used by the shell's
 semantic tests.
 
-Painting (`agent_roster.cpp:293-296` and `127-177`): the owner fills the
+Painting (`agent_roster.cpp:293-296` and `130-230`): the owner fills the
 `st::windowBgOver` list field; each `AgentRowButton` (a checkable `QPushButton`)
-paints selected/hover/pressed/plain fill and two-line text from the shared
-lib_ui palette tokens (`st::dialogsBgActive`, `st::windowBgRipple`,
-`st::dialogsNameFg…`, `st::dialogsTextFg…`) plus a focus rect when focused.
+derives its intrinsic preferred height from the larger of a fixed 40px avatar
+(`kAvatarDiameter`) and the two 13pt line metrics (`QFontMetrics` heights for
+13pt DemiBold + 13pt Normal), plus the 8px vertical frame top/bottom. It paints
+selected/hover/pressed/plain fill, a fixed leading circular avatar/initial
+region, and paint-time right-elided two-line text from the shared lib_ui
+palette tokens (`st::dialogsBgActive`, `st::windowBgRipple`,
+`st::dialogsNameFg…`, `st::dialogsTextFg…`) plus a focus rect when focused. The
+button's full text, accessible name/description, and properties stay untouched.
 
 Build ownership: `CMakeLists.txt:179` compiles `src/ui/agent_roster.cpp` into
 `lingtai_desktop_native_shell`.

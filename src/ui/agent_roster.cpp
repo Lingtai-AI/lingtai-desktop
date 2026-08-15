@@ -5,6 +5,7 @@
 #include <QtCore/QString>
 #include <QtCore/QVariant>
 #include <QtGui/QFont>
+#include <QtGui/QFontMetrics>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QPainter>
 #include <QtWidgets/QStyle>
@@ -22,7 +23,8 @@ namespace lingtai::desktop {
 namespace {
 
 constexpr auto kRosterColumnWidth = 260;
-constexpr auto kRowHeight = 62;
+constexpr auto kAvatarDiameter = 40;
+constexpr auto kAvatarTextGap = 10;
 constexpr auto kRowHorizontalFrame = 10;
 constexpr auto kRowVerticalFrame = 8;
 
@@ -115,14 +117,28 @@ class AgentRowButton final : public QPushButton {
 public:
     explicit AgentRowButton(QWidget *parent)
     : QPushButton(parent) {
-        setFixedHeight(kRowHeight);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         setFocusPolicy(Qt::StrongFocus);
     }
 
 protected:
+    QSize sizeHint() const override;
     void paintEvent(QPaintEvent *) override;
     void keyPressEvent(QKeyEvent *event) override;
 };
+
+QSize AgentRowButton::sizeHint() const {
+    auto primary_font = font();
+    primary_font.setPointSize(13);
+    primary_font.setWeight(QFont::DemiBold);
+    auto secondary_font = font();
+    secondary_font.setPointSize(13);
+    const auto text_height = QFontMetrics(primary_font).height()
+        + QFontMetrics(secondary_font).height();
+    return QSize(
+        std::min(QPushButton::sizeHint().width(), kRosterColumnWidth),
+        std::max(kAvatarDiameter, text_height) + 2 * kRowVerticalFrame);
+}
 
 void AgentRowButton::paintEvent(QPaintEvent *) {
     QPainter painter(this);
@@ -134,29 +150,60 @@ void AgentRowButton::paintEvent(QPaintEvent *) {
             ? st::windowBgRipple
             : st::windowBgOver);
 
-    const auto lines = text().split(QLatin1Char('\n'));
-    const auto text_rect = rect().adjusted(
+    const auto content_rect = rect().adjusted(
         kRowHorizontalFrame, kRowVerticalFrame,
         -kRowHorizontalFrame, -kRowVerticalFrame);
+    const auto avatar_rect = QRect(
+        content_rect.x(),
+        content_rect.y() + (content_rect.height() - kAvatarDiameter) / 2,
+        kAvatarDiameter, kAvatarDiameter);
+    const auto text_rect = QRect(
+        avatar_rect.right() + 1 + kAvatarTextGap,
+        content_rect.y(),
+        content_rect.width() - kAvatarDiameter - 1 - kAvatarTextGap,
+        content_rect.height());
     const auto primary_height = text_rect.height() / 2;
     const auto primary_rect = QRect(
         text_rect.x(), text_rect.y(), text_rect.width(), primary_height);
     const auto secondary_rect = QRect(
         text_rect.x(), text_rect.y() + primary_height,
         text_rect.width(), text_rect.height() - primary_height);
-    constexpr auto flags = Qt::AlignLeft | Qt::AlignVCenter
-        | Qt::TextShowMnemonic;
+
+    const auto lines = text().split(QLatin1Char('\n'));
+    const auto primary_display = QString(lines.value(0))
+        .replace(QLatin1String("&&"), QLatin1String("&"));
 
     auto primary_font = font();
     primary_font.setPointSize(13);
     primary_font.setWeight(QFont::DemiBold);
-    painter.setFont(primary_font);
-    painter.setPen(selected
+    const auto primary_color = selected
         ? st::dialogsNameFgActive
         : over
             ? st::dialogsNameFgOver
-            : st::dialogsNameFg);
-    painter.drawText(primary_rect, flags, lines.value(0));
+            : st::dialogsNameFg;
+
+    const auto avatar_initial = primary_display.trimmed().left(1).toUpper();
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(primary_color);
+    painter.drawEllipse(avatar_rect);
+    painter.setPen(selected
+        ? st::dialogsBgActive
+        : over
+            ? st::windowBgRipple
+            : st::windowBgOver);
+    painter.setFont(primary_font);
+    painter.drawText(avatar_rect, Qt::AlignCenter, avatar_initial);
+
+    constexpr auto flags = Qt::AlignLeft | Qt::AlignVCenter;
+    painter.setFont(primary_font);
+    painter.setPen(primary_color);
+    painter.drawText(
+        primary_rect,
+        flags,
+        QFontMetrics(primary_font).elidedText(
+            primary_display,
+            Qt::ElideRight,
+            std::max(0, primary_rect.width())));
 
     auto secondary_font = font();
     secondary_font.setPointSize(13);
@@ -166,7 +213,13 @@ void AgentRowButton::paintEvent(QPaintEvent *) {
         : over
             ? st::dialogsTextFgOver
             : st::dialogsTextFg);
-    painter.drawText(secondary_rect, flags, lines.value(1));
+    painter.drawText(
+        secondary_rect,
+        flags,
+        QFontMetrics(secondary_font).elidedText(
+            lines.value(1),
+            Qt::ElideRight,
+            std::max(0, secondary_rect.width())));
 
     if (hasFocus()) {
         QStyleOptionFocusRect option;
@@ -377,7 +430,7 @@ void AgentRoster::set_rows(
         row->setCheckable(true);
         row->setChecked(selected_key && *selected_key == item.directory_key);
         row->setEnabled(item.manifest_kind == AgentManifestKind::valid);
-        row->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        row->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
         // The selected row resolves its selection color from the same shared
         // palette token its paint uses, so the ownership is observable without
         // replacing any inherited palette role.
