@@ -35,6 +35,12 @@ Entry point and composition root:
   and the read-only `window()` / `selection_state()` accessors;
   `smoke_ready()` is real product readiness used only by `main.cpp`'s `--smoke`
   path (`native_shell.h:100`).
+  The content pane composes one coherent workspace: the no-project welcome
+  branding and its rhythm spacing live in the empty route only (a selected
+  project's route starts at the content origin), and the selected-Agent page
+  nav is content-driven — two leading buttons plus one trailing positive-stretch
+  spacer — with the duplicate Conversation heading retained only as a hidden
+  object/implementation anchor (the nav item owns the user affordance).
 - The shell retains two stable anchors for the selected-Agent chat top bar —
   `chat_top_bar_` (`lingtai_chat_top_bar`) and `selected_agent_key_`
   (`lingtai_selected_agent_key`) — so `recompute_layout`'s one responsive fit

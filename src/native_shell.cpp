@@ -727,7 +727,6 @@ NativeShell::NativeShell()
         "LingTai Desktop reads a selected project without changing it."));
     content_layout->addWidget(title);
     content_layout->addWidget(purpose);
-    content_layout->addSpacing(40);
 
     open_error_surface_ = new Ui::RpWidget(content);
     open_error_surface_->setObjectName("lingtai_project_open_error_surface");
@@ -777,6 +776,10 @@ NativeShell::NativeShell()
         empty_route_,
         QStringLiteral("Open a LingTai project to inspect its Agents."),
         "lingtai_no_project_detail");
+    // The branding rhythm between the no-project title/purpose and this empty
+    // route belongs to the empty-route-only layout, so a selected project's
+    // route never inherits a shared spacer above the active workspace.
+    empty_layout->addSpacing(40);
     empty_layout->addStretch();
     empty_layout->addWidget(empty_title);
     empty_layout->addWidget(empty_detail);
@@ -982,14 +985,20 @@ NativeShell::NativeShell()
         QObject::connect(button, &QPushButton::clicked, [this, page] {
             show_detail_page(page);
         });
-        pages_nav_layout->addWidget(button, 1);
+        // Content-driven leading navigation: the two buttons keep their own
+        // size, and the one trailing stretch absorbs the remaining width so
+        // the nav is never two equal full-pane slabs.
+        pages_nav_layout->addWidget(button, 0);
         page_nav_buttons_.push_back(button);
     }
+    // The flexible trailing room that makes the page nav content-driven.
+    pages_nav_layout->addStretch(1);
     detail_layout->addWidget(pages_nav);
 
     // The conversation is the product, so it is the default page surface,
     // directly under the page navigation rather than below a stack of source
-    // cards.
+    // cards. Its duplicate "Conversation" heading is retained only as a hidden
+    // object/implementation anchor: the nav item owns the user affordance.
     detail_layout->addWidget(make_label(
         detail, QStringLiteral("Conversation"),
         "lingtai_selected_agent_conversation_heading", 11, QFont::DemiBold));
@@ -2135,7 +2144,10 @@ void NativeShell::show_detail_page(AgentDetailPage page) {
         return;
     }
     const auto on_conversation = page == AgentDetailPage::conversation;
-    conversation_heading->setVisible(on_conversation);
+    // The one visible Conversation affordance is the nav item; the duplicate
+    // heading is retained only as a hidden object/implementation anchor and is
+    // never revealed beside the selected nav control.
+    conversation_heading->setVisible(false);
     conversation->setVisible(on_conversation);
     composer->setVisible(on_conversation);
     composer_status->setVisible(on_conversation);

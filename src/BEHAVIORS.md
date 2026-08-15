@@ -93,6 +93,10 @@ its code.
   (`recompute_layout`), and the handle is hidden. Back is the narrow
   history-back path: it drops the selection and returns to the roster,
   unchanged.
+- The right content pane is one coherent workspace: the no-project welcome
+  branding (title/purpose) and its rhythm spacing belong to the empty route
+  only, so a selected project's active route begins at the content origin with
+  no shared spacer left above the workspace.
 - The selected-Agent chat top bar is responsive against its actual derived
   detail width: at each recompute the full natural top-bar row with the
   current key text is measured against that width (the body minus the actual
@@ -142,7 +146,12 @@ its code.
 ## Dashboard sections
 
 - Exactly one selected-Agent page shows at a time: Conversation (default) or
-  Presets, via the two-button nav row.
+  Presets, via the two-button nav row. The nav is content-driven: the two
+  buttons lead at the leading edge at their own width and a positive-stretch
+  spacer absorbs the remaining width, so they never become two equal full-pane
+  slabs. The duplicate `lingtai_selected_agent_conversation_heading` is
+  retained only as a hidden object/implementation anchor, so the Conversation
+  nav item owns the user affordance.
 - Presets (`read_agent_preset_summary`): reads the kernel-published
   `system/manifest.resolved.json` v1 envelope and shows only the minimal
   Provider, Model, Default, and ordered Allowed refs, with `Resolved`/`Not
