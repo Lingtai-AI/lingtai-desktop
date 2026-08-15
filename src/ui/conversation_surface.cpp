@@ -50,11 +50,23 @@ QTextBlockFormat message_block_format(bool outgoing, int viewport_width) {
     return format;
 }
 
+QTextCharFormat sender_format(bool outgoing) {
+    auto format = QTextCharFormat();
+    format.setForeground(outgoing ? st::historyTextOutFg
+                                  : st::historyTextInFg);
+    auto font = format.font();
+    font.setPixelSize(15);
+    font.setWeight(QFont::DemiBold);
+    format.setFont(font);
+    return format;
+}
+
 QTextCharFormat secondary_format() {
     auto format = QTextCharFormat();
     format.setForeground(st::msgServiceFg);
     auto font = format.font();
-    font.setPointSize(10);
+    font.setPixelSize(13);
+    font.setWeight(QFont::Normal);
     format.setFont(font);
     return format;
 }
@@ -64,7 +76,7 @@ QTextCharFormat subject_format(bool outgoing) {
     format.setForeground(outgoing ? st::historyTextOutFg
                                   : st::historyTextInFg);
     auto font = format.font();
-    font.setPointSize(11);
+    font.setPixelSize(13);
     font.setWeight(QFont::Medium);
     format.setFont(font);
     return format;
@@ -75,7 +87,8 @@ QTextCharFormat body_format(bool outgoing) {
     format.setForeground(outgoing ? st::historyTextOutFg
                                   : st::historyTextInFg);
     auto font = format.font();
-    font.setPointSize(12);
+    font.setPixelSize(14);
+    font.setWeight(QFont::Normal);
     format.setFont(font);
     return format;
 }
@@ -161,7 +174,6 @@ void ConversationSurface::rebuild_document(
     // inside the block so the standard layout honors the block alignment and
     // the margins bound each message near 72% of the viewport width.
     const auto separator = QString(QChar::LineSeparator);
-    const auto header = secondary_format();
     const auto viewport_width = viewport()->width();
     auto first_block = true;
     for (const auto &message : messages) {
@@ -174,11 +186,13 @@ void ConversationSurface::rebuild_document(
             cursor.insertBlock(block_format);
         }
         cursor.insertText(
-            QStringLiteral("%1 · %2")
-                .arg(outgoing ? QStringLiteral("You") : them_,
-                    QString::fromStdString(message.timestamp)),
-            header);
-        cursor.insertText(separator, header);
+            outgoing ? QStringLiteral("You") : them_,
+            sender_format(outgoing));
+        cursor.insertText(
+            QStringLiteral(" · %1")
+                .arg(QString::fromStdString(message.timestamp)),
+            secondary_format());
+        cursor.insertText(separator, secondary_format());
         if (!message.subject.empty()) {
             cursor.insertText(QString::fromStdString(message.subject),
                 subject_format(outgoing));

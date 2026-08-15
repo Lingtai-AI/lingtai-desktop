@@ -84,9 +84,9 @@ Public ports (`src/ui/conversation_surface.h:26-37`):
   the data input; `them` is the caller-chosen presentation name for incoming
   rows. Replaces the document from the existing direct rows in their accepted
   order; an identical refresh is a no-op that preserves scroll, selection, and
-  focus (`conversation_surface.cpp:134-144`).
+  focus (`conversation_surface.cpp:147-157`).
 - `set_plain_state(QString text)` — one plain centered state for the
-  selection/no-route/empty cases (`conversation_surface.cpp:100-114`).
+  selection/no-route/empty cases (`conversation_surface.cpp:113-127`).
 
 View-only state (`conversation_surface.h:52-55`): the last accepted `them_`,
 `last_messages_`, `last_plain_state_`, and the quantized `message_cap_width_`
@@ -94,15 +94,16 @@ used to avoid reflowing on every pixel of a live resize. There is no document
 model here beyond what Qt's `QTextDocument` owns; blocks are rebuilt
 programmatically from the caller rows.
 
-Painting/layout (`conversation_surface.cpp:197-263`): `paintEvent` fills the
+Painting/layout (`conversation_surface.cpp:218-270`): `paintEvent` fills the
 viewport with the `st::windowBgOver` chat backdrop, paints rounded bubbles
 (`st::msgOutBg`/`st::msgInBg`, radius 8) behind message blocks, then delegates
 to `QTextEdit::paintEvent` so text keeps native scroll translation, selection,
 and copy. `resizeEvent` quantizes the viewport-bounded message width and
 reflows only when the bound meaningfully changes. `rebuild_document`
-(`conversation_surface.cpp:146-195`) writes one `QTextBlock` per message
+(`conversation_surface.cpp:159-216`) writes one `QTextBlock` per message
 (incoming left / outgoing right, capped near 72% of viewport width) with a
-header line, optional subject, and literal body.
+header line (author 15px DemiBold plus the timestamp at 13px Normal), an
+optional subject line (13px Medium), and a literal body (14px Normal).
 
 Build ownership: `CMakeLists.txt:180` compiles `src/ui/conversation_surface.cpp`
 into `lingtai_desktop_native_shell`.

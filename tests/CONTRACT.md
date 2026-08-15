@@ -113,6 +113,9 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
 - `tests/agent_roster_presentation_test.cpp` — `agent_roster_presentation`
   (links the shell + `lib_ui` + `crl_integration.cpp`; the real-Qt widget
   layer, proving the roster presentation boundary directly).
+- `tests/conversation_surface_typography_test.cpp` —
+  `conversation_surface_typography` (the dedicated widget/document typography
+  contract on the real `ConversationSurface`).
 - `tests/test_native_shell.py` — `native_shell` (process persistence and
   smoke-order via the built smoke executable).
 - `tests/test_repository_contract.py` — manual `python3 -m unittest

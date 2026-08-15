@@ -161,6 +161,13 @@ project fixture or the shell.
   (`verify_selected_agent_conversation`,
   `tests/native_shell_test.cpp:908-1015`).
 
+- `conversation_surface_typography` proves the dedicated widget/document
+  typography contract on the real `ConversationSurface` for representative
+  incoming and outgoing messages: the author/name renders as its own 15px
+  DemiBold fragment, the body as 14px Normal, and the timestamp and subject
+  as 13px Normal / 13px Medium metadata fragments, proving author >= body >
+  metadata with the exact 15/14/13 pixel values.
+
 ### Process-level smoke/persistence
 
 - `native_shell` proves the built executable's process behavior: `--smoke`

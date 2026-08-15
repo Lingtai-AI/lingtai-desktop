@@ -122,6 +122,15 @@ touches a real Agent or project, and none depends on a network or provider.
   six generic fact widgets are absent. It runs with the platform Qt plugin
   like `native_shell_behavior`.
 
+- `tests/conversation_surface_typography_test.cpp` —
+  `conversation_surface_typography` ctest. The dedicated focused widget/
+  document typography contract: it compiles `src/ui/conversation_surface.cpp`
+  plus the test (`CMakeLists.txt:493-516`), builds a real `QApplication` and
+  `ConversationSurface`, renders representative incoming and outgoing
+  messages, and proves the distinct author 15px DemiBold / body 14px Normal /
+  timestamp 13px Normal / subject 13px Medium fragments (author >= body >
+  metadata) with the exact 15/14/13 pixel values. It takes no fixture root.
+
 ### 4. Process-level smoke/persistence
 
 - `tests/test_native_shell.py` — `native_shell` ctest. Runs the built
@@ -136,8 +145,9 @@ touches a real Agent or project, and none depends on a network or provider.
 ## CMake/ctest mapping
 
 Each ctest registers one executable (or Python script) against one fixture
-path under the build directory; the test itself creates and removes its
-sandbox within that root (`CMakeLists.txt:375-486`):
+path under the build directory (or, for the fixture-less typography contract,
+no fixture); the test itself creates and removes its sandbox within that root
+(`CMakeLists.txt:375-535`):
 
 | Test file | Target / executable | ctest name | Fixture (build dir) |
 | --- | --- | --- | --- |
@@ -155,6 +165,7 @@ sandbox within that root (`CMakeLists.txt:375-486`):
 | `native_shell_destinations_test.cpp` | `lingtai_native_shell_destinations_test` | `native_shell_destinations` | — |
 | `agent_roster_presentation_test.cpp` | `lingtai_agent_roster_presentation_test` | `agent_roster_presentation` | — |
 | `native_shell_presets_test.cpp` | `lingtai_native_shell_presets_test` | `native_shell_presets` | `native-shell-presets-fixture` (CMake-created) |
+| `conversation_surface_typography_test.cpp` | `lingtai_conversation_surface_typography_test` | `conversation_surface_typography` | — (no fixture) |
 | `test_native_shell.py` | `lingtai_desktop_smoke` (built) | `native_shell` | `$<TARGET_FILE:lingtai_desktop_smoke>` |
 
 ## Fixture and data ownership
@@ -177,9 +188,9 @@ sandbox within that root (`CMakeLists.txt:375-486`):
   and does not claim nothing can leak to an arbitrary unobserved outside
   path.
 - The Qt-aware tests are not run under the domain layer: `native_shell_test`
-  needs the full `lib_ui` link edge and `test_native_shell.py` needs the
-  built smoke executable, so both are registered as their own ctests and run
-  with the platform Qt plugin.
+  and `conversation_surface_typography_test` need the `lib_ui` link edge and
+  `test_native_shell.py` needs the built smoke executable, so all are
+  registered as their own ctests and run with the platform Qt plugin.
 - Production ownership is deliberately not duplicated here: the readers,
   writers, and the C1 model are all named and owned in
   [`../src/ANATOMY.md`](../src/ANATOMY.md). This file records only the test

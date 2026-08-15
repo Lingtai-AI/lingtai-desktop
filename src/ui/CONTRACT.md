@@ -61,17 +61,17 @@ below is grounded in the widget source.
   accessible name/description — the sidebar (`agent_roster.cpp:203-206`), the
   roster/scroll/rows containers (`agent_roster.cpp:247-269`), each row
   (`agent_roster.cpp:353-358`), and the conversation surface inherits
-  `QTextEdit` accessibility (`conversation_surface.cpp:85-98`).
+  `QTextEdit` accessibility (`conversation_surface.cpp:98-111`).
 - **Selection.** Rows are checkable and the checked state is caller-driven on
   every refresh (`agent_roster.cpp:360-361`, `298-309`).
 - **Copy/selection (conversation).** The surface is `setReadOnly(true)` with
-  undo disabled (`conversation_surface.cpp:87-88`) but stays a plain
+  undo disabled (`conversation_surface.cpp:100-101`) but stays a plain
   `QTextEdit`; `paintEvent` delegates to `QTextEdit::paintEvent` so native
-  text selection and copy are preserved (`conversation_surface.cpp:245-248`).
+  text selection and copy are preserved (`conversation_surface.cpp:266-269`).
   Message text is inserted literally and never interpreted as markup
-  (`conversation_surface.cpp:187-189`).
+  (`conversation_surface.cpp:201-210`).
 - **Scroll.** An identical conversation refresh is a no-op
-  (`conversation_surface.cpp:134-144`); a changed refresh follows the bottom
+  (`conversation_surface.cpp:147-157`); a changed refresh follows the bottom
   only if the human was already there, else preserves the prior position
-  (`conversation_surface.cpp:151-153`, `192-194`). An unchanged roster refresh
+  (`conversation_surface.cpp:164-166`, `213-215`). An unchanged roster refresh
   preserves scroll by not rebuilding the row tree.

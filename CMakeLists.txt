@@ -508,3 +508,28 @@ else()
     set_tests_properties(native_shell_presets PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
+add_executable(lingtai_conversation_surface_typography_test
+    tests/conversation_surface_typography_test.cpp
+    src/ui/conversation_surface.cpp)
+init_target(lingtai_conversation_surface_typography_test)
+# The real palette globals the surface references come from the already-owned
+# lib_ui dependency; only the direct source include is added here.
+target_include_directories(lingtai_conversation_surface_typography_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(lingtai_conversation_surface_typography_test PRIVATE
+    -Wall -Wextra -Werror -pedantic
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-unused-parameter>
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-deprecated-this-capture>
+    $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-unused-parameter>)
+target_link_libraries(lingtai_conversation_surface_typography_test PRIVATE
+    desktop-app::lib_ui
+    Qt6::Widgets Qt6::Gui Qt6::Core)
+add_test(NAME conversation_surface_typography
+    COMMAND lingtai_conversation_surface_typography_test)
+if(APPLE)
+    set_tests_properties(conversation_surface_typography PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
+else()
+    set_tests_properties(conversation_surface_typography PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()

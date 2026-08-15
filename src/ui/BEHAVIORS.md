@@ -83,33 +83,34 @@ Enabled/checked/keyboard (`agent_roster.cpp:377-395`, `184-193`):
 
 - `set_plain_state(text)` is a no-op if the text already matches
   `last_plain_state_`; otherwise it clears any conversation and centers the
-  plain text (`conversation_surface.cpp:100-114`).
+  plain text (`conversation_surface.cpp:113-127`).
 - `set_conversation(them, messages)` is a no-op when `them` matches and
   `same_content` finds equal size and equal `id`/`outgoing`/`timestamp`/
-  `subject`/`text` per row (`conversation_surface.cpp:116-132`, `134-144`).
+  `subject`/`text` per row (`conversation_surface.cpp:129-145`, `147-157`).
   Otherwise the document is rebuilt, preserving scroll as below.
 
 ### Text and bubble layout
 
-`rebuild_document` (`conversation_surface.cpp:146-202`) writes one
+`rebuild_document` (`conversation_surface.cpp:159-216`) writes one
 `QTextBlock` per message in the caller's order:
 
 - Alignment left (incoming) or right (outgoing); margins bound each message to
   `max(0.72 × viewport width, 160px)`, with 12px edge and 4px/18px top/bottom
   margins (`message_block_format`, `conversation_surface.cpp:36-51`).
 - Header line `You · <timestamp>` for outgoing, `<them> · <timestamp>` for
-  incoming, styled with `st::msgServiceFg` at 10pt
-  (`conversation_surface.cpp:176-181`, `53-60`).
-- Optional subject line (11pt Medium) using `st::historyTextOutFg` /
-  `st::historyTextInFg` (`conversation_surface.cpp:182-186`, `62-71`).
-- Body (12pt) in the same out/in text colors, inserted literally — the surface
-  never interprets markup — after normalizing every paragraph delimiter
-  (CRLF/CR, LF and U+2029) to a U+2028 line separator, so a decoded newline
-  stays inside the one message block and never splits a message into extra
-  blocks/bubbles while the stored text is untouched
-  (`conversation_surface.cpp:187-196`, `73-81`).
+  incoming: the author/name is its own 15px DemiBold fragment in the out/in
+  text color, then the literal ` · <timestamp>` at 13px Normal in
+  `st::msgServiceFg` (`conversation_surface.cpp:188-195`, `53-62`, `64-72`).
+- Optional subject line at 13px Medium using `st::historyTextOutFg` /
+  `st::historyTextInFg` (`conversation_surface.cpp:196-200`, `74-83`).
+- Body at 14px Normal in the same out/in text colors, inserted literally — the
+  surface never interprets markup — after normalizing every paragraph
+  delimiter (CRLF/CR, LF and U+2029) to a U+2028 line separator, so a decoded
+  newline stays inside the one message block and never splits a message into
+  extra blocks/bubbles while the stored text is untouched
+  (`conversation_surface.cpp:210`, `85-94`).
 
-`paintEvent` (`conversation_surface.cpp:204-256`) fills the viewport with the
+`paintEvent` (`conversation_surface.cpp:218-270`) fills the viewport with the
 `st::windowBgOver` chat backdrop, then paints an 8px-radius rounded bubble
 behind each message block (`st::msgOutBg` outgoing, `st::msgInBg` incoming),
 offset by the current scroll so bubbles stay aligned with text; finally
@@ -120,7 +121,7 @@ offset by the current scroll so bubbles stay aligned with text; finally
 - Before a rebuild, the surface records whether the vertical scrollbar sat at
   its bottom; after the rebuild it snaps to the new bottom only if the human
   was already there, otherwise it clamps the prior value
-  (`conversation_surface.cpp:151-153`, `199-201`).
+  (`conversation_surface.cpp:164-166`, `213-215`).
 - `resizeEvent` reflows only when the quantized message cap
   (`int(width × 0.72 / 8) × 8`) changes; a live pixel-by-pixel resize does not
-  rebuild   (`conversation_surface.cpp:258-270`).
+  rebuild   (`conversation_surface.cpp:272-284`).
