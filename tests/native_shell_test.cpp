@@ -21,6 +21,7 @@
 #include <QtGui/QTextCursor>
 #include <QtGui/QTextDocument>
 #include <QtGui/QTextFormat>
+#include <QtGui/QTextLayout>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QDialog>
@@ -2919,6 +2920,54 @@ void verify_telegram_theme_reset(
     require(incoming.min_y >= 0 && outgoing.min_y >= 0,
         "the chat surface must render real incoming and outgoing bubble "
         "components");
+
+    const auto text_bounds = [&](const QString &prefix) {
+        auto result = QRectF();
+        for (auto block = conversation->document()->begin(); block.isValid();
+             block = block.next()) {
+            if (!block.text().startsWith(prefix)) continue;
+            const auto *layout = block.layout();
+            for (auto index = 0; index != layout->lineCount(); ++index) {
+                const auto line = layout->lineAt(index);
+                const auto line_rect = line.naturalTextRect()
+                    .translated(layout->position());
+                result = result.isNull() ? line_rect : result.united(line_rect);
+            }
+            break;
+        }
+        return result.translated(
+            -conversation->horizontalScrollBar()->value(),
+            -conversation->verticalScrollBar()->value());
+    };
+    const auto image_scale = surface_image.devicePixelRatio();
+    const auto require_contains_text = [&](const BubbleTrace &bubble,
+            const QRectF &text, const char *direction) {
+        const auto bubble_left = bubble.min_x / image_scale;
+        const auto bubble_right = (bubble.max_x + 1) / image_scale;
+        const auto bubble_top = bubble.min_y / image_scale;
+        const auto bubble_bottom = (bubble.max_y + 1) / image_scale;
+        require(!text.isNull()
+                && bubble_left <= qFloor(text.left()) - 10
+                && bubble_right >= qCeil(text.right()) + 10
+                && bubble_top <= qFloor(text.top()) - 7
+                && bubble_bottom >= qCeil(text.bottom()) + 7,
+            std::string(direction)
+                + " bubble must contain its laid-out text with Telegram's "
+                  "11x8 padding (one-pixel raster tolerance): bubble=("
+                + std::to_string(bubble_left) + ","
+                + std::to_string(bubble_top) + ")-("
+                + std::to_string(bubble_right) + ","
+                + std::to_string(bubble_bottom) + ") text=("
+                + std::to_string(text.left()) + ","
+                + std::to_string(text.top()) + ")-("
+                + std::to_string(text.right()) + ","
+                + std::to_string(text.bottom()) + ") scale="
+                + std::to_string(image_scale));
+    };
+    require_contains_text(incoming,
+        text_bounds(QStringLiteral("alpha ·")), "incoming");
+    require_contains_text(outgoing,
+        text_bounds(QStringLiteral("You ·")), "outgoing");
     require((incoming.min_x + incoming.max_x) / 2 < surface_image.width() / 2
             && (outgoing.min_x + outgoing.max_x) / 2
                 > surface_image.width() / 2,

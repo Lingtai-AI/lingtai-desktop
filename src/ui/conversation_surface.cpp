@@ -3,7 +3,6 @@
 #include "base/basic_types.h"
 #include "styles/palette.h"
 
-#include <QtGui/QAbstractTextDocumentLayout>
 #include <QtGui/QFont>
 #include <QtGui/QPainter>
 #include <QtGui/QPaintEvent>
@@ -23,14 +22,14 @@
 namespace lingtai::desktop {
 namespace {
 
-constexpr auto kDocumentMargin = 4;
+constexpr auto kDocumentMargin = 8;
 constexpr auto kMessageEdgeMargin = 12;
 constexpr auto kMessageTopMargin = 4;
-constexpr auto kMessageBottomMargin = 12;
+constexpr auto kMessageBottomMargin = 18;
 constexpr auto kMessageCapRatio = 0.72;
 constexpr auto kMinMessageWidth = 160;
-constexpr auto kBubbleHPadding = 10;
-constexpr auto kBubbleVPadding = 4;
+constexpr auto kBubbleHPadding = 11;
+constexpr auto kBubbleVPadding = 8;
 constexpr auto kBubbleRadius = 8;
 constexpr auto kMessageBlockProperty = QTextFormat::UserProperty + 1;
 
@@ -206,8 +205,6 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
 
     const auto h_offset = horizontalScrollBar()->value();
     const auto v_offset = verticalScrollBar()->value();
-    auto *layout = document()->documentLayout();
-
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setPen(Qt::NoPen);
     for (auto block = document()->begin(); block.isValid();
@@ -215,47 +212,30 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
         if (!block.blockFormat().property(kMessageBlockProperty).toBool()) {
             continue;
         }
-        const auto rect = layout->blockBoundingRect(block)
-            .translated(-h_offset, -v_offset);
-        if (!rect.intersects(QRectF(event->rect()))) {
-            continue;
-        }
-        auto widest = 0.0;
         const auto *block_layout = block.layout();
-        const auto line_count = block_layout->lineCount();
-        if (line_count == 0) {
+        auto text_bounds = QRectF();
+        for (auto i = 0; i != block_layout->lineCount(); ++i) {
+            const auto line = block_layout->lineAt(i);
+            const auto line_bounds = line.naturalTextRect()
+                .translated(block_layout->position());
+            text_bounds = text_bounds.isNull()
+                ? line_bounds
+                : text_bounds.united(line_bounds);
+        }
+        if (text_bounds.isNull()) {
             continue;
         }
-        const auto first_line = block_layout->lineAt(0);
-        const auto last_line = block_layout->lineAt(line_count - 1);
-        for (auto i = 0; i != line_count; ++i) {
-            widest = qMax(widest, block_layout->lineAt(i).naturalTextWidth());
-        }
-        if (widest <= 0.0) {
+        text_bounds.translate(-h_offset, -v_offset);
+        const auto bubble = text_bounds.adjusted(
+            -kBubbleHPadding,
+            -kBubbleVPadding,
+            kBubbleHPadding,
+            kBubbleVPadding);
+        if (!bubble.intersects(QRectF(event->rect()))) {
             continue;
         }
-        // The bubble hugs the actual text lines only, translated by the block
-        // rect top, so the block's own top/bottom margins stay outside the
-        // bubble and adjacent bubbles never touch or overlap.
-        const auto content_top = rect.top() + first_line.y();
-        const auto content_bottom = rect.top() + last_line.y()
-            + last_line.height();
         const auto outgoing = block.blockFormat().alignment()
             .testFlag(Qt::AlignRight);
-        QRectF bubble;
-        if (outgoing) {
-            bubble = QRectF(
-                rect.right() - widest - kBubbleHPadding,
-                content_top - kBubbleVPadding,
-                widest + 2 * kBubbleHPadding,
-                (content_bottom - content_top) + 2 * kBubbleVPadding);
-        } else {
-            bubble = QRectF(
-                rect.left() - kBubbleHPadding,
-                content_top - kBubbleVPadding,
-                widest + 2 * kBubbleHPadding,
-                (content_bottom - content_top) + 2 * kBubbleVPadding);
-        }
         painter.setBrush(outgoing ? st::msgOutBg : st::msgInBg);
         painter.drawRoundedRect(bubble, kBubbleRadius, kBubbleRadius);
     }
