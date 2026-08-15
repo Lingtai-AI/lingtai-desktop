@@ -2456,12 +2456,13 @@ void verify_resizable_sidebar(
 // The Commit-24 shell slice: one persistent left project/Agent list column
 // (responsive from a 260px minimum) replaces the action-only rail and the
 // nested roster route. The roster is the left column's own content (never a
-// second list inside the right content route), its rows are a fixed 62px with
-// one primary name line plus one compact secondary/state line, a plain-shadow
-// separator divides list from content, the compact project actions stay
-// reachable, selection still drives the same right detail, and an unchanged
-// projection refresh must not rebuild the row tree so selection/focus/scroll
-// survive.
+// second list inside the right content route), its rows are intrinsically
+// sized from the fixed 40px avatar plus two font lines plus stable padding
+// (never a hard min=max62 box), with one primary name line plus one compact
+// secondary/state line, a plain-shadow separator divides list from content,
+// the compact project actions stay reachable, selection still drives the same
+// right detail, and an unchanged projection refresh must not rebuild the row
+// tree so selection/focus/scroll survive.
 void verify_persistent_roster_shell(
         lingtai::desktop::NativeShell &shell,
         const fs::path &sandbox) {
@@ -2520,11 +2521,16 @@ void verify_persistent_roster_shell(
             && separator->geometry().left() <= content->geometry().left(),
         "the separator must sit between the left column and the content pane");
 
-    // Rows: a fixed 62px tall, with exactly one primary name line plus one
-    // compact secondary/state line.
+    // Rows: intrinsic height from the fixed 40px avatar plus two font lines
+    // plus stable vertical padding, with exactly one primary name line plus
+    // one compact secondary/state line.
     auto *row = agent_row(window, "alpha");
-    require(row->minimumHeight() == 62 && row->maximumHeight() == 62,
-        "Agent rows must be a fixed 62px tall");
+    require(row->minimumHeight() != row->maximumHeight(),
+        "Agent rows must not be a hard min=max62 box: their height must be "
+        "intrinsic from the avatar plus two font lines plus stable padding");
+    require(row->sizeHint().height() >= 40 + 2 * 8,
+        "the intrinsic row sizeHint must accommodate the fixed 40px avatar "
+        "disc plus the stable vertical framing");
     require(row->text().split(QLatin1Char('\n')).size() == 2,
         "each Agent row must show one primary name line plus one compact "
         "secondary/state line");
