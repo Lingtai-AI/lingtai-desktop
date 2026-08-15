@@ -935,6 +935,11 @@ NativeShell::NativeShell()
     sleep_row_layout->addWidget(sleep_button);
     top_bar_layout->addWidget(sleep_row);
     detail_layout->addWidget(top_bar);
+    // Retained once for the whole shell lifetime so the responsive fit measure
+    // in `recompute_layout` can evaluate the full natural row against the
+    // actual detail width without re-deriving these two anchors.
+    chat_top_bar_ = top_bar;
+    selected_agent_key_ = detail_key;
 
     auto *start_status = make_label(
         detail, QString(), "lingtai_selected_agent_start_status", 10);
@@ -2055,6 +2060,8 @@ void NativeShell::recompute_layout(int body_width) {
         separator_->setVisible(true);
         content_->setVisible(true);
         detail_back_button_->setVisible(false);
+        update_top_bar_fit(body_width - roster_width
+            - kRosterResizeHandleWidth - kRosterSeparatorWidth);
         return;
     }
     const auto detail_active =
@@ -2067,6 +2074,26 @@ void NativeShell::recompute_layout(int body_width) {
     separator_->setVisible(false);
     content_->setVisible(detail_active);
     detail_back_button_->setVisible(detail_active);
+    update_top_bar_fit(body_width);
+}
+
+// The one responsive chat-top-bar measure, re-entered on every recompute (and
+// so on every real resize and selection change): the actual detail/header
+// width is exactly what `recompute_layout` just derived -- in Normal mode the
+// body minus the actual chosen roster width, 8px drag handle, and 1px
+// separator; in OneColumn detail the full body width. The full natural
+// top-bar row with the current key text must fit that actual width: when the
+// secondary key was previously hidden it is temporarily included so the
+// natural sizeHint measures the complete row, and the key is then left visible
+// only when it fits, so returning to sufficient width restores it. No
+// timer/event framework or persisted state; primary controls, the presentation
+// name, fonts, and object names are never touched.
+void NativeShell::update_top_bar_fit(int detail_width) {
+    if (!chat_top_bar_ || !selected_agent_key_) return;
+    const auto was_visible = selected_agent_key_->isVisible();
+    if (!was_visible) selected_agent_key_->setVisible(true);
+    const auto fits = chat_top_bar_->sizeHint().width() <= detail_width;
+    selected_agent_key_->setVisible(fits);
 }
 
 // Telegram's OneColumn history-back path: the narrow detail returns to the

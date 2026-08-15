@@ -3054,15 +3054,134 @@ void verify_telegram_theme_reset(
     require(!cleanup_error, "theme-reset fixtures must be removed");
 }
 
+// The R4 RED: the selected-Agent chat top bar must drop its secondary
+// `lingtai_selected_agent_key` metadata before any primary control when the
+// actual header width is constrained. A wide actual header shows the
+// presentation name, the secondary key, and the applicable primary controls
+// (Start for a stale target plus always-present Request sleep; Back only in
+// the narrow OneColumn detail) together without overlap; a constrained
+// OneColumn actual detail header keeps the presentation name and every
+// primary control visible while the secondary key hides first; returning to
+// wide restores the key. Current production keeps `lingtai_selected_agent_key`
+// visible at the constrained width, so this journey must fail exactly that
+// visibility, never fonts, icon substitution, or a hidden primary control.
+void verify_responsive_header_priority(
+        lingtai::desktop::NativeShell &shell,
+        const fs::path &sandbox) {
+    auto &window = shell.window();
+    auto *top_bar = required_child<QWidget>(window, "lingtai_chat_top_bar");
+    auto *presentation_name = required_child<QLabel>(
+        window, "lingtai_selected_agent_presentation_name");
+    auto *detail_key = required_child<QLabel>(
+        window, "lingtai_selected_agent_key");
+    auto *back_button = required_child<QPushButton>(
+        window, "lingtai_agent_detail_back");
+    auto *start_button = required_child<QPushButton>(
+        window, "lingtai_selected_agent_start_agent");
+    auto *sleep_button = required_child<QPushButton>(
+        window, "lingtai_selected_agent_request_sleep");
+
+    // An eligible non-human stale Agent whose deliberately long directory key
+    // is also its presentation identity, so the identity column genuinely
+    // occupies the header and both primary actions stay meaningful.
+    const auto stale_key =
+        "stale-research-agent-with-a-deliberately-long-directory-key";
+    const auto project = sandbox / "project";
+    write_file(project / ".lingtai/human/.agent.json",
+        R"({"agent_id":"20260101-000000-h001","agent_name":"Ted",)"
+        R"("address":"human","state":"active"})");
+    const auto stale_dir = project / ".lingtai" / stale_key;
+    write_file(stale_dir / ".agent.json", R"({"admin":{},"state":"idle"})");
+    write_file(stale_dir / ".agent.heartbeat", "0");
+    const auto fixture_before = tree_snapshot(project);
+    const auto outcome = shell.open_project(project, std::nullopt);
+    require(outcome.disposition == ProjectOpenDisposition::opened,
+        "the responsive-header fixture project must open");
+    require(tree_snapshot(project) == fixture_before,
+        "opening the responsive-header fixture must remain read-only");
+
+    // Public widget geometry in one common ancestor coordinate system.
+    const auto header_rect = [&](QWidget *widget) {
+        return QRect(widget->mapTo(top_bar, QPoint(0, 0)), widget->size());
+    };
+    const auto require_disjoint = [&](std::vector<QWidget *> widgets) {
+        for (auto index = std::size_t{0}; index != widgets.size(); ++index) {
+            require(!widgets[index]->size().isEmpty(),
+                "every visible header widget must own real geometry");
+            for (auto other = index + 1; other != widgets.size(); ++other) {
+                require(!header_rect(widgets[index])
+                            .intersects(header_rect(widgets[other])),
+                    "visible header widgets must never overlap");
+            }
+        }
+    };
+
+    // Wide actual header: presentation name and secondary key beside the
+    // applicable primary controls, all visible without overlap.
+    window.resize(1200, 800);
+    QCoreApplication::processEvents();
+    click_agent(window, stale_key);
+    require(shell.selection_state().selected_agent_directory_key()
+            == std::optional<fs::path>(stale_key),
+        "the stale target must be selectable");
+    QCoreApplication::processEvents();
+    require(presentation_name->isVisible() && detail_key->isVisible(),
+        "a wide actual header must show the presentation name and the "
+        "secondary key together");
+    require(start_button->isVisible() && start_button->isEnabled(),
+        "the stale target must show the applicable Start primary control");
+    require(sleep_button->isVisible(),
+        "Request sleep must remain visible in the wide header");
+    require(!back_button->isVisible(),
+        "Back must stay hidden in wide two-column mode");
+    require_disjoint(
+        {presentation_name, detail_key, start_button, sleep_button});
+
+    // Constrained OneColumn actual detail header: the presentation name and
+    // every primary control stay visible while the secondary key hides first.
+    window.resize(380, 480);
+    QCoreApplication::processEvents();
+    require(presentation_name->isVisible(),
+        "a constrained actual header must keep the presentation name");
+    require(back_button->isVisible(),
+        "a constrained OneColumn actual detail header must keep Back");
+    require(start_button->isVisible() && start_button->isEnabled(),
+        "a constrained actual header must keep the Start primary control");
+    require(sleep_button->isVisible(),
+        "a constrained actual header must keep Request sleep");
+    require(!detail_key->isVisible(),
+        "a constrained actual header must hide the secondary key first, "
+        "before any primary control or the presentation name");
+
+    // Returning to wide restores the secondary key beside the presentation
+    // name and the primary controls.
+    window.resize(1200, 800);
+    QCoreApplication::processEvents();
+    require(presentation_name->isVisible() && detail_key->isVisible(),
+        "returning to wide must restore the secondary key");
+    require(start_button->isVisible() && sleep_button->isVisible()
+            && !back_button->isVisible(),
+        "returning to wide must restore the same wide primary control set");
+    require_disjoint(
+        {presentation_name, detail_key, start_button, sleep_button});
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "responsive-header fixtures must be removed");
+}
+
 int main(int argc, char **argv) {
-    // Test-local execution mode: the exact binary with a fresh fixture root
-    // and this literal flag runs only the R1 resizable-sidebar journey, so the
-    // warm RED/GREEN never has to pass the unrelated accepted-base debt.
+    // Test-local execution modes: the exact binary with a fresh fixture root
+    // and one literal flag runs only the R1 resizable-sidebar or R4
+    // responsive-header journey, so the warm RED/GREEN never has to pass the
+    // unrelated accepted-base debt.
     const auto responsive_sidebar_only = argc == 3
         && std::string_view(argv[2]) == "--responsive-sidebar-only";
-    if (argc != 2 && !responsive_sidebar_only) {
+    const auto responsive_header_only = argc == 3
+        && std::string_view(argv[2]) == "--responsive-header-only";
+    if (argc != 2 && !responsive_sidebar_only && !responsive_header_only) {
         std::cerr << "usage: native_shell_test PROJECT_ROOT "
-                     "[--responsive-sidebar-only]\n";
+                     "[--responsive-sidebar-only|--responsive-header-only]\n";
         return 2;
     }
     try {
@@ -3074,6 +3193,14 @@ int main(int argc, char **argv) {
             shell.show_offscreen();
             QCoreApplication::processEvents();
             verify_resizable_sidebar(shell, project_root);
+            std::cout << "native shell behavior: OK\n";
+            return 0;
+        }
+        if (responsive_header_only) {
+            lingtai::desktop::NativeShell shell;
+            shell.show_offscreen();
+            QCoreApplication::processEvents();
+            verify_responsive_header_priority(shell, project_root);
             std::cout << "native shell behavior: OK\n";
             return 0;
         }

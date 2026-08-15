@@ -93,6 +93,14 @@ its code.
   (`recompute_layout`), and the handle is hidden. Back is the narrow
   history-back path: it drops the selection and returns to the roster,
   unchanged.
+- The selected-Agent chat top bar is responsive against its actual derived
+  detail width: at each recompute the full natural top-bar row with the
+  current key text is measured against that width (the body minus the actual
+  chosen roster width, 8px handle, and 1px separator in Normal mode; the body
+  width in OneColumn detail), and the secondary `lingtai_selected_agent_key`
+  label hides first when it does not fit, returning as soon as sufficient
+  width restores the fit. The presentation name, Back/Start/Request-sleep
+  controls, fonts, and object names are never altered.
 
 ## New Project (TUI functional boundary)
 

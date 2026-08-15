@@ -29,6 +29,7 @@
 #include <vector>
 
 class QDialog;
+class QLabel;
 class QPushButton;
 class QTimer;
 class QWidget;
@@ -135,6 +136,12 @@ private:
     // Telegram's OneColumn history-back path: the narrow detail returns to
     // the roster and drops the selection. No-op outside the narrow detail.
     void handle_detail_back();
+    // The one responsive chat-top-bar fit, owned by the same recompute width
+    // owner: hides the secondary key label first when the full natural top-bar
+    // row with the current key text does not fit the actual detail width just
+    // derived by `recompute_layout`, restoring it as soon as it fits again.
+    // Primary controls, the presentation name, and fonts are never touched.
+    void update_top_bar_fit(int detail_width);
     // Switches the selected-Agent detail to exactly one page: the chat
     // (conversation) by default, or the one retained read-only source
     // (Presets), so only one content surface dominates at a time.
@@ -184,6 +191,12 @@ private:
     // The one compact palette-owned Back control in the detail header, visible
     // only in Telegram's narrow OneColumn detail view.
     QPushButton *detail_back_button_ = nullptr;
+    // Stable pointers to the selected-Agent chat top bar and its secondary key
+    // label, retained so the one responsive fit measure in `recompute_layout`
+    // can evaluate the full natural row against the actual detail width and
+    // hide/restore only the secondary key.
+    QWidget *chat_top_bar_ = nullptr;
+    QLabel *selected_agent_key_ = nullptr;
     Ui::RpWidget *empty_route_ = nullptr;
     Ui::RpWidget *project_route_ = nullptr;
     Ui::RpWidget *open_error_surface_ = nullptr;
