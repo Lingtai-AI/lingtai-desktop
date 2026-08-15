@@ -1,0 +1,175 @@
+# `src/` anatomy
+
+`src/` is the Desktop's owned C++ surface, deliberately flat and deliberately
+small: most source pairs are their own single-owner library target, with three
+exceptions — `main.cpp` and `crl_integration.cpp` live only in the smoke
+executable, and `native_shell.cpp`, `project_bootstrap.cpp`, and the two
+`ui/` widgets compile only into the shell library. The folder splits
+into two kinds of code — **entry/composition/presentation** (the persistent
+shell, its dialog, its widgets) and **domain readers/adapters** (pure models
+and one-leaf-per-walk filesystem access). The split is enforced by CMake link
+edges, not by convention: the readers link only what they need, and the shell
+is the only owner that links them all together. See the repository map
+[`../ANATOMY.md`](../ANATOMY.md) for the top-level build graph and the
+`tests/` contracts; this file descends into the `src/` folder itself.
+
+## Components
+
+Entry point and composition root:
+
+- `main.cpp` — `main()`: constructs one `NativeShell`, installs the two
+  injectable dependencies application composition owns (the Desktop fallback
+  interpreter and the configured TUI executable), wires the native directory
+  picker, and runs the `--smoke` / `--offscreen` paths. Sole owner of the
+  `lingtai-tui` PATH lookup and the `$HOME/.lingtai-tui/runtime/venv/bin/python`
+  fallback (`main.cpp:13`).
+- `native_shell.{h,cpp}` — the C5 composition owner: owns one `Ui::RpWindow`,
+  the roster column, the content pane, the New Project dialog, the composer,
+  the one-second refresh timer, and the two click-armed pending observations.
+  Public seams are the two setters (`set_tui_executable`,
+  `set_agent_start_fallback_python`), `open_project`, and the read-only
+  `window()` / `selection_state()` accessors; `smoke_ready()` is real product
+  readiness used only by `main.cpp`'s `--smoke` path (`native_shell.h:103`).
+- `crl_integration.cpp` — the owned parent `crl` update producer: exactly one
+  `crl::on_main_update_requests()` returning `rpl::never<>()` (no update
+  source in the bounded smoke).
+
+Domain models (pure, Qt-light state/derivation owners):
+
+- `project_attachment.{h,cpp}` — Qt-independent project-root containment
+  seam: `attach_project` canonicalizes a selected directory and
+  `ProjectAttachment::resolve` verifies component-wise containment of a
+  relative path.
+- `workspace_selection.{h,cpp}` — C1 model: the sole owner of the optional
+  accepted active project and optional selected Agent directory key, and the
+  sole same-root/root-switch transition owner.
+- `posix_descriptor_primitives.{h,cpp}` — `posix_internal` seam: move-only
+  descriptor/directory-stream ownership, shared read flags, `safe_leaf`, and
+  one-leaf-at-a-time no-follow `openat`-based opens. Internal; links nothing;
+  no domain policy.
+
+Domain readers/projections (stateless, read-only, one source each):
+
+- `agent_projection.{h,cpp}` — `project_agents`: one composite scan of the
+  canonical root's `.lingtai` immediate children; manifest identity/role,
+  heartbeat presence, and optional `.status.json` from one wall-clock sample.
+- `direct_conversation_route.{h,cpp}` — `resolve_direct_conversation_route`:
+  pure route derivation from an already-produced snapshot; performs no
+  filesystem access.
+- `direct_conversation_history.{h,cpp}` — `read_direct_conversation`: reads
+  the human's own `mailbox` `inbox`/`sent`/`outbox` `message.json` rows.
+- `agent_activity.{h,cpp}` — `read_agent_activity`: bounded suffix read of
+  the selected Agent's `logs/events.jsonl`, projecting the public
+  diary/tool_call/tool_result allowlist.
+- `agent_task_card.{h,cpp}` — `read_agent_task_card`: reads
+  `taskcard/status` and, only when exactly `active`, `taskcard/taskcard.md`.
+- `agent_preset_summary.{h,cpp}` — `read_agent_preset_summary`: reads the
+  kernel-published `system/manifest.resolved.json` v1 envelope plus an
+  `init.json` mtime staleness comparison.
+
+Direct-operation/side-effect owners (the only writers/launchers):
+
+- `direct_mail_publisher.{h,cpp}` — `send_direct_mail`: exclusively creates
+  one human `outbox/<id>` leaf and writes a temp-then-renamed `message.json`.
+- `agent_sleep.{h,cpp}` — `request_agent_sleep`: creates/truncates one
+  `.sleep` marker; plus the best-effort `sleep_received` baseline/observe pair.
+- `agent_launch.{h,cpp}` — `start_agent`: one detached, shell-free
+  `<python> -m lingtai run <dir>` start with `logs/agent.log` redirection.
+- `project_bootstrap.{h,cpp}` — `ProjectBootstrapRunner`: async, shell-free
+  owner of the two headless TUI calls `<exe> presets` and
+  `<exe> spawn <dir> --preset <name>` with exact separate argv.
+
+Presentation widgets under `src/ui/` (their public seams are
+`ui/agent_roster.h` and `ui/conversation_surface.h`; widget internals route
+to the forthcoming sibling [`ui/ANATOMY.md`](ui/ANATOMY.md), while this file
+keeps the parent summary):
+
+- `ui/agent_roster.{h,cpp}` — `AgentRoster`: the persistent left list column
+  (project identity header, Open/New Project actions, scrollable 62px rows);
+  rebuilds its row tree only when the visible model changes.
+- `ui/conversation_surface.{h,cpp}` — `ConversationSurface`: a read-only
+  `QTextEdit` that renders the direct-conversation rows as plain-text
+  blocks with palette-backed bubbles.
+
+## Connections
+
+- `main.cpp` → `NativeShell`: composes it, sets the two injectables, shows it;
+  in smoke mode consumes `smoke_ready()` and emits the ordered markers.
+- `NativeShell` → readers/owners: the shell is the sole caller of
+  `project_agents`, `resolve_direct_conversation_route`,
+  `read_direct_conversation`, `send_direct_mail`, `read_agent_activity`,
+  `read_agent_task_card`, `read_agent_preset_summary`,
+  `request_agent_sleep` + the baseline/observe pair, `start_agent`, and the
+  `ProjectBootstrapRunner` calls. The click handlers rerun `project_agents`
+  once at the click boundary and update the sole `agents_` snapshot.
+- `NativeShell` → `WorkspaceSelectionState`: the shell proposes typed
+  transitions (`activate_project`, `select_agent`,
+  `clear_agent_selection`) and re-derives every visible route from the model;
+  the model performs no reads.
+- Readers → `posix_internal`: `agent_projection`, `direct_conversation_history`,
+  `direct_mail_publisher`, `agent_activity`, `agent_task_card`,
+  `agent_preset_summary`, and `agent_sleep` all consume the shared
+  descriptor primitives as a private dependency. `project_attachment` and
+  `workspace_selection` do not (pure `std::filesystem`/state).
+- CMake link edges are the structural enforcement: `lingtai_desktop_direct_route`
+  links only `lingtai_desktop_core` (a second discovery read is structurally
+  impossible), and `lingtai_desktop_agent_launch` links only
+  `lingtai_desktop_core` + `Qt6::Core` (no reader). The smoke executable links
+  `lingtai_desktop_native_shell` + `desktop-app::lib_ui`.
+
+## Composition
+
+Owned library targets (`CMakeLists.txt`) and their source membership:
+
+- `lingtai_desktop_core` — `project_attachment.cpp`, `workspace_selection.cpp`.
+- `lingtai_desktop_posix_primitives` — `posix_descriptor_primitives.cpp`.
+- `lingtai_desktop_agent_projection` — `agent_projection.cpp`.
+- `lingtai_desktop_direct_route` — `direct_conversation_route.cpp`.
+- `lingtai_desktop_conversation` — `direct_conversation_history.cpp`.
+- `lingtai_desktop_mail_publisher` — `direct_mail_publisher.cpp`.
+- `lingtai_desktop_agent_activity` — `agent_activity.cpp`.
+- `lingtai_desktop_agent_task_card` — `agent_task_card.cpp`.
+- `lingtai_desktop_agent_preset_summary` — `agent_preset_summary.cpp`.
+- `lingtai_desktop_agent_sleep` — `agent_sleep.cpp`.
+- `lingtai_desktop_agent_launch` — `agent_launch.cpp`.
+- `lingtai_desktop_native_shell` — `native_shell.cpp`, `project_bootstrap.cpp`,
+  `ui/agent_roster.cpp`, `ui/conversation_surface.cpp`.
+- `lingtai_desktop_smoke` (executable) — `main.cpp`, `crl_integration.cpp`.
+
+`lingtai_desktop_native_shell` links `desktop-app::lib_ui` privately, links
+`lingtai_desktop_core` publicly, and links every reader/owner library
+privately. The two `ui/` widgets are compiled only into the shell library;
+they are the shell's presentation layer and own no domain reads or writes.
+
+## State
+
+- `WorkspaceSelectionState` (C1) holds the optional accepted `ProjectAttachment`
+  and the optional selected Agent directory key. It is the only in-process
+  persistent model; a fresh open preserves selection only for the same
+  canonical root (`workspace_selection.cpp:20`).
+- `NativeShell` holds one `agents_` snapshot (the sole roster owner), the two
+  click-armed pending observations (`SleepObservation` at most 3 s,
+  `StartObservation` at most 10 s), and one same-target
+  `task_card_last_valid_` view state. All three are discarded on project open
+  or selection change and are never persisted.
+- No reader or owner keeps durable cursors or ledgers; every read is one
+  independent stateless observation. Owned boundaries: the direct local leaf
+  writers (`send_direct_mail`, `request_agent_sleep`) write only their own
+  leaf; `start_agent` owns the Agent's log plus the detached launch; and
+  `ProjectBootstrapRunner` delegates the entire scaffold/config boundary to
+  the TUI headless surface.
+
+## Notes
+
+- `main.cpp` deliberately performs no `.lingtai` or Agent writes: its only
+  concrete choices are the fallback interpreter, the configured TUI
+  executable, and the open-project directory picker.
+- The `posix_internal` seam is intentionally not a filesystem framework: it
+  owns mechanics only (ownership, flags, one-leaf validation), and every
+  bound, parser, candidate choice, and error mapping stays in the owning
+  reader.
+- `NativeShell` installs three process-lifetime adapters before any vendored
+  widget is constructed (`base::Integration`, `Ui::Integration`, and the
+  animations manager) and starts the palette before the window is built
+  (`native_shell.cpp:514`). This is glue for the pinned toolkit, not product
+  logic.
