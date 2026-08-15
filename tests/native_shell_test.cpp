@@ -27,6 +27,7 @@
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QDialog>
+#include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLayout>
 #include <QtWidgets/QLineEdit>
@@ -35,6 +36,7 @@
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QScrollBar>
+#include <QtWidgets/QSpacerItem>
 #include <QtWidgets/QTextEdit>
 
 #include <algorithm>
@@ -3164,6 +3166,46 @@ void verify_responsive_header_priority(
         "returning to wide must restore the same wide primary control set");
     require_disjoint(
         {presentation_name, detail_key, start_button, sleep_button});
+
+    // Wide selected-Agent workspace hierarchy: the content surface, the
+    // active project route, and the Agent pages nav are the durable
+    // pre-production contract for the modern workspace.
+    auto *project_route = required_child<QWidget>(
+        window, "lingtai_project_route");
+    auto *agent_pages_nav = required_child<QWidget>(
+        window, "lingtai_agent_pages_nav");
+    auto *conversation_nav = required_child<QWidget>(
+        window, "lingtai_agent_page_nav_conversation");
+    auto *presets_nav = required_child<QWidget>(
+        window, "lingtai_agent_page_nav_presets");
+    auto *conversation_heading = required_child<QWidget>(
+        window, "lingtai_selected_agent_conversation_heading");
+
+    require(!conversation_heading->isVisible(),
+        "the Agent detail page must show exactly one Conversation "
+        "affordance, hiding the duplicate selected-Agent heading");
+    require(conversation_nav->isVisible(),
+        "the Conversation page nav must remain the visible affordance");
+    require(project_route->geometry().top() == 0,
+        "the active project route must begin at the content origin so "
+        "hidden empty-route branding cannot leave a shared spacer above "
+        "the workspace");
+
+    auto *pages_nav_layout = qobject_cast<QHBoxLayout *>(
+        agent_pages_nav->layout());
+    require(pages_nav_layout != nullptr,
+        "the Agent pages nav must own a horizontal layout");
+    require(pages_nav_layout->count() >= 3,
+        "the Agent pages nav must hold the two buttons and trailing room");
+    require(pages_nav_layout->itemAt(0)->widget() == conversation_nav
+            && pages_nav_layout->itemAt(1)->widget() == presets_nav,
+        "the two page buttons must lead the Agent pages nav");
+    require(pages_nav_layout->stretch(0) == 0
+            && pages_nav_layout->stretch(1) == 0,
+        "the two page buttons must not stretch");
+    auto *trailing_room = pages_nav_layout->itemAt(2)->spacerItem();
+    require(trailing_room != nullptr && pages_nav_layout->stretch(2) > 0,
+        "the Agent pages nav must trail a positive-stretch spacer");
 
     std::error_code cleanup_error;
     fs::remove_all(sandbox, cleanup_error);
