@@ -1014,8 +1014,8 @@ NativeShell::NativeShell()
     detail_layout->addStretch();
 
     // The source-facts labels below the page host are read-only detail
-    // surfaces, not chat content: they stay present as anchors but are only
-    // revealed with the Presets page, so the chat-first surface stays clean.
+    // surfaces, not chat content: they stay present as anchors but are never
+    // revealed on the Presets page, so the chat-first surface stays clean.
     for (const auto *facts_name : {
             "lingtai_selected_agent_manifest_identity",
             "lingtai_selected_agent_manifest_llm",
@@ -1810,13 +1810,13 @@ void NativeShell::reset_composer() {
     }
 }
 
-// Shows the selected Agent's own kernel-published resolved preset policy
-// and active effective configuration: only `system/manifest.resolved.json`.
-// It is a distinct source and surface from the mailbox conversation above,
-// refreshed on the same explicit open/selection paths plus the one-second
-// timer. Every observation is shown exactly as read, so an absent/stale/
-// unavailable current observation never keeps a prior target's projection
-// visible.
+// Shows the selected Agent's own kernel-published resolved preset policy:
+// only the minimal Provider, Model, Default and ordered Allowed refs from
+// `system/manifest.resolved.json`. It is a distinct source and surface from
+// the mailbox conversation above, refreshed on the same explicit
+// open/selection paths plus the one-second timer. Every observation is shown
+// exactly as read, so an absent/stale/unavailable current observation never
+// keeps a prior target's projection visible.
 void NativeShell::render_agent_preset_summary() {
     auto *surface = window_->findChild<QPlainTextEdit *>(
         "lingtai_selected_agent_preset_summary");
@@ -1854,31 +1854,14 @@ void NativeShell::render_agent_preset_summary() {
     }
 
     auto lines = QStringList();
-    lines << QStringLiteral("Active:  %1").arg(value_text(summary.active_ref));
+    lines << QStringLiteral("Provider: %1")
+        .arg(value_text(summary.effective.provider));
+    lines << QStringLiteral("Model: %1").arg(value_text(summary.effective.model));
     lines << QStringLiteral("Default: %1").arg(value_text(summary.default_ref));
     lines << QStringLiteral("Allowed:");
     for (const auto &ref : summary.allowed) {
-        auto badges = QStringList();
-        if (ref.is_active) badges << QStringLiteral("Active");
-        if (ref.is_default) badges << QStringLiteral("Default");
-        lines << (badges.isEmpty()
-            ? QStringLiteral("  • %1").arg(QString::fromStdString(ref.ref))
-            : QStringLiteral("  • [%1] %2")
-                  .arg(badges.join(QStringLiteral(", ")),
-                      QString::fromStdString(ref.ref)));
+        lines << QStringLiteral("  • %1").arg(QString::fromStdString(ref.ref));
     }
-    lines << QString();
-    lines << QStringLiteral("Active effective");
-    lines << QStringLiteral("  Provider: %1")
-        .arg(value_text(summary.effective.provider));
-    lines << QStringLiteral("  Model: %1").arg(value_text(summary.effective.model));
-    lines << QStringLiteral("  Context limit: %1")
-        .arg(value_text(summary.effective.context_limit));
-    lines << QStringLiteral("  Capabilities: %1")
-        .arg(joined_names(summary.effective.capability_names));
-    lines << QString();
-    lines << QStringLiteral("Source: kernel · generated %1")
-        .arg(value_text(summary.generated_at));
 
     show(lines.join(QStringLiteral("\n")),
         summary.source == AgentPresetSummarySource::stale
@@ -2016,7 +1999,7 @@ void NativeShell::handle_detail_back() {
 // when its page is selected, so only one content surface dominates at a time.
 // The secondary pages and the read-only source-facts labels are direct layout
 // children (their object/accessibility anchors never move); switching only
-// flips visibility.
+// flips the page visibility, and the source-facts labels stay hidden.
 void NativeShell::show_detail_page(AgentDetailPage page) {
     auto *conversation_heading = window_->findChild<QLabel *>(
         "lingtai_selected_agent_conversation_heading");
@@ -2040,18 +2023,6 @@ void NativeShell::show_detail_page(AgentDetailPage page) {
     composer_status->setVisible(on_conversation);
     conversation_state->setVisible(on_conversation);
     pages_host->setVisible(!on_conversation);
-    const auto facts_visible = page == AgentDetailPage::presets;
-    for (const auto *name : {
-            "lingtai_selected_agent_manifest_identity",
-            "lingtai_selected_agent_manifest_llm",
-            "lingtai_selected_agent_manifest_capabilities",
-            "lingtai_selected_agent_status_activity",
-            "lingtai_selected_agent_status_context",
-            "lingtai_selected_agent_facts" }) {
-        if (auto *label = window_->findChild<QLabel *>(name)) {
-            label->setVisible(facts_visible);
-        }
-    }
     for (auto index = std::size_t{0}; index != secondary_pages_.size();
             ++index) {
         secondary_pages_[index]->setVisible(

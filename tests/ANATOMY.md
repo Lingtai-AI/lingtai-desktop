@@ -112,6 +112,15 @@ touches a real Agent or project, and none depends on a network or provider.
   projection member but never a roster row. On macOS it runs with
   `QT_QPA_PLATFORM=cocoa`, elsewhere with `offscreen`
   (`CMakeLists.txt:480-486`).
+- `tests/native_shell_presets_test.cpp` — `native_shell_presets` ctest. The
+  one dedicated Repair4 Presets presentation contract: it links the same
+  shell + `desktop-app::lib_ui` + `src/crl_integration.cpp`
+  (`CMakeLists.txt:466-489`), constructs a fresh real `QApplication` and
+  `NativeShell`, and proves that the selected Agent's Resolved Presets page
+  shows exactly the minimal Provider/Model/Default/Allowed text, and that the
+  removed active-ref/badge/context/capability/source-provenance text and the
+  six generic fact widgets are absent. It runs with the platform Qt plugin
+  like `native_shell_behavior`.
 
 ### 4. Process-level smoke/persistence
 
@@ -145,6 +154,7 @@ sandbox within that root (`CMakeLists.txt:375-486`):
 | `native_shell_test.cpp` | `lingtai_native_shell_test` | `native_shell_behavior` | `native-shell-no-write-fixture` (CMake-created) |
 | `native_shell_destinations_test.cpp` | `lingtai_native_shell_destinations_test` | `native_shell_destinations` | — |
 | `agent_roster_presentation_test.cpp` | `lingtai_agent_roster_presentation_test` | `agent_roster_presentation` | — |
+| `native_shell_presets_test.cpp` | `lingtai_native_shell_presets_test` | `native_shell_presets` | `native-shell-presets-fixture` (CMake-created) |
 | `test_native_shell.py` | `lingtai_desktop_smoke` (built) | `native_shell` | `$<TARGET_FILE:lingtai_desktop_smoke>` |
 
 ## Fixture and data ownership

@@ -472,6 +472,15 @@ target_compile_options(lingtai_agent_roster_presentation_test PRIVATE
     $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-unused-parameter>
     $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-deprecated-this-capture>
     $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-unused-parameter>)
+add_executable(lingtai_native_shell_presets_test
+    tests/native_shell_presets_test.cpp
+    src/crl_integration.cpp)
+init_target(lingtai_native_shell_presets_test)
+target_compile_options(lingtai_native_shell_presets_test PRIVATE
+    -Wall -Wextra -Werror -pedantic
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-unused-parameter>
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-deprecated-this-capture>
+    $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-unused-parameter>)
 target_link_libraries(lingtai_agent_roster_presentation_test PRIVATE
     lingtai_desktop_native_shell
     desktop-app::lib_ui)
@@ -482,5 +491,20 @@ if(APPLE)
         ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
 else()
     set_tests_properties(agent_roster_presentation PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+target_link_libraries(lingtai_native_shell_presets_test PRIVATE
+    lingtai_desktop_native_shell
+    desktop-app::lib_ui)
+file(MAKE_DIRECTORY
+    "${CMAKE_CURRENT_BINARY_DIR}/native-shell-presets-fixture")
+add_test(NAME native_shell_presets
+    COMMAND lingtai_native_shell_presets_test
+        "${CMAKE_CURRENT_BINARY_DIR}/native-shell-presets-fixture")
+if(APPLE)
+    set_tests_properties(native_shell_presets PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
+else()
+    set_tests_properties(native_shell_presets PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()

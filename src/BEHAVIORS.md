@@ -129,10 +129,10 @@ its code.
 - Exactly one selected-Agent page shows at a time: Conversation (default) or
   Presets, via the two-button nav row.
 - Presets (`read_agent_preset_summary`): reads the kernel-published
-  `system/manifest.resolved.json` v1 envelope and projects active/default/
-  allowed refs plus the active effective LLM/context/capabilities, with
-  `Resolved`/`Not yet published`/`Stale`/`Unavailable` state. Every
-  observation is shown exactly as read (no last-valid preservation).
+  `system/manifest.resolved.json` v1 envelope and shows only the minimal
+  Provider, Model, Default, and ordered Allowed refs, with `Resolved`/`Not
+  yet published`/`Stale`/`Unavailable` state. Every observation is shown
+  exactly as read (no last-valid preservation).
 
 ## Request sleep
 

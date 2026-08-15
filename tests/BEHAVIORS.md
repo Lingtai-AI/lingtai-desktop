@@ -146,6 +146,12 @@ project fixture or the shell.
   Conversation + Presets, and the low-level
   `lingtai_selected_agent_status_activity` fact label stays present with its
   stable identity (`verify_removed_activity_and_task_card_destinations`).
+- The dedicated `native_shell_presets` test proves the simplified Presets
+  presentation: a selected Agent's Resolved Presets page renders exactly the
+  minimal Provider/Model/Default/Allowed text with ordered refs, the removed
+  active-ref/badge/context/capability/source-provenance text is absent, and
+  the six generic fact widgets stay hidden on that page
+  (`native_shell_presets_test.cpp`).
 - In the selected-Agent conversation, one incoming mail fixture carries a real
   decoded JSON newline (U+000A) in its body; the one incoming multiline mail
   plus the one outgoing mail still occupy exactly two aligned message
