@@ -68,7 +68,10 @@ QPushButton *agent_row(QWidget &widget, std::string_view key) {
 }
 
 constexpr double kInkDistance = 48.0;
-constexpr double kSecondaryScaleRatio = 0.90;
+constexpr double kHierarchyScaleRatio = 1.10;
+constexpr double kSecondaryMaturityRatio = 0.85;
+constexpr double kSelectedNeutralMajority = 0.5;
+constexpr double kAccentBoundedFraction = 1.0 / 3.0;
 constexpr double kAvatarDiameter = 40.0;
 constexpr double kRowVerticalFrame = 8.0;
 constexpr double kRowHorizontalFrame = 10.0;
@@ -167,7 +170,7 @@ int leading_avatar_fill(const QImage &image, double dpr,
     return best;
 }
 
-void verify_secondary_roster_text_matches_primary_scale() {
+void verify_modern_roster_typography_hierarchy() {
     AgentSnapshot snapshot;
     snapshot.scan = AgentScanState::complete;
     snapshot.items = { make_row("MMMMMMMM", AgentRole::main) };
@@ -195,9 +198,57 @@ void verify_secondary_roster_text_matches_primary_scale() {
     require(primary_span > 0.0 && secondary_span > 0.0,
         "the rendered row must show glyph ink in both the primary and "
         "secondary text bands");
-    require(secondary_span >= primary_span * kSecondaryScaleRatio,
-        "the secondary roster text must render at the same mature visual "
-        "scale as the primary");
+    require(primary_span >= secondary_span * kHierarchyScaleRatio,
+        "the primary identity must render at a purposefully larger visual "
+        "scale than the secondary metadata");
+    require(secondary_span >= primary_span * kSecondaryMaturityRatio,
+        "the secondary metadata must keep the accepted readable mature 13pt "
+        "scale, never shrunk to squeeze the hierarchy");
+}
+
+void verify_selected_row_keeps_neutral_majority_surface() {
+    AgentSnapshot snapshot;
+    snapshot.scan = AgentScanState::complete;
+    snapshot.items = { make_row("Selected", AgentRole::main) };
+
+    QWidget parent;
+    AgentRoster roster(&parent);
+    roster.set_rows(snapshot, fs::path("Selected"));
+    roster.resize(260, roster.height());
+    roster.show();
+    QCoreApplication::processEvents();
+
+    auto *row = agent_row(roster, "Selected");
+    require(row != nullptr, "the selected row must render for grab");
+    require(row->isChecked(), "the selected row must be checked before grab");
+    row->clearFocus();
+    roster.clearFocus();
+
+    const auto image = row->grab().toImage();
+    const auto area = image.width() * image.height();
+
+    const auto accent = st::dialogsBgActive->c;
+    const auto neutral = st::windowBgOver->c;
+    auto accent_pixels = 0;
+    auto neutral_pixels = 0;
+    for (auto y = 0; y != image.height(); ++y) {
+        for (auto x = 0; x != image.width(); ++x) {
+            const auto pixel = image.pixelColor(x, y);
+            if (pixel == accent) {
+                ++accent_pixels;
+            }
+            if (pixel == neutral) {
+                ++neutral_pixels;
+            }
+        }
+    }
+    require(double(neutral_pixels) / area >= kSelectedNeutralMajority,
+        "the selected row surface must keep a calm neutral majority painted "
+        "from the shared windowBgOver token rather than a saturated full-row "
+        "accent fill");
+    require(double(accent_pixels) / area <= kAccentBoundedFraction,
+        "the saturated dialogsBgActive accent must stay a bounded minority "
+        "cue on the selected row, never the full-row fill");
 }
 
 void verify_human_hidden_from_roster() {
@@ -248,7 +299,7 @@ void verify_human_hidden_from_roster() {
             && !agent_row(roster, "b-main")->isChecked(),
         "selection must still bind to the caller's real-Agent key");
 
-    verify_secondary_roster_text_matches_primary_scale();
+    verify_modern_roster_typography_hierarchy();
 }
 
 void verify_intrinsic_roster_row_behavior() {
@@ -320,6 +371,7 @@ int main(int argc, char **argv) {
         QApplication application(argc, argv);
         style::internal::init_palette(style::kScaleDefault);
         verify_human_hidden_from_roster();
+        verify_selected_row_keeps_neutral_majority_surface();
         verify_intrinsic_roster_row_behavior();
         std::cout << "agent roster presentation: OK\n";
         return 0;
