@@ -84,7 +84,7 @@ Enabled/checked/keyboard (`agent_roster.cpp:360-375`, `171-180`):
 
 ### Text and bubble layout
 
-`rebuild_document` (`conversation_surface.cpp:146-195`) writes one
+`rebuild_document` (`conversation_surface.cpp:146-202`) writes one
 `QTextBlock` per message in the caller's order:
 
 - Alignment left (incoming) or right (outgoing); margins bound each message to
@@ -96,9 +96,13 @@ Enabled/checked/keyboard (`agent_roster.cpp:360-375`, `171-180`):
 - Optional subject line (11pt Medium) using `st::historyTextOutFg` /
   `st::historyTextInFg` (`conversation_surface.cpp:182-186`, `62-71`).
 - Body (12pt) in the same out/in text colors, inserted literally — the surface
-  never interprets markup (`conversation_surface.cpp:187-189`, `73-81`).
+  never interprets markup — after normalizing every paragraph delimiter
+  (CRLF/CR, LF and U+2029) to a U+2028 line separator, so a decoded newline
+  stays inside the one message block and never splits a message into extra
+  blocks/bubbles while the stored text is untouched
+  (`conversation_surface.cpp:187-196`, `73-81`).
 
-`paintEvent` (`conversation_surface.cpp:197-249`) fills the viewport with the
+`paintEvent` (`conversation_surface.cpp:204-256`) fills the viewport with the
 `st::windowBgOver` chat backdrop, then paints an 8px-radius rounded bubble
 behind each message block (`st::msgOutBg` outgoing, `st::msgInBg` incoming),
 offset by the current scroll so bubbles stay aligned with text; finally
@@ -109,7 +113,7 @@ offset by the current scroll so bubbles stay aligned with text; finally
 - Before a rebuild, the surface records whether the vertical scrollbar sat at
   its bottom; after the rebuild it snaps to the new bottom only if the human
   was already there, otherwise it clamps the prior value
-  (`conversation_surface.cpp:151-153`, `192-194`).
+  (`conversation_surface.cpp:151-153`, `199-201`).
 - `resizeEvent` reflows only when the quantized message cap
   (`int(width × 0.72 / 8) × 8`) changes; a live pixel-by-pixel resize does not
-  rebuild (`conversation_surface.cpp:251-263`).
+  rebuild   (`conversation_surface.cpp:258-270`).

@@ -908,7 +908,7 @@ void verify_selected_agent_conversation(
         R"("agent_name":"issue-643","address":"issue-643","state":"active"})");
     write_file(mailbox / "inbox" / "20260807T184852-0d13" / "message.json",
         conversation_envelope("telegram-bot", "human", "Slice done",
-            "PR published, not merged. <b>#1223</b> & <not-a-tag>",
+            "PR published, not merged.\\n<b>#1223</b> & <not-a-tag>",
             "received_at", "2026-08-07T18:48:52Z"));
     write_file(mailbox / "sent" / "20260807T190000-aa01" / "message.json",
         conversation_envelope("human", "telegram-bot", "Re: Slice done",
@@ -981,6 +981,37 @@ void verify_selected_agent_conversation(
             || (incoming_alignment == Qt::AlignRight
                 && outgoing_alignment == Qt::AlignLeft),
         "incoming and outgoing message blocks must be oppositely aligned");
+
+    // The real incoming mail body above was written through a JSON `\n`
+    // escape, so the kernel-side decode delivers an authentic newline (U+000A)
+    // to the surface, never a literal backslash+n. The two logical messages
+    // must still occupy exactly two aligned message blocks, one bubble each,
+    // with the full literal multiline body kept inside the one incoming block
+    // so it remains selectable and copyable as plain text.
+    require(incoming_block.text().contains(QStringLiteral(
+                "PR published, not merged.\u2028<b>#1223</b> & <not-a-tag>")),
+        "the single incoming message block must contain the full literal "
+        "multiline body with its decoded line break preserved inside that "
+        "one block, never split across extra blocks");
+    auto aligned_message_blocks = 0;
+    for (auto block = surface->document()->begin();
+            block != surface->document()->end();
+            block = block.next()) {
+        const auto alignment = block.blockFormat().alignment();
+        if (alignment == Qt::AlignLeft || alignment == Qt::AlignRight) {
+            ++aligned_message_blocks;
+        }
+    }
+    require(aligned_message_blocks == 2,
+        "one incoming multiline mail plus one outgoing mail must render as "
+        "exactly two aligned message blocks/bubbles, never one block per "
+        "decoded body line");
+    require(surface->toPlainText().contains(
+                QStringLiteral("PR published, not merged."))
+            && surface->toPlainText().contains(
+                QStringLiteral("<b>#1223</b> & <not-a-tag>")),
+        "the full literal multiline body must remain selectable and copyable "
+        "in toPlainText");
 
     require(tree_snapshot(project) == fixture_before,
         "opening and selecting the first Agent must never write to the project");

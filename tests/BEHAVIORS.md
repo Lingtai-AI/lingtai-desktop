@@ -142,6 +142,14 @@ Qt plugin path set and an 8 s watchdog.
   assert the exact intended in-fixture mutations
   (`verify_composer_send_behavior`, `verify_request_sleep_action`,
   `verify_first_project_bootstrap`).
+- In the selected-Agent conversation, one incoming mail fixture carries a real
+  decoded JSON newline (U+000A) in its body; the one incoming multiline mail
+  plus the one outgoing mail still occupy exactly two aligned message
+  blocks/bubbles — the normalized line separator never splits a message into
+  extra blocks — and the full literal multiline body stays selectable/copyable
+  in `toPlainText`
+  (`verify_selected_agent_conversation`,
+  `tests/native_shell_test.cpp:908-1015`).
 
 ### Process-level smoke/persistence
 

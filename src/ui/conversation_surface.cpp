@@ -185,8 +185,15 @@ void ConversationSurface::rebuild_document(
             cursor.insertText(separator, subject_format(outgoing));
         }
         // Message text stays literal: the surface never interprets markup.
-        cursor.insertText(QString::fromStdString(message.text),
-            body_format(outgoing));
+        // Paragraph delimiters are normalized so a decoded LF, CRLF/CR or
+        // U+2029 renders as a U+2028 line separator inside this one block,
+        // never as extra QTextBlocks/bubbles; stored source text is untouched.
+        auto body = QString::fromStdString(message.text);
+        body.replace(QStringLiteral("\r\n"), QString(QChar::LineSeparator));
+        body.replace(QChar::LineFeed, QString(QChar::LineSeparator));
+        body.replace(QChar::CarriageReturn, QString(QChar::LineSeparator));
+        body.replace(QChar::ParagraphSeparator, QString(QChar::LineSeparator));
+        cursor.insertText(body, body_format(outgoing));
     }
 
     scrollbar->setValue(was_at_bottom
