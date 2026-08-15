@@ -27,6 +27,7 @@ constexpr auto kAvatarDiameter = 40;
 constexpr auto kAvatarTextGap = 10;
 constexpr auto kRowHorizontalFrame = 10;
 constexpr auto kRowVerticalFrame = 8;
+constexpr auto kSelectedAccentWidth = 4;
 
 // The presentation row set: the shared snapshot keeps the human pseudo-agent
 // (routing, mailbox, and detail truth consume it), but the roster never
@@ -110,9 +111,9 @@ QString row_accessible(const AgentRow &item) {
 
 // A LingTai-owned checkable row button. It keeps the plain checkable-button
 // semantics the shell and its tests rely on while painting the selected,
-// hover, pressed, and focus states from the shared lib_ui palette
-// (`dialogsBgActive` selected, `dialogsBgOver` hover/pressed) rather than a
-// QSS clone of Telegram.
+// hover, pressed, and focus states from the shared lib_ui palette (a neutral
+// `windowBgOver` selected surface with a narrow `dialogsBgActive` accent cue,
+// `windowBgRipple` hover/pressed) rather than a QSS clone of Telegram.
 class AgentRowButton final : public QPushButton {
 public:
     explicit AgentRowButton(QWidget *parent)
@@ -129,7 +130,7 @@ protected:
 
 QSize AgentRowButton::sizeHint() const {
     auto primary_font = font();
-    primary_font.setPointSize(13);
+    primary_font.setPointSize(15);
     primary_font.setWeight(QFont::DemiBold);
     auto secondary_font = font();
     secondary_font.setPointSize(13);
@@ -145,10 +146,15 @@ void AgentRowButton::paintEvent(QPaintEvent *) {
     const auto selected = isChecked();
     const auto over = isDown() || underMouse();
     painter.fillRect(rect(), selected
-        ? st::dialogsBgActive
+        ? st::windowBgOver
         : over
             ? st::windowBgRipple
             : st::windowBgOver);
+    if (selected) {
+        painter.fillRect(
+            QRect(0, 0, kSelectedAccentWidth, height()),
+            st::dialogsBgActive);
+    }
 
     const auto content_rect = rect().adjusted(
         kRowHorizontalFrame, kRowVerticalFrame,
@@ -174,23 +180,19 @@ void AgentRowButton::paintEvent(QPaintEvent *) {
         .replace(QLatin1String("&&"), QLatin1String("&"));
 
     auto primary_font = font();
-    primary_font.setPointSize(13);
+    primary_font.setPointSize(15);
     primary_font.setWeight(QFont::DemiBold);
-    const auto primary_color = selected
-        ? st::dialogsNameFgActive
-        : over
-            ? st::dialogsNameFgOver
-            : st::dialogsNameFg;
+    const auto primary_color = over
+        ? st::dialogsNameFgOver
+        : st::dialogsNameFg;
 
     const auto avatar_initial = primary_display.trimmed().left(1).toUpper();
     painter.setPen(Qt::NoPen);
     painter.setBrush(primary_color);
     painter.drawEllipse(avatar_rect);
-    painter.setPen(selected
-        ? st::dialogsBgActive
-        : over
-            ? st::windowBgRipple
-            : st::windowBgOver);
+    painter.setPen(over
+        ? st::windowBgRipple
+        : st::windowBgOver);
     painter.setFont(primary_font);
     painter.drawText(avatar_rect, Qt::AlignCenter, avatar_initial);
 
@@ -208,11 +210,9 @@ void AgentRowButton::paintEvent(QPaintEvent *) {
     auto secondary_font = font();
     secondary_font.setPointSize(13);
     painter.setFont(secondary_font);
-    painter.setPen(selected
-        ? st::dialogsTextFgActive
-        : over
-            ? st::dialogsTextFgOver
-            : st::dialogsTextFg);
+    painter.setPen(over
+        ? st::dialogsTextFgOver
+        : st::dialogsTextFg);
     painter.drawText(
         secondary_rect,
         flags,

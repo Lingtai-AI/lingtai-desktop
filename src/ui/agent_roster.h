@@ -19,7 +19,8 @@ namespace lingtai::desktop {
 // Rows are a fixed 62px with 10px/8px framing and show one primary name line
 // plus one compact manifest/role/presence state line. The list surface and
 // every row state are painted from the shared lib_ui palette (`windowBgOver`
-// list field, `windowBgRipple` hover, `dialogsBgActive` selected).
+// list field and neutral selected surface, `windowBgRipple` hover, and a
+// narrow `dialogsBgActive` leading accent cue on the selected row).
 //
 // The visible rows omit the human pseudo-agent: the shared `AgentSnapshot`
 // keeps the human for routing/mailbox/detail truth, but the roster never
