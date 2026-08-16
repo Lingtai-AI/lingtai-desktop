@@ -833,6 +833,7 @@ NativeShell::NativeShell()
     detail_scroll->setObjectName("lingtai_agent_detail_scroll");
     detail_scroll->setAccessibleName(QStringLiteral("Selected Agent detail"));
     detail_scroll->setWidgetResizable(true);
+    detail_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     directory_layout->addWidget(detail_scroll, 1);
     auto *detail = new Ui::RpWidget(detail_scroll);
     detail->setObjectName("lingtai_agent_detail");
@@ -871,6 +872,8 @@ NativeShell::NativeShell()
     auto *detail_key = make_label(
         top_bar, QString(), "lingtai_selected_agent_key", 10);
     detail_key->setAccessibleName(QStringLiteral("Selected Agent key"));
+    detail_key->setWordWrap(false);
+    detail_key->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     identity_column->addWidget(detail_key);
     top_bar_layout->addLayout(identity_column, 1);
     // One compact palette-owned Back control in the chat top bar, visible only
