@@ -27,7 +27,7 @@ namespace {
 constexpr auto kRosterColumnWidth = 260;
 constexpr auto kAvatarDiameter = 40;
 constexpr auto kAvatarTextGap = 10;
-constexpr auto kRowHorizontalFrame = 10;
+constexpr auto kRowHorizontalFrame = 14;
 constexpr auto kRowVerticalFrame = 8;
 
 // The presentation row set: the shared snapshot keeps the human pseudo-agent
@@ -249,9 +249,7 @@ void AgentRowButton::paintEvent(QPaintEvent *) {
     auto secondary_font = font();
     secondary_font.setPointSize(12);
     painter.setFont(secondary_font);
-    painter.setPen(over
-        ? st::dialogsTextFgOver
-        : st::dialogsTextFg);
+    painter.setPen(st::windowSubTextFg);
     painter.drawText(
         secondary_rect,
         flags,
@@ -409,7 +407,7 @@ AgentRoster::AgentRoster(QWidget *parent)
     rows->setAutoFillBackground(true);
     rows_layout_ = new QVBoxLayout(rows);
     rows_layout_->setContentsMargins(0, 0, 0, 0);
-    rows_layout_->setSpacing(4);
+    rows_layout_->setSpacing(2);
     rows_layout_->setSizeConstraint(QLayout::SetMinAndMaxSize);
     scroll_->setWidget(rows);
     layout->addWidget(roster, 1);
