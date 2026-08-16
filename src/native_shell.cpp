@@ -275,6 +275,49 @@ protected:
     }
 };
 
+// One compact palette-owned icon-only lifecycle secondary: the same light-pill
+// language as `PaletteActionButton`, but painted with only a small crescent
+// glyph and never a caption, so its accessible name stays the only label a
+// screen reader hears and the header keeps exactly one captioned action.
+class PaletteIconButton final : public QPushButton {
+public:
+    explicit PaletteIconButton(QWidget *parent)
+    : QPushButton(parent) {
+        setFixedSize(26, 26);
+        setCursor(Qt::PointingHandCursor);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const auto radius = qMin(width(), height()) / 2;
+        const auto pill = !isEnabled()
+            ? st::defaultLightButton.textBg->c
+            : (isDown() || underMouse())
+                ? st::defaultLightButton.textBgOver->c
+                : st::defaultLightButton.textBg->c;
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(pill);
+        painter.drawRoundedRect(rect(), radius, radius);
+        const auto ink = !isEnabled()
+            ? st::windowSubTextFg->c
+            : (isDown() || underMouse())
+                ? st::defaultLightButton.textFgOver->c
+                : st::defaultLightButton.textFg->c;
+        // A small crescent moon: one full disc with an overlapping pill-colored
+        // disc carving the crescent, so the glyph never needs an icon font.
+        const auto size = 13.0;
+        const auto center = QPointF(width() / 2.0, height() / 2.0);
+        painter.setBrush(ink);
+        painter.drawEllipse(center, size / 2.0, size / 2.0);
+        painter.setBrush(pill);
+        painter.drawEllipse(
+            center + QPointF(size * 0.55, -size * 0.25),
+            size * 0.52, size * 0.52);
+    }
+};
+
 // One shared structural owner for the one retained read-only selected-Agent
 // source section (Presets). Each section directly owns its own semibold
 // heading, read-only plain-text surface, state line, and one thin plain-shadow
@@ -876,6 +919,13 @@ NativeShell::NativeShell()
     detail_key->setAccessibleName(QStringLiteral("Selected Agent key"));
     detail_key->setWordWrap(false);
     detail_key->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    // The status line stays visually subordinate to the title: a smaller
+    // point size above and a distinct muted ink drawn from the same
+    // secondary-text token the page nav and disabled actions already use,
+    // never the prominent title ink.
+    auto key_palette = detail_key->palette();
+    key_palette.setColor(QPalette::WindowText, st::windowSubTextFg->c);
+    detail_key->setPalette(key_palette);
     identity_column->addWidget(detail_key);
     top_bar_layout->addLayout(identity_column, 1);
     // One compact palette-owned Back control in the chat top bar, visible only
@@ -905,7 +955,7 @@ NativeShell::NativeShell()
     start_row_layout->setSpacing(0);
     auto *start_button = new PaletteActionButton(
         start_row, QStringLiteral("Start Agent"));
-    start_button->setObjectName("lingtai_selected_agent_start_agent");
+    start_button->setObjectName("lingtai_selected_agent_primary_action");
     start_button->setAccessibleName(QStringLiteral("Start Agent"));
     start_button->setAccessibleDescription(QStringLiteral(
         "Starts the selected Agent's own configured runtime as a detached "
@@ -932,9 +982,11 @@ NativeShell::NativeShell()
 
     // The one Step-5 action on the exact selected Agent: reproduces only the
     // canonical empty `.sleep` marker write plus a best-effort target-side
-    // observation. Disabled while ineligible or while a just-clicked
-    // observation is still pending; the status label below shows only
-    // truthful, evidence-backed claims, never a lifecycle status inferred
+    // observation, as a subtle compact icon-only secondary -- never a second
+    // full-caption action button -- whose accessible name preserves the
+    // "Request sleep" identity. Disabled while ineligible or while a
+    // just-clicked observation is still pending; the status label below shows
+    // only truthful, evidence-backed claims, never a lifecycle status inferred
     // from the write or a timeout alone.
     auto *sleep_row = new Ui::RpWidget(top_bar);
     sleep_row->setObjectName("lingtai_selected_agent_sleep_row");
@@ -942,8 +994,7 @@ NativeShell::NativeShell()
     auto *sleep_row_layout = new QVBoxLayout(sleep_row);
     sleep_row_layout->setContentsMargins(0, 0, 0, 0);
     sleep_row_layout->setSpacing(0);
-    auto *sleep_button = new PaletteActionButton(
-        sleep_row, QStringLiteral("Request sleep"));
+    auto *sleep_button = new PaletteIconButton(sleep_row);
     sleep_button->setObjectName("lingtai_selected_agent_request_sleep");
     sleep_button->setAccessibleName(QStringLiteral("Request sleep"));
     sleep_button->setAccessibleDescription(QStringLiteral(
@@ -2296,12 +2347,13 @@ void NativeShell::recompute_layout(int body_width) {
 // current width while the full identity never leaves accessibility. The
 // complete row is first measured with the name unbounded and every secondary
 // element visible; if it does not fit, the secondary key hides first, then
-// both action caption labels, while the Start/Sleep rows, pills, and Back
-// stay reachable. The remaining width is then allocated to the name -- the
-// actual detail width minus the row's natural non-name width, clamped to at
-// least one pixel -- and its visible text becomes the right-elided full
-// title. No timer/event framework or persisted state; primary controls, the
-// Start/Sleep actions, fonts, and object names are never touched.
+// both action status labels, while the one primary action, the icon-only
+// Request sleep secondary, and Back stay reachable. The remaining width is
+// then allocated to the name -- the actual detail width minus the row's
+// natural non-name width, clamped to at least one pixel -- and its visible
+// text becomes the right-elided full title. No timer/event framework or
+// persisted state; primary controls, the icon-only secondary, fonts, and
+// object names are never touched.
 void NativeShell::update_top_bar_fit(int detail_width) {
     if (!chat_top_bar_ || !selected_agent_key_) return;
     auto *presentation_name = chat_top_bar_->findChild<QLabel *>(
@@ -2590,7 +2642,7 @@ void NativeShell::tick_agent_sleep_observation() {
 // point, not through this function.
 void NativeShell::render_agent_start_status() {
     auto *button = window_->findChild<QPushButton *>(
-        "lingtai_selected_agent_start_agent");
+        "lingtai_selected_agent_primary_action");
     if (!button) return;
 
     const auto *item = selection_state_.active_project()
@@ -2613,7 +2665,7 @@ void NativeShell::handle_start_agent() {
     auto *status = window_->findChild<QLabel *>(
         "lingtai_selected_agent_start_status");
     auto *button = window_->findChild<QPushButton *>(
-        "lingtai_selected_agent_start_agent");
+        "lingtai_selected_agent_primary_action");
     if (!status || !button) return;
     if (pending_start_observation_) return; // one observation at a time
 
