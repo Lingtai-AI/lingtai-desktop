@@ -320,10 +320,11 @@ protected:
 
 // One shared structural owner for the one retained read-only selected-Agent
 // source section (Presets). Each section directly owns its own semibold
-// heading, read-only plain-text surface, state line, and one thin plain-shadow
-// separator, with the same inner margins and spacing, so the retained source
-// uses one consistent local framing instead of a hand-built
-// heading/surface/state sequence.
+// heading, read-only plain-text surface, and state line, with the same inner
+// margins and spacing, so the retained source uses one consistent local
+// framing instead of a hand-built heading/surface/state sequence. Sections
+// never frame themselves with a plain-shadow block: they separate by the
+// surrounding layout spacing alone.
 struct DashboardSection {
     Ui::RpWidget *owner = nullptr;
     QLabel *heading = nullptr;
@@ -366,11 +367,6 @@ DashboardSection add_dashboard_section(
         10);
     state->setAccessibleName(surface_accessible_name + QStringLiteral(" state"));
     layout->addWidget(state);
-    auto *separator = new Ui::PlainShadow(owner);
-    separator->setObjectName((base + QStringLiteral("_separator")).toUtf8().constData());
-    separator->setAccessibleName(heading_text + QStringLiteral(" divider"));
-    separator->setFixedHeight(st::lineWidth);
-    layout->addWidget(separator);
     detail_layout->addWidget(owner);
     return {owner, heading, surface, state};
 }
@@ -1020,15 +1016,6 @@ NativeShell::NativeShell()
     chat_top_bar_ = top_bar;
     selected_agent_key_ = detail_key;
 
-    // One thin plain-shadow divider under the chat top bar, the same
-    // between-surface separator the shell uses for the roster column.
-    auto *top_bar_separator = new Ui::PlainShadow(detail);
-    top_bar_separator->setObjectName("lingtai_chat_top_bar_separator");
-    top_bar_separator->setAccessibleName(
-        QStringLiteral("Selected Agent top bar divider"));
-    top_bar_separator->setFixedHeight(st::lineWidth);
-    detail_layout->addWidget(top_bar_separator);
-
     // One compact secondary page navigation: the chat is the default selected
     // Agent surface, and Presets owns one page so only one content surface
     // shows at a time.
@@ -1083,13 +1070,14 @@ NativeShell::NativeShell()
     // shell's palette background rather than a widget-level white base.
     detail_layout->addWidget(conversation, 1);
 
-    // The one full-width modern composer band, directly under the conversation
-    // it sends into: the band's `st::msgInBg` surface spans the whole detail,
-    // and its own layout keeps one centered adaptive lane capped at 900px that
-    // owns the compact input/Send action row and both status read-outs. The
-    // lane's symmetric side insets are recomputed from the actual detail width
-    // by the same body-resize owner that drives the responsive sidebar/header.
-    auto *composer = new PaletteSurface(detail, st::msgInBg);
+    // The one full-width composer row, directly under the conversation it
+    // sends into: the row sits on the detail's base `windowBg` surface -- the
+    // same base main surface as the content pane -- and its own layout keeps
+    // one centered adaptive lane capped at 900px that owns the compact
+    // input/Send action row and both status read-outs. The lane's symmetric
+    // side insets are recomputed from the actual detail width by the same
+    // body-resize owner that drives the responsive sidebar/header.
+    auto *composer = new PaletteSurface(detail, st::windowBg);
     composer_ = composer;
     composer->setObjectName("lingtai_composer");
     composer->setAccessibleName(QStringLiteral("Send a message"));
@@ -1101,8 +1089,8 @@ NativeShell::NativeShell()
     // submitting through the same send path.
     auto *composer_action_row = new QHBoxLayout;
     composer_action_row->setSpacing(8);
-    // A borderless copy of the shared single-line field style: the band's own
-    // `st::msgInBg` surface is the only frame, and the field keeps the same
+    // A borderless copy of the shared single-line field style: the row's own
+    // base `windowBg` surface is the only frame, and the field keeps the same
     // text/placeholder face as the standard control.
     static const auto borderless_composer_input = [] {
         auto result = st::defaultInputField;
@@ -2424,8 +2412,8 @@ void NativeShell::update_top_bar_fit(int detail_width) {
         .elidedText(full, Qt::ElideRight, available));
 }
 
-// The one full-width composer band, re-entered on every recompute (and so on
-// every real resize and selection change): the band always stretches the full
+// The one full-width composer row, re-entered on every recompute (and so on
+// every real resize and selection change): the row always stretches the full
 // detail width, while its own layout keeps one centered adaptive lane capped
 // at 900px -- outer horizontal margins of at least 12px, growing to split any
 // width beyond 900px -- with the input/Send row and the two status lines
