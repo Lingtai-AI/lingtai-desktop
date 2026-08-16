@@ -204,11 +204,10 @@ private:
     bool dragging_ = false;
 };
 
-// The one compact selected-Agent page navigation control: a checkable
-// two-line-free button that paints its selected and hover states from the same
-// roster surface token (`windowBgOver` for both), marks the selected page with
-// one short `dialogsBgActive` underline, and leaves the resting state
-// transparent so the chat surface shows through.
+// The one compact selected-Agent page navigation control: a plain text tab
+// that is never a filled rectangular slab. Every state paints only its caption
+// glyphs on the transparent shell backdrop, and the selected page adds just
+// one short `dialogsBgActive` accent underline along its bottom edge.
 class PageNavButton final : public QPushButton {
 public:
     explicit PageNavButton(QWidget *parent, const QString &text)
@@ -220,9 +219,6 @@ public:
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter painter(this);
-        if (isChecked() || isDown() || underMouse()) {
-            painter.fillRect(rect(), st::windowBgOver);
-        }
         auto font = this->font();
         font.setPointSize(11);
         font.setWeight(isChecked() ? QFont::DemiBold : QFont::Normal);
@@ -1023,7 +1019,7 @@ NativeShell::NativeShell()
     // One compact secondary page navigation: the chat is the default selected
     // Agent surface, and Presets owns one page so only one content surface
     // shows at a time.
-    auto *pages_nav = new Ui::RpWidget(detail);
+    auto *pages_nav = new PaletteSurface(detail, st::windowBg);
     pages_nav->setObjectName("lingtai_agent_pages_nav");
     pages_nav->setAccessibleName(QStringLiteral("Selected Agent pages"));
     auto *pages_nav_layout = new QHBoxLayout(pages_nav);
