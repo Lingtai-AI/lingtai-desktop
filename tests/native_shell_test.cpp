@@ -2912,8 +2912,6 @@ void verify_plain_underline_page_tabs(
         lingtai::desktop::NativeShell &shell,
         const fs::path &sandbox) {
     auto &window = shell.window();
-    auto *content = required_child<Ui::RpWidget>(
-        window, "lingtai_desktop_content");
     auto *conversation_nav = required_child<QPushButton>(
         window, "lingtai_agent_page_nav_conversation");
     auto *presets_nav = required_child<QPushButton>(
@@ -2933,30 +2931,30 @@ void verify_plain_underline_page_tabs(
 
     const auto slab = st::windowBgOver->c;
     const auto accent = st::dialogsBgActive->c;
-    const auto image = content->grab().toImage();
+    auto *pages_nav = presets_nav->parentWidget();
+    const auto image = pages_nav->grab().toImage();
     // The page-nav row's trailing stretch is guaranteed unpainted, so it is
     // the real shell backdrop the transparent tabs sit on, in the same shared
     // coordinate space as every tab sample below.
     const auto backdrop = [&] {
-        auto *pages_nav = presets_nav->parentWidget();
-        return image.pixelColor(pages_nav->mapTo(
-            content, QPoint(presets_nav->geometry().right() + 8,
-                            presets_nav->geometry().center().y())));
+        return image.pixelColor(
+            QPoint(presets_nav->geometry().right() + 8,
+                   presets_nav->geometry().center().y()));
     }();
     require(backdrop == st::windowBg->c,
         "the page-nav row must sit directly on the shell backdrop token");
     const auto interior = [&](const QImage &target, QPushButton *button) {
         return target.pixelColor(button->mapTo(
-            content, QPoint(button->width() / 2, 3)));
+            pages_nav, QPoint(button->width() / 2, 3)));
     };
     const auto bottom = [&](const QImage &target, QPushButton *button) {
         return target.pixelColor(button->mapTo(
-            content, QPoint(button->width() / 2, button->height() - 1)));
+            pages_nav, QPoint(button->width() / 2, button->height() - 1)));
     };
     const auto has_slab = [&](const QImage &target, QPushButton *button) {
         for (auto y = 0; y < button->height() - 2; ++y) {
             for (auto x = 0; x < button->width(); ++x) {
-                if (target.pixelColor(button->mapTo(content, QPoint(x, y)))
+                if (target.pixelColor(button->mapTo(pages_nav, QPoint(x, y)))
                         == slab) {
                     return true;
                 }
@@ -2979,7 +2977,7 @@ void verify_plain_underline_page_tabs(
 
     presets_nav->click();
     QCoreApplication::processEvents();
-    const auto after = content->grab().toImage();
+    const auto after = pages_nav->grab().toImage();
     require(bottom(after, presets_nav) == accent
             && bottom(after, conversation_nav) != accent,
         "the underline accent must follow the selection");
