@@ -752,6 +752,10 @@ NativeShell::NativeShell()
     content_ = content;
     content->setObjectName("lingtai_desktop_content");
     content->setAccessibleName(QStringLiteral("Workspace content"));
+    auto palette = content->palette();
+    palette.setColor(QPalette::Window, st::windowBg->c);
+    content->setPalette(palette);
+    content->setAutoFillBackground(true);
     content->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     shell_layout->addWidget(content, 1);
 
