@@ -29,7 +29,6 @@ constexpr auto kAvatarDiameter = 40;
 constexpr auto kAvatarTextGap = 10;
 constexpr auto kRowHorizontalFrame = 10;
 constexpr auto kRowVerticalFrame = 8;
-constexpr auto kSelectedAccentWidth = 4;
 
 // The presentation row set: the shared snapshot keeps the human pseudo-agent
 // (routing, mailbox, and detail truth consume it), but the roster never
@@ -150,8 +149,8 @@ QString row_summary(const AgentRow &item) {
 
 // A LingTai-owned checkable row button. It keeps the plain checkable-button
 // semantics the shell and its tests rely on while painting the selected,
-// hover, pressed, and focus states from the shared lib_ui palette (a neutral
-// `windowBgOver` selected surface with a narrow `dialogsBgActive` accent cue,
+// hover, pressed, and focus states from the shared lib_ui palette (idle rows
+// on `windowBg`, a soft rounded `windowBgOver` selected surface, and
 // `windowBgRipple` hover/pressed) rather than a QSS clone of Telegram.
 class AgentRowButton final : public QPushButton {
 public:
@@ -184,16 +183,17 @@ void AgentRowButton::paintEvent(QPaintEvent *) {
     QPainter painter(this);
     const auto selected = isChecked();
     const auto over = isDown() || underMouse();
-    painter.fillRect(rect(), selected
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    constexpr auto kSelectedRadius = 8.0;
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(selected
         ? st::windowBgOver
         : over
             ? st::windowBgRipple
             : st::windowBg);
-    if (selected) {
-        painter.fillRect(
-            QRect(0, 0, kSelectedAccentWidth, height()),
-            st::dialogsBgActive);
-    }
+    painter.drawRoundedRect(
+        QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5),
+        kSelectedRadius, kSelectedRadius);
 
     const auto content_rect = rect().adjusted(
         kRowHorizontalFrame, kRowVerticalFrame,
@@ -504,12 +504,6 @@ void AgentRoster::set_rows(
         row->setChecked(selected_key && *selected_key == item.directory_key);
         row->setEnabled(item.manifest_kind == AgentManifestKind::valid);
         row->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-        // The selected row resolves its selection color from the same shared
-        // palette token its paint uses, so the ownership is observable without
-        // replacing any inherited palette role.
-        auto row_palette = row->palette();
-        row_palette.setColor(QPalette::Highlight, st::dialogsBgActive->c);
-        row->setPalette(row_palette);
         const auto key = item.directory_key;
         QObject::connect(row, &QPushButton::clicked, [this, key] {
             if (row_click_handler_) {
