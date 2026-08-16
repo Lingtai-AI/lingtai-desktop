@@ -393,6 +393,15 @@ target_compile_options(lingtai_project_attachment_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_project_attachment_test PRIVATE
     lingtai_desktop_core)
+add_executable(lingtai_agent_command_runner_test
+    tests/agent_command_runner_test.cpp)
+init_target(lingtai_agent_command_runner_test)
+target_include_directories(lingtai_agent_command_runner_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_options(lingtai_agent_command_runner_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_agent_command_runner_test PRIVATE
+    Qt6::Core)
 enable_testing()
 add_test(NAME project_attachment
     COMMAND lingtai_project_attachment_test
@@ -423,6 +432,9 @@ add_test(NAME posix_descriptor_primitives
 add_test(NAME workspace_selection
     COMMAND lingtai_workspace_selection_test
         "${CMAKE_CURRENT_BINARY_DIR}/workspace-selection-fixture")
+add_test(NAME agent_command_runner
+    COMMAND lingtai_agent_command_runner_test
+        "${CMAKE_CURRENT_BINARY_DIR}/agent-command-runner-fixture")
 
 add_executable(lingtai_desktop_smoke
     src/main.cpp
