@@ -2900,6 +2900,97 @@ void verify_removed_activity_and_task_card_destinations(
         "its stable identity");
 }
 
+// The tabs unit contract: Conversation and Presets are plain text tabs — the
+// selected tab paints only its caption glyphs on the shell backdrop plus one
+// subtle accent underline along its bottom edge, and is never a filled
+// rectangular slab. Real rendered pixels in the shared content coordinate
+// space prove it: the selected tab's interior must read the exact adjacent
+// backdrop (the tab is transparent there) with no pixel of the `windowBgOver`
+// slab token anywhere in it, and the accent must sit only on its bottom row
+// and follow the selection.
+void verify_plain_underline_page_tabs(
+        lingtai::desktop::NativeShell &shell,
+        const fs::path &sandbox) {
+    auto &window = shell.window();
+    auto *content = required_child<Ui::RpWidget>(
+        window, "lingtai_desktop_content");
+    auto *conversation_nav = required_child<QPushButton>(
+        window, "lingtai_agent_page_nav_conversation");
+    auto *presets_nav = required_child<QPushButton>(
+        window, "lingtai_agent_page_nav_presets");
+
+    const auto project = sandbox / "project";
+    write_file(project / ".lingtai/human/.agent.json",
+        R"({"agent_id":"20260101-000000-h001","agent_name":"Ted",)"
+        R"("address":"human","state":"active"})");
+    write_file(project / ".lingtai/alpha/.agent.json",
+        R"({"admin":{},"agent_id":"20260712-191609-a001",)"
+        R"("agent_name":"alpha","address":"alpha","state":"active"})");
+    static_cast<void>(shell.open_project(project, std::nullopt));
+    click_agent(window, "alpha");
+    window.resize(1200, 800);
+    QCoreApplication::processEvents();
+
+    const auto slab = st::windowBgOver->c;
+    const auto accent = st::dialogsBgActive->c;
+    const auto image = content->grab().toImage();
+    // The page-nav row's trailing stretch is guaranteed unpainted, so it is
+    // the real shell backdrop the transparent tabs sit on, in the same shared
+    // coordinate space as every tab sample below.
+    const auto backdrop = [&] {
+        auto *pages_nav = presets_nav->parentWidget();
+        return image.pixelColor(pages_nav->mapTo(
+            content, QPoint(presets_nav->geometry().right() + 8,
+                            presets_nav->geometry().center().y())));
+    }();
+    require(backdrop == st::windowBg->c,
+        "the page-nav row must sit directly on the shell backdrop token");
+    const auto interior = [&](const QImage &target, QPushButton *button) {
+        return target.pixelColor(button->mapTo(
+            content, QPoint(button->width() / 2, 3)));
+    };
+    const auto bottom = [&](const QImage &target, QPushButton *button) {
+        return target.pixelColor(button->mapTo(
+            content, QPoint(button->width() / 2, button->height() - 1)));
+    };
+    const auto has_slab = [&](const QImage &target, QPushButton *button) {
+        for (auto y = 0; y < button->height() - 2; ++y) {
+            for (auto x = 0; x < button->width(); ++x) {
+                if (target.pixelColor(button->mapTo(content, QPoint(x, y)))
+                        == slab) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+
+    require(!has_slab(image, conversation_nav),
+        "the selected Conversation tab must never be a filled rectangular slab");
+    require(interior(image, conversation_nav) == backdrop,
+        "the selected Conversation tab must stay plain text on the backdrop");
+    require(bottom(image, conversation_nav) == accent,
+        "the selected tab must carry only the subtle underline accent");
+    require(interior(image, presets_nav) == backdrop
+            && !has_slab(image, presets_nav),
+        "the unselected Presets tab must stay plain text too");
+    require(bottom(image, presets_nav) != accent,
+        "the underline accent must belong only to the selected tab");
+
+    presets_nav->click();
+    QCoreApplication::processEvents();
+    const auto after = content->grab().toImage();
+    require(bottom(after, presets_nav) == accent
+            && bottom(after, conversation_nav) != accent,
+        "the underline accent must follow the selection");
+    require(!has_slab(after, presets_nav),
+        "the newly selected tab must stay slab-free");
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "plain-underline tab fixtures must be removed");
+}
+
 // The Commit-31 cut: one coherent Telegram-family theme/layout reset for the
 // normal-width chats shell. A wide window must give the dialog list a
 // source-backed responsive width beyond its 260px minimum, all major surfaces
@@ -4090,17 +4181,21 @@ int main(int argc, char **argv) {
         && std::string_view(argv[2]) == "--modern-composer-only";
     const auto slash_interception_only = argc == 3
         && std::string_view(argv[2]) == "--slash-interception-only";
-    const auto compact_header_only = argc == 3
+const auto compact_header_only = argc == 3
         && std::string_view(argv[2]) == "--compact-header-only";
     const auto two_surface_only = argc == 3
         && std::string_view(argv[2]) == "--two-surface-only";
+    const auto plain_underline_only = argc == 3
+        && std::string_view(argv[2]) == "--plain-underline-only";
     if (argc != 2 && !responsive_sidebar_only && !responsive_header_only
             && !modern_composer_only && !slash_interception_only
-            && !compact_header_only && !two_surface_only) {
+            && !compact_header_only && !two_surface_only
+            && !plain_underline_only) {
         std::cerr << "usage: native_shell_test PROJECT_ROOT "
                      "[--responsive-sidebar-only|--responsive-header-only|"
                      "--modern-composer-only|--slash-interception-only|"
-                     "--compact-header-only|--two-surface-only]\n";
+                     "--compact-header-only|--two-surface-only|"
+                     "--plain-underline-only]\n";
         return 2;
     }
     try {
@@ -4141,7 +4236,7 @@ int main(int argc, char **argv) {
             std::cout << "native shell behavior: OK\n";
             return 0;
         }
-        if (compact_header_only) {
+if (compact_header_only) {
             lingtai::desktop::NativeShell shell;
             shell.show_offscreen();
             QCoreApplication::processEvents();
@@ -4156,6 +4251,15 @@ int main(int argc, char **argv) {
             QCoreApplication::processEvents();
             verify_two_surface_hierarchy(
                 shell, project_root / "commit-s1-two-surface-fixture");
+            std::cout << "native shell behavior: OK\n";
+            return 0;
+        }
+        if (plain_underline_only) {
+            lingtai::desktop::NativeShell shell;
+            shell.show_offscreen();
+            QCoreApplication::processEvents();
+            verify_plain_underline_page_tabs(
+                shell, project_root / "commit-tab-plain-underline-fixture");
             std::cout << "native shell behavior: OK\n";
             return 0;
         }
@@ -4197,6 +4301,8 @@ int main(int argc, char **argv) {
             shell, project_root / "commit-s1-two-surface-fixture");
         verify_modern_composer_surface(
             shell, project_root / "commit-m4-composer-surface-fixture");
+        verify_plain_underline_page_tabs(
+            shell, project_root / "commit-tab-plain-underline-fixture");
         std::cout << "native shell behavior: OK\n";
         return 0;
     } catch (const std::exception &error) {
