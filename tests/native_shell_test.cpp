@@ -4007,6 +4007,76 @@ void verify_conversation_slash_interception(
     require(!cleanup_error, "slash-interception fixtures must be removed");
 }
 
+// The Stage-1 two-surface shell contract: only `lingtai_desktop_sidebar`
+// (the elevated list) and `lingtai_desktop_content` (the base pane) are main
+// surfaces. The selected-Agent header, page nav, conversation, and composer
+// regions must not paint their own boxed dark backgrounds or hard-edged
+// plain-shadow frames, and every surface fill must come from the base
+// (`windowBg`), elevated (`windowBgOver`), or selected (`dialogsBgActive`)
+// palette hierarchy. Current production paints the full-width composer band
+// from the bubble token `msgInBg` and frames the chat top bar with a
+// `Ui::PlainShadow`, so it must fail the composer and shadow-frame assertions.
+void verify_two_surface_hierarchy(
+        lingtai::desktop::NativeShell &shell,
+        const fs::path &sandbox) {
+    auto &window = shell.window();
+    auto *sidebar = required_child<Ui::RpWidget>(
+        window, "lingtai_desktop_sidebar");
+    auto *content = required_child<Ui::RpWidget>(
+        window, "lingtai_desktop_content");
+    auto *detail = required_child<Ui::RpWidget>(
+        window, "lingtai_agent_detail");
+    auto *composer = required_child<Ui::RpWidget>(
+        window, "lingtai_composer");
+
+    const auto project = sandbox / "project";
+    write_file(project / ".lingtai/human/.agent.json",
+        R"({"agent_id":"20260101-000000-h001","agent_name":"Ted",)"
+        R"("address":"human","state":"active"})");
+    write_file(project / ".lingtai/alpha/.agent.json",
+        R"({"admin":{},"agent_id":"20260712-191609-a001",)"
+        R"("agent_name":"alpha","address":"alpha","state":"active"})");
+    window.resize(1200, 800);
+    QCoreApplication::processEvents();
+    const auto outcome = shell.open_project(project, std::nullopt);
+    require(outcome.disposition == ProjectOpenDisposition::opened,
+        "the two-surface fixture project must open");
+    click_agent(window, "alpha");
+    require(shell.selection_state().selected_agent_directory_key()
+            == std::optional<fs::path>("alpha"),
+        "alpha must be selectable for the two-surface hierarchy");
+    QCoreApplication::processEvents();
+
+    // Only the two main surfaces paint a full-pane background: the sidebar is
+    // the one elevated surface and the content is the one base surface, so no
+    // header/nav/conversation/composer surface may paint a boxed fill of its
+    // own. The composer must sit on the base content surface, never a
+    // full-width dark band from a non-base/elevated/selected token.
+    require(sidebar->grab().toImage().pixelColor(2, 2)
+            == st::windowBgOver->c,
+        "the sidebar must be the one elevated main surface");
+    require(content->grab().toImage().pixelColor(2, 2) == st::windowBg->c,
+        "the content must be the one base main surface");
+    require(composer->grab().toImage().pixelColor(2, 2) == st::windowBg->c,
+        "the composer must sit on the base content surface, never a "
+        "full-width dark band of its own");
+
+    // No hard-edged plain-shadow frames around the header/nav/conversation/
+    // composer: the only plain-shadow separator in the whole shell divides
+    // the two main surfaces, so no plain shadow may live inside the detail.
+    auto shadow_frames = 0;
+    for (auto *child : detail->findChildren<QWidget *>()) {
+        if (dynamic_cast<Ui::PlainShadow *>(child)) ++shadow_frames;
+    }
+    require(shadow_frames == 0,
+        "no hard-edged plain-shadow frame may box the header, nav, "
+        "conversation, or composer inside the detail");
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "two-surface fixtures must be removed");
+}
+
 int main(int argc, char **argv) {
     // Test-local execution modes: the exact binary with a fresh fixture root
     // and one literal flag runs only the R1 resizable-sidebar, R4
@@ -4022,13 +4092,15 @@ int main(int argc, char **argv) {
         && std::string_view(argv[2]) == "--slash-interception-only";
     const auto compact_header_only = argc == 3
         && std::string_view(argv[2]) == "--compact-header-only";
+    const auto two_surface_only = argc == 3
+        && std::string_view(argv[2]) == "--two-surface-only";
     if (argc != 2 && !responsive_sidebar_only && !responsive_header_only
             && !modern_composer_only && !slash_interception_only
-            && !compact_header_only) {
+            && !compact_header_only && !two_surface_only) {
         std::cerr << "usage: native_shell_test PROJECT_ROOT "
                      "[--responsive-sidebar-only|--responsive-header-only|"
                      "--modern-composer-only|--slash-interception-only|"
-                     "--compact-header-only]\n";
+                     "--compact-header-only|--two-surface-only]\n";
         return 2;
     }
     try {
@@ -4078,6 +4150,15 @@ int main(int argc, char **argv) {
             std::cout << "native shell behavior: OK\n";
             return 0;
         }
+        if (two_surface_only) {
+            lingtai::desktop::NativeShell shell;
+            shell.show_offscreen();
+            QCoreApplication::processEvents();
+            verify_two_surface_hierarchy(
+                shell, project_root / "commit-s1-two-surface-fixture");
+            std::cout << "native shell behavior: OK\n";
+            return 0;
+        }
         const auto original_palette = QApplication::palette();
         verify_dark_application_palette_inheritance(
             project_root / "commit-8-palette-fixture");
@@ -4112,6 +4193,8 @@ int main(int argc, char **argv) {
             shell, project_root / "commit-28-dashboard-fixture");
         verify_telegram_theme_reset(
             shell, project_root / "commit-31-theme-reset-fixture");
+        verify_two_surface_hierarchy(
+            shell, project_root / "commit-s1-two-surface-fixture");
         verify_modern_composer_surface(
             shell, project_root / "commit-m4-composer-surface-fixture");
         std::cout << "native shell behavior: OK\n";
