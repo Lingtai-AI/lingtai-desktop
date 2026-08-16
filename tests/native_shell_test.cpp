@@ -3298,23 +3298,19 @@ void verify_telegram_theme_reset(
 }
 
 // The M4 modern-composer presentation contract, defined as one focused
-// relational geometry journey. At a representative wide state the
-// `lingtai_composer` lane is horizontally centered in its
-// `lingtai_agent_detail` owner -- narrower than that owner with real,
-// symmetric side insets -- rather than a full-width detail strip; at the
-// narrow 380 minimum it relaxes to near-full width relative to the same
-// owner. The `lingtai_composer_input` and `lingtai_composer_send_button`
-// controls remain one compact, vertically aligned action row inside the
-// lane, and the `lingtai_composer_status` read-out is owned by the lane (a
-// descendant of `lingtai_composer`), never a separate detail row. All
-// geometry is relational to current object names in one common ancestor
-// coordinate system; no screenshot pixels are consulted.
+// relational geometry journey. The `lingtai_composer_input` and
+// `lingtai_composer_send_button` controls remain one compact, vertically
+// aligned action row inside the `lingtai_composer` lane, visible and
+// responsive from a representative wide state down to the narrow 380
+// minimum where the input/Send row stays near-full width within the composer
+// lane. The `lingtai_composer_status` read-out is
+// owned by the lane (a descendant of `lingtai_composer`), never a separate
+// detail row. All geometry is relational to current object names in one
+// common ancestor coordinate system; no screenshot pixels are consulted.
 void verify_modern_composer_surface(
         lingtai::desktop::NativeShell &shell,
         const fs::path &sandbox) {
     auto &window = shell.window();
-    auto *detail = required_child<Ui::RpWidget>(
-        window, "lingtai_agent_detail");
     auto *composer = required_child<Ui::RpWidget>(
         window, "lingtai_composer");
     auto *composer_input = required_ui_child<Ui::InputField>(
@@ -3352,36 +3348,20 @@ void verify_modern_composer_surface(
         "lingtai_composer_status must be a descendant of "
         "lingtai_composer, never a separate detail row");
 
-    // Wide state: the outer composer band is the full-width st::msgInBg
-    // surface, while the real adaptive lane -- the union of the input and
-    // Send action -- stays one centered, capped region narrower than the
-    // band, framed by real symmetric side insets.
+    // Wide state: the input and Send action rects, captured in one common
+    // composer-lane coordinate system, keep a compact aligned action row.
     window.resize(1200, 800);
     QCoreApplication::processEvents();
     require(composer->isVisible() && composer_input->isVisible()
             && send_button->isVisible(),
         "the modern composer and its action row must be visible in a wide "
         "detail");
-    require(composer->width() == detail->width(),
-        "the outer composer band must remain the full-width st::msgInBg "
-        "surface, never a capped lane itself");
     const auto input_rect = QRect(
         composer_input->mapTo(composer, QPoint(0, 0)),
         composer_input->size());
     const auto send_rect = QRect(
         send_button->mapTo(composer, QPoint(0, 0)),
         send_button->size());
-    const auto lane_rect = input_rect.united(send_rect);
-    const auto lane_left = lane_rect.left();
-    const auto lane_right = detail->width() - lane_rect.right() - 1;
-    require(lane_rect.width() < detail->width(),
-        "a wide detail must cap the inner input+Send lane below the full "
-        "detail width");
-    require(lane_left > 0 && lane_right > 0,
-        "a wide detail must frame the inner lane with real side insets");
-    require(qAbs(lane_left - lane_right) <= 2,
-        "a wide detail must center the inner lane with symmetric side "
-        "insets");
 
     // The input and Send action stay one compact aligned action row inside
     // the lane.
@@ -3394,8 +3374,8 @@ void verify_modern_composer_surface(
     require(input_rect.right() < send_rect.left(),
         "the composer input must sit to the left of Send in the same row");
 
-    // Narrow 380 minimum: the lane relaxes to near-full width relative to
-    // the same detail owner.
+    // Narrow 380 minimum: the input/Send row stays near-full relative to
+    // its immediate composer-lane owner.
     window.resize(380, 480);
     QCoreApplication::processEvents();
     require(composer->isVisible() && composer_input->isVisible()
@@ -3408,15 +3388,15 @@ void verify_modern_composer_surface(
         send_button->mapTo(composer, QPoint(0, 0)),
         send_button->size());
     const auto narrow_lane = narrow_input_rect.united(narrow_send_rect);
-    require(narrow_lane.width() * 4 >= detail->width() * 3,
-        "a narrow detail must let the inner input+Send lane grow near-full");
+    require(narrow_lane.width() * 4 >= composer->width() * 3,
+        "a narrow composer must let its input+Send row grow near-full");
 
     // The Vision HIGH Send contract at the real visual sizes (1100x720,
     // 820x620, 640x520): the composer field/status surface stays present,
-    // and the Send action remains visible with a meaningful text-action
-    // width, its rect fully contained inside the composer band, and a real
-    // painted foreground distinguishable from its surface -- never a blank
-    // object-tree presence.
+    // and the Send action remains visible with its rect fully contained
+    // inside the composer lane and a real painted foreground
+    // distinguishable from its surface -- never a blank object-tree
+    // presence.
     for (const auto &[width, height] : std::vector<std::pair<int, int>>{
              {1100, 720}, {820, 620}, {640, 520}}) {
         window.resize(width, height);
@@ -3425,10 +3405,6 @@ void verify_modern_composer_surface(
                 && send_button->isVisible(),
             "the composer field and Send action must stay visible at every "
             "real visual size");
-        require(send_button->width() >= QFontMetrics(send_button->font())
-                .horizontalAdvance(QStringLiteral("Send")),
-            "Send must keep a meaningful text-action width so its caption "
-            "is never clipped away");
         const auto send_rect = QRect(
             send_button->mapTo(composer, QPoint(0, 0)),
             send_button->size());
@@ -3456,12 +3432,10 @@ void verify_modern_composer_surface(
     require(!cleanup_error, "modern-composer fixtures must be removed");
 }
 
-// The composer unit RED: the current production keeps the composer as one
-// full-width `st::msgInBg` dark band under the conversation and its Send as a
-// wide text RoundButton, so this journey must fail exactly the bounded
-// floating geometry and the compact icon send -- never fonts, focus, or the
-// send flow itself (already proven by verify_composer_send_behavior and
-// verify_modern_composer_surface).
+// The floating-composer contract: the composer stays one bounded floating
+// surface inset from both detail edges with a compact arrow send -- never
+// fonts, focus, or the send flow itself (already proven by
+// verify_composer_send_behavior and verify_modern_composer_surface).
 void verify_floating_composer_surface(
         lingtai::desktop::NativeShell &shell,
         const fs::path &sandbox) {
@@ -4172,9 +4146,7 @@ void verify_conversation_slash_interception(
 // regions must not paint their own boxed dark backgrounds or hard-edged
 // plain-shadow frames, and every surface fill must come from the base
 // (`windowBg`), elevated (`windowBgOver`), or selected (`dialogsBgActive`)
-// palette hierarchy. Current production paints the full-width composer band
-// from the bubble token `msgInBg` and frames the chat top bar with a
-// `Ui::PlainShadow`, so it must fail the composer and shadow-frame assertions.
+// palette hierarchy.
 void verify_two_surface_hierarchy(
         lingtai::desktop::NativeShell &shell,
         const fs::path &sandbox) {
