@@ -371,27 +371,28 @@ AgentRoster::AgentRoster(QWidget *parent)
                 QPoint(0, selector->height())));
         });
 
-    layout->addWidget(make_label(
-        this, QStringLiteral("Workspace"), "lingtai_sidebar_workspace_label",
-        11, QFont::Medium));
-
     auto *roster = new Ui::RpWidget(this);
     roster->setObjectName("lingtai_agent_roster");
     roster->setAccessibleName(QStringLiteral("Agent roster"));
     auto *roster_layout = new QVBoxLayout(roster);
     roster_layout->setContentsMargins(0, 0, 0, 0);
     roster_layout->setSpacing(6);
-    roster_layout->addWidget(make_label(
+    auto *heading_row = new QHBoxLayout;
+    heading_row->setSpacing(6);
+    heading_row->addWidget(make_label(
         roster, QStringLiteral("Agents"), "lingtai_agent_roster_heading", 12,
         QFont::DemiBold));
     roster_state_ = make_label(
         roster, QString(), "lingtai_agent_roster_state", 10);
     roster_state_->setAccessibleName(QStringLiteral("Agent roster status"));
-    roster_layout->addWidget(roster_state_);
+    heading_row->addStretch();
+    heading_row->addWidget(roster_state_);
+    roster_layout->addLayout(heading_row);
     scroll_ = new QScrollArea(roster);
     scroll_->setObjectName("lingtai_agent_roster_scroll");
     scroll_->setAccessibleName(QStringLiteral("Agent roster rows"));
     scroll_->setWidgetResizable(true);
+    scroll_->setFrameShape(QFrame::NoFrame);
     // The roster surface and its scroll viewport both fill the shared
     // `windowBg` field color instead of a raw white Base surface.
     auto viewport_palette = scroll_->viewport()->palette();
@@ -427,12 +428,10 @@ void AgentRoster::set_row_click_handler(RowClickHandler handler) {
 
 void AgentRoster::update_state_label(const AgentSnapshot &snapshot) {
     const auto visible = visible_rows(snapshot);
-    roster_state_->setText(snapshot.scan != AgentScanState::complete
-        ? QStringLiteral("Roster unavailable")
-        : visible.empty()
-            ? QStringLiteral("No Agents found — scan complete")
-            : QStringLiteral("%1 Agent(s) — scan complete")
-                .arg(visible.size()));
+    roster_state_->setText(snapshot.scan == AgentScanState::complete
+            && !visible.empty()
+        ? QStringLiteral("%1").arg(visible.size())
+        : QString());
 }
 
 void AgentRoster::update_checked_states(
