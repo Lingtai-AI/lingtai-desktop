@@ -13,6 +13,7 @@
 #include <QtGui/QImage>
 #include <QtGui/QPalette>
 #include <QtWidgets/QApplication>
+#include <QtWidgets/QFrame>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLayout>
 #include <QtWidgets/QMenu>
@@ -75,10 +76,9 @@ constexpr double kInkDistance = 48.0;
 constexpr double kHierarchyScaleRatio = 1.05;
 constexpr double kSecondaryMaturityRatio = 0.85;
 constexpr double kSelectedNeutralMajority = 0.5;
-constexpr double kAccentBoundedFraction = 1.0 / 3.0;
 constexpr double kAvatarDiameter = 40.0;
 constexpr double kRowVerticalFrame = 8.0;
-constexpr double kRowHorizontalFrame = 10.0;
+constexpr double kRowHorizontalFrame = 14.0;
 constexpr double kAvatarTextGap = 10.0;
 
 QColor sample_idle_background(const QImage &image, double dpr) {
@@ -250,9 +250,20 @@ void verify_selected_row_keeps_neutral_majority_surface() {
         "the selected row surface must keep a calm neutral majority painted "
         "from the shared windowBgOver token rather than a saturated full-row "
         "accent fill");
-    require(double(accent_pixels) / area <= kAccentBoundedFraction,
-        "the saturated dialogsBgActive accent must stay a bounded minority "
-        "cue on the selected row, never the full-row fill");
+    require(accent_pixels == 0,
+        "the selected row must not paint the old dialogsBgActive left stripe");
+    require(image.pixelColor(0, 0) != neutral
+            && image.pixelColor(image.width() - 1, 0) != neutral
+            && image.pixelColor(0, image.height() - 1) != neutral
+            && image.pixelColor(image.width() - 1, image.height() - 1)
+                != neutral,
+        "the selected windowBgOver surface must leave all four outer corners "
+        "outside its rounded body");
+    const auto dpr = std::max(1.0, double(image.devicePixelRatio()));
+    require(image.pixelColor(
+            image.width() - int(4.0 * dpr), image.height() / 2) == neutral,
+        "the rounded selected body must still fill its interior with the "
+        "shared windowBgOver token");
 }
 
 void verify_human_hidden_from_roster() {
@@ -294,9 +305,26 @@ void verify_human_hidden_from_roster() {
 
     auto *state = roster.findChild<QLabel *>("lingtai_agent_roster_state");
     require(state != nullptr, "the roster state label must exist");
-    require(state->text()
-            == QStringLiteral("3 Agent(s) — scan complete"),
-        "roster state must count visible Agent rows only");
+    require(state->text() == QStringLiteral("3"),
+        "the compact roster header must show only the visible Agent count");
+    require(roster.findChild<QLabel *>(
+            "lingtai_sidebar_workspace_label") == nullptr,
+        "the redundant Workspace label must be absent");
+    auto *heading = roster.findChild<QLabel *>(
+        "lingtai_agent_roster_heading");
+    auto *scroll = roster.findChild<QScrollArea *>(
+        "lingtai_agent_roster_scroll");
+    require(heading != nullptr && scroll != nullptr,
+        "the compact Agents heading and roster scroll area must exist");
+    roster.show();
+    QCoreApplication::processEvents();
+    require(std::abs(heading->geometry().center().y()
+            - state->geometry().center().y()) <= 2,
+        "the Agents heading and optional count must share one compact row");
+    require(scroll->frameShape() == QFrame::NoFrame,
+        "the Agent-list scroll area must not draw an outer frame");
+    require(rows->layout()->spacing() == 2,
+        "the borderless Agent rows must use the tighter two-pixel gap");
 
     roster.set_rows(snapshot, fs::path("c-agent"));
     require(agent_row(roster, "c-agent")->isChecked()
@@ -367,11 +395,9 @@ void verify_intrinsic_roster_row_behavior() {
         "elidedText call, not pixel-claimed here");
 }
 
-// I2 modern-roster RED contract (fails on the exact base). The idle and the
-// selected row share the same `windowBgOver` body fill, so outside the 4px
-// leading accent strip their grabs are identical; whole-row selection must
-// make them materially different while the selected row keeps its calm
-// neutral-majority / accent-minority surface. The idle row and the list field
+// I2 modern-roster contract. Whole-row selection must visibly diverge from
+// idle with a calm rounded `windowBgOver` body and no legacy accent stripe.
+// The idle row and the list field
 // must both read as the calm `st::windowBg` semantic role (the field currently
 // paints no palette role and never autofills), and the visible secondary line
 // must render the friendly 1:1 label form while the accessible description
@@ -415,11 +441,10 @@ void verify_row_selection_diverges_and_field_uses_window_bg() {
         "the idle and selected row grabs must be the same size to compare");
     const auto dpr = std::max(1.0, double(idle_image.devicePixelRatio()));
 
-    const auto accent_physical = int(4.0 * dpr);
     auto differing_pixels = 0;
     auto comparable_pixels = 0;
     for (auto y = 0; y != idle_image.height(); ++y) {
-        for (auto x = accent_physical; x != idle_image.width(); ++x) {
+        for (auto x = 0; x != idle_image.width(); ++x) {
             ++comparable_pixels;
             if (idle_image.pixelColor(x, y)
                     != selected_image.pixelColor(x, y)) {
@@ -429,9 +454,8 @@ void verify_row_selection_diverges_and_field_uses_window_bg() {
     }
     require(double(differing_pixels) / comparable_pixels
             >= kWholeRowSelectionDifference,
-        "outside the 4px accent strip the idle and selected row bodies must "
-        "differ materially: whole-row selection must be visible, not only the "
-        "narrow accent cue");
+        "the idle and selected row bodies must differ materially across "
+        "the rounded surface rather than through a narrow accent cue");
 
     const auto neutral = st::windowBgOver->c;
     const auto accent = st::dialogsBgActive->c;
@@ -453,9 +477,8 @@ void verify_row_selection_diverges_and_field_uses_window_bg() {
     require(double(neutral_pixels) / selected_area >= kSelectedNeutralMajority,
         "the selected row must keep its calm neutral-majority surface from "
         "windowBgOver as its body diverges from the idle row");
-    require(double(accent_pixels) / selected_area <= kAccentBoundedFraction,
-        "the dialogsBgActive accent must stay a bounded minority cue on the "
-        "selected row");
+    require(accent_pixels == 0,
+        "the selected row must not paint any dialogsBgActive stripe pixels");
 
     auto *rows = idle_roster.findChild<Ui::RpWidget *>(
         "lingtai_agent_roster_rows");
