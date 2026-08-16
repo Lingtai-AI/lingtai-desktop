@@ -4249,7 +4249,7 @@ int main(int argc, char **argv) {
         && std::string_view(argv[2]) == "--modern-composer-only";
     const auto slash_interception_only = argc == 3
         && std::string_view(argv[2]) == "--slash-interception-only";
-const auto compact_header_only = argc == 3
+    const auto compact_header_only = argc == 3
         && std::string_view(argv[2]) == "--compact-header-only";
     const auto two_surface_only = argc == 3
         && std::string_view(argv[2]) == "--two-surface-only";
@@ -4306,7 +4306,7 @@ const auto compact_header_only = argc == 3
             std::cout << "native shell behavior: OK\n";
             return 0;
         }
-if (compact_header_only) {
+        if (compact_header_only) {
             lingtai::desktop::NativeShell shell;
             shell.show_offscreen();
             QCoreApplication::processEvents();
@@ -4380,7 +4380,7 @@ if (compact_header_only) {
             shell, project_root / "commit-s1-two-surface-fixture");
         verify_modern_composer_surface(
             shell, project_root / "commit-m4-composer-surface-fixture");
-verify_plain_underline_page_tabs(
+        verify_plain_underline_page_tabs(
             shell, project_root / "commit-tab-plain-underline-fixture");
         verify_floating_composer_surface(
             shell, project_root / "commit-fc-floating-composer-fixture");
