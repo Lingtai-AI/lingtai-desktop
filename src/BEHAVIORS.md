@@ -64,11 +64,14 @@ its code.
 - The argument-free current surfaces are exact and case-sensitive: `/presets`
   selects the existing Presets page; `/agents` uses the existing narrow Back
   path or, in the wide two-column view, preserves selection and focuses its
-  existing roster row; `/help` reports only `/agents`, `/presets`, `/help`, and
-  `/quit`; `/quit` closes only the Desktop window.
-- Every other parsed command, including `/sleep` and a supported name with
-  arguments, sets exactly `Command not available in this Desktop build.` and
-  performs no mail or Agent lifecycle side effect.
+  existing roster row; `/sleep` and `/cpr` reuse the existing selected-Agent
+  Request sleep and Start owners and their status surfaces; `/help` reports only
+  `/agents`, `/presets`, `/sleep`, `/cpr`, `/help`, and `/quit`; `/quit` closes
+  only the Desktop window.
+- Every other parsed command, including every argument-bearing form (such as
+  `/sleep all` and `/cpr all`) and later lifecycle command, stays local, sets
+  exactly `Command not available in this Desktop build.`, and performs no mail
+  or Agent lifecycle side effect.
 
 ## State and selection
 
@@ -181,10 +184,14 @@ its code.
 
 ## Request sleep
 
-- Eligibility at click time: valid manifest, main/agent role, `alive`
+- Empty-form exact case-sensitive `/sleep` clears the composer status and calls
+  only the existing selected-Agent Request sleep handler, reusing its
+  `request_agent_sleep` owner, eligibility, observation, and status surface.
+- Eligibility at invocation time: valid manifest, main/agent role, `alive`
   presence, and a known `.agent.json.state` other than `asleep`/`suspended`.
-- The click reruns `project_agents` once, captures a log baseline, writes the
-  `.sleep` marker, shows exactly `Sleep requested.`, disables the button, and
+- The shared handler reruns `project_agents` once, captures a log baseline,
+  writes the `.sleep` marker, shows exactly `Sleep requested.`, disables the
+  button, and
   observes for at most 3 s via the existing timer. Terminal text reports
   whether `sleep_received(source="signal_file")` was observed and the
   re-projected current state — never `queued` or a lifecycle verdict from the
@@ -193,10 +200,15 @@ its code.
 
 ## Start Agent
 
+- Empty-form exact case-sensitive `/cpr` clears the composer status and calls
+  only the existing selected-Agent Start handler, reusing its `start_agent`
+  owner, eligibility, observation, and status surface.
 - The Start action is hidden (not merely disabled) for a heartbeat-live
   selection and shown only when a valid main/agent row has exactly a stale or
-  missing heartbeat.
-- The click reruns `project_agents` once, then starts
+  missing heartbeat. If the shared handler's fresh re-read instead finds the
+  selected row heartbeat-live, it reports exactly `Agent is already online.`;
+  missing, nonselected, and other ineligible cases keep their existing behavior.
+- The shared handler reruns `project_agents` once, then starts
   `<python> -m lingtai run <agent-dir>` detached and shell-free, redirecting
   stdout/stderr to the Agent's own `logs/agent.log` (created first). It shows
   `Starting Agent...` and observes for at most 10 s: success is proven only

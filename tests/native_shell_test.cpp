@@ -140,7 +140,7 @@ std::string read_file(const fs::path &path) {
 }
 
 // Writes one executable POSIX shell "python" stand-in used only by the
-// Start Agent journey below. It never runs a real interpreter: it records
+// Start Agent journeys below. It never runs a real interpreter: it records
 // its exact received argv, then -- only when `heartbeat_path` is given --
 // simulates the target kernel's later fresh-heartbeat write after a short
 // delay, from a detached background subshell independent of this test
@@ -3499,11 +3499,11 @@ void verify_responsive_header_priority(
     require(!cleanup_error, "responsive-header fixtures must be removed");
 }
 
-// The U1 composer-command contract: every leading-slash command in this
+// The U1/U2 composer-command contract: every leading-slash command in this
 // journey is submitted through the real InputField Return path. Local
-// navigation/help/quit must never become DirectPublisher mail, while the
-// already-parsed but deliberately unavailable `/sleep` must never become a
-// lifecycle signal in this slice.
+// navigation/help/quit and selected-Agent sleep/start must never become
+// DirectPublisher mail, while argument-bearing lifecycle and later commands
+// remain deliberately unavailable in this slice.
 void verify_conversation_slash_interception(
         lingtai::desktop::NativeShell &shell,
         const fs::path &sandbox) {
@@ -3518,6 +3518,10 @@ void verify_conversation_slash_interception(
         window, "lingtai_composer_send_button");
     auto *status = required_child<QLabel>(
         window, "lingtai_composer_status");
+    auto *start_status = required_child<QLabel>(
+        window, "lingtai_selected_agent_start_status");
+    auto *sleep_status = required_child<QLabel>(
+        window, "lingtai_selected_agent_sleep_status");
     auto *conversation_nav = required_child<QPushButton>(
         window, "lingtai_agent_page_nav_conversation");
     auto *presets_nav = required_child<QPushButton>(
@@ -3535,6 +3539,20 @@ void verify_conversation_slash_interception(
     write_file(target / ".agent.heartbeat", std::to_string(
         std::chrono::duration<double>(
             std::chrono::system_clock::now().time_since_epoch()).count()));
+
+    const auto beta = project / ".lingtai/beta";
+    write_file(beta / ".agent.json",
+        R"({"admin":{},"agent_id":"20260712-191609-b001",)"
+        R"("agent_name":"beta","address":"beta","state":"idle"})");
+    const auto beta_python = sandbox / "runtime-beta/bin/python";
+    const auto beta_argv = sandbox / "argv-beta.txt";
+    write_fixture_python(beta_python, beta_argv, std::nullopt, 0);
+    const auto beta_runtime = beta_python.parent_path().parent_path();
+    for (const auto &agent : {target, beta}) {
+        write_file(agent / "init.json",
+            QStringLiteral(R"({"venv_path":"%1"})")
+                .arg(path_text(beta_runtime)).toStdString());
+    }
 
     const auto outbox_leaf_count = [&] {
         auto count = std::size_t{0};
@@ -3601,11 +3619,26 @@ void verify_conversation_slash_interception(
         "raw /sleep must clear the composer after local submission");
     require(outbox_leaf_count() == 0,
         "raw /sleep must stay local and create no human outbox leaf");
-    require(!fs::exists(target / ".sleep"),
-        "raw /sleep must create no Agent lifecycle signal in U1");
-    require(status->text() == QStringLiteral(
-                "Command not available in this Desktop build."),
-        "raw /sleep must show the exact unavailable-in-this-build status");
+    require(fs::exists(target / ".sleep"),
+        "raw empty-form /sleep must create the selected alpha/.sleep "
+        "lifecycle signal");
+    require(read_file(target / ".sleep").empty(),
+        "raw empty-form /sleep must create the exact zero-byte .sleep marker");
+    require(sleep_status->text() == QStringLiteral("Sleep requested."),
+        "raw empty-form /sleep must report the existing owner's exact "
+        "Sleep requested. status");
+
+    submit_command(QStringLiteral("/cpr"));
+    require(input->getLastText().isEmpty(),
+        "raw /cpr must clear the composer after local submission");
+    require(outbox_leaf_count() == 0,
+        "raw /cpr on live alpha must stay local and create no outbox leaf");
+    require(start_status->text() == QStringLiteral("Agent is already online."),
+        "raw empty-form /cpr on live alpha must report the exact truthful "
+        "TUI-equivalent status in the existing Start surface");
+    require(!fs::exists(beta_argv)
+            && !fs::exists(target / "logs/agent.log"),
+        "raw empty-form /cpr on live alpha must launch nothing");
 
     submit_command(QStringLiteral("/help"));
     require(input->getLastText().isEmpty(),
@@ -3615,27 +3648,95 @@ void verify_conversation_slash_interception(
     const auto help = status->text();
     require(!help.isEmpty() && help.size() <= 512,
         "raw /help must expose one bounded nonempty local response");
-    for (const auto *command : {"/agents", "/presets", "/help", "/quit"}) {
+    for (const auto *command : {
+             "/agents", "/presets", "/sleep", "/cpr", "/help", "/quit"}) {
         require(help.contains(QString::fromLatin1(command)),
-            std::string("raw /help must expose the available U1 command ")
+            std::string("raw /help must expose the available command ")
                 + command);
     }
-    require(!help.contains(QStringLiteral("/start"), Qt::CaseInsensitive)
-            && !help.contains(QStringLiteral("/wake"), Qt::CaseInsensitive)
-            && (!help.contains(QStringLiteral("/sleep"), Qt::CaseInsensitive)
-                || help.contains(
-                    QStringLiteral("not available"), Qt::CaseInsensitive)),
-        "raw /help must not claim unavailable lifecycle execution");
-    require(!fs::exists(target / ".sleep"),
-        "raw /help must create no Agent lifecycle signal");
+    for (const auto *command : {
+             "/clear", "/refresh", "/suspend", "/start", "/wake"}) {
+        require(!help.contains(
+                    QString::fromLatin1(command), Qt::CaseInsensitive),
+            std::string("raw /help must not claim the unavailable command ")
+                + command);
+    }
+    require(fs::exists(target / ".sleep")
+            && !fs::exists(beta / ".sleep") && !fs::exists(beta_argv),
+        "raw /help must not create, remove, or launch any Agent lifecycle signal");
+
+    click_agent(window, "beta");
+    require(shell.selection_state().selected_agent_directory_key()
+                == std::optional<fs::path>("beta")
+            && input->isEnabled() && send_button->isEnabled(),
+        "the stale beta fixture must be selected before CPR command checks");
+    const auto unavailable = QStringLiteral(
+        "Command not available in this Desktop build.");
+    for (const auto &command : {
+             QStringLiteral("/sleep all"), QStringLiteral("/cpr all"),
+             QStringLiteral("/sleep later"), QStringLiteral("/cpr later")}) {
+        submit_command(command);
+        require(input->getLastText().isEmpty(),
+            "argument-bearing lifecycle commands must remain commands and "
+            "clear the composer");
+        require(outbox_leaf_count() == 0,
+            "argument-bearing lifecycle commands must stay local and create "
+            "no human outbox leaf");
+        require(status->text() == unavailable,
+            "all and other lifecycle arguments must report the exact "
+            "unavailable-in-this-build status");
+    }
+    require(!fs::exists(beta / ".sleep") && !fs::exists(beta_argv),
+        "argument-bearing /sleep and /cpr must neither signal nor launch beta");
+
+    submit_command(QStringLiteral("/definitely-unknown"));
+    require(input->getLastText().isEmpty(),
+        "an unknown slash command must remain a command and clear the composer");
+    require(outbox_leaf_count() == 0,
+        "an unknown slash command must stay local and create no outbox leaf");
+    require(status->text() == unavailable,
+        "an unknown slash command must keep the exact unavailable status");
+    require(!fs::exists(beta / ".sleep") && !fs::exists(beta_argv),
+        "an unknown slash command must create no Agent lifecycle signal");
+
+    const auto cpr_started = std::chrono::steady_clock::now();
+    submit_command(QStringLiteral("/cpr"));
+    const auto cpr_elapsed = std::chrono::steady_clock::now() - cpr_started;
+    require(input->getLastText().isEmpty(),
+        "raw /cpr must clear the composer after local submission");
+    require(outbox_leaf_count() == 0,
+        "raw /cpr on stale beta must stay local and create no outbox leaf");
+    require(cpr_elapsed < std::chrono::seconds(1),
+        "raw empty-form /cpr must return promptly through the existing Start "
+        "owner, never blocking the composer");
+    require(start_status->text() == QStringLiteral("Starting Agent..."),
+        "raw empty-form /cpr on stale beta must show the existing Start "
+        "owner's exact pending status");
+    require(!fs::exists(beta / ".sleep"),
+        "raw empty-form /cpr must not create a sleep signal");
+
+    const auto argv_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!fs::exists(beta_argv)
+            && std::chrono::steady_clock::now() < argv_deadline) {
+        QThread::msleep(20);
+    }
+    require(fs::exists(beta_argv),
+        "raw empty-form /cpr must invoke beta's configured fixture runtime");
+    const auto exact_beta_argv = QStringLiteral("-m\nlingtai\nrun\n%1\n")
+        .arg(path_text(fs::canonical(beta))).toStdString();
+    require(read_file(beta_argv) == exact_beta_argv,
+        "raw empty-form /cpr argv must be the exact separate four lines -m, "
+        "lingtai, run, and beta's absolute canonical directory");
 
     submit_command(QStringLiteral("/quit"));
     require(input->getLastText().isEmpty(),
         "raw /quit must clear the composer after local submission");
     require(outbox_leaf_count() == 0,
         "raw /quit must stay local and create no human outbox leaf");
-    require(!fs::exists(target / ".sleep"),
-        "raw /quit must create no Agent lifecycle signal");
+    require(!fs::exists(beta / ".sleep")
+            && read_file(beta_argv) == exact_beta_argv,
+        "raw /quit must create no additional Agent lifecycle signal");
     require(!window.isVisible(),
         "raw /quit must close the real Desktop window locally");
 
@@ -3647,7 +3748,7 @@ void verify_conversation_slash_interception(
 int main(int argc, char **argv) {
     // Test-local execution modes: the exact binary with a fresh fixture root
     // and one literal flag runs only the R1 resizable-sidebar, R4
-    // responsive-header, M4 modern-composer, or U1 slash-interception journey,
+    // responsive-header, M4 modern-composer, or U1/U2 slash-interception journey,
     // so the warm RED/GREEN never has to pass unrelated accepted-base debt.
     const auto responsive_sidebar_only = argc == 3
         && std::string_view(argv[2]) == "--responsive-sidebar-only";
@@ -3698,7 +3799,7 @@ int main(int argc, char **argv) {
             shell.show_offscreen();
             QCoreApplication::processEvents();
             verify_conversation_slash_interception(
-                shell, project_root / "u1-slash-interception-fixture");
+                shell, project_root / "u2-slash-interception-fixture");
             std::cout << "native shell behavior: OK\n";
             return 0;
         }

@@ -2055,9 +2055,19 @@ void NativeShell::handle_send_message() {
             }
             return;
         }
+        if (command->name == "sleep") {
+            status->clear();
+            handle_request_sleep();
+            return;
+        }
+        if (command->name == "cpr") {
+            status->clear();
+            handle_start_agent();
+            return;
+        }
         if (command->name == "help") {
             status->setText(QStringLiteral(
-                "Available commands: /agents, /presets, /help, /quit."));
+                "Available commands: /agents, /presets, /sleep, /cpr, /help, /quit."));
             return;
         }
         if (command->name == "quit") {
@@ -2527,6 +2537,9 @@ void NativeShell::handle_start_agent() {
 
     const auto *item = selectable_item(agents_, key);
     if (!item || !agent_start_eligible(*item)) {
+        if (item && item->presence == AgentPresenceKind::alive) {
+            status->setText(QStringLiteral("Agent is already online."));
+        }
         return; // render_roster() above already reflects fresh eligibility
     }
 

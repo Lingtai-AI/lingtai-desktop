@@ -106,9 +106,10 @@ caller proposes typed transitions only; the model performs no reads.
    timer, re-derives visible routes from C1 truth, and proposes transitions
    through the model. It also owns the composer-local dispatch after calling
    `parse_slash_command` on raw text: every parsed command terminates locally
-   before `send_direct_mail`, and U1 reuses only the existing roster, Presets,
-   status, and window surfaces. It does not re-implement a reader or execute a
-   lifecycle operation from slash dispatch.
+   before `send_direct_mail`. U2 lifecycle slash dispatch may invoke only the
+   existing `request_agent_sleep` and `start_agent` owners through their
+   existing selected-Agent handlers; `NativeShell` does not reimplement their
+   lifecycle behavior, and this composition changes no public interface.
 5. **UI widgets do not absorb domain/business behavior.** `AgentRoster`
    renders rows and reports clicks; `ConversationSurface` renders rows and
    paints bubbles. Both hold only view state.
