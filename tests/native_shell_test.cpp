@@ -3322,6 +3322,55 @@ void verify_responsive_header_priority(
     require(trailing_room != nullptr && pages_nav_layout->stretch(2) > 0,
         "the Agent pages nav must trail a positive-stretch spacer");
 
+    // (A) The checked Conversation page affordance must paint its active
+    // state through real semantic palette accents: some
+    // `st::dialogsTextFgService` accent text over at most a bounded minority
+    // of `st::dialogsBgActive` surface -- never a full-slab solid background.
+    required_child<QPushButton>(window, "lingtai_agent_page_nav_conversation")
+        ->click();
+    QCoreApplication::processEvents();
+    const auto conversation_nav_image = conversation_nav->grab().toImage();
+    auto accent_pixels = 0;
+    auto active_pixels = 0;
+    for (auto y = 0; y != conversation_nav_image.height(); ++y) {
+        for (auto x = 0; x != conversation_nav_image.width(); ++x) {
+            if (conversation_nav_image.pixelColor(x, y)
+                    == st::dialogsTextFgService->c) {
+                ++accent_pixels;
+            } else if (conversation_nav_image.pixelColor(x, y)
+                    == st::dialogsBgActive->c) {
+                ++active_pixels;
+            }
+        }
+    }
+    require(accent_pixels > 0,
+        "the checked Conversation page affordance must paint real "
+        "st::dialogsTextFgService accent pixels, not a blank grab");
+    require(active_pixels * 4 < conversation_nav_image.width()
+                * conversation_nav_image.height(),
+        "the checked Conversation page must keep st::dialogsBgActive to a "
+        "bounded minority (<25%) of its surface, never the full-slab "
+        "background");
+
+    // (B) The Start/Sleep status read-outs belong inside their own action
+    // rows, never as separate full-width detail siblings.
+    auto *start_status = required_child<QLabel>(
+        window, "lingtai_selected_agent_start_status");
+    auto *sleep_status = required_child<QLabel>(
+        window, "lingtai_selected_agent_sleep_status");
+    auto *start_row = required_child<Ui::RpWidget>(
+        window, "lingtai_selected_agent_start_row");
+    auto *sleep_row = required_child<Ui::RpWidget>(
+        window, "lingtai_selected_agent_sleep_row");
+    require(start_status->parentWidget() == start_row,
+        "the Start status must be parented inside its own "
+        "lingtai_selected_agent_start_row, never a separate full-width "
+        "detail band");
+    require(sleep_status->parentWidget() == sleep_row,
+        "the Request sleep status must be parented inside its own "
+        "lingtai_selected_agent_sleep_row, never a separate full-width "
+        "detail band");
+
     std::error_code cleanup_error;
     fs::remove_all(sandbox, cleanup_error);
     require(!cleanup_error, "responsive-header fixtures must be removed");

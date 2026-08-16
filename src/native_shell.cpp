@@ -28,6 +28,7 @@
 #include <QtCore/QTimer>
 #include <QtCore/QVariant>
 #include <QtGui/QFont>
+#include <QtGui/QFontMetrics>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QMouseEvent>
 #include <QtGui/QPainter>
@@ -79,13 +80,6 @@ constexpr auto kMaximumRosterWidthRatio = 0.30;
 constexpr auto kRosterResizeHandleWidth = 8;
 constexpr auto kTwoColumnAvailableThreshold =
     kRosterColumnWidth + kDetailColumnMinimumWidth;
-
-// The one bounded composer lane is a centered surface narrower than the
-// detail pane: it relaxes to near-full width at the detail's source-backed
-// 380px minimum and plateaus at a visibly narrower lane (85%) once the
-// detail reaches 1000px, with symmetric side insets throughout.
-constexpr auto kComposerWideDetailWidth = 1000;
-constexpr auto kComposerWideWidthRatio = 0.85;
 
 namespace fs = std::filesystem;
 
@@ -210,9 +204,9 @@ private:
 
 // The one compact selected-Agent page navigation control: a checkable
 // two-line-free button that paints its selected and hover states from the same
-// shared palette the dialog list uses (`dialogsBgActive` selected,
-// `windowBgOver` hover), with the resting state left transparent so the chat
-// surface shows through.
+// roster surface token (`windowBgOver` for both), marks the selected page with
+// one short `dialogsBgActive` underline, and leaves the resting state
+// transparent so the chat surface shows through.
 class PageNavButton final : public QPushButton {
 public:
     explicit PageNavButton(QWidget *parent, const QString &text)
@@ -224,17 +218,21 @@ public:
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter painter(this);
-        if (isChecked()) {
-            painter.fillRect(rect(), st::dialogsBgActive);
-        } else if (isDown() || underMouse()) {
+        if (isChecked() || isDown() || underMouse()) {
             painter.fillRect(rect(), st::windowBgOver);
         }
         auto font = this->font();
         font.setPointSize(11);
         font.setWeight(isChecked() ? QFont::DemiBold : QFont::Normal);
         painter.setFont(font);
-        painter.setPen(isChecked() ? st::windowFgActive : st::windowSubTextFg);
+        painter.setPen(isChecked() ? st::dialogsTextFgService : st::windowSubTextFg);
         painter.drawText(rect(), Qt::AlignCenter, text());
+        if (isChecked()) {
+            const auto underline_width = qMin(width(), 24);
+            painter.fillRect(
+                (width() - underline_width) / 2, height() - 2,
+                underline_width, 2, st::dialogsBgActive);
+        }
     }
 };
 
@@ -857,14 +855,15 @@ NativeShell::NativeShell()
     auto *top_bar = new QWidget(detail);
     top_bar->setObjectName("lingtai_chat_top_bar");
     top_bar->setAccessibleName(QStringLiteral("Selected Agent"));
+    top_bar->setFixedHeight(54);
     auto *top_bar_layout = new QHBoxLayout(top_bar);
-    top_bar_layout->setContentsMargins(0, 0, 0, 0);
+    top_bar_layout->setContentsMargins(12, 8, 12, 8);
     top_bar_layout->setSpacing(8);
     auto *identity_column = new QVBoxLayout;
     identity_column->setContentsMargins(0, 0, 0, 0);
     identity_column->setSpacing(2);
     auto *presentation_name = make_label(
-        top_bar, QString(), "lingtai_selected_agent_presentation_name", 13,
+        top_bar, QString(), "lingtai_selected_agent_presentation_name", 14,
         QFont::DemiBold);
     presentation_name->setAccessibleName(
         QStringLiteral("Selected Agent presentation name"));
@@ -896,7 +895,7 @@ NativeShell::NativeShell()
     auto *start_row = new Ui::RpWidget(top_bar);
     start_row->setObjectName("lingtai_selected_agent_start_row");
     start_row->setAccessibleName(QStringLiteral("Start Agent"));
-    auto *start_row_layout = new QHBoxLayout(start_row);
+    auto *start_row_layout = new QVBoxLayout(start_row);
     start_row_layout->setContentsMargins(0, 0, 0, 0);
     start_row_layout->setSpacing(0);
     auto *start_button = new PaletteActionButton(
@@ -911,6 +910,13 @@ NativeShell::NativeShell()
         handle_start_agent();
     });
     start_row_layout->addWidget(start_button);
+    auto *start_status = make_label(
+        start_row, QString(), "lingtai_selected_agent_start_status", 10);
+    start_status->setAccessibleName(QStringLiteral("Start Agent status"));
+    start_status->setMaximumWidth(160);
+    start_status->setMaximumHeight(12);
+    start_status->setWordWrap(false);
+    start_row_layout->addWidget(start_status);
     // Reserve the action region's height from the row's own layout so the
     // chat surface below never jumps when the Start button is hidden for a
     // heartbeat-live Agent; visibility/enablement still track eligibility
@@ -928,7 +934,7 @@ NativeShell::NativeShell()
     auto *sleep_row = new Ui::RpWidget(top_bar);
     sleep_row->setObjectName("lingtai_selected_agent_sleep_row");
     sleep_row->setAccessibleName(QStringLiteral("Request sleep"));
-    auto *sleep_row_layout = new QHBoxLayout(sleep_row);
+    auto *sleep_row_layout = new QVBoxLayout(sleep_row);
     sleep_row_layout->setContentsMargins(0, 0, 0, 0);
     sleep_row_layout->setSpacing(0);
     auto *sleep_button = new PaletteActionButton(
@@ -943,6 +949,13 @@ NativeShell::NativeShell()
         handle_request_sleep();
     });
     sleep_row_layout->addWidget(sleep_button);
+    auto *sleep_status = make_label(
+        sleep_row, QString(), "lingtai_selected_agent_sleep_status", 10);
+    sleep_status->setAccessibleName(QStringLiteral("Sleep request status"));
+    sleep_status->setMaximumWidth(160);
+    sleep_status->setMaximumHeight(12);
+    sleep_status->setWordWrap(false);
+    sleep_row_layout->addWidget(sleep_status);
     top_bar_layout->addWidget(sleep_row);
     detail_layout->addWidget(top_bar);
     // Retained once for the whole shell lifetime so the responsive fit measure
@@ -950,15 +963,6 @@ NativeShell::NativeShell()
     // actual detail width without re-deriving these two anchors.
     chat_top_bar_ = top_bar;
     selected_agent_key_ = detail_key;
-
-    auto *start_status = make_label(
-        detail, QString(), "lingtai_selected_agent_start_status", 10);
-    start_status->setAccessibleName(QStringLiteral("Start Agent status"));
-    detail_layout->addWidget(start_status);
-    auto *sleep_status = make_label(
-        detail, QString(), "lingtai_selected_agent_sleep_status", 10);
-    sleep_status->setAccessibleName(QStringLiteral("Sleep request status"));
-    detail_layout->addWidget(sleep_status);
 
     // One thin plain-shadow divider under the chat top bar, the same
     // between-surface separator the shell uses for the roster column.
@@ -1023,28 +1027,36 @@ NativeShell::NativeShell()
     // shell's palette background rather than a widget-level white base.
     detail_layout->addWidget(conversation, 1);
 
-    // The one bounded modern composer surface, directly under the
-    // conversation it sends into: the lane owns its compact input/Send action
-    // row and the send-status read-out immediately below it, so it stays one
-    // self-contained composer rather than a full-width detail strip. The lane
-    // is horizontally centered with symmetric side insets, recomputed from
-    // the actual detail width by the same body-resize owner that drives the
-    // responsive sidebar/header.
-    auto *composer = new Ui::RpWidget(detail);
+    // The one full-width modern composer band, directly under the conversation
+    // it sends into: the band's `st::msgInBg` surface spans the whole detail,
+    // and its own layout keeps one centered adaptive lane capped at 900px that
+    // owns the compact input/Send action row and both status read-outs. The
+    // lane's symmetric side insets are recomputed from the actual detail width
+    // by the same body-resize owner that drives the responsive sidebar/header.
+    auto *composer = new PaletteSurface(detail, st::msgInBg);
     composer_ = composer;
     composer->setObjectName("lingtai_composer");
     composer->setAccessibleName(QStringLiteral("Send a message"));
     auto *composer_layout = new QVBoxLayout(composer);
-    composer_layout->setContentsMargins(0, 0, 0, 0);
+    composer_layout->setContentsMargins(12, 10, 12, 8);
     composer_layout->setSpacing(4);
     // The one compact aligned action row: one vendored single-line input and
     // one explicit Send action, both owned by the composer lane and both
     // submitting through the same send path.
     auto *composer_action_row = new QHBoxLayout;
     composer_action_row->setSpacing(8);
+    // A borderless copy of the shared single-line field style: the band's own
+    // `st::msgInBg` surface is the only frame, and the field keeps the same
+    // text/placeholder face as the standard control.
+    static const auto borderless_composer_input = [] {
+        auto result = st::defaultInputField;
+        result.border = 0;
+        result.borderActive = 0;
+        return result;
+    }();
     auto *composer_input = new Ui::InputField(
         composer,
-        st::defaultInputField,
+        borderless_composer_input,
         Ui::InputField::Mode::SingleLine,
         rpl::single(QStringLiteral("Message…")));
     composer_input->setObjectName("lingtai_composer_input");
@@ -1070,17 +1082,18 @@ NativeShell::NativeShell()
         composer, QString(), "lingtai_composer_status", 10);
     composer_status->setAccessibleName(QStringLiteral("Send status"));
     composer_layout->addWidget(composer_status);
-    detail_layout->addWidget(composer, 0, Qt::AlignHCenter);
+    // The conversation's own compact read-out shares the same lane, directly
+    // under the send status: it never becomes a separate detail row.
+    auto *conversation_state = make_label(
+        composer, QString(), "lingtai_selected_agent_conversation_state", 10);
+    conversation_state->setAccessibleName(
+        QStringLiteral("Selected Agent conversation state"));
+    composer_layout->addWidget(conversation_state);
+    detail_layout->addWidget(composer, 0);
     composer_input->submits()
         | rpl::on_next([this] {
             handle_send_message();
         }, submits_lifetime_);
-
-    auto *conversation_state = make_label(
-        detail, QString(), "lingtai_selected_agent_conversation_state", 10);
-    conversation_state->setAccessibleName(
-        QStringLiteral("Selected Agent conversation state"));
-    detail_layout->addWidget(conversation_state);
 
     // The one retained bounded read-only selected-Agent source section is
     // presented through the same local structural framing: one semibold
@@ -1743,6 +1756,8 @@ void NativeShell::render_roster() {
     if (!detail_item) {
         selected_key->setText(QStringLiteral("No Agent selected"));
         presentation_name->clear();
+        presentation_name->setProperty("lingtai_full_text", QString());
+        presentation_name->setAccessibleDescription(QString());
         manifest_identity->clear();
         manifest_llm->clear();
         manifest_capabilities->clear();
@@ -1768,6 +1783,11 @@ void NativeShell::render_roster() {
             ? QString::fromStdString(*identity->true_name)
             : key;
     presentation_name->setText(title);
+    // The full presentation title is retained on the label itself (a dynamic
+    // property and the accessible description) so the responsive top-bar fit
+    // can elide only the visible text without ever losing the identity.
+    presentation_name->setProperty("lingtai_full_text", title);
+    presentation_name->setAccessibleDescription(title);
     const auto role_presence = QStringLiteral("role: %1 · presence: %2")
         .arg(role_text(detail_item->role),
             presence_text(detail_item->presence));
@@ -1896,8 +1916,13 @@ void NativeShell::render_conversation() {
     const auto history = read_direct_conversation(*route);
     const auto *presentation_name = window_->findChild<QLabel *>(
         "lingtai_selected_agent_presentation_name");
-    const auto them = presentation_name && !presentation_name->text().isEmpty()
-        ? presentation_name->text()
+    // Sender identity always comes from the stored full title, never the
+    // possibly elided visible text the responsive top-bar fit may have set.
+    const auto full_title = presentation_name
+        ? presentation_name->property("lingtai_full_text").toString()
+        : QString();
+    const auto them = !full_title.isEmpty()
+        ? full_title
         : path_text(route->target_directory_key);
     // The owner rebuilds only on real change and owns the exact was-at-bottom
     // capture plus scroll restoration; composer code stays untouched.
@@ -2113,36 +2138,71 @@ void NativeShell::recompute_layout(int body_width) {
 // so on every real resize and selection change): the actual detail/header
 // width is exactly what `recompute_layout` just derived -- in Normal mode the
 // body minus the actual chosen roster width, 8px drag handle, and 1px
-// separator; in OneColumn detail the full body width. The full natural
-// top-bar row with the current key text must fit that actual width: when the
-// secondary key was previously hidden it is temporarily included so the
-// natural sizeHint measures the complete row, and the key is then left visible
-// only when it fits, so returning to sufficient width restores it. No
-// timer/event framework or persisted state; primary controls, the presentation
-// name, fonts, and object names are never touched.
+// separator; in OneColumn detail the full body width. The identity name keeps
+// its full title stored on the presentation-name label (a `lingtai_full_text`
+// dynamic property and the accessible description), so it can elide for the
+// current width while the full identity never leaves accessibility. The
+// complete row is first measured with the name unbounded and every secondary
+// element visible; if it does not fit, the secondary key hides first, then
+// both action caption labels, while the Start/Sleep rows, pills, and Back
+// stay reachable. The remaining width is then allocated to the name -- the
+// actual detail width minus the row's natural non-name width, clamped to at
+// least one pixel -- and its visible text becomes the right-elided full
+// title. No timer/event framework or persisted state; primary controls, the
+// Start/Sleep actions, fonts, and object names are never touched.
 void NativeShell::update_top_bar_fit(int detail_width) {
     if (!chat_top_bar_ || !selected_agent_key_) return;
-    const auto was_visible = selected_agent_key_->isVisible();
-    if (!was_visible) selected_agent_key_->setVisible(true);
-    const auto fits = chat_top_bar_->sizeHint().width() <= detail_width;
-    selected_agent_key_->setVisible(fits);
+    auto *presentation_name = chat_top_bar_->findChild<QLabel *>(
+        "lingtai_selected_agent_presentation_name");
+    auto *start_status = chat_top_bar_->findChild<QLabel *>(
+        "lingtai_selected_agent_start_status");
+    auto *sleep_status = chat_top_bar_->findChild<QLabel *>(
+        "lingtai_selected_agent_sleep_status");
+    if (!presentation_name || !start_status || !sleep_status) return;
+    const auto full = presentation_name->property(
+        "lingtai_full_text").toString();
+    if (full.isEmpty()) return;
+    // Measure the complete natural row: the name is unbounded with its full
+    // title restored, and the secondary key plus both action captions show.
+    presentation_name->setMaximumWidth(QWIDGETSIZE_MAX);
+    presentation_name->setText(full);
+    selected_agent_key_->setVisible(true);
+    start_status->setVisible(true);
+    sleep_status->setVisible(true);
+    // Priority cascade: the secondary key hides first, then both action
+    // captions, so the Start/Sleep rows, pills, and Back stay reachable.
+    if (chat_top_bar_->sizeHint().width() > detail_width) {
+        selected_agent_key_->setVisible(false);
+        if (chat_top_bar_->sizeHint().width() > detail_width) {
+            start_status->setVisible(false);
+            sleep_status->setVisible(false);
+        }
+    }
+    // Allocate every remaining pixel to the identity name: its maximum width
+    // is the actual detail width minus the row's natural non-name width, so
+    // the name never hides or overlaps; the visible text is the right-elided
+    // full title and the full identity stays on the property/description.
+    presentation_name->setMaximumWidth(0);
+    const auto non_name_width = chat_top_bar_->sizeHint().width();
+    const auto available = std::max(1, detail_width - non_name_width);
+    presentation_name->setMaximumWidth(available);
+    presentation_name->setText(QFontMetrics(presentation_name->font())
+        .elidedText(full, Qt::ElideRight, available));
 }
 
-// The one bounded composer lane, re-entered on every recompute (and so on
-// every real resize and selection change): its width relaxes toward
-// near-full as the actual detail width approaches the source-backed 380px
-// minimum and plateaus at a visibly narrower lane (85%) once the detail is
-// wide, keeping the lane centered by its own layout alignment with real
-// symmetric side insets. Object names, the input/Send row, and the status
+// The one full-width composer band, re-entered on every recompute (and so on
+// every real resize and selection change): the band always stretches the full
+// detail width, while its own layout keeps one centered adaptive lane capped
+// at 900px -- outer horizontal margins of at least 12px, growing to split any
+// width beyond 900px -- with the input/Send row and the two status lines
+// staying in that same lane. Object names, the input/Send row, and the status
 // wording are never touched.
 void NativeShell::update_composer_width(int detail_width) {
     if (!composer_) return;
-    const auto ramp = std::clamp(
-        double(detail_width - kDetailColumnMinimumWidth)
-            / double(kComposerWideDetailWidth - kDetailColumnMinimumWidth),
-        0.0, 1.0);
-    const auto ratio = 1.0 - (1.0 - kComposerWideWidthRatio) * ramp;
-    composer_->setFixedWidth(qRound(detail_width * ratio));
+    const auto outer = std::max(12, (detail_width - 900) / 2 + 12);
+    composer_->setMinimumWidth(0);
+    composer_->setMaximumWidth(QWIDGETSIZE_MAX);
+    composer_->layout()->setContentsMargins(outer, 10, outer, 8);
 }
 
 // Telegram's OneColumn history-back path: the narrow detail returns to the
