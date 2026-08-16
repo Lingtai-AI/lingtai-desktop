@@ -3456,6 +3456,69 @@ void verify_modern_composer_surface(
     require(!cleanup_error, "modern-composer fixtures must be removed");
 }
 
+// The composer unit RED: the current production keeps the composer as one
+// full-width `st::msgInBg` dark band under the conversation and its Send as a
+// wide text RoundButton, so this journey must fail exactly the bounded
+// floating geometry and the compact icon send -- never fonts, focus, or the
+// send flow itself (already proven by verify_composer_send_behavior and
+// verify_modern_composer_surface).
+void verify_floating_composer_surface(
+        lingtai::desktop::NativeShell &shell,
+        const fs::path &sandbox) {
+    auto &window = shell.window();
+    auto *detail = required_child<Ui::RpWidget>(
+        window, "lingtai_agent_detail");
+    auto *composer = required_child<Ui::RpWidget>(
+        window, "lingtai_composer");
+    auto *send_button = required_ui_child<Ui::RoundButton>(
+        window, "lingtai_composer_send_button");
+
+    const auto project = sandbox / "project";
+    write_file(project / ".lingtai/human/.agent.json",
+        R"({"agent_id":"20260101-000000-h001","agent_name":"Ted",)"
+        R"("address":"human","state":"active"})");
+    write_file(project / ".lingtai/alpha/.agent.json",
+        R"({"admin":{},"agent_id":"20260712-191609-a001",)"
+        R"("agent_name":"alpha","address":"alpha","state":"active"})");
+    const auto fixture_before = tree_snapshot(project);
+    const auto outcome = shell.open_project(project, std::nullopt);
+    require(outcome.disposition == ProjectOpenDisposition::opened,
+        "the floating-composer fixture project must open");
+    require(tree_snapshot(project) == fixture_before,
+        "opening the floating-composer fixture must remain read-only");
+    click_agent(window, "alpha");
+    require(shell.selection_state().selected_agent_directory_key()
+                == std::optional<fs::path>("alpha"),
+        "the floating-composer fixture Agent must be selectable");
+
+    window.resize(1200, 800);
+    QCoreApplication::processEvents();
+
+    // One bounded floating composer, never a full-width dark band under the
+    // conversation: the surface must stay inset from both detail edges.
+    require(composer->isVisible() && send_button->isVisible(),
+        "the floating composer and its send action must be visible");
+    require(composer->width() < detail->width(),
+        "the composer must be a bounded floating surface, never the "
+        "full-width st::msgInBg dark band");
+    const auto composer_left = composer->mapTo(detail, QPoint(0, 0)).x();
+    const auto composer_right =
+        detail->width() - composer_left - composer->width();
+    require(composer_left > 0 && composer_right > 0,
+        "the floating composer must sit inset from both detail edges");
+
+    // Compact icon send: an arrow-sized control with no literal text caption.
+    require(send_button->width() <= 48,
+        "the send action must be a compact icon control, never a wide text "
+        "Send button");
+    require(send_button->accessibilityName() != QStringLiteral("Send"),
+        "the send action must be an arrow icon, not a literal Send caption");
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "floating-composer fixtures must be removed");
+}
+
 // The R4 RED: the selected-Agent chat top bar must drop its secondary
 // `lingtai_selected_agent_key` metadata before any primary control when the
 // actual header width is constrained. A wide actual header shows the
@@ -4192,15 +4255,17 @@ const auto compact_header_only = argc == 3
         && std::string_view(argv[2]) == "--two-surface-only";
     const auto plain_underline_only = argc == 3
         && std::string_view(argv[2]) == "--plain-underline-only";
+    const auto floating_composer_only = argc == 3
+        && std::string_view(argv[2]) == "--floating-composer-only";
     if (argc != 2 && !responsive_sidebar_only && !responsive_header_only
             && !modern_composer_only && !slash_interception_only
             && !compact_header_only && !two_surface_only
-            && !plain_underline_only) {
+            && !plain_underline_only && !floating_composer_only) {
         std::cerr << "usage: native_shell_test PROJECT_ROOT "
                      "[--responsive-sidebar-only|--responsive-header-only|"
                      "--modern-composer-only|--slash-interception-only|"
                      "--compact-header-only|--two-surface-only|"
-                     "--plain-underline-only]\n";
+                     "--plain-underline-only|--floating-composer-only]\n";
         return 2;
     }
     try {
@@ -4268,6 +4333,15 @@ if (compact_header_only) {
             std::cout << "native shell behavior: OK\n";
             return 0;
         }
+        if (floating_composer_only) {
+            lingtai::desktop::NativeShell shell;
+            shell.show_offscreen();
+            QCoreApplication::processEvents();
+            verify_floating_composer_surface(
+                shell, project_root / "commit-fc-floating-composer-fixture");
+            std::cout << "native shell behavior: OK\n";
+            return 0;
+        }
         const auto original_palette = QApplication::palette();
         verify_dark_application_palette_inheritance(
             project_root / "commit-8-palette-fixture");
@@ -4306,8 +4380,10 @@ if (compact_header_only) {
             shell, project_root / "commit-s1-two-surface-fixture");
         verify_modern_composer_surface(
             shell, project_root / "commit-m4-composer-surface-fixture");
-        verify_plain_underline_page_tabs(
+verify_plain_underline_page_tabs(
             shell, project_root / "commit-tab-plain-underline-fixture");
+        verify_floating_composer_surface(
+            shell, project_root / "commit-fc-floating-composer-fixture");
         std::cout << "native shell behavior: OK\n";
         return 0;
     } catch (const std::exception &error) {
