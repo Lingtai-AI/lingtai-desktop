@@ -2674,13 +2674,13 @@ void verify_compact_header_hierarchy(
     // Exactly one primary action: the header owns one primary-action anchor
     // and, in wide mode, exactly one visible action button carries a caption.
     auto *primary = required_child<QPushButton>(
-        window, "lingtai_selected_agent_primary_action");
+        window, "lingtai_selected_agent_start_agent");
     require(header_child_of(primary),
         "the one primary action must live inside the selected-Agent header");
     auto primary_in_header = 0;
     for (auto *button : top_bar->findChildren<QPushButton *>()) {
         if (button->objectName()
-                == QStringLiteral("lingtai_selected_agent_primary_action")) {
+                == QStringLiteral("lingtai_selected_agent_start_agent")) {
             ++primary_in_header;
         }
     }

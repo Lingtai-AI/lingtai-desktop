@@ -955,7 +955,7 @@ NativeShell::NativeShell()
     start_row_layout->setSpacing(0);
     auto *start_button = new PaletteActionButton(
         start_row, QStringLiteral("Start Agent"));
-    start_button->setObjectName("lingtai_selected_agent_primary_action");
+    start_button->setObjectName("lingtai_selected_agent_start_agent");
     start_button->setAccessibleName(QStringLiteral("Start Agent"));
     start_button->setAccessibleDescription(QStringLiteral(
         "Starts the selected Agent's own configured runtime as a detached "
@@ -2642,7 +2642,7 @@ void NativeShell::tick_agent_sleep_observation() {
 // point, not through this function.
 void NativeShell::render_agent_start_status() {
     auto *button = window_->findChild<QPushButton *>(
-        "lingtai_selected_agent_primary_action");
+        "lingtai_selected_agent_start_agent");
     if (!button) return;
 
     const auto *item = selection_state_.active_project()
@@ -2665,7 +2665,7 @@ void NativeShell::handle_start_agent() {
     auto *status = window_->findChild<QLabel *>(
         "lingtai_selected_agent_start_status");
     auto *button = window_->findChild<QPushButton *>(
-        "lingtai_selected_agent_primary_action");
+        "lingtai_selected_agent_start_agent");
     if (!status || !button) return;
     if (pending_start_observation_) return; // one observation at a time
 
