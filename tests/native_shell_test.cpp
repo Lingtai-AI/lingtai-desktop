@@ -3238,6 +3238,8 @@ void verify_responsive_header_priority(
         const fs::path &sandbox) {
     auto &window = shell.window();
     auto *top_bar = required_child<QWidget>(window, "lingtai_chat_top_bar");
+    auto *detail_scroll = required_child<QScrollArea>(
+        window, "lingtai_agent_detail_scroll");
     auto *presentation_name = required_child<QLabel>(
         window, "lingtai_selected_agent_presentation_name");
     auto *detail_key = required_child<QLabel>(
@@ -3249,17 +3251,20 @@ void verify_responsive_header_priority(
     auto *sleep_button = required_child<QPushButton>(
         window, "lingtai_selected_agent_request_sleep");
 
-    // An eligible non-human stale Agent whose deliberately long directory key
-    // is also its presentation identity, so the identity column genuinely
-    // occupies the header and both primary actions stay meaningful.
-    const auto stale_key =
-        "stale-research-agent-with-a-deliberately-long-directory-key";
+    // An eligible non-human stale Agent with the same moderate-length distinct
+    // directory key/presentation-name shape as the validated narrow render, so
+    // metadata priority is proved before a single trailing value can wrap.
+    const auto stale_key = "personal_research_companion";
     const auto project = sandbox / "project";
     write_file(project / ".lingtai/human/.agent.json",
         R"({"agent_id":"20260101-000000-h001","agent_name":"Ted",)"
         R"("address":"human","state":"active"})");
     const auto stale_dir = project / ".lingtai" / stale_key;
-    write_file(stale_dir / ".agent.json", R"({"admin":{},"state":"idle"})");
+    write_file(stale_dir / ".agent.json",
+        R"({"agent_id":"20260101-000000-a001",)"
+        R"("agent_name":"personal_research_companion",)"
+        R"("nickname":"Personal Research Companion",)"
+        R"("address":"personal_research_companion","admin":{},"state":"idle"})");
     write_file(stale_dir / ".agent.heartbeat", "0");
     const auto fixture_before = tree_snapshot(project);
     const auto outcome = shell.open_project(project, std::nullopt);
@@ -3305,8 +3310,23 @@ void verify_responsive_header_priority(
     require_disjoint(
         {presentation_name, detail_key, start_button, sleep_button});
 
-    // Constrained OneColumn actual detail header: the presentation name and
-    // every primary control stay visible while the secondary key hides first.
+    // The validated 640x520 narrow render must already prioritize the primary
+    // identity and controls before the long directory-key metadata can wrap or
+    // make the vertical detail pane horizontally scrollable.
+    window.resize(640, 520);
+    QCoreApplication::processEvents();
+    require(!detail_key->wordWrap(),
+        "secondary header metadata must stay single-line before fit priority "
+        "hides it");
+    require(detail_scroll->horizontalScrollBarPolicy()
+            == Qt::ScrollBarAlwaysOff,
+        "the selected-Agent detail pane is vertical-only at narrow widths");
+    require(detail_scroll->horizontalScrollBar()->maximum() == 0
+            && !detail_scroll->horizontalScrollBar()->isVisible(),
+        "the validated 640px narrow detail pane must not overflow horizontally");
+
+    // Minimum OneColumn actual detail header: the presentation name and every
+    // primary control stay visible while the secondary key remains hidden.
     window.resize(380, 480);
     QCoreApplication::processEvents();
     require(presentation_name->isVisible(),
@@ -3320,6 +3340,10 @@ void verify_responsive_header_priority(
     require(!detail_key->isVisible(),
         "a constrained actual header must hide the secondary key first, "
         "before any primary control or the presentation name");
+    require(detail_scroll->horizontalScrollBar()->maximum() == 0
+            && !detail_scroll->horizontalScrollBar()->isVisible(),
+        "the vertical Agent detail surface must not overflow horizontally at "
+        "a valid narrow size");
 
     // Returning to wide restores the secondary key beside the presentation
     // name and the primary controls.
