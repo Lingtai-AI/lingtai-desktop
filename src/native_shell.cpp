@@ -1070,13 +1070,12 @@ NativeShell::NativeShell()
     // shell's palette background rather than a widget-level white base.
     detail_layout->addWidget(conversation, 1);
 
-    // The one full-width composer row, directly under the conversation it
-    // sends into: the row sits on the detail's base `windowBg` surface -- the
-    // same base main surface as the content pane -- and its own layout keeps
-    // one centered adaptive lane capped at 900px that owns the compact
-    // input/Send action row and both status read-outs. The lane's symmetric
-    // side insets are recomputed from the actual detail width by the same
-    // body-resize owner that drives the responsive sidebar/header.
+    // The one floating composer surface, directly under the conversation it
+    // sends into: the surface's base `windowBg` content token sits on the same
+    // base main surface as the content pane -- never a full-width dark band --
+    // and it stays physically inset from both detail edges by a wrapper lane,
+    // while its own layout owns the compact attachment/input/Send action row
+    // and both status read-outs.
     auto *composer = new PaletteSurface(detail, st::windowBg);
     composer_ = composer;
     composer->setObjectName("lingtai_composer");
@@ -1084,9 +1083,9 @@ NativeShell::NativeShell()
     auto *composer_layout = new QVBoxLayout(composer);
     composer_layout->setContentsMargins(12, 10, 12, 8);
     composer_layout->setSpacing(4);
-    // The one compact aligned action row: one vendored single-line input and
-    // one explicit Send action, both owned by the composer lane and both
-    // submitting through the same send path.
+    // The one compact aligned action row: one attachment icon, one vendored
+    // single-line input, and one explicit icon Send action, all owned by the
+    // composer lane and the input/Send both submitting through the same path.
     auto *composer_action_row = new QHBoxLayout;
     composer_action_row->setSpacing(8);
     // A borderless copy of the shared single-line field style: the row's own
@@ -1107,18 +1106,22 @@ NativeShell::NativeShell()
     composer_input->setAccessibleName(QStringLiteral("Message"));
     composer_input->setMinHeight(36);
     composer_input->setEnabled(false);
+    auto *attachment_button = new QPushButton(QStringLiteral("+"), composer);
+    attachment_button->setObjectName("lingtai_composer_attachment_button");
+    attachment_button->setAccessibleName(QStringLiteral("Attach file"));
+    attachment_button->setEnabled(false);
+    attachment_button->setFixedWidth(36);
+    attachment_button->setFixedHeight(36);
+    composer_action_row->addWidget(attachment_button);
     composer_action_row->addWidget(composer_input, 1);
     auto *send_button = new Ui::RoundButton(
         composer,
-        rpl::single(QStringLiteral("Send")),
+        rpl::single(QStringLiteral("↑")),
         st::defaultActiveButton);
-    // The RoundButton constructor's natural caption width stays a hard
-    // minimum, so the lane's QHBoxLayout can never compress Send below a
-    // meaningful text-action width and clip its caption.
-    send_button->setMinimumWidth(send_button->width());
     send_button->setObjectName("lingtai_composer_send_button");
     send_button->setAccessibleName(QStringLiteral("Send message"));
     send_button->setEnabled(false);
+    send_button->setFixedWidth(40);
     send_button->addClickHandler([this] {
         handle_send_message();
     });
@@ -1137,7 +1140,10 @@ NativeShell::NativeShell()
     conversation_state->setAccessibleName(
         QStringLiteral("Selected Agent conversation state"));
     composer_layout->addWidget(conversation_state);
-    detail_layout->addWidget(composer, 0);
+    auto *composer_surface = new QHBoxLayout;
+    composer_surface->setContentsMargins(24, 0, 24, 0);
+    composer_surface->addWidget(composer);
+    detail_layout->addLayout(composer_surface);
     composer_input->submits()
         | rpl::on_next([this] {
             handle_send_message();
