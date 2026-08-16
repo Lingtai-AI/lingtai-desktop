@@ -76,6 +76,9 @@ Domain readers/projections (stateless, read-only, one source each):
 - `direct_conversation_route.{h,cpp}` — `resolve_direct_conversation_route`:
   pure route derivation from an already-produced snapshot; performs no
   filesystem access.
+- `slash_command.{h,cpp}` — `parse_slash_command`: pure composer-text
+  classification matching the TUI leading-slash / first-ASCII-space boundary;
+  owns no dispatch, widget, filesystem access, or side effect.
 - `direct_conversation_history.{h,cpp}` — `read_direct_conversation`: reads
   the human's own `mailbox` `inbox`/`sent`/`outbox` `message.json` rows.
 - `agent_preset_summary.{h,cpp}` — `read_agent_preset_summary`: reads the

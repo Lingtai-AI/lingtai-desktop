@@ -50,6 +50,14 @@ its code.
   `st::msgInBg`, `st::msgOutBg`, `st::defaultLightButton`, etc.), never a raw
   white/black Qt surface.
 
+## Conversation command classification
+
+- `parse_slash_command` classifies only raw text whose first byte is `/` and
+  which has at least one following byte. It splits once on the first literal
+  ASCII space, trims the argument edges, preserves unknown names and internal
+  argument spacing, and owns no dispatch or side effect. A bare slash, leading
+  whitespace, empty text, and ordinary text are not commands.
+
 ## State and selection
 
 - `WorkspaceSelectionState` is the only active-project/Agent truth. A valid

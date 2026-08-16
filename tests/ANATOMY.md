@@ -59,6 +59,8 @@ touches a real Agent or project, and none depends on a network or provider.
   composite discovery/role/presence/status projection.
 - `tests/direct_conversation_route_test.cpp` — `direct_conversation_route`
   ctest. Pure route/eligibility derivation; no filesystem access.
+- `tests/slash_command_test.cpp` — `slash_command` ctest. Pure TUI-shaped
+  command classification; no Qt, filesystem, project fixture, or side effect.
 - `tests/direct_conversation_history_test.cpp` — `direct_conversation_history`
   ctest. Read-only mailbox rows, membership, order, collapse, no-write.
 - `tests/direct_mail_publisher_test.cpp` — `direct_mail_publisher` ctest.

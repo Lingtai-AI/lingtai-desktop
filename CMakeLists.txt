@@ -231,6 +231,16 @@ target_compile_options(lingtai_desktop_direct_route PRIVATE
 target_link_libraries(lingtai_desktop_direct_route
     PUBLIC lingtai_desktop_core)
 
+# Pure composer classification: it recognizes one TUI-shaped leading-slash
+# command without owning dispatch, widgets, filesystem access, or side effects.
+add_library(lingtai_desktop_slash_command STATIC
+    src/slash_command.cpp)
+init_target(lingtai_desktop_slash_command)
+target_include_directories(lingtai_desktop_slash_command PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(lingtai_desktop_slash_command PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+
 # The one current conversation owner: it turns an already-accepted route into
 # the direct rows the selected-Agent surface renders. It reads the human's own
 # mailbox and nothing else, and it owns no presentation.
@@ -321,6 +331,15 @@ target_compile_options(lingtai_direct_conversation_route_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_direct_conversation_route_test PRIVATE
     lingtai_desktop_direct_route)
+add_executable(lingtai_slash_command_test
+    tests/slash_command_test.cpp)
+init_target(lingtai_slash_command_test)
+target_include_directories(lingtai_slash_command_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(lingtai_slash_command_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_slash_command_test PRIVATE
+    lingtai_desktop_slash_command)
 add_executable(lingtai_direct_conversation_history_test
     tests/direct_conversation_history_test.cpp)
 init_target(lingtai_direct_conversation_history_test)
@@ -382,6 +401,8 @@ add_test(NAME agent_projection
 add_test(NAME direct_conversation_route
     COMMAND lingtai_direct_conversation_route_test
         "${CMAKE_CURRENT_BINARY_DIR}/direct-conversation-route-fixture")
+add_test(NAME slash_command
+    COMMAND lingtai_slash_command_test)
 add_test(NAME direct_conversation_history
     COMMAND lingtai_direct_conversation_history_test
         "${CMAKE_CURRENT_BINARY_DIR}/direct-conversation-history-fixture")

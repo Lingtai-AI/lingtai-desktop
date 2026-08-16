@@ -26,6 +26,8 @@ must never be confused:
   reader projects, what a writer writes, what the shell composes and shows.
   A behavioral change to the product must land with its corresponding proof
   in the same change; a repository contract does not follow that rule.
+  `slash_command_test.cpp` is the pure classification proof: it pins the raw
+  leading-slash and first-ASCII-space boundary without asserting later dispatch.
 
 ## Evidence rules
 

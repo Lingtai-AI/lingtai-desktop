@@ -47,6 +47,8 @@ Reads (no writes, no durable state):
   `AgentRoster` presentation omits that row.
 - `resolve_direct_conversation_route(attachment, snapshot, key)` →
   `std::optional<DirectConversationRoute>` (`direct_conversation_route.h`).
+- `parse_slash_command(raw_text)` → `std::optional<SlashCommand>`
+  (`slash_command.h`) — classification only; support and effects remain outside.
 - `read_direct_conversation(route)` → `DirectConversationHistory`
   (`direct_conversation_history.h`).
 - `read_agent_preset_summary(attachment, key)` → `AgentPresetSummary`

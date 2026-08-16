@@ -20,6 +20,7 @@ python3 -m unittest tests.test_repository_contract
 ctest --test-dir build --output-on-failure -R '^project_attachment$'
 ctest --test-dir build --output-on-failure -R '^agent_projection$'
 ctest --test-dir build --output-on-failure -R '^direct_conversation_route$'
+ctest --test-dir build --output-on-failure -R '^slash_command$'
 ctest --test-dir build --output-on-failure -R '^direct_conversation_history$'
 ctest --test-dir build --output-on-failure -R '^direct_mail_publisher$'
 ctest --test-dir build --output-on-failure -R '^agent_preset_summary$'
