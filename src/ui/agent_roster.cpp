@@ -4,10 +4,12 @@
 
 #include <QtCore/QString>
 #include <QtCore/QVariant>
+#include <QtGui/QAction>
 #include <QtGui/QFont>
 #include <QtGui/QFontMetrics>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QPainter>
+#include <QtWidgets/QMenu>
 #include <QtWidgets/QStyle>
 #include <QtWidgets/QStyleOptionFocusRect>
 #include <QtWidgets/QLabel>
@@ -313,16 +315,17 @@ AgentRoster::AgentRoster(QWidget *parent)
     layout->setContentsMargins(14, 12, 14, 12);
     layout->setSpacing(8);
 
-    layout->addWidget(make_label(
-        this, QStringLiteral("LingTai"), "lingtai_sidebar_brand", 16,
-        QFont::DemiBold));
-    layout->addWidget(make_label(
-        this, QStringLiteral("No project open"), "lingtai_project_root", 11));
-
-    // The compact project actions beside the project identity header. The
-    // shell wires their clicks; the owner only composes them.
-    auto *actions = new QHBoxLayout;
-    actions->setSpacing(6);
+    // The compact project selector header replaces the old stacked brand and
+    // identity rows. The shell's typed callback lookup still targets the
+    // original object names, so the hidden Open button and project-root label
+    // keep their identity: the selector menu's Open/New actions drive those
+    // buttons' clicks, and its disabled path row mirrors the current root.
+    auto *header = new QHBoxLayout;
+    header->setSpacing(6);
+    auto *project_root = make_label(
+        this, QStringLiteral("No project open"), "lingtai_project_root", 11);
+    project_root->hide();
+    header->addWidget(project_root);
     auto *open_button = new QPushButton(
         QStringLiteral("Open Project…"), this);
     open_button->setObjectName("lingtai_open_project_button");
@@ -330,17 +333,43 @@ AgentRoster::AgentRoster(QWidget *parent)
     open_button->setAccessibleDescription(QStringLiteral(
         "Request a project location. No project is changed by this request."));
     open_button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    actions->addWidget(open_button);
-    auto *new_button = new QPushButton(
-        QStringLiteral("New Project…"), this);
+    open_button->hide();
+    header->addWidget(open_button);
+    auto *selector = new QPushButton(QStringLiteral("LingTai ▾"), this);
+    selector->setObjectName("lingtai_project_selector");
+    selector->setAccessibleName(QStringLiteral("LingTai project selector"));
+    selector->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    header->addWidget(selector);
+    auto *new_button = new QPushButton(QStringLiteral("+"), this);
     new_button->setObjectName("lingtai_new_project_button");
     new_button->setAccessibleName(QStringLiteral("New Project"));
     new_button->setAccessibleDescription(QStringLiteral(
         "Creates a new LingTai project and its first Agent through the "
         "canonical TUI, then starts that Agent."));
-    new_button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    actions->addWidget(new_button);
-    layout->addLayout(actions);
+    new_button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    header->addWidget(new_button);
+    layout->addLayout(header);
+
+    auto *selector_menu = new QMenu(selector);
+    selector_menu->setObjectName("lingtai_project_selector_menu");
+    auto *path_action = selector_menu->addAction(project_root->text());
+    path_action->setEnabled(false);
+    auto *open_action =
+        selector_menu->addAction(QStringLiteral("Open Project"));
+    open_action->setObjectName("lingtai_open_project_button");
+    QObject::connect(open_action, &QAction::triggered,
+        open_button, &QPushButton::click);
+    auto *new_action =
+        selector_menu->addAction(QStringLiteral("New Project"));
+    new_action->setObjectName("lingtai_new_project_button");
+    QObject::connect(new_action, &QAction::triggered,
+        new_button, &QPushButton::click);
+    QObject::connect(selector, &QPushButton::clicked,
+        [selector, selector_menu, path_action, project_root] {
+            path_action->setText(project_root->text());
+            selector_menu->popup(selector->mapToGlobal(
+                QPoint(0, selector->height())));
+        });
 
     layout->addWidget(make_label(
         this, QStringLiteral("Workspace"), "lingtai_sidebar_workspace_label",
