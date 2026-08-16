@@ -168,6 +168,34 @@ void write_fixture_python(
     require(!error, "fixture python must be made executable");
 }
 
+// Writes one fake `lingtai-tui control` executable used only by the U5
+// lifecycle-command journey. It never runs a real TUI or Agent: it records
+// its exact separate argv to a file, then -- only after a short deterministic
+// delay -- emits one canonical success JSON object on stdout and writes a
+// completion marker, exactly like a real headless control command would
+// eventually answer. The emitted agent stays `alpha` because the journey only
+// ever runs the control command under the alpha Agent.
+void write_fixture_control(
+        const fs::path &executable_path,
+        const fs::path &argv_record_path,
+        const fs::path &done_marker_path,
+        int delay_seconds) {
+    auto script = std::string("#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"")
+        + argv_record_path.string() + "\"\n"
+        + "sleep " + std::to_string(delay_seconds) + "\n"
+        + "printf '%s\\n' '{\"command\":\"refresh\",\"agent\":\"alpha\","
+          "\"status\":\"signaled\"}'\n"
+        + "printf 'done\\n' > \"" + done_marker_path.string() + "\"\n"
+        + "exit 0\n";
+    write_file(executable_path, script);
+    std::error_code error;
+    fs::permissions(executable_path,
+        fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec
+            | fs::perms::others_read | fs::perms::others_exec,
+        fs::perm_options::replace, error);
+    require(!error, "fixture control executable must be made executable");
+}
+
 std::map<std::string, std::string> tree_snapshot(const fs::path &root) {
     auto result = std::map<std::string, std::string>();
     if (!fs::exists(root)) {
@@ -3649,13 +3677,13 @@ void verify_conversation_slash_interception(
     require(!help.isEmpty() && help.size() <= 512,
         "raw /help must expose one bounded nonempty local response");
     for (const auto *command : {
-             "/agents", "/presets", "/sleep", "/cpr", "/help", "/quit"}) {
+             "/agents", "/presets", "/sleep", "/cpr", "/clear", "/refresh",
+             "/suspend", "/help", "/quit"}) {
         require(help.contains(QString::fromLatin1(command)),
             std::string("raw /help must expose the available command ")
                 + command);
     }
-    for (const auto *command : {
-             "/clear", "/refresh", "/suspend", "/start", "/wake"}) {
+    for (const auto *command : {"/start", "/wake"}) {
         require(!help.contains(
                     QString::fromLatin1(command), Qt::CaseInsensitive),
             std::string("raw /help must not claim the unavailable command ")
@@ -3664,6 +3692,130 @@ void verify_conversation_slash_interception(
     require(fs::exists(target / ".sleep")
             && !fs::exists(beta / ".sleep") && !fs::exists(beta_argv),
         "raw /help must not create, remove, or launch any Agent lifecycle signal");
+
+    // The U5 lifecycle-command contract, injected through the same
+    // `set_tui_executable` seam the shipped TUI uses: the fake control
+    // executable never runs a real TUI or Agent, records exact separate argv,
+    // and answers one canonical success JSON after a short deterministic
+    // delay.
+    const auto control_executable = sandbox / "lingtai-tui-control";
+    const auto control_argv = sandbox / "argv-control.txt";
+    const auto control_done = sandbox / "control-done.txt";
+    write_fixture_control(control_executable, control_argv, control_done, 1);
+    shell.set_tui_executable(control_executable);
+
+    const auto exact_control_argv = QStringLiteral(
+        "control\n--project\n%1\n--agent\nalpha\nrefresh\ncodex-preset\n")
+        .arg(path_text(fs::canonical(project / ".lingtai"))).toStdString();
+    const auto pending_status = QStringLiteral("Agent command pending.");
+    const auto duplicate_status =
+        QStringLiteral("Agent command already pending.");
+    const auto success_status = QStringLiteral("Refresh signaled.");
+    const auto failure_status = QStringLiteral("Agent command failed.");
+    const auto wait_for_control_done = [&] {
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(8);
+        while (!fs::exists(control_done)
+                && std::chrono::steady_clock::now() < deadline) {
+            QThread::msleep(20);
+            QCoreApplication::processEvents();
+        }
+        require(fs::exists(control_done),
+            "the fake control command must complete within the bound");
+        // The marker is written just before the child exits, so the runner's
+        // QProcess finished callback lands only after a short bounded event
+        // drain; never assert a status while the callback could still arrive.
+        const auto drain_deadline =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+        while (std::chrono::steady_clock::now() < drain_deadline) {
+            QThread::msleep(20);
+            QCoreApplication::processEvents();
+        }
+    };
+    const auto remove_control_done = [&] {
+        std::error_code ignore;
+        fs::remove(control_done, ignore);
+    };
+
+    // Exact separate argv for `/refresh codex-preset` through the real
+    // composer/Send path, with the preset argument passed through unchanged.
+    submit_command(QStringLiteral("/refresh codex-preset"));
+    require(input->getLastText().isEmpty(),
+        "raw /refresh codex-preset must clear the composer after local "
+        "submission");
+    require(outbox_leaf_count() == 0,
+        "raw /refresh codex-preset must stay local and create no outbox leaf");
+    const auto refresh_argv_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!fs::exists(control_argv)
+            && std::chrono::steady_clock::now() < refresh_argv_deadline) {
+        QThread::msleep(20);
+    }
+    require(fs::exists(control_argv),
+        "raw /refresh codex-preset must invoke the injected fake control "
+        "executable");
+    require(read_file(control_argv) == exact_control_argv,
+        "raw /refresh codex-preset must pass the exact separate argv control, "
+        "--project, the fixture .lingtai root, --agent, alpha, refresh, and "
+        "the unchanged codex-preset argument");
+    require(status->text() == pending_status,
+        "an accepted lifecycle command must show only the exact pending "
+        "status while running, never a predeclared success");
+
+    // A duplicate lifecycle slash while the first command is still pending is
+    // rejected without a second fake invocation.
+    submit_command(QStringLiteral("/clear"));
+    require(input->getLastText().isEmpty(),
+        "raw /clear during a pending lifecycle command must clear the "
+        "composer");
+    require(read_file(control_argv) == exact_control_argv,
+        "a duplicate lifecycle slash while pending must not invoke the fake "
+        "control executable a second time");
+    require(status->text() == duplicate_status,
+        "a duplicate lifecycle slash while pending must report the exact "
+        "truthful already-pending status");
+
+    // Stale-result isolation: the alpha command finishes only after the
+    // roster has moved away to beta, so its success/failure must never
+    // surface under beta.
+    click_agent(window, "beta");
+    require(shell.selection_state().selected_agent_directory_key()
+                == std::optional<fs::path>("beta"),
+        "beta must be selected while the alpha control command is pending");
+    wait_for_control_done();
+    require(status->text() != success_status
+            && status->text() != failure_status,
+        "an old alpha completion must not surface as a success or failure "
+        "under the later-selected beta");
+
+    // Away-and-back isolation: returning to alpha while the next command is
+    // still pending must also discard the stale completion.
+    click_agent(window, "alpha");
+    remove_control_done();
+    submit_command(QStringLiteral("/refresh codex-preset"));
+    click_agent(window, "beta");
+    click_agent(window, "alpha");
+    require(shell.selection_state().selected_agent_directory_key()
+                == std::optional<fs::path>("alpha"),
+        "the away-and-back re-selection must leave alpha selected");
+    wait_for_control_done();
+    require(status->text() != success_status
+            && status->text() != failure_status,
+        "an old alpha completion must not surface as a success or failure "
+        "after an away-and-back re-selection");
+
+    // The exact successful refresh outcome is shown only when the project,
+    // Agent, and generation still match.
+    remove_control_done();
+    submit_command(QStringLiteral("/refresh codex-preset"));
+    wait_for_control_done();
+    require(status->text() == success_status,
+        "a matching project/Agent/generation must show the exact successful "
+        "refresh outcome after the callback");
+    require(read_file(control_argv) == exact_control_argv
+            + exact_control_argv + exact_control_argv,
+        "the journey must have invoked the fake control executable exactly "
+        "three times with identical exact separate argv");
 
     click_agent(window, "beta");
     require(shell.selection_state().selected_agent_directory_key()

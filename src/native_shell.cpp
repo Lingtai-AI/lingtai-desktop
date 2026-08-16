@@ -1659,6 +1659,7 @@ ProjectOpenOutcome NativeShell::open_project(
 
     selection_state_.activate_project(std::move(*attached.attachment));
     selection_state_.clear_agent_selection();
+    bump_lifecycle_generation();
     if (selected_key) {
         static_cast<void>(selection_state_.select_agent(*selected_key));
     }
@@ -2035,6 +2036,11 @@ void NativeShell::handle_send_message() {
     const auto raw_text = input->getLastText();
     if (const auto command = parse_slash_command(raw_text.toStdString())) {
         input->clear();
+        if (command->name == "suspend" || command->name == "clear"
+            || command->name == "refresh") {
+            handle_lifecycle_command(command->name, command->args);
+            return;
+        }
         if (!command->args.empty()) {
             status->setText(QStringLiteral(
                 "Command not available in this Desktop build."));
@@ -2067,7 +2073,8 @@ void NativeShell::handle_send_message() {
         }
         if (command->name == "help") {
             status->setText(QStringLiteral(
-                "Available commands: /agents, /presets, /sleep, /cpr, /help, /quit."));
+                "Available commands: /agents, /presets, /sleep, /cpr, /clear, "
+                "/refresh, /suspend, /help, /quit."));
             return;
         }
         if (command->name == "quit") {
@@ -2129,6 +2136,7 @@ void NativeShell::handle_agent_selection(const fs::path &directory_key) {
         return;
     }
     reset_composer();
+    bump_lifecycle_generation();
     // A selection change must never let a prior target's pending sleep or
     // Start observation or terminal result surface under the newly selected
     // Agent.
@@ -2149,6 +2157,89 @@ void NativeShell::handle_agent_selection(const fs::path &directory_key) {
         error->clear();
         error->hide();
     }
+}
+
+// The one selected-Agent lifecycle owner for `/suspend`, `/clear`, and
+// `/refresh [preset]`. Only the empty forms and a zero-or-one raw preset
+// argument are accepted; extra or invalid arguments are rejected locally
+// without launching. Dispatch always rides the already-injected
+// `tui_executable_` with the exact separate argv through the one owned
+// AgentCommandRunner; a duplicate lifecycle slash while pending is rejected
+// with the exact truthful status, and ordinary chat send is never disabled.
+void NativeShell::handle_lifecycle_command(
+        const std::string &name, const std::string &args) {
+    auto *status = window_->findChild<QLabel *>("lingtai_composer_status");
+    if (!status) return;
+    if (!selection_state_.active_project()
+        || !selection_state_.selected_agent_directory_key()) {
+        status->setText(QStringLiteral(
+            "Command not available in this Desktop build."));
+        return;
+    }
+    std::string optional_arg;
+    const auto single_preset = !args.empty()
+        && args.find(' ') == std::string::npos;
+    const auto valid = ((name == "suspend" || name == "clear") && args.empty())
+        || (name == "refresh" && (args.empty() || single_preset));
+    if (!valid) {
+        status->setText(QStringLiteral(
+            "Command not available in this Desktop build."));
+        return;
+    }
+    if (single_preset) {
+        optional_arg = args;
+    }
+    const auto project_root =
+        path_text(selection_state_.active_project()->root() / ".lingtai")
+            .toStdString();
+    const auto agent_key =
+        selection_state_.selected_agent_directory_key()->string();
+    if (!command_runner_.run(tui_executable_, project_root, agent_key, name,
+            optional_arg, lifecycle_generation(),
+            [this](AgentCommandResult result) {
+                handle_lifecycle_finished(std::move(result));
+            })) {
+        status->setText(QStringLiteral("Agent command already pending."));
+        return;
+    }
+    pending_lifecycle_action_ = name;
+    status->setText(QStringLiteral("Agent command pending."));
+}
+
+// The one terminal lifecycle delivery. A completion may update the existing
+// conversation status only when the generation, canonical project root, and
+// selected Agent key captured at dispatch still match the current selection
+// context, so an old completion -- including an away-and-back return to the
+// same key -- can never surface under a later selection.
+void NativeShell::handle_lifecycle_finished(AgentCommandResult result) {
+    auto *status = window_->findChild<QLabel *>("lingtai_composer_status");
+    if (!status) return;
+    const auto matching_context = selection_state_.active_project()
+        && selection_state_.selected_agent_directory_key()
+        && result.bound_generation == lifecycle_generation()
+        && result.bound_project_root
+            == path_text(selection_state_.active_project()->root()
+                / ".lingtai").toStdString()
+        && result.bound_agent_key
+            == selection_state_.selected_agent_directory_key()->string();
+    if (!matching_context || pending_lifecycle_action_.empty()) {
+        pending_lifecycle_action_.clear();
+        return;
+    }
+    auto signaled = QString::fromStdString(pending_lifecycle_action_);
+    signaled[0] = signaled[0].toUpper();
+    status->setText(result.kind == AgentCommandResultKind::succeeded
+        ? signaled + QStringLiteral(" signaled.")
+        : QStringLiteral("Agent command failed."));
+    pending_lifecycle_action_.clear();
+}
+
+std::string NativeShell::lifecycle_generation() const noexcept {
+    return std::to_string(selection_generation_);
+}
+
+void NativeShell::bump_lifecycle_generation() noexcept {
+    ++selection_generation_;
 }
 
 // Telegram's one mode recompute, fed by the body's own size stream: below
@@ -2303,6 +2394,7 @@ void NativeShell::update_composer_width(int detail_width) {
 void NativeShell::handle_detail_back() {
     if (!detail_back_button_ || !detail_back_button_->isVisible()) return;
     selection_state_.clear_agent_selection();
+    bump_lifecycle_generation();
     reset_composer();
     pending_sleep_observation_.reset();
     pending_start_observation_.reset();

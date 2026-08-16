@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agent_command_runner.h"
 #include "agent_launch.h"
 #include "agent_projection.h"
 #include "agent_sleep.h"
@@ -21,6 +22,7 @@
 #include <rpl/lifetime.h>
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -122,6 +124,14 @@ private:
     void reset_composer();
     void handle_send_message();
     void handle_agent_selection(const std::filesystem::path &directory_key);
+    // The one selected-Agent lifecycle slash owner for `/suspend`, `/clear`,
+    // and `/refresh [preset]`, dispatched through the one owned
+    // AgentCommandRunner.
+    void handle_lifecycle_command(const std::string &name,
+        const std::string &args);
+    void handle_lifecycle_finished(AgentCommandResult result);
+    [[nodiscard]] std::string lifecycle_generation() const noexcept;
+    void bump_lifecycle_generation() noexcept;
     void render_agent_sleep_status();
     void handle_request_sleep();
     void tick_agent_sleep_observation();
@@ -211,9 +221,20 @@ private:
     AgentSnapshot agents_;
     OpenProjectRequestHandler open_project_request_handler_;
     std::filesystem::path agent_start_fallback_python_;
-    // One narrow injectable dependency: the configured TUI executable used
-    // only by the explicit New Project flow.
+    // One narrow injectable dependency: the configured TUI executable used by
+    // the explicit New Project flow and the selected-Agent lifecycle commands.
     std::filesystem::path tui_executable_;
+    // The one selected-Agent lifecycle owner: one global pending command at a
+    // time through exact separate argv, with the start-time project root,
+    // Agent key, and generation compared before any completion surfaces.
+    AgentCommandRunner command_runner_;
+    // The one current selection-generation epoch, bumped on every real
+    // project open, successful Agent selection, and Back/selection clear.
+    std::uint64_t selection_generation_ = 0;
+    // The one accepted lifecycle action awaiting its single callback, so the
+    // terminal status names the exact signaled command without re-parsing the
+    // runner's captured output.
+    std::string pending_lifecycle_action_;
     // The one async owner of the headless `presets`/`spawn` subprocess calls.
     // Owned by the shell; no PID, lock, retry, or rollback machinery.
     std::unique_ptr<ProjectBootstrapRunner> bootstrap_runner_;
