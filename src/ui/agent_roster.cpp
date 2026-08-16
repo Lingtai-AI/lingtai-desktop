@@ -149,9 +149,9 @@ QString row_summary(const AgentRow &item) {
 
 // A LingTai-owned checkable row button. It keeps the plain checkable-button
 // semantics the shell and its tests rely on while painting the selected,
-// hover, pressed, and focus states from the shared lib_ui palette (idle rows
-// on `windowBg`, a soft rounded `windowBgOver` selected surface, and
-// `windowBgRipple` hover/pressed) rather than a QSS clone of Telegram.
+// hover, pressed, and focus states from the shared lib_ui palette. Idle rows
+// merge into the Sidebar's `windowBgOver`; selected/hover rows alone use the
+// soft rounded `windowBgRipple` surface rather than a QSS clone of Telegram.
 class AgentRowButton final : public QPushButton {
 public:
     explicit AgentRowButton(QWidget *parent)
@@ -186,11 +186,9 @@ void AgentRowButton::paintEvent(QPaintEvent *) {
     painter.setRenderHint(QPainter::Antialiasing, true);
     constexpr auto kSelectedRadius = 8.0;
     painter.setPen(Qt::NoPen);
-    painter.setBrush(selected
-        ? st::windowBgOver
-        : over
-            ? st::windowBgRipple
-            : st::windowBg);
+    painter.setBrush((selected || over)
+        ? st::windowBgRipple
+        : st::windowBgOver);
     painter.drawRoundedRect(
         QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5),
         kSelectedRadius, kSelectedRadius);
@@ -391,10 +389,10 @@ AgentRoster::AgentRoster(QWidget *parent)
     scroll_->setAccessibleName(QStringLiteral("Agent roster rows"));
     scroll_->setWidgetResizable(true);
     scroll_->setFrameShape(QFrame::NoFrame);
-    // The roster surface and its scroll viewport both fill the shared
-    // `windowBg` field color instead of a raw white Base surface.
+    // The rows surface and its scroll viewport share the Sidebar's
+    // `windowBgOver` background instead of forming an independent white field.
     auto viewport_palette = scroll_->viewport()->palette();
-    viewport_palette.setColor(QPalette::Window, st::windowBg->c);
+    viewport_palette.setColor(QPalette::Window, st::windowBgOver->c);
     scroll_->viewport()->setPalette(viewport_palette);
     scroll_->viewport()->setAutoFillBackground(true);
     roster_layout->addWidget(scroll_, 1);
@@ -402,7 +400,7 @@ AgentRoster::AgentRoster(QWidget *parent)
     rows->setObjectName("lingtai_agent_roster_rows");
     rows->setAccessibleName(QStringLiteral("Agent roster rows"));
     auto rows_palette = rows->palette();
-    rows_palette.setColor(QPalette::Window, st::windowBg->c);
+    rows_palette.setColor(QPalette::Window, st::windowBgOver->c);
     rows->setPalette(rows_palette);
     rows->setAutoFillBackground(true);
     rows_layout_ = new QVBoxLayout(rows);
