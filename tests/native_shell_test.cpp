@@ -13,6 +13,7 @@
 #include <QtCore/QThread>
 #include <QtGui/QColor>
 #include <QtGui/QFont>
+#include <QtGui/QFontMetrics>
 #include <QtGui/QImage>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QMouseEvent>
@@ -3117,26 +3118,35 @@ void verify_modern_composer_surface(
         "lingtai_composer_status must be a descendant of "
         "lingtai_composer, never a separate detail row");
 
-    // Wide state: the lane is a centered, bounded surface narrower than its
-    // detail owner, with real symmetric side insets.
+    // Wide state: the outer composer band is the full-width st::msgInBg
+    // surface, while the real adaptive lane -- the union of the input and
+    // Send action -- stays one centered, capped region narrower than the
+    // band, framed by real symmetric side insets.
     window.resize(1200, 800);
     QCoreApplication::processEvents();
     require(composer->isVisible() && composer_input->isVisible()
             && send_button->isVisible(),
         "the modern composer and its action row must be visible in a wide "
         "detail");
-    const auto composer_left = composer->mapTo(detail, QPoint(0, 0)).x();
-    const auto composer_right = composer->mapTo(
-        detail, QPoint(composer->width(), 0)).x();
-    const auto left_inset = composer_left;
-    const auto right_inset = detail->width() - composer_right;
-    require(composer->width() < detail->width(),
-        "a wide detail must bound the composer lane rather than span the "
-        "whole detail surface");
-    require(left_inset > 0 && right_inset > 0,
-        "a wide detail must frame the composer lane with real side insets");
-    require(qAbs(left_inset - right_inset) <= 2,
-        "a wide detail must center the composer lane with symmetric side "
+    require(composer->width() == detail->width(),
+        "the outer composer band must remain the full-width st::msgInBg "
+        "surface, never a capped lane itself");
+    const auto input_rect = QRect(
+        composer_input->mapTo(composer, QPoint(0, 0)),
+        composer_input->size());
+    const auto send_rect = QRect(
+        send_button->mapTo(composer, QPoint(0, 0)),
+        send_button->size());
+    const auto lane_rect = input_rect.united(send_rect);
+    const auto lane_left = lane_rect.left();
+    const auto lane_right = detail->width() - lane_rect.right() - 1;
+    require(lane_rect.width() < detail->width(),
+        "a wide detail must cap the inner input+Send lane below the full "
+        "detail width");
+    require(lane_left > 0 && lane_right > 0,
+        "a wide detail must frame the inner lane with real side insets");
+    require(qAbs(lane_left - lane_right) <= 2,
+        "a wide detail must center the inner lane with symmetric side "
         "insets");
 
     // The input and Send action stay one compact aligned action row inside
@@ -3145,12 +3155,6 @@ void verify_modern_composer_surface(
             && send_button->parent() == composer,
         "the composer input and Send action must be owned by the composer "
         "lane");
-    const auto input_rect = QRect(
-        composer_input->mapTo(composer, QPoint(0, 0)),
-        composer_input->size());
-    const auto send_rect = QRect(
-        send_button->mapTo(composer, QPoint(0, 0)),
-        send_button->size());
     require(qAbs(input_rect.center().y() - send_rect.center().y()) <= 2,
         "the composer input and Send action must align on one compact row");
     require(input_rect.right() < send_rect.left(),
@@ -3163,8 +3167,55 @@ void verify_modern_composer_surface(
     require(composer->isVisible() && composer_input->isVisible()
             && send_button->isVisible(),
         "the modern composer must stay visible at the narrow minimum");
-    require(composer->width() * 4 >= detail->width() * 3,
-        "a narrow detail must let the composer lane grow near-full");
+    const auto narrow_input_rect = QRect(
+        composer_input->mapTo(composer, QPoint(0, 0)),
+        composer_input->size());
+    const auto narrow_send_rect = QRect(
+        send_button->mapTo(composer, QPoint(0, 0)),
+        send_button->size());
+    const auto narrow_lane = narrow_input_rect.united(narrow_send_rect);
+    require(narrow_lane.width() * 4 >= detail->width() * 3,
+        "a narrow detail must let the inner input+Send lane grow near-full");
+
+    // The Vision HIGH Send contract at the real visual sizes (1100x720,
+    // 820x620, 640x520): the composer field/status surface stays present,
+    // and the Send action remains visible with a meaningful text-action
+    // width, its rect fully contained inside the composer band, and a real
+    // painted foreground distinguishable from its surface -- never a blank
+    // object-tree presence.
+    for (const auto &[width, height] : std::vector<std::pair<int, int>>{
+             {1100, 720}, {820, 620}, {640, 520}}) {
+        window.resize(width, height);
+        QCoreApplication::processEvents();
+        require(composer->isVisible() && composer_input->isVisible()
+                && send_button->isVisible(),
+            "the composer field and Send action must stay visible at every "
+            "real visual size");
+        require(send_button->width() >= QFontMetrics(send_button->font())
+                .horizontalAdvance(QStringLiteral("Send")),
+            "Send must keep a meaningful text-action width so its caption "
+            "is never clipped away");
+        const auto send_rect = QRect(
+            send_button->mapTo(composer, QPoint(0, 0)),
+            send_button->size());
+        require(composer->rect().contains(send_rect),
+            "the Send action rect must stay fully contained inside the "
+            "composer band at every real visual size");
+        const auto send_image = send_button->grab().toImage();
+        const auto dpr = std::max(1.0, double(send_image.devicePixelRatio()));
+        const auto surface = send_image.pixelColor(0, 0);
+        auto foreground_pixels = 0;
+        for (auto y = 0; y != send_image.height(); ++y) {
+            for (auto x = 0; x != send_image.width(); ++x) {
+                if (send_image.pixelColor(x, y) != surface) {
+                    ++foreground_pixels;
+                }
+            }
+        }
+        require(foreground_pixels >= int(4.0 * dpr * dpr),
+            "the Send action must paint a distinguishable foreground over "
+            "its surface, not a single-color blank grab");
+    }
 
     std::error_code cleanup_error;
     fs::remove_all(sandbox, cleanup_error);
@@ -3370,6 +3421,54 @@ void verify_responsive_header_priority(
         "the Request sleep status must be parented inside its own "
         "lingtai_selected_agent_sleep_row, never a separate full-width "
         "detail band");
+
+    // (C) The Vision HIGH at the real visual sizes (1100x720, 820x620,
+    // 640x520): the selected presentation name must keep a meaningful share
+    // of the actual top bar -- derived from the current top bar width and
+    // capped at a modest readable width, never hardcoded screenshot pixels --
+    // and must retain a readable prefix of its full identity instead of
+    // collapsing to a few characters. Elision may shorten the visible text
+    // but must never replace the full selected-Agent identity production
+    // owns on the accessible description and the retained dynamic property.
+    // Every visible nonempty Start/Sleep status must also fit its own
+    // allocated width, and secondary guidance may be hidden before the
+    // identity is ever destroyed.
+    const auto full_identity = QString::fromUtf8(stale_key);
+    for (const auto &[width, height] : std::vector<std::pair<int, int>>{
+             {1100, 720}, {820, 620}, {640, 520}}) {
+        window.resize(width, height);
+        QCoreApplication::processEvents();
+        require(presentation_name->isVisible(),
+            "the selected presentation name must stay visible at every real "
+            "visual size");
+        const auto meaningful_share = std::min(top_bar->width() / 3, 240);
+        require(presentation_name->width() >= meaningful_share,
+            "the selected presentation name must keep a meaningful share of "
+            "the actual top bar, capped at a modest readable width, instead "
+            "of collapsing far below the available space");
+        auto visible_identity = presentation_name->text();
+        if (visible_identity.endsWith(QChar(0x2026))) {
+            visible_identity.chop(1);
+        }
+        require(visible_identity.size()
+                    >= std::min(full_identity.size(), qsizetype(12))
+                && full_identity.startsWith(visible_identity),
+            "visible elision must retain a readable prefix of the full "
+            "selected identity, never collapsing to a few characters");
+        require(presentation_name->property("lingtai_full_text").toString()
+                    == full_identity
+                && presentation_name->accessibleDescription() == full_identity,
+            "visible elision must never replace the full selected-Agent "
+            "identity production keeps on the accessible description");
+        for (auto *status : {start_status, sleep_status}) {
+            if (status->isVisible() && !status->text().isEmpty()) {
+                require(QFontMetrics(status->font())
+                        .horizontalAdvance(status->text()) <= status->width(),
+                    "every visible nonempty Start/Sleep status must fit its "
+                    "own allocated width, never clip inside its action row");
+            }
+        }
+    }
 
     std::error_code cleanup_error;
     fs::remove_all(sandbox, cleanup_error);
