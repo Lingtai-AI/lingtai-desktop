@@ -2608,6 +2608,116 @@ void verify_persistent_roster_shell(
     require(!cleanup_error, "roster-shell fixtures must be removed");
 }
 
+// The header-unit RED: the selected-Agent header must be a compact hierarchy
+// -- one title plus one small muted status line, exactly one primary action,
+// and lifecycle secondary controls as subtle compact buttons/icons, never a
+// second full-caption action button. Current production keeps the status line
+// in the same prominent ink as the title and offers both Start Agent and
+// Request sleep as full-caption buttons, so this journey must fail exactly
+// those assertions, never fonts, metrics, or a hidden control.
+void verify_compact_header_hierarchy(
+        lingtai::desktop::NativeShell &shell,
+        const fs::path &sandbox) {
+    auto &window = shell.window();
+    auto *top_bar = required_child<QWidget>(window, "lingtai_chat_top_bar");
+    auto *presentation_name = required_child<QLabel>(
+        window, "lingtai_selected_agent_presentation_name");
+    auto *status = required_child<QLabel>(
+        window, "lingtai_selected_agent_key");
+
+    const auto project = sandbox / "project";
+    write_file(project / ".lingtai/human/.agent.json",
+        R"({"agent_id":"20260101-000000-h001","agent_name":"Ted",)"
+        R"("address":"human","state":"active"})");
+    const auto target = project / ".lingtai/alpha";
+    write_file(target / ".agent.json",
+        R"({"admin":{},"agent_id":"20260712-191609-a001",)"
+        R"("agent_name":"alpha","nickname":"Alpha Agent",)"
+        R"("address":"alpha","state":"idle"})");
+    write_file(target / ".agent.heartbeat", "0");
+    const auto fixture_before = tree_snapshot(project);
+    const auto outcome = shell.open_project(project, std::nullopt);
+    require(outcome.disposition == ProjectOpenDisposition::opened,
+        "the compact-header fixture project must open");
+    require(tree_snapshot(project) == fixture_before,
+        "opening the compact-header fixture must remain read-only");
+
+    window.resize(1200, 800);
+    QCoreApplication::processEvents();
+    click_agent(window, "alpha");
+    require(shell.selection_state().selected_agent_directory_key()
+            == std::optional<fs::path>("alpha"),
+        "the compact-header fixture Agent must be selectable");
+    QCoreApplication::processEvents();
+
+    const auto header_child_of = [&](QWidget *widget) {
+        for (auto *ancestor = widget; ancestor != nullptr;
+             ancestor = ancestor->parentWidget()) {
+            if (ancestor == top_bar) return true;
+        }
+        return false;
+    };
+
+    // Title + small muted status: the presentation name is the prominent
+    // title and the status line reads small and in a distinct muted ink.
+    require(presentation_name->isVisible(),
+        "the compact header must keep the selected-Agent title visible");
+    require(status->isVisible(),
+        "the compact header must show a small status line under the title");
+    require(status->font().pointSize() < presentation_name->font().pointSize(),
+        "the header status must stay smaller than the title");
+    require(status->palette().color(QPalette::WindowText)
+            != presentation_name->palette().color(QPalette::WindowText),
+        "the header status must render in a distinct muted ink, never the "
+        "same prominent color as the title");
+
+    // Exactly one primary action: the header owns one primary-action anchor
+    // and, in wide mode, exactly one visible action button carries a caption.
+    auto *primary = required_child<QPushButton>(
+        window, "lingtai_selected_agent_primary_action");
+    require(header_child_of(primary),
+        "the one primary action must live inside the selected-Agent header");
+    auto primary_in_header = 0;
+    for (auto *button : top_bar->findChildren<QPushButton *>()) {
+        if (button->objectName()
+                == QStringLiteral("lingtai_selected_agent_primary_action")) {
+            ++primary_in_header;
+        }
+    }
+    require(primary_in_header == 1,
+        "the compact header must expose exactly one primary action");
+    require(primary->isVisible() && primary->isEnabled(),
+        "the one primary action must be visible and enabled for an "
+        "eligible selected Agent");
+    auto visible_caption_actions = 0;
+    for (auto *button : top_bar->findChildren<QPushButton *>()) {
+        if (button->isVisible() && !button->text().isEmpty()) {
+            ++visible_caption_actions;
+        }
+    }
+    require(visible_caption_actions == 1 && primary->isVisible()
+            && !primary->text().isEmpty(),
+        "the compact header must show exactly one caption-carrying action "
+        "button: the one primary action, never a second full-caption action");
+
+    // Lifecycle secondaries: subtle compact buttons/icons, never a second
+    // full-caption text button.
+    auto *sleep = required_child<QPushButton>(
+        window, "lingtai_selected_agent_request_sleep");
+    require(header_child_of(sleep),
+        "the lifecycle secondary must live inside the selected-Agent header");
+    require(sleep->text().isEmpty(),
+        "the lifecycle secondary must be a subtle compact icon button, "
+        "never a second full-caption action");
+    require(sleep->accessibleName() == QStringLiteral("Request sleep"),
+        "the compact icon lifecycle secondary must keep its accessible "
+        "identity");
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "compact-header fixtures must be removed");
+}
+
 } // namespace
 
 struct DashboardSectionShape {
@@ -3910,11 +4020,15 @@ int main(int argc, char **argv) {
         && std::string_view(argv[2]) == "--modern-composer-only";
     const auto slash_interception_only = argc == 3
         && std::string_view(argv[2]) == "--slash-interception-only";
+    const auto compact_header_only = argc == 3
+        && std::string_view(argv[2]) == "--compact-header-only";
     if (argc != 2 && !responsive_sidebar_only && !responsive_header_only
-            && !modern_composer_only && !slash_interception_only) {
+            && !modern_composer_only && !slash_interception_only
+            && !compact_header_only) {
         std::cerr << "usage: native_shell_test PROJECT_ROOT "
                      "[--responsive-sidebar-only|--responsive-header-only|"
-                     "--modern-composer-only|--slash-interception-only]\n";
+                     "--modern-composer-only|--slash-interception-only|"
+                     "--compact-header-only]\n";
         return 2;
     }
     try {
@@ -3952,6 +4066,15 @@ int main(int argc, char **argv) {
             QCoreApplication::processEvents();
             verify_conversation_slash_interception(
                 shell, project_root / "u2-slash-interception-fixture");
+            std::cout << "native shell behavior: OK\n";
+            return 0;
+        }
+        if (compact_header_only) {
+            lingtai::desktop::NativeShell shell;
+            shell.show_offscreen();
+            QCoreApplication::processEvents();
+            verify_compact_header_hierarchy(
+                shell, project_root / "commit-32-compact-header-fixture");
             std::cout << "native shell behavior: OK\n";
             return 0;
         }
