@@ -7,6 +7,7 @@
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QString>
+#include <QtGui/QAction>
 #include <QtGui/QColor>
 #include <QtGui/QFontMetricsF>
 #include <QtGui/QImage>
@@ -14,6 +15,7 @@
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLayout>
+#include <QtWidgets/QMenu>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QScrollArea>
 
@@ -484,6 +486,68 @@ void verify_row_selection_diverges_and_field_uses_window_bg() {
         "the accessible description must retain the raw facts verbatim");
 }
 
+// I2 selector RED contract (fails on the exact base). The project header must
+// lead with one compact `LingTai ▾` selector button plus one compact `+`
+// action instead of the bare brand label and the two full-width Open/New
+// buttons; activating the selector must surface a menu carrying the current
+// project-root path and the Open/New Project entries that keep the existing
+// object identities, while the roster's own identities stay reachable.
+void verify_compact_project_selector_and_menu() {
+    QWidget parent;
+    AgentRoster roster(&parent);
+    roster.show();
+    QCoreApplication::processEvents();
+
+    auto *selector = static_cast<QPushButton *>(nullptr);
+    auto *plus = static_cast<QPushButton *>(nullptr);
+    for (auto *candidate : roster.findChildren<QPushButton *>()) {
+        if (candidate->text() == QStringLiteral("LingTai ▾")) {
+            selector = candidate;
+        } else if (candidate->text() == QStringLiteral("+")) {
+            plus = candidate;
+        }
+    }
+    require(selector != nullptr,
+        "the project header must lead with one compact `LingTai ▾` selector "
+        "button, not a bare brand label");
+    require(plus != nullptr,
+        "the project header must show one compact `+` action beside the "
+        "selector");
+    require(selector->accessibleName().contains(QStringLiteral("LingTai")),
+        "the compact selector must keep a LingTai project accessible "
+        "identity");
+
+    auto *root = roster.findChild<QLabel *>("lingtai_project_root");
+    require(root != nullptr,
+        "the project-root label that reports the current path must remain");
+    const auto current_path = root->text();
+
+    auto *open_entry = static_cast<QAction *>(nullptr);
+    auto *new_entry = static_cast<QAction *>(nullptr);
+    auto path_entry_seen = false;
+    selector->click();
+    QCoreApplication::processEvents();
+    for (auto *menu : roster.findChildren<QMenu *>()) {
+        for (auto *action : menu->actions()) {
+            if (action->objectName()
+                    == QStringLiteral("lingtai_open_project_button")) {
+                open_entry = action;
+            } else if (action->objectName()
+                    == QStringLiteral("lingtai_new_project_button")) {
+                new_entry = action;
+            }
+            if (action->text() == current_path) {
+                path_entry_seen = true;
+            }
+        }
+    }
+    require(open_entry != nullptr && new_entry != nullptr,
+        "the selector menu must expose Open and New Project entries that keep "
+        "the existing object identities");
+    require(path_entry_seen,
+        "the selector menu must surface the current project path");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -495,6 +559,7 @@ int main(int argc, char **argv) {
         verify_selected_row_keeps_neutral_majority_surface();
         verify_intrinsic_roster_row_behavior();
         verify_row_selection_diverges_and_field_uses_window_bg();
+        verify_compact_project_selector_and_menu();
         std::cout << "agent roster presentation: OK\n";
         return 0;
     } catch (const std::exception &error) {
