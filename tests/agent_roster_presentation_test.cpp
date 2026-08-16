@@ -232,7 +232,7 @@ void verify_selected_row_keeps_neutral_majority_surface() {
     const auto area = image.width() * image.height();
 
     const auto accent = st::dialogsBgActive->c;
-    const auto neutral = st::windowBgOver->c;
+    const auto neutral = st::windowBgRipple->c;
     auto accent_pixels = 0;
     auto neutral_pixels = 0;
     for (auto y = 0; y != image.height(); ++y) {
@@ -248,8 +248,8 @@ void verify_selected_row_keeps_neutral_majority_surface() {
     }
     require(double(neutral_pixels) / area >= kSelectedNeutralMajority,
         "the selected row surface must keep a calm neutral majority painted "
-        "from the shared windowBgOver token rather than a saturated full-row "
-        "accent fill");
+        "from the shared windowBgRipple token rather than a saturated "
+        "full-row accent fill");
     require(accent_pixels == 0,
         "the selected row must not paint the old dialogsBgActive left stripe");
     require(image.pixelColor(0, 0) != neutral
@@ -257,13 +257,13 @@ void verify_selected_row_keeps_neutral_majority_surface() {
             && image.pixelColor(0, image.height() - 1) != neutral
             && image.pixelColor(image.width() - 1, image.height() - 1)
                 != neutral,
-        "the selected windowBgOver surface must leave all four outer corners "
-        "outside its rounded body");
+        "the selected windowBgRipple surface must leave all four outer "
+        "corners outside its rounded body");
     const auto dpr = std::max(1.0, double(image.devicePixelRatio()));
     require(image.pixelColor(
             image.width() - int(4.0 * dpr), image.height() / 2) == neutral,
         "the rounded selected body must still fill its interior with the "
-        "shared windowBgOver token");
+        "shared windowBgRipple token");
 }
 
 void verify_human_hidden_from_roster() {
@@ -396,14 +396,14 @@ void verify_intrinsic_roster_row_behavior() {
 }
 
 // I2 modern-roster contract. Whole-row selection must visibly diverge from
-// idle with a calm rounded `windowBgOver` body and no legacy accent stripe.
-// The idle row and the list field
-// must both read as the calm `st::windowBg` semantic role (the field currently
-// paints no palette role and never autofills), and the visible secondary line
+// idle with a calm rounded `windowBgRipple` body and no legacy accent stripe.
+// The idle row and the list field must both merge into the Sidebar's
+// `st::windowBgOver` semantic role (the old white `windowBg` autofill
+// created a full rectangular panel), and the visible secondary line
 // must render the friendly 1:1 label form while the accessible description
 // keeps the raw facts verbatim. These are asserted on the current widget tree
 // only; no future production symbol is referenced.
-void verify_row_selection_diverges_and_field_uses_window_bg() {
+void verify_row_selection_diverges_and_field_uses_sidebar_bg() {
     constexpr double kWholeRowSelectionDifference = 0.05;
 
     AgentSnapshot snapshot;
@@ -457,7 +457,7 @@ void verify_row_selection_diverges_and_field_uses_window_bg() {
         "the idle and selected row bodies must differ materially across "
         "the rounded surface rather than through a narrow accent cue");
 
-    const auto neutral = st::windowBgOver->c;
+    const auto neutral = st::windowBgRipple->c;
     const auto accent = st::dialogsBgActive->c;
     auto neutral_pixels = 0;
     auto accent_pixels = 0;
@@ -476,7 +476,7 @@ void verify_row_selection_diverges_and_field_uses_window_bg() {
         selected_image.width() * selected_image.height();
     require(double(neutral_pixels) / selected_area >= kSelectedNeutralMajority,
         "the selected row must keep its calm neutral-majority surface from "
-        "windowBgOver as its body diverges from the idle row");
+        "windowBgRipple as its body diverges from the idle row");
     require(accent_pixels == 0,
         "the selected row must not paint any dialogsBgActive stripe pixels");
 
@@ -486,18 +486,18 @@ void verify_row_selection_diverges_and_field_uses_window_bg() {
         "lingtai_agent_roster_scroll");
     require(rows != nullptr && scroll != nullptr,
         "the roster rows field and its scroll area must exist");
-    require(rows->palette().color(QPalette::Window) == st::windowBg->c
+    require(rows->palette().color(QPalette::Window) == st::windowBgOver->c
             && scroll->viewport()->palette().color(QPalette::Window)
-                == st::windowBg->c,
-        "the list field and its scroll viewport must carry the st::windowBg "
-        "palette role so the field reads as one calm surface");
+                == st::windowBgOver->c,
+        "the list field and its scroll viewport must merge into the Sidebar's "
+        "st::windowBgOver surface instead of forming a white rectangle");
     require(scroll->viewport()->autoFillBackground(),
-        "the list field viewport must auto-fill its windowBg role so the "
-        "field is actually painted, not transparent over the sidebar");
+        "the list field viewport must auto-fill the shared Sidebar role so "
+        "its empty area remains seamless rather than becoming a white panel");
     const auto idle_background = sample_idle_background(idle_image, dpr);
-    require(idle_background == st::windowBg->c,
-        "the idle row body must paint the same st::windowBg semantic role as "
-        "the list field");
+    require(idle_background == st::windowBgOver->c,
+        "the idle row body must merge into the same st::windowBgOver Sidebar "
+        "surface as the list field");
 
     const auto lines = selected->text().split(QLatin1Char('\n'));
     require(lines.value(0) == QStringLiteral("Alpha")
@@ -581,7 +581,7 @@ int main(int argc, char **argv) {
         verify_human_hidden_from_roster();
         verify_selected_row_keeps_neutral_majority_surface();
         verify_intrinsic_roster_row_behavior();
-        verify_row_selection_diverges_and_field_uses_window_bg();
+        verify_row_selection_diverges_and_field_uses_sidebar_bg();
         verify_compact_project_selector_and_menu();
         std::cout << "agent roster presentation: OK\n";
         return 0;
