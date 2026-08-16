@@ -2933,28 +2933,35 @@ void verify_plain_underline_page_tabs(
     const auto accent = st::dialogsBgActive->c;
     auto *pages_nav = presets_nav->parentWidget();
     const auto image = pages_nav->grab().toImage();
+    // The grab backing is physical device pixels, but every coordinate below
+    // is a logical pages_nav point: scale by the image's devicePixelRatio
+    // (Retina) once so each pixelColor sample lands on the physical pixel.
+    const auto dpr = image.devicePixelRatio();
+    const auto at = [&](const QImage &target, const QPoint &logical) {
+        return target.pixelColor(QPoint(qRound(logical.x() * dpr),
+                                        qRound(logical.y() * dpr)));
+    };
     // The page-nav row's trailing stretch is guaranteed unpainted, so it is
     // the real shell backdrop the transparent tabs sit on, in the same shared
     // coordinate space as every tab sample below.
     const auto backdrop = [&] {
-        return image.pixelColor(
-            QPoint(presets_nav->geometry().right() + 8,
-                   presets_nav->geometry().center().y()));
+        return at(image, QPoint(presets_nav->geometry().right() + 8,
+                                presets_nav->geometry().center().y()));
     }();
     require(backdrop == st::windowBg->c,
         "the page-nav row must sit directly on the shell backdrop token");
     const auto interior = [&](const QImage &target, QPushButton *button) {
-        return target.pixelColor(button->mapTo(
+        return at(target, button->mapTo(
             pages_nav, QPoint(button->width() / 2, 3)));
     };
     const auto bottom = [&](const QImage &target, QPushButton *button) {
-        return target.pixelColor(button->mapTo(
+        return at(target, button->mapTo(
             pages_nav, QPoint(button->width() / 2, button->height() - 1)));
     };
     const auto has_slab = [&](const QImage &target, QPushButton *button) {
         for (auto y = 0; y < button->height() - 2; ++y) {
             for (auto x = 0; x < button->width(); ++x) {
-                if (target.pixelColor(button->mapTo(pages_nav, QPoint(x, y)))
+                if (at(target, button->mapTo(pages_nav, QPoint(x, y)))
                         == slab) {
                     return true;
                 }
