@@ -3457,7 +3457,7 @@ void verify_responsive_header_priority(
     // Every visible nonempty Start/Sleep status must also fit its own
     // allocated width, and secondary guidance may be hidden before the
     // identity is ever destroyed.
-    const auto full_identity = QString::fromUtf8(stale_key);
+    const auto full_identity = QStringLiteral("Personal Research Companion");
     for (const auto &[width, height] : std::vector<std::pair<int, int>>{
              {1100, 720}, {820, 620}, {640, 520}}) {
         window.resize(width, height);
