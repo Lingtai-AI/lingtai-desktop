@@ -617,6 +617,90 @@ void verify_plain_state_resize_journey() {
     verify_plain_state_contract(surface, 1400, "after resize");
 }
 
+// ---------------------------------------------------------------------------
+// Empty-state RED contract (map unit "empty"): the no-message conversation
+// (zero rows) must render the content surface's centered empty state: a small
+// Agent avatar, the title "No messages yet", and the muted prompt "Send a
+// message or start the Agent.", all inside the same centered reading column
+// messages use. Fails on the exact base: set_conversation with zero rows
+// rebuilds an empty document, so the title, prompt, and avatar are all
+// absent. The existing plain-state journey stays: other plain/error states
+// remain truthful.
+// ---------------------------------------------------------------------------
+void verify_empty_state_contract() {
+    ConversationSurface surface;
+    surface.resize(kRedViewportWidth, 480);
+    surface.show();
+    QCoreApplication::processEvents();
+    surface.set_conversation(QStringLiteral("Telegram Bot"), {});
+    surface.document()->documentLayout()->documentSize();
+    QCoreApplication::processEvents();
+
+    QTextBlock title_block;
+    QTextBlock prompt_block;
+    auto saw_avatar = false;
+    for (auto block = surface.document()->begin(); block.isValid();
+         block = block.next()) {
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const auto fragment = it.fragment();
+            if (!fragment.isValid()) {
+                continue;
+            }
+            if (fragment.text() == QStringLiteral("No messages yet")) {
+                title_block = block;
+            } else if (fragment.text() == QStringLiteral(
+                    "Send a message or start the Agent.")) {
+                prompt_block = block;
+            }
+            if (fragment.charFormat().isImageFormat()) {
+                saw_avatar = true;
+            }
+        }
+    }
+    if (!title_block.isValid() || !prompt_block.isValid()) {
+        throw std::runtime_error(
+            "the no-message state must render the centered title 'No messages "
+            "yet' and the muted prompt 'Send a message or start the Agent.' "
+            "on the content surface");
+    }
+    if (!saw_avatar) {
+        throw std::runtime_error(
+            "the no-message state must render a centered small Agent avatar");
+    }
+
+    // The empty state stays on the content surface: the same centered reading
+    // column messages use, centered rather than full-pane.
+    const auto gutter = double(plain_state_column_gutter(kRedViewportWidth));
+    const auto title_format = title_block.blockFormat();
+    if (std::abs(title_format.leftMargin() - gutter) > 1.0
+        || std::abs(title_format.rightMargin() - gutter) > 1.0
+        || !title_format.alignment().testFlag(Qt::AlignCenter)) {
+        throw std::runtime_error(
+            "the empty state must stay centered inside the reading column "
+            "with symmetric " + std::to_string(int(gutter))
+            + "px gutters, but the title block carries "
+            + std::to_string(title_format.leftMargin()) + "px / "
+            + std::to_string(title_format.rightMargin()) + "px");
+    }
+
+    // The prompt is the muted secondary tone (12px Normal, st::msgServiceFg).
+    for (auto it = prompt_block.begin(); !it.atEnd(); ++it) {
+        const auto piece = it.fragment();
+        if (piece.isValid() && piece.text() == QStringLiteral(
+                "Send a message or start the Agent.")) {
+            const auto tone = piece.charFormat();
+            if (tone.font().pixelSize() != 12
+                || tone.font().weight() != QFont::Normal
+                || tone.foreground().color() != st::msgServiceFg->c) {
+                throw std::runtime_error(
+                    "the empty-state prompt must be muted in the quiet "
+                    "secondary tone (12px Normal, st::msgServiceFg)");
+            }
+            break;
+        }
+    }
+}
+
 } // namespace
 
 int run_typography_test(int argc, char **argv) {
@@ -630,6 +714,7 @@ int run_typography_test(int argc, char **argv) {
         verify_content_geometry();
         verify_turn_rhythm();
         verify_plain_state_resize_journey();
+        verify_empty_state_contract();
         std::cout << "conversation surface typography: OK\n";
         return 0;
     } catch (const std::exception &error) {
