@@ -1022,6 +1022,10 @@ NativeShell::NativeShell()
     auto *pages_nav = new PaletteSurface(detail, st::windowBg);
     pages_nav->setObjectName("lingtai_agent_pages_nav");
     pages_nav->setAccessibleName(QStringLiteral("Selected Agent pages"));
+    auto palette = pages_nav->palette();
+    palette.setColor(QPalette::Window, st::windowBg->c);
+    pages_nav->setPalette(palette);
+    pages_nav->setAutoFillBackground(true);
     auto *pages_nav_layout = new QHBoxLayout(pages_nav);
     pages_nav_layout->setContentsMargins(0, 4, 0, 4);
     pages_nav_layout->setSpacing(4);
