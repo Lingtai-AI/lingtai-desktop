@@ -3,18 +3,23 @@
 #include "base/basic_types.h"
 #include "styles/palette.h"
 
+#include <QtCore/QUrl>
+#include <QtCore/QVariant>
 #include <QtGui/QFont>
 #include <QtGui/QFontMetricsF>
 #include <QtGui/QPainter>
 #include <QtGui/QPaintEvent>
 #include <QtGui/QPalette>
+#include <QtGui/QPixmap>
 #include <QtGui/QResizeEvent>
 #include <QtGui/QTextBlock>
 #include <QtGui/QTextBlockFormat>
 #include <QtGui/QTextCharFormat>
 #include <QtGui/QTextCursor>
+#include <QtGui/QTextDocument>
 #include <QtGui/QTextFormat>
 #include <QtGui/QTextFrame>
+#include <QtGui/QTextImageFormat>
 #include <QtGui/QTextLayout>
 #include <QtWidgets/QScrollBar>
 
@@ -40,6 +45,12 @@ constexpr auto kBubbleHPadding = 11;
 constexpr auto kBubbleVPadding = 8;
 constexpr auto kBubbleRadius = 8;
 constexpr auto kMessageBlockProperty = QTextFormat::UserProperty + 1;
+constexpr auto kEmptyAvatarDiameter = 32;
+constexpr auto kEmptyAvatarGap = 10;
+constexpr auto kEmptyTitleGap = 6;
+constexpr auto kEmptyStateHeadroom = 28;
+constexpr auto kEmptyStateTitleSize = 15;
+constexpr auto kEmptyStateAvatarLetterSize = 14;
 
 // The symmetric gutter of the centered reading column for a viewport: fixed
 // 12px edge gutters until the column max, then a shared share of the excess.
@@ -211,6 +222,37 @@ void apply_plain_state_formatting(
     document->rootFrame()->setFrameFormat(frame_format);
 }
 
+QTextCharFormat empty_state_title_format() {
+    auto format = QTextCharFormat();
+    format.setForeground(st::msgServiceFg);
+    auto font = format.font();
+    font.setPixelSize(kEmptyStateTitleSize);
+    font.setWeight(QFont::Normal);
+    format.setFont(font);
+    return format;
+}
+
+// The small empty-state Agent avatar: a quiet muted circle carrying the
+// Agent's own initial, painted with the same shared palette tokens the roster
+// rows use so the empty conversation reads as the same partner identity.
+QPixmap empty_state_avatar(const QString &initial, int diameter) {
+    auto pixmap = QPixmap(diameter, diameter);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(st::msgServiceFg);
+    painter.drawEllipse(0, 0, diameter, diameter);
+    auto font = QFont();
+    font.setPixelSize(kEmptyStateAvatarLetterSize);
+    font.setWeight(QFont::DemiBold);
+    painter.setFont(font);
+    painter.setPen(st::windowBg);
+    painter.drawText(QRect(0, 0, diameter, diameter), Qt::AlignCenter, initial);
+    painter.end();
+    return pixmap;
+}
+
 } // namespace
 
 ConversationSurface::ConversationSurface(QWidget *parent)
@@ -229,6 +271,7 @@ ConversationSurface::ConversationSurface(QWidget *parent)
 }
 
 void ConversationSurface::set_plain_state(const QString &text) {
+    empty_state_active_ = false;
     if (text == last_plain_state_) {
         return;
     }
@@ -270,7 +313,12 @@ void ConversationSurface::set_conversation(
     them_ = them;
     last_messages_ = messages;
     last_plain_state_.clear();
-    rebuild_document(messages);
+    empty_state_active_ = messages.empty();
+    if (messages.empty()) {
+        rebuild_empty_state();
+    } else {
+        rebuild_document(messages);
+    }
 }
 
 void ConversationSurface::rebuild_document(
@@ -342,6 +390,56 @@ void ConversationSurface::rebuild_document(
         : std::min(previous, scrollbar->maximum()));
 }
 
+void ConversationSurface::rebuild_empty_state() {
+    auto *document = this->document();
+    document->clear();
+    clear_plain_state_anchor(document);
+    auto cursor = QTextCursor(document);
+    cursor.movePosition(QTextCursor::Start);
+
+    // The empty no-message state is one centered group inside the same reading
+    // column messages use: symmetric gutters bound every block, and AlignCenter
+    // holds the small Agent avatar, the title, and the muted prompt together
+    // rather than the full pane.
+    const auto gutter = reading_column_margins(viewport()->width());
+    auto centered = QTextBlockFormat();
+    centered.setAlignment(Qt::AlignCenter);
+    centered.setLeftMargin(gutter);
+    centered.setRightMargin(gutter);
+
+    auto avatar_format = centered;
+    avatar_format.setBottomMargin(kEmptyAvatarGap);
+    cursor.setBlockFormat(avatar_format);
+    auto image_format = QTextImageFormat();
+    image_format.setName(QStringLiteral("empty-state-agent-avatar"));
+    image_format.setWidth(kEmptyAvatarDiameter);
+    image_format.setHeight(kEmptyAvatarDiameter);
+    cursor.insertImage(image_format);
+
+    auto title_format = centered;
+    title_format.setBottomMargin(kEmptyTitleGap);
+    cursor.insertBlock(title_format);
+    cursor.insertText(
+        QStringLiteral("No messages yet"), empty_state_title_format());
+
+    cursor.insertBlock(centered);
+    cursor.insertText(
+        QStringLiteral("Send a message or start the Agent."),
+        secondary_format());
+
+    auto frame_format = document->rootFrame()->frameFormat();
+    frame_format.setTopMargin(kEmptyStateHeadroom);
+    document->rootFrame()->setFrameFormat(frame_format);
+
+    const auto initial = them_.trimmed().isEmpty()
+        ? QStringLiteral("A")
+        : them_.trimmed().left(1).toUpper();
+    document->addResource(
+        QTextDocument::ImageResource,
+        QUrl(QStringLiteral("empty-state-agent-avatar")),
+        empty_state_avatar(initial, kEmptyAvatarDiameter));
+}
+
 void ConversationSurface::paintEvent(QPaintEvent *event) {
     auto *surface_viewport = viewport();
     QPainter painter(surface_viewport);
@@ -411,7 +509,9 @@ void ConversationSurface::resizeEvent(QResizeEvent *event) {
         return;
     }
     last_layout_width_ = width;
-    if (!last_messages_.empty()) {
+    if (empty_state_active_) {
+        rebuild_empty_state();
+    } else if (!last_messages_.empty()) {
         rebuild_document(last_messages_);
     }
 }

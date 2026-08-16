@@ -47,12 +47,14 @@ protected:
 private:
     void rebuild_document(
         const std::vector<DirectConversationMessage> &messages);
+    void rebuild_empty_state();
     [[nodiscard]] bool same_content(
         const std::vector<DirectConversationMessage> &messages) const;
 
     QString them_;
     std::vector<DirectConversationMessage> last_messages_;
     QString last_plain_state_;
+    bool empty_state_active_ = false;
     int last_layout_width_ = 0;
 };
 
