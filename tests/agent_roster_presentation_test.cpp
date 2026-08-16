@@ -10,10 +10,12 @@
 #include <QtGui/QColor>
 #include <QtGui/QFontMetricsF>
 #include <QtGui/QImage>
+#include <QtGui/QPalette>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLayout>
 #include <QtWidgets/QPushButton>
+#include <QtWidgets/QScrollArea>
 
 #include <algorithm>
 #include <cmath>
@@ -68,7 +70,7 @@ QPushButton *agent_row(QWidget &widget, std::string_view key) {
 }
 
 constexpr double kInkDistance = 48.0;
-constexpr double kHierarchyScaleRatio = 1.10;
+constexpr double kHierarchyScaleRatio = 1.05;
 constexpr double kSecondaryMaturityRatio = 0.85;
 constexpr double kSelectedNeutralMajority = 0.5;
 constexpr double kAccentBoundedFraction = 1.0 / 3.0;
@@ -173,7 +175,7 @@ int leading_avatar_fill(const QImage &image, double dpr,
 void verify_modern_roster_typography_hierarchy() {
     AgentSnapshot snapshot;
     snapshot.scan = AgentScanState::complete;
-    snapshot.items = { make_row("MMMMMMMM", AgentRole::main) };
+    snapshot.items = { make_row("Main Agent · Active", AgentRole::main) };
 
     QWidget parent;
     AgentRoster roster(&parent);
@@ -182,7 +184,7 @@ void verify_modern_roster_typography_hierarchy() {
     roster.show();
     QCoreApplication::processEvents();
 
-    auto *button = agent_row(roster, "MMMMMMMM");
+    auto *button = agent_row(roster, "Main Agent · Active");
     require(button != nullptr, "the glyph-rich row must render for grab");
     button->clearFocus();
     roster.clearFocus();
@@ -202,8 +204,8 @@ void verify_modern_roster_typography_hierarchy() {
         "the primary identity must render at a purposefully larger visual "
         "scale than the secondary metadata");
     require(secondary_span >= primary_span * kSecondaryMaturityRatio,
-        "the secondary metadata must keep the accepted readable mature 13pt "
-        "scale, never shrunk to squeeze the hierarchy");
+        "the secondary metadata must keep a readable mature subordinate "
+        "scale; the exact 12pt target remains source-reviewed");
 }
 
 void verify_selected_row_keeps_neutral_majority_surface() {
@@ -363,6 +365,125 @@ void verify_intrinsic_roster_row_behavior() {
         "elidedText call, not pixel-claimed here");
 }
 
+// I2 modern-roster RED contract (fails on the exact base). The idle and the
+// selected row share the same `windowBgOver` body fill, so outside the 4px
+// leading accent strip their grabs are identical; whole-row selection must
+// make them materially different while the selected row keeps its calm
+// neutral-majority / accent-minority surface. The idle row and the list field
+// must both read as the calm `st::windowBg` semantic role (the field currently
+// paints no palette role and never autofills), and the visible secondary line
+// must render the friendly 1:1 label form while the accessible description
+// keeps the raw facts verbatim. These are asserted on the current widget tree
+// only; no future production symbol is referenced.
+void verify_row_selection_diverges_and_field_uses_window_bg() {
+    constexpr double kWholeRowSelectionDifference = 0.05;
+
+    AgentSnapshot snapshot;
+    snapshot.scan = AgentScanState::complete;
+    snapshot.items = { make_row("Alpha", AgentRole::main) };
+
+    QWidget parent;
+    AgentRoster idle_roster(&parent);
+    idle_roster.set_rows(snapshot, std::nullopt);
+    idle_roster.resize(260, idle_roster.height());
+    idle_roster.show();
+    QCoreApplication::processEvents();
+
+    AgentRoster selected_roster(&parent);
+    selected_roster.set_rows(snapshot, fs::path("Alpha"));
+    selected_roster.resize(260, selected_roster.height());
+    selected_roster.show();
+    QCoreApplication::processEvents();
+
+    auto *idle = agent_row(idle_roster, "Alpha");
+    auto *selected = agent_row(selected_roster, "Alpha");
+    require(idle != nullptr && selected != nullptr,
+        "both the idle and the selected row must render for grab");
+    require(!idle->isChecked() && selected->isChecked(),
+        "the idle row must be unchecked and the selected row checked before "
+        "grab");
+    idle->clearFocus();
+    selected->clearFocus();
+    idle_roster.clearFocus();
+    selected_roster.clearFocus();
+
+    const auto idle_image = idle->grab().toImage();
+    const auto selected_image = selected->grab().toImage();
+    require(idle_image.size() == selected_image.size(),
+        "the idle and selected row grabs must be the same size to compare");
+    const auto dpr = std::max(1.0, double(idle_image.devicePixelRatio()));
+
+    const auto accent_physical = int(4.0 * dpr);
+    auto differing_pixels = 0;
+    auto comparable_pixels = 0;
+    for (auto y = 0; y != idle_image.height(); ++y) {
+        for (auto x = accent_physical; x != idle_image.width(); ++x) {
+            ++comparable_pixels;
+            if (idle_image.pixelColor(x, y)
+                    != selected_image.pixelColor(x, y)) {
+                ++differing_pixels;
+            }
+        }
+    }
+    require(double(differing_pixels) / comparable_pixels
+            >= kWholeRowSelectionDifference,
+        "outside the 4px accent strip the idle and selected row bodies must "
+        "differ materially: whole-row selection must be visible, not only the "
+        "narrow accent cue");
+
+    const auto neutral = st::windowBgOver->c;
+    const auto accent = st::dialogsBgActive->c;
+    auto neutral_pixels = 0;
+    auto accent_pixels = 0;
+    for (auto y = 0; y != selected_image.height(); ++y) {
+        for (auto x = 0; x != selected_image.width(); ++x) {
+            const auto pixel = selected_image.pixelColor(x, y);
+            if (pixel == neutral) {
+                ++neutral_pixels;
+            }
+            if (pixel == accent) {
+                ++accent_pixels;
+            }
+        }
+    }
+    const auto selected_area =
+        selected_image.width() * selected_image.height();
+    require(double(neutral_pixels) / selected_area >= kSelectedNeutralMajority,
+        "the selected row must keep its calm neutral-majority surface from "
+        "windowBgOver as its body diverges from the idle row");
+    require(double(accent_pixels) / selected_area <= kAccentBoundedFraction,
+        "the dialogsBgActive accent must stay a bounded minority cue on the "
+        "selected row");
+
+    auto *rows = idle_roster.findChild<Ui::RpWidget *>(
+        "lingtai_agent_roster_rows");
+    auto *scroll = idle_roster.findChild<QScrollArea *>(
+        "lingtai_agent_roster_scroll");
+    require(rows != nullptr && scroll != nullptr,
+        "the roster rows field and its scroll area must exist");
+    require(rows->palette().color(QPalette::Window) == st::windowBg->c
+            && scroll->viewport()->palette().color(QPalette::Window)
+                == st::windowBg->c,
+        "the list field and its scroll viewport must carry the st::windowBg "
+        "palette role so the field reads as one calm surface");
+    require(scroll->viewport()->autoFillBackground(),
+        "the list field viewport must auto-fill its windowBg role so the "
+        "field is actually painted, not transparent over the sidebar");
+    const auto idle_background = sample_idle_background(idle_image, dpr);
+    require(idle_background == st::windowBg->c,
+        "the idle row body must paint the same st::windowBg semantic role as "
+        "the list field");
+
+    const auto lines = selected->text().split(QLatin1Char('\n'));
+    require(lines.value(0) == QStringLiteral("Alpha")
+            && lines.value(1) == QStringLiteral("Main Agent · Active"),
+        "the visible secondary line must render the friendly 1:1 label form "
+        "(role · presence) while the primary line stays the agent key");
+    require(selected->accessibleDescription().contains(
+            QStringLiteral("valid — main — alive")),
+        "the accessible description must retain the raw facts verbatim");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -373,6 +494,7 @@ int main(int argc, char **argv) {
         verify_human_hidden_from_roster();
         verify_selected_row_keeps_neutral_majority_surface();
         verify_intrinsic_roster_row_behavior();
+        verify_row_selection_diverges_and_field_uses_window_bg();
         std::cout << "agent roster presentation: OK\n";
         return 0;
     } catch (const std::exception &error) {

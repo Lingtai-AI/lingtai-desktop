@@ -109,6 +109,43 @@ QString row_accessible(const AgentRow &item) {
             + QStringLiteral("manifest diagnostic: %1").arg(diagnostic);
 }
 
+QString friendly_role_text(AgentRole role) {
+    switch (role) {
+    case AgentRole::main: return QStringLiteral("Main Agent");
+    case AgentRole::agent: return QStringLiteral("Agent");
+    case AgentRole::human: return QStringLiteral("Human");
+    case AgentRole::unknown: return QString();
+    }
+    return QString();
+}
+
+QString friendly_presence_text(AgentPresenceKind presence) {
+    switch (presence) {
+    case AgentPresenceKind::alive_human:
+    case AgentPresenceKind::alive: return QStringLiteral("Active");
+    case AgentPresenceKind::stale: return QStringLiteral("Stale");
+    case AgentPresenceKind::missing: return QStringLiteral("Missing");
+    case AgentPresenceKind::invalid: return QStringLiteral("Invalid");
+    case AgentPresenceKind::unavailable: return QStringLiteral("Unavailable");
+    case AgentPresenceKind::unknown: return QString();
+    }
+    return QString();
+}
+
+// The visible two-line row renders a friendly 1:1 summary (`Main Agent ·
+// Active`) instead of the raw fact codes, so the compact row stays
+// human-readable; the accessible description and tooltip keep the raw facts
+// verbatim. An unknown role or presence falls back to the raw facts rather
+// than inventing a friendly label.
+QString row_summary(const AgentRow &item) {
+    const auto role = friendly_role_text(item.role);
+    const auto presence = friendly_presence_text(item.presence);
+    if (role.isEmpty() || presence.isEmpty()) {
+        return row_facts(item);
+    }
+    return QStringLiteral("%1 · %2").arg(role, presence);
+}
+
 // A LingTai-owned checkable row button. It keeps the plain checkable-button
 // semantics the shell and its tests rely on while painting the selected,
 // hover, pressed, and focus states from the shared lib_ui palette (a neutral
@@ -130,10 +167,10 @@ protected:
 
 QSize AgentRowButton::sizeHint() const {
     auto primary_font = font();
-    primary_font.setPointSize(15);
+    primary_font.setPointSize(13);
     primary_font.setWeight(QFont::DemiBold);
     auto secondary_font = font();
-    secondary_font.setPointSize(13);
+    secondary_font.setPointSize(12);
     const auto text_height = QFontMetrics(primary_font).height()
         + QFontMetrics(secondary_font).height();
     return QSize(
@@ -149,7 +186,7 @@ void AgentRowButton::paintEvent(QPaintEvent *) {
         ? st::windowBgOver
         : over
             ? st::windowBgRipple
-            : st::windowBgOver);
+            : st::windowBg);
     if (selected) {
         painter.fillRect(
             QRect(0, 0, kSelectedAccentWidth, height()),
@@ -180,7 +217,7 @@ void AgentRowButton::paintEvent(QPaintEvent *) {
         .replace(QLatin1String("&&"), QLatin1String("&"));
 
     auto primary_font = font();
-    primary_font.setPointSize(15);
+    primary_font.setPointSize(13);
     primary_font.setWeight(QFont::DemiBold);
     const auto primary_color = over
         ? st::dialogsNameFgOver
@@ -192,7 +229,7 @@ void AgentRowButton::paintEvent(QPaintEvent *) {
     painter.drawEllipse(avatar_rect);
     painter.setPen(over
         ? st::windowBgRipple
-        : st::windowBgOver);
+        : st::windowBg);
     painter.setFont(primary_font);
     painter.drawText(avatar_rect, Qt::AlignCenter, avatar_initial);
 
@@ -208,7 +245,7 @@ void AgentRowButton::paintEvent(QPaintEvent *) {
             std::max(0, primary_rect.width())));
 
     auto secondary_font = font();
-    secondary_font.setPointSize(13);
+    secondary_font.setPointSize(12);
     painter.setFont(secondary_font);
     painter.setPen(over
         ? st::dialogsTextFgOver
@@ -326,13 +363,20 @@ AgentRoster::AgentRoster(QWidget *parent)
     scroll_->setObjectName("lingtai_agent_roster_scroll");
     scroll_->setAccessibleName(QStringLiteral("Agent roster rows"));
     scroll_->setWidgetResizable(true);
-    // The dialog-list surface paints one uniform light-gray field, so the
-    // scroll viewport must not fill a raw white Base surface over it.
-    scroll_->viewport()->setAutoFillBackground(false);
+    // The roster surface and its scroll viewport both fill the shared
+    // `windowBg` field color instead of a raw white Base surface.
+    auto viewport_palette = scroll_->viewport()->palette();
+    viewport_palette.setColor(QPalette::Window, st::windowBg->c);
+    scroll_->viewport()->setPalette(viewport_palette);
+    scroll_->viewport()->setAutoFillBackground(true);
     roster_layout->addWidget(scroll_, 1);
     auto *rows = new Ui::RpWidget(scroll_);
     rows->setObjectName("lingtai_agent_roster_rows");
     rows->setAccessibleName(QStringLiteral("Agent roster rows"));
+    auto rows_palette = rows->palette();
+    rows_palette.setColor(QPalette::Window, st::windowBg->c);
+    rows->setPalette(rows_palette);
+    rows->setAutoFillBackground(true);
     rows_layout_ = new QVBoxLayout(rows);
     rows_layout_->setContentsMargins(0, 0, 0, 0);
     rows_layout_->setSpacing(4);
@@ -424,8 +468,9 @@ void AgentRoster::set_rows(
             QStringLiteral("lingtai_agent_row_%1").arg(index));
         row->setAccessibleName(
             QStringLiteral("Agent %1").arg(path_text(item.directory_key)));
-        row->setText(QStringLiteral("%1\n%2").arg(button_key, row_facts(item)));
+        row->setText(QStringLiteral("%1\n%2").arg(button_key, row_summary(item)));
         row->setAccessibleDescription(row_accessible(item));
+        row->setToolTip(row_facts(item));
         row->setProperty("directory_key", path_text(item.directory_key));
         row->setCheckable(true);
         row->setChecked(selected_key && *selected_key == item.directory_key);
