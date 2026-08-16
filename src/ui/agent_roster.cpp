@@ -335,11 +335,6 @@ AgentRoster::AgentRoster(QWidget *parent)
     open_button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     open_button->hide();
     header->addWidget(open_button);
-    auto *selector = new QPushButton(QStringLiteral("LingTai ▾"), this);
-    selector->setObjectName("lingtai_project_selector");
-    selector->setAccessibleName(QStringLiteral("LingTai project selector"));
-    selector->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    header->addWidget(selector);
     auto *new_button = new QPushButton(QStringLiteral("+"), this);
     new_button->setObjectName("lingtai_new_project_button");
     new_button->setAccessibleName(QStringLiteral("New Project"));
@@ -347,6 +342,11 @@ AgentRoster::AgentRoster(QWidget *parent)
         "Creates a new LingTai project and its first Agent through the "
         "canonical TUI, then starts that Agent."));
     new_button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    auto *selector = new QPushButton(QStringLiteral("LingTai ▾"), this);
+    selector->setObjectName("lingtai_project_selector");
+    selector->setAccessibleName(QStringLiteral("LingTai project selector"));
+    selector->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    header->addWidget(selector);
     header->addWidget(new_button);
     layout->addLayout(header);
 
