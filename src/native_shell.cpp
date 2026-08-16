@@ -4,6 +4,7 @@
 #include "agent_sleep.h"
 #include "direct_conversation_history.h"
 #include "direct_mail_publisher.h"
+#include "slash_command.h"
 
 #include "base/event_filter.h"
 #include "base/integration.h"
@@ -21,6 +22,7 @@
 #include "ui/widgets/rp_window.h"
 #include "ui/widgets/shadow.h"
 
+#include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
 #include <QtCore/QPoint>
 #include <QtCore/QString>
@@ -2019,15 +2021,57 @@ void NativeShell::render_agent_preset_summary() {
             ? QStringLiteral("Stale") : QStringLiteral("Resolved"));
 }
 
-// Always resolves the route fresh from current C1/C3 truth rather than
-// capturing it once, so a selection change between typing and clicking Send
-// can never deliver to a stale target.
+// Classifies the raw composer text before ordinary trim/send handling. Every
+// parsed slash command is cleared and dispatched locally here, so even an
+// unknown or deliberately unavailable command can never reach DirectPublisher.
+// Ordinary messages still resolve the route fresh from current C1/C3 truth
+// rather than capturing it once, so a selection change between typing and
+// clicking Send can never deliver to a stale target.
 void NativeShell::handle_send_message() {
     auto *input = static_cast<Ui::InputField *>(
         window_->findChild<QObject *>("lingtai_composer_input"));
     auto *status = window_->findChild<QLabel *>("lingtai_composer_status");
     if (!input || !status) return;
-    const auto text = input->getLastText().trimmed();
+    const auto raw_text = input->getLastText();
+    if (const auto command = parse_slash_command(raw_text.toStdString())) {
+        input->clear();
+        if (!command->args.empty()) {
+            status->setText(QStringLiteral(
+                "Command not available in this Desktop build."));
+            return;
+        }
+        if (command->name == "presets") {
+            status->clear();
+            show_detail_page(AgentDetailPage::presets);
+            return;
+        }
+        if (command->name == "agents") {
+            status->clear();
+            if (detail_back_button_ && detail_back_button_->isVisible()) {
+                handle_detail_back();
+            } else {
+                agent_roster_->focus_row(
+                    selection_state_.selected_agent_directory_key());
+            }
+            return;
+        }
+        if (command->name == "help") {
+            status->setText(QStringLiteral(
+                "Available commands: /agents, /presets, /help, /quit."));
+            return;
+        }
+        if (command->name == "quit") {
+            status->clear();
+            window_->hide();
+            QCoreApplication::quit();
+            return;
+        }
+        status->setText(QStringLiteral(
+            "Command not available in this Desktop build."));
+        return;
+    }
+
+    const auto text = raw_text.trimmed();
     if (text.isEmpty()) return; // reject whitespace-only input without writing
 
     if (!selection_state_.active_project()

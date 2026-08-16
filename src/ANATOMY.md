@@ -24,8 +24,9 @@ Entry point and composition root:
   `lingtai-tui` PATH lookup and the `$HOME/.lingtai-tui/runtime/venv/bin/python`
   fallback (`main.cpp:13`).
 - `native_shell.{h,cpp}` — the C5 composition owner: owns one `Ui::RpWindow`,
-  the roster column, the content pane, the New Project dialog, the composer,
-  the one-second refresh timer, and the two click-armed pending observations.
+  the roster column, the content pane, the New Project dialog, the composer and
+  its local slash-command dispatch, the one-second refresh timer, and the two
+  click-armed pending observations.
   The roster column is separated from the content pane by one semantic 8px
   drag handle (`lingtai_roster_resize_handle`, distinct from the one-pixel
   `Ui::PlainShadow` `lingtai_roster_separator` that follows it) whose drags
@@ -118,7 +119,7 @@ keeps the parent summary):
   in smoke mode consumes `smoke_ready()` and emits the ordered markers.
 - `NativeShell` → readers/owners: the shell is the sole caller of
   `project_agents`, `resolve_direct_conversation_route`,
-  `read_direct_conversation`, `send_direct_mail`,
+  `parse_slash_command`, `read_direct_conversation`, `send_direct_mail`,
   `read_agent_preset_summary`,
   `request_agent_sleep` + the baseline/observe pair, `start_agent`, and the
   `ProjectBootstrapRunner` calls. The click handlers rerun `project_agents`
@@ -146,6 +147,7 @@ Owned library targets (`CMakeLists.txt`) and their source membership:
 - `lingtai_desktop_posix_primitives` — `posix_descriptor_primitives.cpp`.
 - `lingtai_desktop_agent_projection` — `agent_projection.cpp`.
 - `lingtai_desktop_direct_route` — `direct_conversation_route.cpp`.
+- `lingtai_desktop_slash_command` — `slash_command.cpp`.
 - `lingtai_desktop_conversation` — `direct_conversation_history.cpp`.
 - `lingtai_desktop_mail_publisher` — `direct_mail_publisher.cpp`.
 - `lingtai_desktop_agent_preset_summary` — `agent_preset_summary.cpp`.
@@ -156,8 +158,8 @@ Owned library targets (`CMakeLists.txt`) and their source membership:
 - `lingtai_desktop_smoke` (executable) — `main.cpp`, `crl_integration.cpp`.
 
 `lingtai_desktop_native_shell` links `desktop-app::lib_ui` privately, links
-`lingtai_desktop_core` publicly, and links every reader/owner library
-privately. The two `ui/` widgets are compiled only into the shell library;
+`lingtai_desktop_core` publicly, and links every reader/owner library plus the
+pure slash classifier privately. The two `ui/` widgets are compiled only into the shell library;
 they are the shell's presentation layer and own no domain reads or writes.
 
 ## State

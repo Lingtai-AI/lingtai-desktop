@@ -3499,22 +3499,169 @@ void verify_responsive_header_priority(
     require(!cleanup_error, "responsive-header fixtures must be removed");
 }
 
+// The U1 composer-command contract: every leading-slash command in this
+// journey is submitted through the real InputField Return path. Local
+// navigation/help/quit must never become DirectPublisher mail, while the
+// already-parsed but deliberately unavailable `/sleep` must never become a
+// lifecycle signal in this slice.
+void verify_conversation_slash_interception(
+        lingtai::desktop::NativeShell &shell,
+        const fs::path &sandbox) {
+    auto &window = shell.window();
+    auto *sidebar = required_child<Ui::RpWidget>(
+        window, "lingtai_desktop_sidebar");
+    auto *content = required_child<Ui::RpWidget>(
+        window, "lingtai_desktop_content");
+    auto *input = required_ui_child<Ui::InputField>(
+        window, "lingtai_composer_input");
+    auto *send_button = required_ui_child<Ui::RoundButton>(
+        window, "lingtai_composer_send_button");
+    auto *status = required_child<QLabel>(
+        window, "lingtai_composer_status");
+    auto *conversation_nav = required_child<QPushButton>(
+        window, "lingtai_agent_page_nav_conversation");
+    auto *presets_nav = required_child<QPushButton>(
+        window, "lingtai_agent_page_nav_presets");
+
+    const auto project = sandbox / "project";
+    const auto target = project / ".lingtai/alpha";
+    const auto outbox = project / ".lingtai/human/mailbox/outbox";
+    write_file(project / ".lingtai/human/.agent.json",
+        R"({"agent_id":"20260101-000000-h001","agent_name":"Ted",)"
+        R"("address":"human","state":"active"})");
+    write_file(target / ".agent.json",
+        R"({"admin":{},"agent_id":"20260712-191609-a001",)"
+        R"("agent_name":"alpha","address":"alpha","state":"active"})");
+    write_file(target / ".agent.heartbeat", std::to_string(
+        std::chrono::duration<double>(
+            std::chrono::system_clock::now().time_since_epoch()).count()));
+
+    const auto outbox_leaf_count = [&] {
+        auto count = std::size_t{0};
+        if (!fs::exists(outbox)) return count;
+        for (const auto &entry : fs::directory_iterator(outbox)) {
+            static_cast<void>(entry);
+            ++count;
+        }
+        return count;
+    };
+    const auto submit_command = [&](const QString &command) {
+        input->setText(command);
+        input->setFocus();
+        QCoreApplication::processEvents();
+        auto enter = QKeyEvent(
+            QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QApplication::sendEvent(input->rawTextEdit(), &enter);
+        QCoreApplication::processEvents();
+    };
+
+    window.resize(380, 480);
+    QCoreApplication::processEvents();
+    const auto outcome = shell.open_project(project, std::nullopt);
+    require(outcome.disposition == ProjectOpenDisposition::opened,
+        "the slash-interception fixture project must open");
+    click_agent(window, "alpha");
+    require(shell.selection_state().selected_agent_directory_key()
+                == std::optional<fs::path>("alpha")
+            && input->isEnabled() && send_button->isEnabled(),
+        "a selected valid Agent must enable the composer before slash input");
+
+    submit_command(QStringLiteral("/presets"));
+    require(input->getLastText().isEmpty(),
+        "raw /presets must clear the composer after local submission");
+    require(outbox_leaf_count() == 0,
+        "raw /presets must stay local and create no human outbox leaf");
+    require(presets_nav->isChecked() && !conversation_nav->isChecked(),
+        "raw /presets must check the existing Presets page");
+
+    // Presets intentionally hides the composer. Return through the existing
+    // page button, then use `/agents` from a real narrow selected-detail state
+    // so the roster and focus transition are observable.
+    conversation_nav->click();
+    QCoreApplication::processEvents();
+    require(conversation_nav->isChecked() && input->isVisible(),
+        "the existing Conversation page must restore the real composer");
+    submit_command(QStringLiteral("/agents"));
+    require(input->getLastText().isEmpty(),
+        "raw /agents must clear the composer after local submission");
+    require(outbox_leaf_count() == 0,
+        "raw /agents must stay local and create no human outbox leaf");
+    require(!shell.selection_state().selected_agent_directory_key()
+            && sidebar->isVisible() && !content->isVisible(),
+        "raw /agents must return a narrow selected detail to the existing roster");
+    require(window.focusWidget() == agent_row(window, "alpha"),
+        "raw /agents must return focus to a usable existing Agent row");
+
+    // Re-enter the same valid route for the command-status checks.
+    click_agent(window, "alpha");
+    require(input->isEnabled() && send_button->isEnabled(),
+        "reselecting the valid Agent must re-enable the composer");
+    submit_command(QStringLiteral("/sleep"));
+    require(input->getLastText().isEmpty(),
+        "raw /sleep must clear the composer after local submission");
+    require(outbox_leaf_count() == 0,
+        "raw /sleep must stay local and create no human outbox leaf");
+    require(!fs::exists(target / ".sleep"),
+        "raw /sleep must create no Agent lifecycle signal in U1");
+    require(status->text() == QStringLiteral(
+                "Command not available in this Desktop build."),
+        "raw /sleep must show the exact unavailable-in-this-build status");
+
+    submit_command(QStringLiteral("/help"));
+    require(input->getLastText().isEmpty(),
+        "raw /help must clear the composer after local submission");
+    require(outbox_leaf_count() == 0,
+        "raw /help must stay local and create no human outbox leaf");
+    const auto help = status->text();
+    require(!help.isEmpty() && help.size() <= 512,
+        "raw /help must expose one bounded nonempty local response");
+    for (const auto *command : {"/agents", "/presets", "/help", "/quit"}) {
+        require(help.contains(QString::fromLatin1(command)),
+            std::string("raw /help must expose the available U1 command ")
+                + command);
+    }
+    require(!help.contains(QStringLiteral("/start"), Qt::CaseInsensitive)
+            && !help.contains(QStringLiteral("/wake"), Qt::CaseInsensitive)
+            && (!help.contains(QStringLiteral("/sleep"), Qt::CaseInsensitive)
+                || help.contains(
+                    QStringLiteral("not available"), Qt::CaseInsensitive)),
+        "raw /help must not claim unavailable lifecycle execution");
+    require(!fs::exists(target / ".sleep"),
+        "raw /help must create no Agent lifecycle signal");
+
+    submit_command(QStringLiteral("/quit"));
+    require(input->getLastText().isEmpty(),
+        "raw /quit must clear the composer after local submission");
+    require(outbox_leaf_count() == 0,
+        "raw /quit must stay local and create no human outbox leaf");
+    require(!fs::exists(target / ".sleep"),
+        "raw /quit must create no Agent lifecycle signal");
+    require(!window.isVisible(),
+        "raw /quit must close the real Desktop window locally");
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "slash-interception fixtures must be removed");
+}
+
 int main(int argc, char **argv) {
     // Test-local execution modes: the exact binary with a fresh fixture root
     // and one literal flag runs only the R1 resizable-sidebar, R4
-    // responsive-header, or M4 modern-composer journey, so the warm
-    // RED/GREEN never has to pass the unrelated accepted-base debt.
+    // responsive-header, M4 modern-composer, or U1 slash-interception journey,
+    // so the warm RED/GREEN never has to pass unrelated accepted-base debt.
     const auto responsive_sidebar_only = argc == 3
         && std::string_view(argv[2]) == "--responsive-sidebar-only";
     const auto responsive_header_only = argc == 3
         && std::string_view(argv[2]) == "--responsive-header-only";
     const auto modern_composer_only = argc == 3
         && std::string_view(argv[2]) == "--modern-composer-only";
+    const auto slash_interception_only = argc == 3
+        && std::string_view(argv[2]) == "--slash-interception-only";
     if (argc != 2 && !responsive_sidebar_only && !responsive_header_only
-            && !modern_composer_only) {
+            && !modern_composer_only && !slash_interception_only) {
         std::cerr << "usage: native_shell_test PROJECT_ROOT "
                      "[--responsive-sidebar-only|--responsive-header-only|"
-                     "--modern-composer-only]\n";
+                     "--modern-composer-only|--slash-interception-only]\n";
         return 2;
     }
     try {
@@ -3543,6 +3690,15 @@ int main(int argc, char **argv) {
             QCoreApplication::processEvents();
             verify_modern_composer_surface(
                 shell, project_root / "commit-m4-composer-surface-fixture");
+            std::cout << "native shell behavior: OK\n";
+            return 0;
+        }
+        if (slash_interception_only) {
+            lingtai::desktop::NativeShell shell;
+            shell.show_offscreen();
+            QCoreApplication::processEvents();
+            verify_conversation_slash_interception(
+                shell, project_root / "u1-slash-interception-fixture");
             std::cout << "native shell behavior: OK\n";
             return 0;
         }

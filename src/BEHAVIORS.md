@@ -57,6 +57,18 @@ its code.
   ASCII space, trims the argument edges, preserves unknown names and internal
   argument spacing, and owns no dispatch or side effect. A bare slash, leading
   whitespace, empty text, and ordinary text are not commands.
+- `NativeShell::handle_send_message` calls that classifier on the raw composer
+  text before the ordinary trim/mail path. Every parsed command clears the
+  composer and returns through local dispatch, so unknown, unavailable, and
+  argument-bearing commands never reach `send_direct_mail`.
+- The argument-free current surfaces are exact and case-sensitive: `/presets`
+  selects the existing Presets page; `/agents` uses the existing narrow Back
+  path or, in the wide two-column view, preserves selection and focuses its
+  existing roster row; `/help` reports only `/agents`, `/presets`, `/help`, and
+  `/quit`; `/quit` closes only the Desktop window.
+- Every other parsed command, including `/sleep` and a supported name with
+  arguments, sets exactly `Command not available in this Desktop build.` and
+  performs no mail or Agent lifecycle side effect.
 
 ## State and selection
 
@@ -139,12 +151,13 @@ its code.
 - The composer is one vendored single-line `InputField` plus an explicit
   `Send` `RoundButton`, enabled only when a direct route resolves for the
   current selection.
-- Send re-resolves the route fresh (never a stale captured target), trims the
-  text, rejects whitespace-only input without writing, and calls
-  `send_direct_mail`. Outcome text is exactly `Queued` on success or
-  `Message was not queued.`; the composer clears only on success. The
-  conversation state line shows `N message(s)` plus ` · N skipped` when the
-  one generic skipped count is nonzero.
+- After raw slash classification returns no command, ordinary send re-resolves
+  the route fresh (never a stale captured target), trims the text, rejects
+  whitespace-only input without writing, and calls `send_direct_mail`.
+  Outcome text is exactly `Queued` on success or `Message was not queued.`;
+  the ordinary-message composer clears only on success. The conversation state
+  line shows `N message(s)` plus ` · N skipped` when the one generic skipped
+  count is nonzero.
 - The conversation surface renders rows read-only as plain text (kernel
   `message` field), chronological by the kernel's timestamp precedence with
   the entry ID as tie-break; markup is never interpreted. This is the TUI

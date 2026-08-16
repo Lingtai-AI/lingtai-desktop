@@ -240,6 +240,8 @@ target_include_directories(lingtai_desktop_slash_command PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_options(lingtai_desktop_slash_command PRIVATE
     -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_desktop_native_shell PRIVATE
+    lingtai_desktop_slash_command)
 
 # The one current conversation owner: it turns an already-accepted route into
 # the direct rows the selected-Agent surface renders. It reads the human's own
