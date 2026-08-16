@@ -1068,6 +1068,10 @@ NativeShell::NativeShell()
         composer,
         rpl::single(QStringLiteral("Send")),
         st::defaultActiveButton);
+    // The RoundButton constructor's natural caption width stays a hard
+    // minimum, so the lane's QHBoxLayout can never compress Send below a
+    // meaningful text-action width and clip its caption.
+    send_button->setMinimumWidth(send_button->width());
     send_button->setObjectName("lingtai_composer_send_button");
     send_button->setAccessibleName(QStringLiteral("Send message"));
     send_button->setEnabled(false);
@@ -2162,13 +2166,23 @@ void NativeShell::update_top_bar_fit(int detail_width) {
     const auto full = presentation_name->property(
         "lingtai_full_text").toString();
     if (full.isEmpty()) return;
-    // Measure the complete natural row: the name is unbounded with its full
+    // Restore the full natural row: the name is unbounded with its full
     // title restored, and the secondary key plus both action captions show.
     presentation_name->setMaximumWidth(QWIDGETSIZE_MAX);
     presentation_name->setText(full);
     selected_agent_key_->setVisible(true);
     start_status->setVisible(true);
     sleep_status->setVisible(true);
+    // Every nonempty Start/Sleep status must fit its own bounded label width
+    // before any primary identity space is consumed; one that cannot is
+    // hidden so a long read-out never clips inside its action row.
+    const auto status_self_fits = [](QLabel *status) {
+        if (status->text().isEmpty()) return true;
+        return QFontMetrics(status->font()).horizontalAdvance(status->text())
+            <= status->maximumWidth();
+    };
+    if (!status_self_fits(start_status)) start_status->setVisible(false);
+    if (!status_self_fits(sleep_status)) sleep_status->setVisible(false);
     // Priority cascade: the secondary key hides first, then both action
     // captions, so the Start/Sleep rows, pills, and Back stay reachable.
     if (chat_top_bar_->sizeHint().width() > detail_width) {
@@ -2178,13 +2192,33 @@ void NativeShell::update_top_bar_fit(int detail_width) {
             sleep_status->setVisible(false);
         }
     }
+    // Measure the non-name row with the visible name text blanked (and its
+    // width clamped to zero), so the full presentation title never double
+    // counts into the row's size hint and collapses the derived allocation.
+    presentation_name->setMinimumWidth(0);
+    presentation_name->setMaximumWidth(0);
+    presentation_name->setText(QString());
+    // Measure only the top-level horizontal items after the vertically
+    // stacked identity column; the key and name share item 0 and therefore
+    // never count as horizontal non-name cost.
+    auto *top_layout = chat_top_bar_->layout();
+    const auto margins = top_layout->contentsMargins();
+    auto non_name_width = margins.left() + margins.right();
+    auto visible_non_identity_items = 0;
+    for (auto i = 1; i != top_layout->count(); ++i) {
+        auto *item = top_layout->itemAt(i);
+        auto *widget = item ? item->widget() : nullptr;
+        if (!widget || !widget->isVisible()) continue;
+        non_name_width += item->sizeHint().width();
+        ++visible_non_identity_items;
+    }
+    non_name_width += top_layout->spacing() * visible_non_identity_items;
     // Allocate every remaining pixel to the identity name: its maximum width
     // is the actual detail width minus the row's natural non-name width, so
     // the name never hides or overlaps; the visible text is the right-elided
     // full title and the full identity stays on the property/description.
-    presentation_name->setMaximumWidth(0);
-    const auto non_name_width = chat_top_bar_->sizeHint().width();
     const auto available = std::max(1, detail_width - non_name_width);
+    presentation_name->setMinimumWidth(available);
     presentation_name->setMaximumWidth(available);
     presentation_name->setText(QFontMetrics(presentation_name->font())
         .elidedText(full, Qt::ElideRight, available));
