@@ -14,6 +14,7 @@
 #include <QtGui/QTextCharFormat>
 #include <QtGui/QTextCursor>
 #include <QtGui/QTextFormat>
+#include <QtGui/QTextFrame>
 #include <QtGui/QTextLayout>
 #include <QtWidgets/QScrollBar>
 
@@ -39,6 +40,12 @@ constexpr auto kBubbleHPadding = 11;
 constexpr auto kBubbleVPadding = 8;
 constexpr auto kBubbleRadius = 8;
 constexpr auto kMessageBlockProperty = QTextFormat::UserProperty + 1;
+
+// The symmetric gutter of the centered reading column for a viewport: fixed
+// 12px edge gutters until the column max, then a shared share of the excess.
+int reading_column_margins(int viewport_width) {
+    return qMax(12, (viewport_width - kReadingColumnMax) / 2 + 12);
+}
 
 // The shared lane maximum for a given viewport: the widest any one message may
 // be. At the explicit narrow breakpoint the lane is near-full (the viewport
@@ -85,7 +92,7 @@ QTextCharFormat sender_format(bool outgoing) {
     format.setForeground(outgoing ? st::historyTextOutFg
                                   : st::historyTextInFg);
     auto font = format.font();
-    font.setPixelSize(15);
+    font.setPixelSize(13);
     font.setWeight(QFont::DemiBold);
     format.setFont(font);
     return format;
@@ -95,7 +102,7 @@ QTextCharFormat secondary_format() {
     auto format = QTextCharFormat();
     format.setForeground(st::msgServiceFg);
     auto font = format.font();
-    font.setPixelSize(13);
+    font.setPixelSize(12);
     font.setWeight(QFont::Normal);
     format.setFont(font);
     return format;
@@ -106,8 +113,8 @@ QTextCharFormat subject_format(bool outgoing) {
     format.setForeground(outgoing ? st::historyTextOutFg
                                   : st::historyTextInFg);
     auto font = format.font();
-    font.setPixelSize(13);
-    font.setWeight(QFont::Medium);
+    font.setPixelSize(12);
+    font.setWeight(QFont::Normal);
     format.setFont(font);
     return format;
 }
@@ -165,6 +172,45 @@ int message_content_width(
     return int(widest + 0.5);
 }
 
+// The plain-state vertical anchor lives on the document root frame's top
+// margin rather than on the first block: Qt's first-block layout does not
+// honor a first block's own topMargin and places the line at the frame's top
+// edge. Drop that margin whenever a real conversation is rebuilt or the plain
+// state clears, so empty-state spacing can never leak into message layout.
+void clear_plain_state_anchor(QTextDocument *document) {
+    auto frame_format = document->rootFrame()->frameFormat();
+    frame_format.setTopMargin(0);
+    document->rootFrame()->setFrameFormat(frame_format);
+}
+
+// Apply the plain-state lane formatting to a whole document: symmetric
+// reading-column gutters on the sides, horizontal center, and a root-frame
+// top margin that anchors the first line a third of the way down the
+// viewport, with the placeholder tone carried by the same secondary format
+// messages use.
+void apply_plain_state_formatting(
+        QTextDocument *document,
+        int viewport_width,
+        int viewport_height) {
+    const auto gutter = reading_column_margins(viewport_width);
+    const auto line_height = QFontMetricsF(secondary_format().font()).height();
+    QTextBlockFormat format;
+    format.setAlignment(Qt::AlignCenter);
+    format.setLeftMargin(gutter);
+    format.setRightMargin(gutter);
+    format.setTopMargin(0);
+    auto cursor = QTextCursor(document);
+    cursor.select(QTextCursor::Document);
+    cursor.mergeBlockFormat(format);
+    cursor.select(QTextCursor::Document);
+    cursor.mergeCharFormat(secondary_format());
+
+    auto frame_format = document->rootFrame()->frameFormat();
+    frame_format.setTopMargin(
+        qMax(0.0, (viewport_height - line_height) / 3.0));
+    document->rootFrame()->setFrameFormat(frame_format);
+}
+
 } // namespace
 
 ConversationSurface::ConversationSurface(QWidget *parent)
@@ -190,11 +236,10 @@ void ConversationSurface::set_plain_state(const QString &text) {
     last_messages_.clear();
     setPlainText(text);
     if (!text.isEmpty()) {
-        QTextBlockFormat centered;
-        centered.setAlignment(Qt::AlignCenter);
-        auto cursor = QTextCursor(document());
-        cursor.select(QTextCursor::Document);
-        cursor.mergeBlockFormat(centered);
+        apply_plain_state_formatting(
+            document(), viewport()->width(), viewport()->height());
+    } else {
+        clear_plain_state_anchor(document());
     }
 }
 
@@ -239,6 +284,7 @@ void ConversationSurface::rebuild_document(
 
     auto *document = this->document();
     document->clear();
+    clear_plain_state_anchor(document);
     auto cursor = QTextCursor(document);
     cursor.movePosition(QTextCursor::Start);
 
@@ -352,6 +398,10 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
 
 void ConversationSurface::resizeEvent(QResizeEvent *event) {
     QTextEdit::resizeEvent(event);
+    if (!last_plain_state_.isEmpty()) {
+        apply_plain_state_formatting(
+            document(), viewport()->width(), viewport()->height());
+    }
     // Quantize the viewport/layout width so a live resize only reflows when
     // the bound meaningfully changes. This follows the full layout width, not
     // just the capped message width: on a very wide pane the centered reading

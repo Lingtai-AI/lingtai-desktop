@@ -17,6 +17,7 @@
 #include <QtGui/QTextLayout>
 #include <QtWidgets/QApplication>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <iostream>
@@ -86,11 +87,11 @@ void require_hierarchy(
         int body_size,
         int timestamp_size,
         int subject_size) {
-    if (!(author_size >= body_size && body_size > timestamp_size
-            && body_size > subject_size)) {
+    if (!(body_size > author_size && author_size > timestamp_size
+            && author_size > subject_size)) {
         throw std::runtime_error(
             std::string("the ") + direction
-            + " message must read author >= body > metadata (author "
+            + " message must read body > author > metadata (author "
             + std::to_string(author_size) + "px, body "
             + std::to_string(body_size) + "px, timestamp "
             + std::to_string(timestamp_size) + "px, subject "
@@ -458,29 +459,29 @@ void verify_typography(ConversationSurface &surface, const QString &them) {
     const auto incoming_fragments = fragments_of(incoming);
     const auto outgoing_fragments = fragments_of(outgoing);
 
-    // author/sender: 15px semibold, its own fragment for each direction.
+    // author/sender: 13px DemiBold, its own fragment for each direction.
     const auto &in_sender = require_fragment(
         incoming_fragments, them, true, "incoming sender");
-    require_font(in_sender, 15, QFont::DemiBold, "incoming sender");
+    require_font(in_sender, 13, QFont::DemiBold, "incoming sender");
     const auto &out_sender = require_fragment(
         outgoing_fragments, QStringLiteral("You"), true, "outgoing sender");
-    require_font(out_sender, 15, QFont::DemiBold, "outgoing sender");
+    require_font(out_sender, 13, QFont::DemiBold, "outgoing sender");
 
-    // timestamp and subject metadata: 13px.
-    const auto &in_timestamp = require_fragment(
-        incoming_fragments, QStringLiteral(" · "), false, "incoming timestamp");
-    require_font(in_timestamp, 13, QFont::Normal, "incoming timestamp");
-    const auto &out_timestamp = require_fragment(
-        outgoing_fragments, QStringLiteral(" · "), false, "outgoing timestamp");
-    require_font(out_timestamp, 13, QFont::Normal, "outgoing timestamp");
+    // metadata (timestamp) and subject: 12px Normal.
+    const auto &in_metadata = require_fragment(
+        incoming_fragments, QStringLiteral(" · "), false, "incoming metadata");
+    require_font(in_metadata, 12, QFont::Normal, "incoming metadata");
+    const auto &out_metadata = require_fragment(
+        outgoing_fragments, QStringLiteral(" · "), false, "outgoing metadata");
+    require_font(out_metadata, 12, QFont::Normal, "outgoing metadata");
     const auto &in_subject = require_fragment(
         incoming_fragments, QStringLiteral("Slice done"), false,
         "incoming subject");
-    require_font(in_subject, 13, QFont::Medium, "incoming subject");
+    require_font(in_subject, 12, QFont::Normal, "incoming subject");
     const auto &out_subject = require_fragment(
         outgoing_fragments, QStringLiteral("Re: Slice done"), false,
         "outgoing subject");
-    require_font(out_subject, 13, QFont::Medium, "outgoing subject");
+    require_font(out_subject, 12, QFont::Normal, "outgoing subject");
 
     // message body: 14px normal.
     const auto &in_body = require_fragment(
@@ -494,11 +495,126 @@ void verify_typography(ConversationSurface &surface, const QString &them) {
 
     // The pinned visual hierarchy for both directions.
     require_hierarchy("incoming", in_sender.font.pixelSize(),
-        in_body.font.pixelSize(), in_timestamp.font.pixelSize(),
+        in_body.font.pixelSize(), in_metadata.font.pixelSize(),
         in_subject.font.pixelSize());
     require_hierarchy("outgoing", out_sender.font.pixelSize(),
-        out_body.font.pixelSize(), out_timestamp.font.pixelSize(),
+        out_body.font.pixelSize(), out_metadata.font.pixelSize(),
         out_subject.font.pixelSize());
+}
+
+// ---------------------------------------------------------------------------
+// I3 RED contract (plan v2 §3.3 / §6.4): at the 1200px test viewport the
+// plain empty state must join the same centered reading column as the message
+// lane (symmetric 162px outer gutters), anchor at the perceptual ~1/3 of the
+// usable viewport, render in the quiet secondary tone (12px Normal,
+// st::msgServiceFg) and recompute all of that after a resize. The modern type
+// ladder (sender 13px DemiBold / metadata and subject 12px Normal / body 14px
+// Normal) is asserted by verify_typography, while the existing opposite sender
+// anchors and the directional width-dependent inner slack stay covered by the
+// pre-existing responsive/content geometry tests. Fails on the exact base: the
+// plain state is full-pane AlignCenter with zero margins at the document top
+// in the default character format, resizeEvent reflows messages only, and the
+// sender, metadata, and subject tiers are 15px / 13px / 13px Medium.
+// ---------------------------------------------------------------------------
+
+constexpr int kRedViewportWidth = 1200;
+constexpr int kRedColumnMax = 900;
+constexpr int kRedEdgeGutter = 12;
+
+int plain_state_column_gutter(int viewport_width) {
+    return std::max(kRedEdgeGutter,
+        (viewport_width - kRedColumnMax) / 2 + kRedEdgeGutter);
+}
+
+void verify_plain_state_contract(
+        ConversationSurface &surface,
+        int viewport_width,
+        const char *stage) {
+    const auto block = surface.document()->begin();
+    if (!block.isValid()) {
+        throw std::runtime_error(
+            std::string("the empty state must render one document block ")
+            + stage);
+    }
+
+    // Symmetric reading-column margins: the same centered column the message
+    // lane lives in, not the full-pane center (fails on the base: zero
+    // margins).
+    const auto expected_margin =
+        double(plain_state_column_gutter(viewport_width));
+    const auto format = block.blockFormat();
+    if (std::abs(format.leftMargin() - expected_margin) > 1.0
+        || std::abs(format.rightMargin() - expected_margin) > 1.0) {
+        throw std::runtime_error(
+            std::string("the empty state must join the centered reading column ")
+            + stage + ": its block needs symmetric " + std::to_string(
+                expected_margin) + "px left/right margins at viewport width "
+            + std::to_string(viewport_width) + "px, but it carries "
+            + std::to_string(format.leftMargin()) + "px / "
+            + std::to_string(format.rightMargin()) + "px");
+    }
+
+    // Perceptual ~1/3 vertical anchor of the usable viewport (fails on the
+    // base: the line sits at the document top).
+    const auto viewport_height = surface.viewport()->height();
+    const auto *layout = block.layout();
+    if (layout->lineCount() < 1) {
+        throw std::runtime_error(
+            std::string("the empty-state block must lay out at least one line ")
+            + stage);
+    }
+    const auto line_center = layout->lineAt(0).naturalTextRect()
+        .translated(layout->position()).center().y();
+    if (line_center < double(viewport_height) / 4.0
+        || line_center > 2.0 * double(viewport_height) / 3.0) {
+        throw std::runtime_error(
+            std::string("the empty state must anchor at the perceptual 1/3 of "
+                "the usable viewport ") + stage + ": the line's vertical center "
+            + std::to_string(line_center) + "px must fall in [h/4, 2h/3] = ["
+            + std::to_string(viewport_height / 4) + ", "
+            + std::to_string(2 * viewport_height / 3) + "]px, but it stays at "
+              "the document top");
+    }
+
+    // Quiet secondary tone: 12px Normal in st::msgServiceFg (fails on the
+    // base: the default character format).
+    QTextCharFormat tone;
+    for (auto it = block.begin(); !it.atEnd(); ++it) {
+        const auto fragment = it.fragment();
+        if (fragment.isValid()) {
+            tone = fragment.charFormat();
+            break;
+        }
+    }
+    if (tone.font().pixelSize() != 12 || tone.font().weight() != QFont::Normal
+        || tone.foreground().color() != st::msgServiceFg->c) {
+        throw std::runtime_error(
+            std::string("the empty state must render in the quiet secondary "
+                "tone (12px Normal, st::msgServiceFg) ") + stage
+            + ", but its character format is "
+            + std::to_string(tone.font().pixelSize()) + "px weight "
+            + std::to_string(tone.font().weight()));
+    }
+}
+
+void verify_plain_state_resize_journey() {
+    ConversationSurface surface;
+    surface.resize(kRedViewportWidth, 480);
+    surface.show();
+    QCoreApplication::processEvents();
+    surface.set_plain_state(QStringLiteral("No messages yet."));
+    surface.document()->documentLayout()->documentSize();
+    QCoreApplication::processEvents();
+    verify_plain_state_contract(surface, kRedViewportWidth, "before resize");
+
+    // Resize must recompute the column margins and the 1/3 anchor (fails on
+    // the base: resizeEvent reflows messages only, leaving the full-pane
+    // center stale).
+    surface.resize(1400, 600);
+    QCoreApplication::processEvents();
+    surface.document()->documentLayout()->documentSize();
+    QCoreApplication::processEvents();
+    verify_plain_state_contract(surface, 1400, "after resize");
 }
 
 } // namespace
@@ -513,6 +629,7 @@ int run_typography_test(int argc, char **argv) {
         verify_responsive_width();
         verify_content_geometry();
         verify_turn_rhythm();
+        verify_plain_state_resize_journey();
         std::cout << "conversation surface typography: OK\n";
         return 0;
     } catch (const std::exception &error) {
