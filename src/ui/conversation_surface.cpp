@@ -46,6 +46,8 @@ constexpr auto kNarrowViewportWidth = 480;
 constexpr auto kBubbleHPadding = 11;
 constexpr auto kBubbleVPadding = 8;
 constexpr auto kBubbleRadius = 8;
+constexpr auto kMessageAvatarDiameter = 40;
+constexpr auto kMessageAvatarGap = 10;
 constexpr auto kMessageBlockProperty = QTextFormat::UserProperty + 1;
 constexpr auto kEmptyAvatarDiameter = 32;
 constexpr auto kEmptyAvatarGap = 10;
@@ -91,8 +93,10 @@ QTextBlockFormat message_block_format(
     // content-driven width.
     const auto column = qMin(viewport_width, kReadingColumnMax);
     const auto outer = (viewport_width - column) / 2 + kMessageEdgeMargin;
-    const auto inner = qMax(outer, viewport_width - width - outer);
-    format.setLeftMargin(outgoing ? inner : outer);
+    const auto avatar_lane = kMessageAvatarDiameter + kMessageAvatarGap;
+    const auto text_outer = outgoing ? outer : outer + avatar_lane;
+    const auto inner = qMax(outer, viewport_width - width - text_outer);
+    format.setLeftMargin(outgoing ? inner : text_outer);
     format.setRightMargin(outgoing ? outer : inner);
     format.setTopMargin(kMessageTopMargin);
     format.setBottomMargin(0);
@@ -679,14 +683,34 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
             -kBubbleVPadding,
             kBubbleHPadding,
             kBubbleVPadding);
-        if (!bubble.intersects(QRectF(event->rect()))) {
-            continue;
-        }
         const auto outgoing = first_valid_block.blockFormat().alignment()
             .testFlag(Qt::AlignRight);
         if (outgoing) {
+            if (!bubble.intersects(QRectF(event->rect()))) {
+                continue;
+            }
             painter.setBrush(st::msgOutBg);
             painter.drawRoundedRect(bubble, kBubbleRadius, kBubbleRadius);
+        } else {
+            const auto avatar = QRectF(
+                text_bounds.left() - kMessageAvatarGap
+                    - kMessageAvatarDiameter,
+                text_bounds.center().y()
+                    - kMessageAvatarDiameter / 2.0,
+                kMessageAvatarDiameter,
+                kMessageAvatarDiameter);
+            if (avatar.intersects(QRectF(event->rect()))) {
+                painter.setBrush(st::dialogsNameFg);
+                painter.drawEllipse(avatar);
+                auto font = QFont();
+                font.setPixelSize(13);
+                font.setWeight(QFont::DemiBold);
+                painter.setFont(font);
+                painter.setPen(st::windowBg);
+                painter.drawText(avatar, Qt::AlignCenter,
+                    them_.trimmed().left(1).toUpper());
+                painter.setPen(Qt::NoPen);
+            }
         }
     }
     painter.setRenderHint(QPainter::Antialiasing, false);
