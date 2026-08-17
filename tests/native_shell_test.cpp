@@ -3394,6 +3394,8 @@ void verify_modern_composer_surface(
         window, "lingtai_roster_resize_handle");
     auto *separator = required_ui_child<Ui::PlainShadow>(
         window, "lingtai_roster_separator");
+    auto *detail_scroll = required_child<QScrollArea>(
+        window, "lingtai_agent_detail_scroll");
 
     // Ted's real-window acceptance is stricter than the source oracle: the
     // macOS titlebar must visibly share the app base, and the white columns
@@ -3413,6 +3415,8 @@ void verify_modern_composer_surface(
         "the wide resize target must paint windowBg");
     require(!separator->isVisible(),
         "responsive recompute must not re-show the center divider");
+    require(detail_scroll->frameShape() == QFrame::NoFrame,
+        "the main detail scroll must not draw a rectangular pane border");
 
     const auto painted_bounds = [](const QImage &image, QColor surface) {
         auto bounds = QRect();
