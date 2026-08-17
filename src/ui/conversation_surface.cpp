@@ -518,7 +518,13 @@ void ConversationSurface::rebuild_document(
         frame_format.setBackground(Qt::transparent);
         auto *frame = cursor.insertFrame(frame_format);
         cursor = frame->firstCursorPosition();
-        cursor.setBlockFormat(block_format);
+        // The header block carries the whole-message lane format but never the
+        // outer bottom margin: the final body block of the message owns that
+        // margin, so consecutive bubbles keep a positive gap even when the body
+        // spans multiple continuation blocks.
+        auto header_format = block_format;
+        header_format.setBottomMargin(0);
+        cursor.setBlockFormat(header_format);
         cursor.insertText(
             outgoing ? QStringLiteral("You") : them_,
             sender_format(outgoing));
@@ -551,6 +557,14 @@ void ConversationSurface::rebuild_document(
         continuation.clearProperty(kMessageBlockProperty);
         insert_markdown_body(
             cursor, body, body_format(outgoing), continuation);
+        // The final block owns the message's outer bottom margin: give it back
+        // the header's original margin so the outer bubble gap survives the
+        // body's zero-margin continuation blocks. When the body creates no
+        // visible continuation block the cursor still sits on the header, which
+        // simply regains the original bottom margin.
+        auto final_format = cursor.blockFormat();
+        final_format.setBottomMargin(block_format.bottomMargin());
+        cursor.setBlockFormat(final_format);
     }
 
     scrollbar->setValue(was_at_bottom
