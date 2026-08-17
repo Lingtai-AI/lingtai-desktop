@@ -3394,23 +3394,24 @@ void verify_modern_composer_surface(
         window, "lingtai_roster_separator");
     auto *detail_scroll = required_child<QScrollArea>(
         window, "lingtai_agent_detail_scroll");
-    auto *titlebar_brand = required_child<QLabel>(
-        window, "lingtai_titlebar_brand");
     auto *project_selector = required_child<QPushButton>(
         window, "lingtai_project_selector");
 
-    require(titlebar_brand->text() == QStringLiteral("LingTai")
-            && titlebar_brand->parent() == &window,
-        "the pure LingTai brand must be a direct full-size window overlay, not a body/Sidebar child below the native title bar");
-    const auto native_anchor = titlebar_brand->property(
+    require(window.findChild<QLabel *>("lingtai_titlebar_brand") == nullptr,
+        "the titlebar brand must not be a Qt child below the AppKit titlebar");
+    require(window.property("lingtai_native_titlebar_brand_host").toString()
+            == QStringLiteral("AppKitTitlebar"),
+        "the pure LingTai brand must be installed in the native traffic-light superview");
+    const auto native_anchor = window.property(
         "lingtai_native_traffic_light_anchor").toPoint();
+    const auto brand_frame = window.property(
+        "lingtai_native_titlebar_brand_frame").toRect();
     require(native_anchor.x() > 0
             && native_anchor.y() >= 8 && native_anchor.y() <= 32
-            && titlebar_brand->geometry().top() >= 0
-            && titlebar_brand->geometry().bottom() <= 48
-            && qAbs(titlebar_brand->geometry().left() - native_anchor.x()) <= 1
-            && qAbs(titlebar_brand->geometry().center().y() - native_anchor.y()) <= 1,
-        "the titlebar brand must stay in the top traffic-light row, start immediately right of it, and share its vertical center");
+            && brand_frame.top() >= 0 && brand_frame.bottom() <= 48
+            && qAbs(brand_frame.left() - native_anchor.x()) <= 1
+            && qAbs(brand_frame.center().y() - native_anchor.y()) <= 1,
+        "the native brand must begin after the green button and share the real traffic-light row");
     require(project_selector->parent() != window.body().get(),
         "the functional project selector must remain in the Sidebar");
 
