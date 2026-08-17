@@ -1339,6 +1339,10 @@ void verify_human_bubble_contract() {
         "moves the shared message rail outward without stretching prose past "
         "the accepted readable bubble width.",
         1600);
+    const auto real_short_mixed_message = render_outgoing_at(
+        "2026-07-31T02:36:51Z",
+        "你似乎在修复MCP不兼容的问题？",
+        1600);
     // Exact adjacent Human records from ~/.lingtai/Personal_agent_minimax that
     // exposed the bug: both hit the same capped lane, but different word-wrap
     // slack must never move the bubble/timestamp right edge.
@@ -1394,11 +1398,13 @@ void verify_human_bubble_contract() {
         throw std::runtime_error(
             "long Human prose must keep the accepted 500-560px readable bubble cap");
     }
-    if (very_wide_message.block.rightMargin() * 5
-        > very_wide_message.viewport_width) {
+    if (very_wide_message.block.rightMargin() > 64) {
         throw std::runtime_error(
-            "a very wide Conversation must place the Human rail in the outer "
-            "80% instead of retaining the old centered 900px column");
+            "a 1600px Conversation must keep its Human rail within a 64px edge gutter");
+    }
+    if (real_short_mixed_message.text.height() > 32.0) {
+        throw std::runtime_error(
+            "the real short mixed-language Human message must stay on one line");
     }
 
     const auto expected_fill = QColor(QStringLiteral("#EEF7F3"));

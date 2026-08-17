@@ -3669,8 +3669,8 @@ void verify_modern_composer_surface(
     // flex input lane absorbs this additional width.
     window.resize(1600, 900);
     QCoreApplication::processEvents();
-    require(controls->width() * 4 >= detail->width() * 3,
-        "a very wide Composer rail must occupy at least 75% of the detail pane");
+    require(controls->width() * 100 >= detail->width() * 94,
+        "a very wide Composer rail must occupy at least 94% of the detail pane");
     require(attachment_button->width() == 40
             && send_button->width() == send_button->height()
             && send_button->width() <= 44,
