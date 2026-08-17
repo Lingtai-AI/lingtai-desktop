@@ -192,7 +192,6 @@ protected:
             painter.setBrush(st::windowBgOver->c);
             painter.drawEllipse(rect().adjusted(2, 2, -2, -2));
         }
-        painter.translate(width() / 2.0 - 16.0, height() / 2.0 - 16.0);
         QPainterPath clip;
         clip.moveTo(11.0, 19.0);
         clip.lineTo(20.5, 9.5);
@@ -200,6 +199,9 @@ protected:
         clip.lineTo(14.0, 23.5);
         clip.cubicTo(10.0, 27.5, 4.5, 22.0, 8.5, 18.0);
         clip.lineTo(18.0, 8.5);
+        const auto clip_center = clip.boundingRect().center();
+        const auto button_center = QRectF(rect()).center();
+        painter.translate(button_center - clip_center);
         painter.setBrush(Qt::NoBrush);
         painter.setPen(QPen(st::windowSubTextFg->c, 1.8, Qt::SolidLine,
             Qt::RoundCap, Qt::RoundJoin));
@@ -227,6 +229,11 @@ public:
     }
 
 protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        painter.fillRect(rect(), st::windowBg->c);
+    }
+
     void mousePressEvent(QMouseEvent *event) override {
         if (event->button() == Qt::LeftButton) {
             dragging_ = true;
@@ -758,6 +765,12 @@ std::unique_ptr<Ui::RpWindow> make_native_window() {
         return style_copy;
     }();
     result->setTitleStyle(desktop_title_style);
+    // Telegram's MainWindow::updatePalette assigns one app-owned base to the
+    // transparent macOS title bar and the content canvas. lib_ui already owns
+    // NoTitleBarBackgroundHint/full-size native title behavior here.
+    auto palette = result->palette();
+    palette.setColor(QPalette::Window, st::windowBg->c);
+    result->setPalette(palette);
     return result;
 }
 
@@ -1211,10 +1224,17 @@ NativeShell::NativeShell()
     attachment_button->setEnabled(false);
     composer_action_row->addWidget(attachment_button);
     composer_action_row->addWidget(composer_input, 1);
+    static const auto composer_send_style = [] {
+        auto result = st::defaultActiveButton;
+        result.height = 40;
+        result.radius = 20;
+        result.textTop += 3;
+        return result;
+    }();
     auto *send_button = new Ui::RoundButton(
         composer_controls,
-        rpl::single(QStringLiteral("↑")),
-        st::defaultActiveButton);
+        rpl::single(QStringLiteral(" ↑")),
+        composer_send_style);
     send_button->setObjectName("lingtai_composer_send_button");
     send_button->setAccessibleName(QStringLiteral("Send message"));
     send_button->setEnabled(false);
