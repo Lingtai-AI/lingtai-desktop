@@ -3400,8 +3400,8 @@ void verify_modern_composer_surface(
         window, "lingtai_project_selector");
 
     require(titlebar_brand->text() == QStringLiteral("LingTai")
-            && titlebar_brand->parent() == window.body().get(),
-        "the pure LingTai titlebar brand must be a separate body overlay, not the Sidebar selector");
+            && titlebar_brand->parent() == &window,
+        "the pure LingTai brand must be a direct full-size window overlay, not a body/Sidebar child below the native title bar");
     const auto native_anchor = titlebar_brand->property(
         "lingtai_native_traffic_light_anchor").toPoint();
     require(native_anchor.x() > 0
