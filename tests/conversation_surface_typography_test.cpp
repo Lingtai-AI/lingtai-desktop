@@ -253,11 +253,17 @@ void verify_responsive_width() {
     const auto narrow = measure_at_width(320);
     const auto narrow_in = narrow.first;
     const auto narrow_out = narrow.second;
-    if (narrow_in.content_ratio < 0.90
+    // The incoming message reserves its 50px avatar lane (40px circle + 10px
+    // gap) inside the pane, so its text alone no longer stays >=90%; the whole
+    // avatar envelope does. The outgoing bubble has no avatar lane.
+    const auto narrow_in_envelope_ratio =
+        (narrow_in.content_width + 50.0) / 320.0;
+    if (narrow_in_envelope_ratio < 0.90
         || narrow_out.content_ratio < 0.90) {
         throw std::runtime_error(
             "at a narrow viewport the message width must become near-full "
-            "(~90%+) instead of the current 72%");
+            "(~90%+): the incoming avatar envelope and the outgoing bubble, "
+            "instead of the current 72%");
     }
 }
 
