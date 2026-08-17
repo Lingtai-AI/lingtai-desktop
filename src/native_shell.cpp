@@ -2425,10 +2425,11 @@ void NativeShell::bump_lifecycle_generation() noexcept {
 
 // Telegram's one mode recompute, fed by the body's own size stream: below
 // the source-backed two-surface threshold (`260 + 380` usable column pixels
-// after the one-pixel separator and the 8px drag handle) exactly one
-// full-width surface is shown -- the roster until an Agent is selected, then
-// the detail with Back; at or above it roster + handle + separator + detail
-// all show and Back is hidden. A selected Agent is the sole state that
+// after the 8px drag handle) exactly one full-width surface is shown -- the
+// roster until an Agent is selected, then the detail with Back; at or above it
+// roster + handle + detail all show and Back is hidden. The semantic separator
+// object stays hidden in both modes so responsive recompute cannot restore an
+// unwanted full-height pane edge. A selected Agent is the sole state that
 // decides which narrow surface is active, so a wide->narrow resize with an
 // active selection keeps the detail, exactly as Telegram keeps the active
 // chat in OneColumn.
@@ -2448,7 +2449,7 @@ void NativeShell::recompute_layout(int body_width) {
         agent_roster_->setVisible(true);
         agent_roster_->set_roster_width(roster_width);
         roster_resize_handle_->setVisible(true);
-        separator_->setVisible(true);
+        separator_->setVisible(false);
         content_->setVisible(true);
         detail_back_button_->setVisible(false);
         const auto detail_width = body_width - roster_width
