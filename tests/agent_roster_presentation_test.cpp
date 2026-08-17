@@ -266,6 +266,28 @@ void verify_selected_row_keeps_neutral_majority_surface() {
         "shared windowBgRipple token");
 }
 
+void verify_roster_rows_are_virtual_canvas() {
+    AgentSnapshot snapshot;
+    snapshot.scan = AgentScanState::complete;
+    snapshot.items = {
+        make_row("a-agent", AgentRole::agent),
+        make_row("b-main", AgentRole::main),
+    };
+
+    QWidget parent;
+    AgentRoster roster(&parent);
+    roster.set_rows(snapshot, std::nullopt);
+
+    auto *rows = roster.findChild<Ui::RpWidget *>(
+        "lingtai_agent_roster_rows");
+    require(rows != nullptr, "the rendered roster rows container must exist");
+
+    const auto buttons = rows->findChildren<QPushButton *>(
+        QString(), Qt::FindDirectChildrenOnly);
+    require(buttons.empty(),
+        "Agent rows are virtual canvas data, not child QPushButtons");
+}
+
 void verify_human_hidden_from_roster() {
     AgentSnapshot snapshot;
     snapshot.scan = AgentScanState::complete;
@@ -578,6 +600,7 @@ int main(int argc, char **argv) {
     try {
         QApplication application(argc, argv);
         style::internal::init_palette(style::kScaleDefault);
+        verify_roster_rows_are_virtual_canvas();
         verify_human_hidden_from_roster();
         verify_selected_row_keeps_neutral_majority_surface();
         verify_intrinsic_roster_row_behavior();
