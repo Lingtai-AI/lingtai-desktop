@@ -1615,13 +1615,22 @@ void NativeShell::refresh_system_palette() {
 void NativeShell::show() {
     refresh_route();
     window_->show();
+    ApplyNativeFullSizeTitlebar(window_.get());
     recompute_layout(window_->body()->width());
+    // Qt 6.11 can finish recreating its NSWindow on the next main-loop turn.
+    // Reapply to the actual post-show window unconditionally; lib_ui's poll
+    // only does this when the NSWindow pointer itself changed.
+    QTimer::singleShot(0, window_.get(), [this] {
+        ApplyNativeFullSizeTitlebar(window_.get());
+        recompute_layout(window_->body()->width());
+    });
 }
 
 void NativeShell::show_offscreen() {
     refresh_route();
     window_->setAttribute(Qt::WA_DontShowOnScreen, true);
     window_->show();
+    ApplyNativeFullSizeTitlebar(window_.get());
     recompute_layout(window_->body()->width());
 }
 

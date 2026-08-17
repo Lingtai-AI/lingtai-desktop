@@ -8,5 +8,6 @@ namespace lingtai::desktop {
 
 void ApplyNativeWindowBackground(QWidget *widget, const QColor &color);
 QPoint NativeTrafficLightAnchor(QWidget *widget);
+void ApplyNativeFullSizeTitlebar(QWidget *widget);
 
 } // namespace lingtai::desktop

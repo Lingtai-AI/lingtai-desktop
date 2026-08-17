@@ -21,6 +21,26 @@ void ApplyNativeWindowBackground(QWidget *widget, const QColor &color) {
     window.opaque = YES;
 }
 
+void ApplyNativeFullSizeTitlebar(QWidget *widget) {
+    auto *view = reinterpret_cast<NSView *>(widget->winId());
+    auto *window = view.window;
+    if (!window) {
+        widget->setProperty("lingtai_native_titlebar_full_size", false);
+        return;
+    }
+    window.styleMask = window.styleMask | NSWindowStyleMaskFullSizeContentView;
+    window.titlebarAppearsTransparent = YES;
+    window.titleVisibility = NSWindowTitleHidden;
+    [window.contentView.superview layoutSubtreeIfNeeded];
+    const auto covers_window = qAbs(qRound(
+        window.frame.size.height - view.frame.size.height)) <= 1;
+    const auto has_full_size_bit =
+        (window.styleMask & NSWindowStyleMaskFullSizeContentView) != 0;
+    widget->setProperty(
+        "lingtai_native_titlebar_full_size",
+        has_full_size_bit && covers_window);
+}
+
 QPoint NativeTrafficLightAnchor(QWidget *widget) {
     auto *view = reinterpret_cast<NSView *>(widget->winId());
     auto *window = view.window;
@@ -31,7 +51,7 @@ QPoint NativeTrafficLightAnchor(QWidget *widget) {
     const auto frame = [zoom.superview convertRect:zoom.frame toView:nil];
     return QPoint(
         qRound(NSMaxX(frame) + 8.0),
-        qRound(NSMidY(frame)));
+        qRound(window.frame.size.height - NSMidY(frame)));
 }
 
 } // namespace lingtai::desktop
