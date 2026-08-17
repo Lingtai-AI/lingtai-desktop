@@ -547,10 +547,10 @@ void verify_typography(ConversationSurface &surface, const QString &them) {
             if (!block.isValid()) continue;
             const auto format = block.blockFormat();
             if (format.lineHeightType() != QTextBlockFormat::ProportionalHeight
-                || qRound(format.lineHeight()) != 110) {
+                || qRound(format.lineHeight()) != 160) {
                 throw std::runtime_error(
                     std::string("the ") + direction
-                    + " message blocks must use 110% proportional line height "
+                    + " message blocks must use 160% proportional line height "
                       "after the reading font scales");
             }
         }
