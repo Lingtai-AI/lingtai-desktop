@@ -1564,7 +1564,8 @@ NativeShell::NativeShell()
     titlebar_brand->adjustSize();
     titlebar_brand->setFixedHeight(30);
     titlebar_brand->move(
-        traffic_anchor.x(), traffic_anchor.y() - titlebar_brand->height() / 2);
+        traffic_anchor.x(),
+        qMax(0, traffic_anchor.y() - titlebar_brand->height() / 2));
     titlebar_brand->setProperty(
         "lingtai_native_traffic_light_anchor", traffic_anchor);
     titlebar_brand->raise();
