@@ -3411,6 +3411,8 @@ void verify_modern_composer_surface(
         window, "lingtai_titlebar_brand");
     require(titlebar != nullptr && titlebar->isVisible() && titlebar->height() > 0,
         "Telegram's real macOS TitleWidget row must be restored instead of zero-height hidden");
+    require(window.property("lingtai_native_titlebar_full_size").toBool(),
+        "the post-show NSWindow must keep FullSizeContentView so TitleWidget y=0 shares the traffic-light row");
     require(titlebar_brand->parent() == titlebar,
         "the pure LingTai brand must be painted inside Telegram's TitleWidget owner");
     require(window.body()->geometry().top() == titlebar->height(),
