@@ -701,6 +701,205 @@ void verify_empty_state_contract() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Safe-Markdown RED contract: the message bodies are stored raw (Markdown
+// control characters and literal HTML), but the surface must render them
+// through the accepted safe formatter contract: control markers are absent
+// from the displayed plain text, heading/bold/link/code runs are real
+// distinct QTextCharFormat runs in the existing QTextDocument, raw HTML is
+// never interpreted as HTML, and no image or other resource enters the
+// document. Fails on the exact base: rebuild_document inserts the whole body
+// as one literal 14px Normal run, so '# Plan', '- **bold** item',
+// '[docs](https://example.com)', the backticks, '> note', and '<b>unsafe</b>'
+// all survive verbatim with no distinct formatted runs at all.
+//
+// The scan is whole-document and direction-independent: it never assumes a
+// body fragment lives in its message's header block, because the accepted
+// future design lets one message own several QTextBlocks inside a QTextFrame.
+// Both directions receive the identical raw body, so each element surfacing
+// at least twice (one distinct run per message) is an occurrence-count proof
+// that both the incoming and outgoing bodies are safe-formatted.
+// ---------------------------------------------------------------------------
+std::vector<QTextCharFormat> format_runs(
+        const QTextDocument &document,
+        const QString &prefix) {
+    std::vector<QTextCharFormat> runs;
+    for (auto block = document.begin(); block.isValid(); block = block.next()) {
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const auto fragment = it.fragment();
+            if (fragment.isValid() && fragment.text().startsWith(prefix)) {
+                runs.push_back(fragment.charFormat());
+            }
+        }
+    }
+    return runs;
+}
+
+std::vector<QTextCharFormat> require_formatted(
+        const QTextDocument &document,
+        const QString &text,
+        const char *role) {
+    auto runs = format_runs(document, text);
+    if (runs.size() < 2) {
+        throw std::runtime_error(
+            std::string("expected the ") + role + " text '" + text.toStdString()
+            + "' to render as distinct QTextCharFormat runs for both the "
+              "incoming and outgoing directions, but the whole-document scan "
+              "found " + std::to_string(runs.size()) + " run(s)");
+    }
+    return runs;
+}
+
+void verify_markdown_safe_formatting() {
+    ConversationSurface surface;
+    surface.resize(kRedViewportWidth, 480);
+    surface.show();
+    QCoreApplication::processEvents();
+
+    // One incoming and one outgoing message with the identical stored raw
+    // body exercising every contract element: a heading, a bold list item, a
+    // link, inline code, a fenced cpp block, a blockquote, and literal HTML.
+    const auto raw_body = QStringLiteral(
+        "# Plan\n"
+        "- **bold** item\n"
+        "[docs](https://example.com)\n"
+        "`inline code`\n"
+        "```cpp\n"
+        "int main() { return 0; }\n"
+        "```\n"
+        "> note\n"
+        "<b>unsafe</b>");
+    std::vector<DirectConversationMessage> messages;
+    messages.push_back({
+        .id = "in-1",
+        .outgoing = false,
+        .timestamp = "2026-08-07T18:48:52Z",
+        .subject = "Slice done",
+        .text = raw_body.toStdString(),
+    });
+    messages.push_back({
+        .id = "out-1",
+        .outgoing = true,
+        .timestamp = "2026-08-07T19:00:00Z",
+        .subject = "Re: Slice done",
+        .text = raw_body.toStdString(),
+    });
+    surface.set_conversation(QStringLiteral("Telegram Bot"), messages);
+    surface.document()->documentLayout()->documentSize();
+    QCoreApplication::processEvents();
+    const auto &document = *surface.document();
+
+    // Markdown control markers are absent from the displayed plain text: the
+    // heading, list/bold, link, fence/backtick, and blockquote syntax all
+    // disappear even though the stored bodies still carry them.
+    const auto plain = document.toPlainText();
+    for (const auto *marker : { "# Plan", "- **bold** item",
+            "[docs](https://example.com)", "> note" }) {
+        if (plain.contains(QString::fromUtf8(marker))) {
+            throw std::runtime_error(
+                std::string("the Markdown control marker '") + marker
+                + "' must be absent from the displayed plain text, but the "
+                  "body is rendered literally");
+        }
+    }
+    if (plain.contains(QChar('`'))) {
+        throw std::runtime_error(
+            "inline and fenced code backticks must be absent from the "
+            "displayed plain text, but the body is rendered literally");
+    }
+
+    // Heading: every 'Plan' run (one per direction) is visually distinct from
+    // the 14px plain body (a larger size or an emphasized weight).
+    const auto heading = require_formatted(
+        document, QStringLiteral("Plan"), "markdown heading");
+    if (!std::all_of(heading.begin(), heading.end(),
+            [](const QTextCharFormat &format) {
+                return format.font().pixelSize() > 14
+                    || format.font().weight() >= QFont::DemiBold;
+            })) {
+        throw std::runtime_error(
+            "the '# Plan' heading must render as its own visually distinct "
+            "run (larger or emphasized) in both directions, not as 14px "
+            "plain body text");
+    }
+
+    // Bold: every 'bold' run (one per direction) is genuinely bold.
+    const auto bold = require_formatted(
+        document, QStringLiteral("bold"), "markdown bold");
+    if (!std::all_of(bold.begin(), bold.end(),
+            [](const QTextCharFormat &format) {
+                return format.font().weight() >= QFont::Bold;
+            })) {
+        throw std::runtime_error(
+            "the '- **bold** item' list item must render 'bold' as a "
+            "genuinely bold run in both directions, not literal '**' markers");
+    }
+
+    // Link: every 'docs' run (one per direction) is an anchor.
+    const auto link = require_formatted(
+        document, QStringLiteral("docs"), "markdown link");
+    if (!std::all_of(link.begin(), link.end(),
+            [](const QTextCharFormat &format) {
+                return format.isAnchor();
+            })) {
+        throw std::runtime_error(
+            "the '[docs](https://example.com)' link must render 'docs' as an "
+            "anchor run in both directions, not the literal bracket syntax");
+    }
+
+    // Code: both the inline backtick run and the fenced cpp block render in a
+    // fixed-pitch font with the backticks gone, once per direction.
+    const auto inline_code = require_formatted(
+        document, QStringLiteral("inline code"), "inline code");
+    if (!std::all_of(inline_code.begin(), inline_code.end(),
+            [](const QTextCharFormat &format) {
+                return format.font().fixedPitch();
+            })) {
+        throw std::runtime_error(
+            "inline backtick code must render in a fixed-pitch font in both "
+            "directions with the backticks absent");
+    }
+    const auto code_block = require_formatted(
+        document, QStringLiteral("int main() { return 0; }"),
+        "fenced cpp code");
+    if (!std::all_of(code_block.begin(), code_block.end(),
+            [](const QTextCharFormat &format) {
+                return format.font().fixedPitch();
+            })) {
+        throw std::runtime_error(
+            "the fenced cpp code block must render in a fixed-pitch font in "
+            "both directions with the fence markers absent");
+    }
+
+    // Blockquote: '> note' appears as plain quote text without the '>'
+    // control marker, once per direction.
+    require_formatted(document, QStringLiteral("note"), "blockquote");
+
+    // Raw HTML is never interpreted as HTML: '<b>unsafe</b>' must not turn
+    // 'unsafe' into a real bold run, and no image/resource may enter the
+    // document from the bodies.
+    for (auto block = document.begin(); block.isValid(); block = block.next()) {
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const auto fragment = it.fragment();
+            if (!fragment.isValid()) {
+                continue;
+            }
+            const auto format = fragment.charFormat();
+            if (format.isImageFormat()) {
+                throw std::runtime_error(
+                    "no image may be introduced into the conversation "
+                    "document by the safe formatter");
+            }
+            if (fragment.text().contains(QStringLiteral("unsafe"))
+                && format.font().weight() >= QFont::Bold) {
+                throw std::runtime_error(
+                    "the raw HTML '<b>unsafe</b>' must never be interpreted "
+                    "as a real bold HTML run");
+            }
+        }
+    }
+}
+
 } // namespace
 
 int run_typography_test(int argc, char **argv) {
@@ -715,6 +914,7 @@ int run_typography_test(int argc, char **argv) {
         verify_turn_rhythm();
         verify_plain_state_resize_journey();
         verify_empty_state_contract();
+        verify_markdown_safe_formatting();
         std::cout << "conversation surface typography: OK\n";
         return 0;
     } catch (const std::exception &error) {
