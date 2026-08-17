@@ -25,6 +25,7 @@
 #include <QtGui/QTextDocument>
 #include <QtGui/QTextFormat>
 #include <QtGui/QTextLayout>
+#include <QtGui/QWindow>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QDialog>
@@ -3391,22 +3392,27 @@ void verify_modern_composer_surface(
         window, "lingtai_composer_status");
     auto *resize_handle = required_child<QWidget>(
         window, "lingtai_roster_resize_handle");
+    auto *separator = required_ui_child<Ui::PlainShadow>(
+        window, "lingtai_roster_separator");
 
-    // Telegram Desktop's macOS window helper makes the native title bar
-    // transparent/full-size, while MainWindow::updatePalette gives that chrome
-    // the same windowBg base as the app. Its columns touch directly and retain
-    // only a one-pixel PlainShadow; LingTai's wider drag target must therefore
-    // paint the shared base instead of exposing the platform-default gray.
+    // Ted's real-window acceptance is stricter than the source oracle: the
+    // macOS titlebar must visibly share the app base, and the white columns
+    // must meet without even the optional one-pixel Telegram side shadow.
     require(window.windowFlags().testFlag(Qt::NoTitleBarBackgroundHint),
         "the macOS title bar must stay transparent over the app-owned base");
     require(window.palette().color(QPalette::Window) == st::windowBg->c,
-        "the native title bar and app canvas must share Telegram's windowBg base");
+        "the Qt window palette must own the shared windowBg base");
+    require(window.windowHandle() != nullptr
+            && window.property("lingtai_window_surface_color").value<QColor>()
+                == st::windowBg->c,
+        "the native window surface must receive windowBg, not only QWidget palette");
     const auto handle_image = resize_handle->grab().toImage();
     require(handle_image.pixelColor(
                 handle_image.width() / 2, handle_image.height() / 2)
             == st::windowBg->c,
-        "the wide resize target must paint windowBg while the adjacent "
-        "PlainShadow remains the only visible separator");
+        "the wide resize target must paint windowBg");
+    require(separator->width() == 0 || !separator->isVisible(),
+        "the accepted single canvas must expose no visible center divider");
 
     const auto painted_bounds = [](const QImage &image, QColor surface) {
         auto bounds = QRect();
@@ -3503,6 +3509,9 @@ void verify_modern_composer_surface(
         "attachment must sit to the left of Message in the shared container");
     require(qAbs(input_rect.center().y() - send_rect.center().y()) <= 2,
         "the composer input and Send action must align on one compact row");
+    require(qAbs(attachment_rect.center().y() - controls->rect().center().y()) <= 1
+            && qAbs(send_rect.center().y() - controls->rect().center().y()) <= 1,
+        "both 40px icon lanes must be vertically centered in the shared Composer");
     require(input_rect.right() < send_rect.left(),
         "the composer input must sit to the left of Send in the same row");
 
