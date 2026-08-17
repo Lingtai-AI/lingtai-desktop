@@ -752,6 +752,17 @@ void apply_system_palette() {
     }
 }
 
+void apply_titlebar_brand_palette(QWidget *window) {
+    if (!window) return;
+    auto *brand = window->findChild<QLabel *>(
+        QStringLiteral("lingtai_titlebar_brand"));
+    if (!brand) return;
+    auto palette = brand->palette();
+    palette.setColor(QPalette::WindowText, st::dialogsNameFg->c);
+    palette.setColor(QPalette::Text, st::dialogsNameFg->c);
+    brand->setPalette(palette);
+}
+
 std::unique_ptr<Ui::RpWindow> make_native_window() {
     // Install the adapters before any vendored widget is constructed, unless
     // a hosting environment already installed them.
@@ -1574,6 +1585,7 @@ NativeShell::NativeShell()
         brand_font.setPointSize(11);
         brand_font.setWeight(QFont::DemiBold);
         titlebar_brand->setFont(brand_font);
+        apply_titlebar_brand_palette(window_.get());
         titlebar_brand->adjustSize();
         titlebar_brand->setFixedHeight(titlebar->height());
         titlebar_brand->move(traffic_anchor.x(), 0);
@@ -1592,6 +1604,7 @@ NativeShell::~NativeShell() = default;
 
 void NativeShell::refresh_system_palette() {
     apply_system_palette();
+    apply_titlebar_brand_palette(window_.get());
     render_conversation();
     window_->update();
     for (auto *widget : window_->findChildren<QWidget *>()) {
