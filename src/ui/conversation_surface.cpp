@@ -885,9 +885,16 @@ void ConversationSurface::rebuild_document() {
                     layout->lineAt(line_index).horizontalAdvance());
             }
         }
+        // Block margins are measured in the viewport, while QTextDocument also
+        // subtracts its root margin from both sides of the actual line lane. Add
+        // that existing inset back so declared bubble padding is not consumed by
+        // the document chrome during the second layout pass.
+        const auto document_inset = int(std::ceil(
+            2 * document->documentMargin()));
         const auto final_width = qBound(
             qMin(pending.lane_min, pending.lane_max),
-            int(std::ceil(real_width)) + 2 * pending.horizontal_padding,
+            int(std::ceil(real_width)) + 2 * pending.horizontal_padding
+                + document_inset,
             pending.lane_max);
         const auto final_lane = message_block_format(
             pending.outgoing, viewport_width, final_width);
