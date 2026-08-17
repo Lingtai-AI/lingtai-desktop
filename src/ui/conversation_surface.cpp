@@ -5,6 +5,7 @@
 
 #include <QtCore/QUrl>
 #include <QtCore/QVariant>
+#include <QtGui/QAbstractTextDocumentLayout>
 #include <QtGui/QColor>
 #include <QtGui/QFont>
 #include <QtGui/QFontMetricsF>
@@ -635,8 +636,17 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
     const auto v_offset = verticalScrollBar()->value();
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setPen(Qt::NoPen);
+    const auto *document_layout = document()->documentLayout();
     const auto message_frames = document()->rootFrame()->childFrames();
-    for (const auto *frame : message_frames) {
+    for (auto *frame : message_frames) {
+        // Each sibling message frame carries its own advancing document
+        // origin, while the blocks' QTextLayout positions stay relative to
+        // that frame. Translate every line by both the block layout position
+        // and the frame's document top-left so each bubble sits around its
+        // native Qt text instead of the first frame's local coordinates.
+        const auto frame_origin = document_layout
+            ->frameBoundingRect(frame)
+            .topLeft();
         QTextBlock first_valid_block;
         auto text_bounds = QRectF();
         for (auto block = frame->begin(); !block.atEnd();
@@ -650,7 +660,8 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
             for (auto i = 0; i != block_layout->lineCount(); ++i) {
                 const auto line = block_layout->lineAt(i);
                 const auto line_bounds = line.naturalTextRect()
-                    .translated(block_layout->position());
+                    .translated(block_layout->position())
+                    .translated(frame_origin);
                 block_bounds = block_bounds.isNull()
                     ? line_bounds
                     : block_bounds.united(line_bounds);
