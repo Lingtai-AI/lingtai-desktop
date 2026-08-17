@@ -187,6 +187,9 @@ private:
 
     WorkspaceSelectionState selection_state_;
     std::unique_ptr<Ui::RpWindow> window_;
+    // The one no-project launch canvas. It owns only the first project CTA;
+    // the existing roster/detail workspace replaces it after project open.
+    QWidget *startup_route_ = nullptr;
     // The persistent left 260px project/Agent list column. It owns the
     // project identity header, the compact Open/New Project actions, and the
     // Agent rows; the shell wires its row clicks and the action buttons.

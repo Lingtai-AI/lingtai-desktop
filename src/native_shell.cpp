@@ -26,6 +26,7 @@
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
+#include <QtCore/QLineF>
 #include <QtCore/QPoint>
 #include <QtCore/QString>
 #include <QtCore/QStringList>
@@ -157,6 +158,46 @@ private:
 // One Telegram-shaped Composer control envelope: attachment, field and Send
 // share this single rounded base and its one-pixel adaptive palette border.
 // Status text stays in the outer Composer lane rather than widening this frame.
+// The quiet first-launch mark is drawn from evenly spaced dots rather than a
+// bundled raster, so it remains crisp at every Qt scale while retaining the
+// sparse teal line-art character of the accepted reference.
+class StartupIllustration final : public QWidget {
+public:
+    explicit StartupIllustration(QWidget *parent)
+    : QWidget(parent) {
+        setFixedSize(220, 190);
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(QStringLiteral("#008f79")));
+        const auto draw_dotted_segment = [&painter](QPointF from, QPointF to) {
+            const QLineF line(from, to);
+            const auto count = std::max(2, qRound(line.length() / 7.0));
+            for (auto index = 0; index <= count; ++index) {
+                const auto ratio = double(index) / double(count);
+                const auto point = from + (to - from) * ratio;
+                painter.drawEllipse(point, 1.7, 1.7);
+            }
+        };
+        const std::array<std::pair<QPointF, QPointF>, 12> segments = {{
+            {{36, 72}, {72, 24}}, {{72, 24}, {110, 75}},
+            {{110, 75}, {145, 35}}, {{145, 35}, {186, 82}},
+            {{28, 86}, {192, 86}}, {{55, 47}, {55, 150}},
+            {{110, 58}, {110, 150}}, {{165, 58}, {165, 150}},
+            {{35, 150}, {184, 150}}, {{18, 168}, {202, 168}},
+            {{73, 101}, {95, 124}}, {{145, 103}, {128, 126}},
+        }};
+        for (const auto &[from, to] : segments) {
+            draw_dotted_segment(from, to);
+        }
+    }
+};
+
 class ComposerControls final : public Ui::RpWidget {
 public:
     explicit ComposerControls(QWidget *parent)
@@ -842,6 +883,65 @@ NativeShell::NativeShell()
     auto *shell_layout = new QHBoxLayout(body);
     shell_layout->setContentsMargins(0, 0, 0, 0);
     shell_layout->setSpacing(0);
+
+    auto *startup_route = new PaletteSurface(body, st::windowBg);
+    startup_route_ = startup_route;
+    startup_route->setObjectName("lingtai_startup_route");
+    startup_route->setAccessibleName(QStringLiteral("Choose a LingTai project"));
+    auto *startup_layout = new QVBoxLayout(startup_route);
+    startup_layout->setContentsMargins(32, 24, 32, 40);
+    startup_layout->setSpacing(0);
+    startup_layout->addStretch(4);
+    auto *startup_illustration = new StartupIllustration(startup_route);
+    startup_illustration->setObjectName("lingtai_startup_illustration");
+    startup_layout->addWidget(startup_illustration, 0, Qt::AlignHCenter);
+    startup_layout->addSpacing(18);
+    auto *startup_heading = new QLabel(
+        QStringLiteral("LingTai Orchestration"), startup_route);
+    startup_heading->setObjectName("lingtai_startup_heading");
+    startup_heading->setAlignment(Qt::AlignCenter);
+    auto heading_font = startup_heading->font();
+    heading_font.setFamily(QStringLiteral("Menlo"));
+    heading_font.setStyleHint(QFont::Monospace);
+    heading_font.setPixelSize(16);
+    heading_font.setWeight(QFont::DemiBold);
+    startup_heading->setFont(heading_font);
+    auto startup_palette = startup_heading->palette();
+    startup_palette.setColor(QPalette::WindowText, QColor(QStringLiteral("#008f79")));
+    startup_heading->setPalette(startup_palette);
+    startup_layout->addWidget(startup_heading);
+    startup_layout->addSpacing(16);
+    auto *startup_tagline = new QLabel(
+        QStringLiteral("Awaken under Bodhi\nOne soul, thousand avatars"),
+        startup_route);
+    startup_tagline->setObjectName("lingtai_startup_tagline");
+    startup_tagline->setAlignment(Qt::AlignCenter);
+    auto tagline_font = startup_tagline->font();
+    tagline_font.setPixelSize(15);
+    tagline_font.setWeight(QFont::Normal);
+    startup_tagline->setFont(tagline_font);
+    auto tagline_palette = startup_tagline->palette();
+    tagline_palette.setColor(QPalette::WindowText, st::windowFg->c);
+    startup_tagline->setPalette(tagline_palette);
+    startup_layout->addWidget(startup_tagline);
+    startup_layout->addSpacing(30);
+    auto *choose_project = new QPushButton(
+        QStringLiteral("Choose project"), startup_route);
+    choose_project->setObjectName("lingtai_startup_choose_project");
+    choose_project->setAccessibleName(QStringLiteral("Choose project"));
+    choose_project->setCursor(Qt::PointingHandCursor);
+    choose_project->setFixedSize(236, 46);
+    choose_project->setStyleSheet(QStringLiteral(
+        "QPushButton { background: #1769e0; color: white; border: none; "
+        "border-radius: 8px; font-size: 15px; font-weight: 600; } "
+        "QPushButton:hover { background: #0d5fd6; } "
+        "QPushButton:pressed { background: #0a51b8; }"));
+    QObject::connect(choose_project, &QPushButton::clicked, [this] {
+        request_open_project();
+    });
+    startup_layout->addWidget(choose_project, 0, Qt::AlignHCenter);
+    startup_layout->addStretch(5);
+    shell_layout->addWidget(startup_route, 1);
 
     // The persistent left 260px project/Agent list column: project identity
     // header, compact Open/New Project actions, and the scrollable Agent
@@ -2526,6 +2626,26 @@ void NativeShell::bump_lifecycle_generation() noexcept {
 // active selection keeps the detail, exactly as Telegram keeps the active
 // chat in OneColumn.
 void NativeShell::recompute_layout(int body_width) {
+    const auto project_active = selection_state_.active_project().has_value();
+    if (startup_route_) startup_route_->setVisible(!project_active);
+    if (auto *brand = window_->findChild<QLabel *>("lingtai_titlebar_brand")) {
+        auto *titlebar = brand->parentWidget();
+        if (!project_active && titlebar) {
+            brand->move((titlebar->width() - brand->width()) / 2, 0);
+        } else {
+            const auto traffic_anchor = NativeTrafficLightAnchor(window_.get());
+            brand->setProperty("lingtai_native_traffic_light_anchor", traffic_anchor);
+            brand->move(traffic_anchor.x(), 0);
+        }
+        brand->raise();
+    }
+    if (!project_active) {
+        agent_roster_->setVisible(false);
+        roster_resize_handle_->setVisible(false);
+        separator_->setVisible(false);
+        content_->setVisible(false);
+        return;
+    }
     const auto available = body_width - kRosterResizeHandleWidth
         - kRosterSeparatorWidth;
     if (available >= kTwoColumnAvailableThreshold) {
@@ -2992,6 +3112,7 @@ void NativeShell::refresh_route() {
     // Both are stored pointers the constructor always sets before
     // refresh_route() can run, so neither branch here is ever reachable.
     const auto project_active = selection_state_.active_project().has_value();
+    if (startup_route_) startup_route_->setVisible(!project_active);
     empty_route_->setVisible(!project_active);
     project_route_->setVisible(project_active);
     // The welcome branding only belongs to the no-project state: with a
