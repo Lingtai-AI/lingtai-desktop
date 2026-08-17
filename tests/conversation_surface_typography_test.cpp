@@ -1222,88 +1222,195 @@ void verify_directional_bubble_policy() {
 }
 
 
-// Outgoing human messages are body-first: no in-bubble `You · timestamp`
-// header. The timestamp remains visible immediately outside the bubble on its
-// left, proven without prescribing a document/frame property implementation by
-// comparing two otherwise-identical renders whose timestamps differ.
+// Human messages are body-first and content-sized. Their bubble is anchored
+// right, but the text within it is always a normal left-aligned reading block;
+// timestamp ink lives below the bubble instead of floating beside its top edge.
 struct OutgoingRender {
     QImage image;
-    QRectF bubble;
+    QRectF text;
     QString plain;
+    QTextBlockFormat block;
+    QTextCharFormat body;
+    qreal effective_width = 0;
+    int viewport_width = 0;
 };
 
-OutgoingRender render_outgoing_at(const std::string &timestamp) {
+OutgoingRender render_outgoing_at(
+        const std::string &timestamp,
+        const std::string &text = "Human body only.",
+        int width = 1200) {
     ConversationSurface surface;
-    surface.resize(1600, 260);
+    surface.resize(width, 340);
     surface.show();
     QCoreApplication::processEvents();
     surface.set_conversation(QStringLiteral("Telegram Bot"), {{
         .id = "out-time",
         .outgoing = true,
         .timestamp = timestamp,
-        .text = "Human body only.",
+        .text = text,
     }});
     surface.document()->documentLayout()->documentSize();
     QCoreApplication::processEvents();
 
     const auto frames = surface.document()->rootFrame()->childFrames();
-    if (frames.size() != 1 || !is_outgoing_frame(*frames.front())) {
+    if (frames.size() != 1) {
         throw std::runtime_error(
-            "the outgoing body/time fixture must render one right-aligned frame");
+            "the Human bubble fixture must render exactly one message frame");
+    }
+    const auto blocks = frame_blocks(*frames.front());
+    if (blocks.empty()) {
+        throw std::runtime_error("the Human bubble fixture has no body block");
     }
     const auto h_offset = double(surface.horizontalScrollBar()->value());
     const auto v_offset = double(surface.verticalScrollBar()->value());
+    const auto format = blocks.front().blockFormat();
+    const auto runs = format_runs(*surface.document(),
+        QString::fromStdString(text).left(12));
+    if (runs.empty()) {
+        throw std::runtime_error("the Human bubble fixture has no body format");
+    }
+    auto frame_text = QString();
+    for (const auto &block : blocks) {
+        if (!frame_text.isEmpty()) {
+            frame_text += QChar('\n');
+        }
+        frame_text += block.text();
+    }
     return {
         surface.viewport()->grab().toImage(),
-        message_bubble_rect(*frames.front()).translated(-h_offset, -v_offset),
-        surface.toPlainText().trimmed(),
+        message_text_bounds(*frames.front()).translated(-h_offset, -v_offset),
+        frame_text.trimmed(),
+        format,
+        runs.front(),
+        surface.viewport()->width() - format.leftMargin() - format.rightMargin(),
+        surface.viewport()->width(),
     };
 }
 
-int changed_pixels(const QImage &a, const QImage &b, const QRectF &logical) {
-    if (a.size() != b.size() || a.devicePixelRatio() != b.devicePixelRatio()) {
-        throw std::runtime_error("paired outgoing renders must share one image geometry");
-    }
-    const auto dpr = a.devicePixelRatio();
-    const auto left = std::max(0, int(std::floor(logical.left() * dpr)));
-    const auto top = std::max(0, int(std::floor(logical.top() * dpr)));
-    const auto right = std::min(a.width(), int(std::ceil(logical.right() * dpr)));
-    const auto bottom = std::min(a.height(), int(std::ceil(logical.bottom() * dpr)));
-    auto changed = 0;
-    for (auto y = top; y < bottom; ++y) {
-        for (auto x = left; x < right; ++x) {
-            changed += (a.pixel(x, y) != b.pixel(x, y));
+QRectF exact_color_bounds(const QImage &image, const QColor &color) {
+    auto bounds = QRect();
+    const auto pixel = color.rgba();
+    for (auto y = 0; y < image.height(); ++y) {
+        for (auto x = 0; x < image.width(); ++x) {
+            if (image.pixel(x, y) == pixel) {
+                const auto point = QRect(x, y, 1, 1);
+                bounds = bounds.isNull() ? point : bounds.united(point);
+            }
         }
     }
-    return changed;
+    const auto dpr = image.devicePixelRatio();
+    if (bounds.isNull()) {
+        return QRectF();
+    }
+    const auto physical = QRectF(bounds).adjusted(0, 0, 1, 1);
+    return QRectF(physical.x() / dpr, physical.y() / dpr,
+        physical.width() / dpr, physical.height() / dpr);
 }
 
-void verify_outgoing_body_first_and_external_time() {
+QRectF changed_bounds(const QImage &a, const QImage &b) {
+    if (a.size() != b.size() || a.devicePixelRatio() != b.devicePixelRatio()) {
+        throw std::runtime_error("paired Human renders must share one image geometry");
+    }
+    auto bounds = QRect();
+    for (auto y = 0; y < a.height(); ++y) {
+        for (auto x = 0; x < a.width(); ++x) {
+            if (a.pixel(x, y) != b.pixel(x, y)) {
+                const auto point = QRect(x, y, 1, 1);
+                bounds = bounds.isNull() ? point : bounds.united(point);
+            }
+        }
+    }
+    const auto dpr = a.devicePixelRatio();
+    if (bounds.isNull()) {
+        return QRectF();
+    }
+    const auto physical = QRectF(bounds).adjusted(0, 0, 1, 1);
+    return QRectF(physical.x() / dpr, physical.y() / dpr,
+        physical.width() / dpr, physical.height() / dpr);
+}
+
+void verify_human_bubble_contract() {
     const auto first = render_outgoing_at("2026-08-07T19:00:00Z");
     const auto second = render_outgoing_at("2026-08-07T20:11:00Z");
+    const auto short_message = render_outgoing_at(
+        "2026-08-07T19:00:00Z", "OK");
+    const auto long_message = render_outgoing_at(
+        "2026-08-07T19:00:00Z",
+        "This intentionally long Human message proves that the bubble stays "
+        "content-sized and stops at a moderate share of the Conversation "
+        "column instead of stretching across the available pane.");
     const auto expected = QStringLiteral("Human body only.");
     if (first.plain != expected || second.plain != expected) {
         throw std::runtime_error(
-            "outgoing bubble document must contain the body only: remove the "
-            "in-bubble `You · timestamp` header");
+            "Human bubble document must contain the body only: no sender/time "
+            "header belongs inside the bubble");
     }
 
-    const auto bubble = first.bubble.intersected(second.bubble);
-    if (bubble.isEmpty()) {
-        throw std::runtime_error("paired outgoing bubbles must overlap");
-    }
-    if (changed_pixels(first.image, second.image, bubble) != 0) {
+    const auto left_aligned = [](const OutgoingRender &render) {
+        return bool(render.block.alignment() & Qt::AlignLeft)
+            && render.block.leftMargin() > render.block.rightMargin();
+    };
+    if (!left_aligned(first) || !left_aligned(short_message)
+        || !left_aligned(long_message)) {
         throw std::runtime_error(
-            "changing only the timestamp must not change any pixels inside the "
-            "outgoing body bubble");
+            "Human body text must be left-aligned while asymmetric margins "
+            "keep the content-sized bubble anchored on the right");
     }
-    const auto time_strip = QRectF(
-        bubble.left() - 180.0, bubble.top(), 172.0, bubble.height());
-    if (changed_pixels(first.image, second.image, time_strip) == 0) {
+    if (first.body.font().pixelSize() < 15
+        || first.body.font().pixelSize() > 16
+        || first.body.font().weight() != QFont::Normal
+        || first.block.lineHeightType() != QTextBlockFormat::ProportionalHeight
+        || first.block.lineHeight() < 150 || first.block.lineHeight() > 160) {
         throw std::runtime_error(
-            "changing only the timestamp must change rendered pixels in the "
-            "strip immediately left of the outgoing bubble");
+            "Human body must share the 15-16px Normal and 1.5-1.6 reading "
+            "typography used by Agent prose");
     }
+    if (short_message.effective_width > 200) {
+        throw std::runtime_error(
+            "a short Human message must retain a narrow content-sized bubble");
+    }
+    const auto conversation_column = qMin(long_message.viewport_width, 900);
+    const auto long_ratio = long_message.effective_width / conversation_column;
+    if (long_ratio < 0.55 || long_ratio > 0.65) {
+        throw std::runtime_error(
+            "a long Human message must cap at 55-65% of the Conversation column");
+    }
+
+    const auto expected_fill = QColor(QStringLiteral("#EEF7F3"));
+    const auto fill = exact_color_bounds(first.image, expected_fill);
+    const auto expected_bubble = first.text.adjusted(-15, -11, 15, 11);
+    const auto close = [](qreal a, qreal b) { return std::abs(a - b) <= 2.0; };
+    if (fill.isEmpty()
+        || !close(fill.left(), expected_bubble.left())
+        || !close(fill.right(), expected_bubble.right())
+        || !close(fill.top(), expected_bubble.top())
+        || !close(fill.bottom(), expected_bubble.bottom())) {
+        throw std::runtime_error(
+            "Human bubble must use the pale low-saturation fill with about "
+            "15px horizontal and 11px vertical padding");
+    }
+    if (first.image.pixelColor(
+            qRound(expected_bubble.left()), qRound(expected_bubble.top()))
+        == expected_fill) {
+        throw std::runtime_error(
+            "Human bubble needs a moderate rounded corner, not a square or "
+            "extremely pill-like edge");
+    }
+
+    const auto changed = changed_bounds(first.image, second.image);
+    if (changed.isEmpty()
+        || changed.top() < expected_bubble.bottom() + 1
+        || changed.left() < expected_bubble.left() - 1
+        || changed.right() > expected_bubble.right() + 1
+        || changed.height() > 16) {
+        throw std::runtime_error(
+            "Human timestamp must render as a compact muted line directly "
+            "below and right-aligned with the bubble, never beside its top edge");
+    }
+}
+
+void verify_outgoing_body_first_and_external_time() {
+    verify_human_bubble_contract();
 }
 
 
@@ -1965,6 +2072,13 @@ int run_typography_test(int argc, char **argv) {
     try {
         QApplication application(argc, argv);
         style::internal::init_palette(style::kScaleDefault);
+        if (argc > 1
+                && QString::fromLocal8Bit(argv[1])
+                    == QStringLiteral("--human-bubble-only")) {
+            verify_human_bubble_contract();
+            std::cout << "conversation surface Human bubble: OK\n";
+            return 0;
+        }
         if (argc > 1
                 && QString::fromLocal8Bit(argv[1])
                     == QStringLiteral("--body-reading-only")) {
