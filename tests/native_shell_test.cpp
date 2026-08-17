@@ -3389,6 +3389,53 @@ void verify_modern_composer_surface(
         window, "lingtai_composer_send_button");
     auto *composer_status = required_child<QLabel>(
         window, "lingtai_composer_status");
+    auto *resize_handle = required_child<QWidget>(
+        window, "lingtai_roster_resize_handle");
+
+    // Telegram Desktop's macOS window helper makes the native title bar
+    // transparent/full-size, while MainWindow::updatePalette gives that chrome
+    // the same windowBg base as the app. Its columns touch directly and retain
+    // only a one-pixel PlainShadow; LingTai's wider drag target must therefore
+    // paint the shared base instead of exposing the platform-default gray.
+    require(window.windowFlags().testFlag(Qt::NoTitleBarBackgroundHint),
+        "the macOS title bar must stay transparent over the app-owned base");
+    require(window.palette().color(QPalette::Window) == st::windowBg->c,
+        "the native title bar and app canvas must share Telegram's windowBg base");
+    const auto handle_image = resize_handle->grab().toImage();
+    require(handle_image.pixelColor(
+                handle_image.width() / 2, handle_image.height() / 2)
+            == st::windowBg->c,
+        "the wide resize target must paint windowBg while the adjacent "
+        "PlainShadow remains the only visible separator");
+
+    const auto painted_bounds = [](const QImage &image, QColor surface) {
+        auto bounds = QRect();
+        for (auto y = 0; y != image.height(); ++y) {
+            for (auto x = 0; x != image.width(); ++x) {
+                if (image.pixelColor(x, y) != surface) {
+                    bounds = bounds.isNull()
+                        ? QRect(x, y, 1, 1)
+                        : bounds.united(QRect(x, y, 1, 1));
+                }
+            }
+        }
+        return bounds;
+    };
+    const auto require_centered_paint = [&](QWidget *widget, const char *message) {
+        const auto image = widget->grab().toImage();
+        const auto bounds = painted_bounds(image, image.pixelColor(0, 0));
+        const auto tolerance = qMax(1, qCeil(image.devicePixelRatio()));
+        require(!bounds.isNull()
+                && qAbs(bounds.left() + bounds.right() - (image.width() - 1))
+                    <= tolerance
+                && qAbs(bounds.top() + bounds.bottom() - (image.height() - 1))
+                    <= tolerance,
+            message);
+    };
+    require_centered_paint(attachment_button,
+        "the paperclip ink must be mathematically centered in its 40px lane");
+    require_centered_paint(send_button,
+        "the circular Send paint must be centered in its 40px lane");
 
     const auto project = sandbox / "project";
     write_file(project / ".lingtai/human/.agent.json",
