@@ -31,7 +31,7 @@ QPoint NativeTrafficLightAnchor(QWidget *widget) {
     const auto frame = [zoom.superview convertRect:zoom.frame toView:nil];
     return QPoint(
         qRound(NSMaxX(frame) + 8.0),
-        qRound(widget->height() - NSMidY(frame)));
+        qRound(NSMidY(frame)));
 }
 
 } // namespace lingtai::desktop
