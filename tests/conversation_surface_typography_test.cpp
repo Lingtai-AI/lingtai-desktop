@@ -108,10 +108,10 @@ void require_hierarchy(
         int author_size,
         int body_size,
         int timestamp_size) {
-    if (!(body_size > author_size && author_size > timestamp_size)) {
+    if (!(author_size > body_size && body_size > timestamp_size)) {
         throw std::runtime_error(
             std::string("the ") + direction
-            + " message must read body > author > metadata (author "
+            + " message must read author > body > metadata (author "
             + std::to_string(author_size) + "px, body "
             + std::to_string(body_size) + "px, timestamp "
             + std::to_string(timestamp_size) + "px)");
@@ -513,7 +513,7 @@ void verify_typography(ConversationSurface &surface, const QString &them) {
     // Incoming keeps its Agent-name header; outgoing is intentionally body-first.
     const auto &in_sender = require_fragment(
         incoming_fragments, them, true, "incoming sender");
-    require_font(in_sender, 13, QFont::DemiBold, "incoming sender");
+    require_font(in_sender, 15, QFont::DemiBold, "incoming sender");
 
     // Incoming metadata remains 12px Normal. Per-email subjects are source
     // metadata, not conversation content, and must not enter either direction's
@@ -550,7 +550,7 @@ void verify_typography(ConversationSurface &surface, const QString &them) {
 // lane (symmetric 162px outer gutters), anchor at the perceptual ~1/3 of the
 // usable viewport, render in the quiet secondary tone (12px Normal,
 // st::msgServiceFg) and recompute all of that after a resize. The modern type
-// ladder (sender 13px DemiBold / metadata and subject 12px Normal / body 14px
+// ladder (sender 15px DemiBold / metadata 12px Normal / body 14px
 // Normal) is asserted by verify_typography, while the existing opposite sender
 // anchors and the directional width-dependent inner slack stay covered by the
 // pre-existing responsive/content geometry tests. Fails on the exact base: the
@@ -1809,6 +1809,15 @@ int run_typography_test(int argc, char **argv) {
     try {
         QApplication application(argc, argv);
         style::internal::init_palette(style::kScaleDefault);
+        if (argc > 1
+                && QString::fromLocal8Bit(argv[1])
+                    == QStringLiteral("--message-type-only")) {
+            ConversationSurface surface;
+            surface.resize(640, 480);
+            verify_typography(surface, QStringLiteral("Telegram Bot"));
+            std::cout << "conversation surface message type: OK\n";
+            return 0;
+        }
         if (argc > 1
                 && QString::fromLocal8Bit(argv[1])
                     == QStringLiteral("--message-grouping-only")) {
