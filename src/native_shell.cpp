@@ -1245,7 +1245,7 @@ NativeShell::NativeShell()
         result.borderActive = 0;
         // defaultInputField is a 55px floating-label control with a 28px top
         // inset. This Composer owns a fixed 40px single-line lane instead.
-        result.textMargins = QMargins(0, 11, 0, 0);
+        result.textMargins = QMargins(0, 13, 0, 0);
         result.placeholderMargins = QMargins();
         result.placeholderScale = 0.0;
         result.placeholderShift = 0;
