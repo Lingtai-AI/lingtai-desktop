@@ -1552,7 +1552,7 @@ NativeShell::NativeShell()
         });
 
     const auto traffic_anchor = NativeTrafficLightAnchor(window_.get());
-    auto *titlebar_brand = new QLabel(QStringLiteral("LingTai"), body);
+    auto *titlebar_brand = new QLabel(QStringLiteral("LingTai"), window_.get());
     titlebar_brand->setObjectName("lingtai_titlebar_brand");
     titlebar_brand->setAccessibleName(QStringLiteral("LingTai"));
     titlebar_brand->setAttribute(Qt::WA_TransparentForMouseEvents);
