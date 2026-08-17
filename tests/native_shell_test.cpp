@@ -3482,11 +3482,32 @@ void verify_modern_composer_surface(
                 + ": x_delta=" + std::to_string(x_delta)
                 + ", y_delta=" + std::to_string(y_delta));
     };
-    require_color_ink_centered(
-        composer_input,
-        st::defaultInputField.placeholderFg->c,
-        false,
-        "the Message placeholder ink must be vertically centered in its 40px field");
+    const auto message_controls_image = controls->grab().toImage();
+    const auto controls_scale = message_controls_image.devicePixelRatio();
+    const auto input_left = qRound(
+        composer_input->mapTo(controls, QPoint()).x() * controls_scale);
+    const auto input_right = input_left
+        + qRound(composer_input->width() * controls_scale) - 1;
+    auto message_bounds = QRect();
+    for (auto y = 0; y != message_controls_image.height(); ++y) {
+        for (auto x = input_left; x <= input_right; ++x) {
+            if (message_controls_image.pixelColor(x, y)
+                != st::defaultInputField.placeholderFg->c) {
+                continue;
+            }
+            message_bounds = message_bounds.isNull()
+                ? QRect(x, y, 1, 1)
+                : message_bounds.united(QRect(x, y, 1, 1));
+        }
+    }
+    const auto message_y_delta = message_bounds.isNull()
+        ? message_controls_image.height()
+        : message_bounds.top() + message_bounds.bottom()
+            - (message_controls_image.height() - 1);
+    require(!message_bounds.isNull()
+            && qAbs(message_y_delta) <= qMax(1, qCeil(controls_scale)),
+        "the Message ink must be vertically centered in the whole Composer capsule: y_delta="
+            + std::to_string(message_y_delta));
     require_color_ink_centered(
         send_button,
         st::defaultActiveButton.textFg->c,
