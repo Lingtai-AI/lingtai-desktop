@@ -531,33 +531,36 @@ void verify_row_selection_diverges_and_field_uses_sidebar_bg() {
         "the accessible description must retain the raw facts verbatim");
 }
 
-// I2 selector RED contract (fails on the exact base). The project header must
-// lead with one compact `LingTai ▾` selector button plus one compact `+`
-// action instead of the bare brand label and the two full-width Open/New
-// buttons; activating the selector must surface a menu carrying the current
-// project-root path and the Open/New Project entries that keep the existing
-// object identities, while the roster's own identities stay reachable.
+// Project-toolbar contract. The top-left controls are one compact flat row:
+// a text-led `LingTai` selector whose chevron is painted as a small icon, plus
+// one icon-only New Project action. Neither control may fall back to the
+// platform's beveled/default QPushButton frame. The selector menu still owns
+// the current path and the existing Open/New Project action identities.
 void verify_compact_project_selector_and_menu() {
     QWidget parent;
     AgentRoster roster(&parent);
     roster.show();
     QCoreApplication::processEvents();
 
-    auto *selector = static_cast<QPushButton *>(nullptr);
-    auto *plus = static_cast<QPushButton *>(nullptr);
-    for (auto *candidate : roster.findChildren<QPushButton *>()) {
-        if (candidate->text() == QStringLiteral("LingTai ▾")) {
-            selector = candidate;
-        } else if (candidate->text() == QStringLiteral("+")) {
-            plus = candidate;
-        }
-    }
+    auto *selector = roster.findChild<QPushButton *>(
+        "lingtai_project_selector");
+    auto *plus = roster.findChild<QPushButton *>(
+        "lingtai_new_project_button");
     require(selector != nullptr,
-        "the project header must lead with one compact `LingTai ▾` selector "
-        "button, not a bare brand label");
+        "the project toolbar must expose its LingTai selector");
     require(plus != nullptr,
-        "the project header must show one compact `+` action beside the "
-        "selector");
+        "the project toolbar must expose its New Project icon action");
+    require(selector->text() == QStringLiteral("LingTai"),
+        "the selector label must be plain `LingTai`; its small chevron is an "
+        "adjacent painted icon, not a wide text glyph");
+    require(plus->text().isEmpty(),
+        "the New Project control must be icon-only, not a text `+` button");
+    require(selector->isFlat() && plus->isFlat(),
+        "both project toolbar controls must suppress the platform's default "
+        "beveled button frame");
+    require(plus->maximumWidth() <= 32
+            && plus->height() == selector->height(),
+        "the icon-only plus must stay compact and align with the selector");
     require(selector->accessibleName().contains(QStringLiteral("LingTai")),
         "the compact selector must keep a LingTai project accessible "
         "identity");
@@ -600,6 +603,13 @@ int main(int argc, char **argv) {
     try {
         QApplication application(argc, argv);
         style::internal::init_palette(style::kScaleDefault);
+        if (argc > 1
+                && QString::fromLocal8Bit(argv[1])
+                    == QStringLiteral("--project-toolbar-only")) {
+            verify_compact_project_selector_and_menu();
+            std::cout << "project toolbar presentation: OK\n";
+            return 0;
+        }
         verify_roster_rows_are_virtual_canvas();
         verify_human_hidden_from_roster();
         verify_selected_row_keeps_neutral_majority_surface();

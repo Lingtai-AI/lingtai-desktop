@@ -8,6 +8,7 @@
 #include <QtGui/QMouseEvent>
 #include <QtGui/QFontMetrics>
 #include <QtGui/QPainter>
+#include <QtGui/QPen>
 #include <QtWidgets/QMenu>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QHBoxLayout>
@@ -28,6 +29,108 @@ constexpr auto kAvatarTextGap = 10;
 constexpr auto kRowHorizontalFrame = 14;
 constexpr auto kRowVerticalFrame = 8;
 constexpr auto kRowSpacing = 2;
+
+enum class ProjectToolbarControl {
+    selector,
+    add,
+};
+
+// Telegram lib_ui's FlatButton paints only a flat base/hover background before
+// its ripple, while IconButton paints the ripple and glyph without asking the
+// platform style for a frame. Keep that same ownership here: the project
+// controls paint their own small hover/press surface and glyphs, so macOS/Qt
+// can never reintroduce a beveled default QPushButton border.
+class ProjectToolbarButton final : public QPushButton {
+public:
+    ProjectToolbarButton(
+        QWidget *parent,
+        ProjectToolbarControl control)
+    : QPushButton(parent)
+    , control_(control) {
+        setFlat(true);
+        setCursor(Qt::PointingHandCursor);
+        setFixedHeight(30);
+        if (control_ == ProjectToolbarControl::add) {
+            setFixedWidth(30);
+            setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        } else {
+            setMinimumWidth(0);
+            setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        }
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+
+        if (underMouse() || isDown()) {
+            auto background = st::windowBgRipple->c;
+            if (isDown()) {
+                background = background.darker(112);
+            }
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(background);
+            painter.drawRoundedRect(
+                QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 6, 6);
+        }
+
+        const auto ink = (underMouse() || isDown())
+            ? st::dialogsNameFgOver->c
+            : st::dialogsNameFg->c;
+        painter.setPen(ink);
+
+        if (control_ == ProjectToolbarControl::selector) {
+            auto font = this->font();
+            font.setPointSize(11);
+            font.setWeight(QFont::DemiBold);
+            painter.setFont(font);
+            const auto label = text();
+            if (label == QStringLiteral("⋯")) {
+                painter.drawText(rect(), Qt::AlignCenter, label);
+            } else {
+                const auto left = 9;
+                const auto metrics = QFontMetrics(font);
+                const auto label_width = metrics.horizontalAdvance(label);
+                painter.drawText(
+                    QRect(left, 0, label_width, height()),
+                    Qt::AlignLeft | Qt::AlignVCenter,
+                    label);
+                const auto chevron_x = left + label_width + 7.0;
+                const auto chevron_y = height() / 2.0;
+                auto chevron_pen = QPen(ink, 1.4);
+                chevron_pen.setCapStyle(Qt::RoundCap);
+                painter.setPen(chevron_pen);
+                painter.drawLine(
+                    QPointF(chevron_x - 3.0, chevron_y - 1.5),
+                    QPointF(chevron_x, chevron_y + 1.5));
+                painter.drawLine(
+                    QPointF(chevron_x, chevron_y + 1.5),
+                    QPointF(chevron_x + 3.0, chevron_y - 1.5));
+            }
+        } else {
+            auto icon_pen = QPen(ink, 1.6);
+            icon_pen.setCapStyle(Qt::RoundCap);
+            painter.setPen(icon_pen);
+            const auto center = QPointF(width() / 2.0, height() / 2.0);
+            painter.drawLine(
+                center + QPointF(-4.0, 0.0),
+                center + QPointF(4.0, 0.0));
+            painter.drawLine(
+                center + QPointF(0.0, -4.0),
+                center + QPointF(0.0, 4.0));
+        }
+
+        if (hasFocus()) {
+            painter.fillRect(
+                QRect(7, height() - 2, qMax(0, width() - 14), 2),
+                st::dialogsBgActive);
+        }
+    }
+
+private:
+    ProjectToolbarControl control_;
+};
 
 // The presentation row set: the shared snapshot keeps the human pseudo-agent
 // (routing, mailbox, and detail truth consume it), but the roster never
@@ -502,7 +605,7 @@ AgentRoster::AgentRoster(QWidget *parent)
     // keep their identity: the selector menu's Open/New actions drive those
     // buttons' clicks, and its disabled path row mirrors the current root.
     auto *header = new QHBoxLayout;
-    header->setSpacing(6);
+    header->setSpacing(4);
     auto *project_root = make_label(
         this, QStringLiteral("No project open"), "lingtai_project_root", 11);
     project_root->hide();
@@ -516,19 +619,20 @@ AgentRoster::AgentRoster(QWidget *parent)
     open_button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     open_button->hide();
     header->addWidget(open_button);
-    auto *new_button = new QPushButton(QStringLiteral("+"), this);
+    auto *new_button = new ProjectToolbarButton(
+        this, ProjectToolbarControl::add);
     new_project_button_ = new_button;
     new_button->setObjectName("lingtai_new_project_button");
     new_button->setAccessibleName(QStringLiteral("New Project"));
     new_button->setAccessibleDescription(QStringLiteral(
         "Creates a new LingTai project and its first Agent through the "
         "canonical TUI, then starts that Agent."));
-    new_button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-    auto *selector = new QPushButton(QStringLiteral("LingTai ▾"), this);
+    auto *selector = new ProjectToolbarButton(
+        this, ProjectToolbarControl::selector);
+    selector->setText(QStringLiteral("LingTai"));
     project_selector_ = selector;
     selector->setObjectName("lingtai_project_selector");
     selector->setAccessibleName(QStringLiteral("LingTai project selector"));
-    selector->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     header->addWidget(selector);
     header->addWidget(new_button);
     layout->addLayout(header);
@@ -613,7 +717,7 @@ void AgentRoster::update_narrow_mode() {
     const auto narrow = width() <= kNarrowRosterWidth;
     project_selector_->setText(narrow
         ? QStringLiteral("⋯")
-        : QStringLiteral("LingTai ▾"));
+        : QStringLiteral("LingTai"));
     new_project_button_->setVisible(!narrow);
     roster_heading_->setVisible(!narrow);
     roster_state_->setVisible(!narrow);
