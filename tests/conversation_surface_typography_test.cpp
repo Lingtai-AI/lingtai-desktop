@@ -1228,6 +1228,7 @@ struct OutgoingRender {
     QTextCharFormat body;
     qreal effective_width = 0;
     qreal first_line_advance = 0;
+    qreal document_margin = 0;
     int viewport_width = 0;
 };
 
@@ -1280,6 +1281,7 @@ OutgoingRender render_outgoing_at(
         runs.front(),
         surface.viewport()->width() - format.leftMargin() - format.rightMargin(),
         blocks.front().layout()->lineAt(0).horizontalAdvance(),
+        surface.document()->documentMargin(),
         surface.viewport()->width(),
     };
 }
@@ -1414,12 +1416,13 @@ void verify_human_bubble_contract() {
     // the rendered line's horizontal advance plus its declared padding; an ink-
     // bounds probe can under-size the live line when its paint device differs.
     const auto layout_width_deficit = real_short_mixed_message.first_line_advance
-        + 2 * 15 - real_short_mixed_message.effective_width;
+        + 2 * 15 + 2 * real_short_mixed_message.document_margin
+        - real_short_mixed_message.effective_width;
     if (layout_width_deficit > 0.5) {
         throw std::runtime_error(
             "the real mixed-language Human bubble must fit its QTextLine "
-            "horizontal advance plus padding, but it is short by "
-            + std::to_string(layout_width_deficit) + "px");
+            "advance, declared padding, and the root document inset, but it "
+            "is short by " + std::to_string(layout_width_deficit) + "px");
     }
 
     const auto expected_fill = QColor(QStringLiteral("#EEF7F3"));
