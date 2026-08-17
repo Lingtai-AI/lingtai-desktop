@@ -1,6 +1,7 @@
 #include "native_shell.h"
 
 #include "styles/palette.h"
+#include "ui/platform/mac/ui_window_title_mac.h"
 #include "ui/rp_widget.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/fields/input_field.h"
@@ -3397,21 +3398,29 @@ void verify_modern_composer_surface(
     auto *project_selector = required_child<QPushButton>(
         window, "lingtai_project_selector");
 
-    require(window.findChild<QLabel *>("lingtai_titlebar_brand") == nullptr,
-        "the titlebar brand must not be a Qt child below the AppKit titlebar");
-    require(window.property("lingtai_native_titlebar_brand_host").toString()
-            == QStringLiteral("AppKitTitlebar"),
-        "the pure LingTai brand must be installed in the native traffic-light superview");
-    const auto native_anchor = window.property(
+    auto *titlebar = [&]() -> Ui::Platform::TitleWidget * {
+        for (auto *child : window.findChildren<QWidget *>(
+                QString(), Qt::FindDirectChildrenOnly)) {
+            if (auto *candidate = dynamic_cast<Ui::Platform::TitleWidget *>(child)) {
+                return candidate;
+            }
+        }
+        return nullptr;
+    }();
+    auto *titlebar_brand = required_child<QLabel>(
+        window, "lingtai_titlebar_brand");
+    require(titlebar != nullptr && titlebar->isVisible() && titlebar->height() > 0,
+        "Telegram's real macOS TitleWidget row must be restored instead of zero-height hidden");
+    require(titlebar_brand->parent() == titlebar,
+        "the pure LingTai brand must be painted inside Telegram's TitleWidget owner");
+    require(window.body()->geometry().top() == titlebar->height(),
+        "the content body must begin below the restored unified title row");
+    const auto native_anchor = titlebar_brand->property(
         "lingtai_native_traffic_light_anchor").toPoint();
-    const auto brand_frame = window.property(
-        "lingtai_native_titlebar_brand_frame").toRect();
     require(native_anchor.x() > 0
-            && native_anchor.y() >= 8 && native_anchor.y() <= 32
-            && brand_frame.top() >= 0 && brand_frame.bottom() <= 48
-            && qAbs(brand_frame.left() - native_anchor.x()) <= 1
-            && qAbs(brand_frame.center().y() - native_anchor.y()) <= 1,
-        "the native brand must begin after the green button and share the real traffic-light row");
+            && qAbs(titlebar_brand->geometry().left() - native_anchor.x()) <= 1
+            && qAbs(titlebar_brand->geometry().center().y() - native_anchor.y()) <= 1,
+        "the title-row brand must begin after the green button and share its vertical center");
     require(project_selector->parent() != window.body().get(),
         "the functional project selector must remain in the Sidebar");
 
