@@ -107,17 +107,14 @@ void require_hierarchy(
         const char *direction,
         int author_size,
         int body_size,
-        int timestamp_size,
-        int subject_size) {
-    if (!(body_size > author_size && author_size > timestamp_size
-            && author_size > subject_size)) {
+        int timestamp_size) {
+    if (!(body_size > author_size && author_size > timestamp_size)) {
         throw std::runtime_error(
             std::string("the ") + direction
             + " message must read body > author > metadata (author "
             + std::to_string(author_size) + "px, body "
             + std::to_string(body_size) + "px, timestamp "
-            + std::to_string(timestamp_size) + "px, subject "
-            + std::to_string(subject_size) + "px)");
+            + std::to_string(timestamp_size) + "px)");
     }
 }
 
@@ -518,18 +515,19 @@ void verify_typography(ConversationSurface &surface, const QString &them) {
         incoming_fragments, them, true, "incoming sender");
     require_font(in_sender, 13, QFont::DemiBold, "incoming sender");
 
-    // Incoming metadata and both subjects: 12px Normal.
+    // Incoming metadata remains 12px Normal. Per-email subjects are source
+    // metadata, not conversation content, and must not enter either direction's
+    // rendered message surface.
     const auto &in_metadata = require_fragment(
         incoming_fragments, QStringLiteral(" · "), false, "incoming metadata");
     require_font(in_metadata, 12, QFont::Normal, "incoming metadata");
-    const auto &in_subject = require_fragment(
-        incoming_fragments, QStringLiteral("Slice done"), false,
-        "incoming subject");
-    require_font(in_subject, 12, QFont::Normal, "incoming subject");
-    const auto &out_subject = require_fragment(
-        outgoing_fragments, QStringLiteral("Re: Slice done"), false,
-        "outgoing subject");
-    require_font(out_subject, 12, QFont::Normal, "outgoing subject");
+    const auto rendered = surface.document()->toPlainText();
+    if (rendered.contains(QStringLiteral("Slice done"))
+        || rendered.contains(QStringLiteral("Re: Slice done"))) {
+        throw std::runtime_error(
+            "per-email subject/title metadata must not be rendered in the "
+            "conversation surface");
+    }
 
     // message body: 14px normal.
     const auto &in_body = require_fragment(
@@ -543,8 +541,7 @@ void verify_typography(ConversationSurface &surface, const QString &them) {
 
     // The pinned visual hierarchy for both directions.
     require_hierarchy("incoming", in_sender.font.pixelSize(),
-        in_body.font.pixelSize(), in_metadata.font.pixelSize(),
-        in_subject.font.pixelSize());
+        in_body.font.pixelSize(), in_metadata.font.pixelSize());
 }
 
 // ---------------------------------------------------------------------------
@@ -1643,12 +1640,132 @@ void verify_time_separators_only() {
 
 }
 
+// Real same-Agent grouping contract from Ted's file19 sequence: consecutive
+// incoming rows form one visual group. Only the first visible row in the group
+// carries the Agent avatar, stored email subjects never enter the conversation
+// document, and the enlarged within-group rhythm remains visibly tighter than
+// the break around an outgoing row.
+void verify_same_agent_grouping_only() {
+    ConversationSurface surface;
+    surface.resize(1600, 720);
+    surface.show();
+    QCoreApplication::processEvents();
+
+    const std::vector<DirectConversationMessage> messages = {
+        {.id = "in-1", .outgoing = false,
+            .timestamp = "2026-08-17T15:40:00Z",
+            .subject = "private mail subject one",
+            .text = "First Agent message."},
+        {.id = "in-2", .outgoing = false,
+            .timestamp = "2026-08-17T15:41:00Z",
+            .subject = "private mail subject two",
+            .text = "Second consecutive Agent message."},
+        {.id = "out-1", .outgoing = true,
+            .timestamp = "2026-08-17T15:42:00Z",
+            .subject = "private human reply subject",
+            .text = "Human reply breaks the Agent group."},
+        {.id = "in-3", .outgoing = false,
+            .timestamp = "2026-08-17T15:43:00Z",
+            .subject = "private mail subject three",
+            .text = "First message in the next Agent group."},
+    };
+    surface.set_conversation(QStringLiteral("Telegram Bot"), messages);
+    surface.document()->documentLayout()->documentSize();
+    QCoreApplication::processEvents();
+
+    const auto rendered = surface.document()->toPlainText();
+    if (rendered.contains(QStringLiteral("private mail subject"))
+        || rendered.contains(QStringLiteral("private human reply subject"))) {
+        throw std::runtime_error(
+            "per-email subject/title metadata must never enter any message "
+            "surface in a grouped conversation");
+    }
+
+    const auto frames = surface.document()->rootFrame()->childFrames();
+    if (frames.size() != 4) {
+        throw std::runtime_error(
+            "the grouping fixture must keep four chronological message frames");
+    }
+    auto *first_incoming = frames[0];
+    auto *continued_incoming = frames[1];
+    auto *outgoing = frames[2];
+    auto *next_group_incoming = frames[3];
+    if (is_outgoing_frame(*first_incoming)
+        || is_outgoing_frame(*continued_incoming)
+        || !is_outgoing_frame(*outgoing)
+        || is_outgoing_frame(*next_group_incoming)) {
+        throw std::runtime_error(
+            "the grouping fixture must remain incoming, incoming, outgoing, "
+            "incoming in chronological order");
+    }
+
+    const auto within_group_gap = message_bubble_rect(*continued_incoming).top()
+        - message_bubble_rect(*first_incoming).bottom();
+    const auto first_group_break = message_bubble_rect(*outgoing).top()
+        - message_bubble_rect(*continued_incoming).bottom();
+    const auto second_group_break = message_bubble_rect(*next_group_incoming).top()
+        - message_bubble_rect(*outgoing).bottom();
+    constexpr auto kMinimumWithinGroupGap = 18.0;
+    constexpr auto kMinimumGroupDelta = 8.0;
+    if (within_group_gap < kMinimumWithinGroupGap) {
+        throw std::runtime_error(
+            "consecutive Agent messages need an enlarged readable gap of at "
+            "least 18px, but the rendered within-group gap is "
+            + std::to_string(within_group_gap) + "px");
+    }
+    if (first_group_break < within_group_gap + kMinimumGroupDelta
+        || second_group_break < within_group_gap + kMinimumGroupDelta) {
+        throw std::runtime_error(
+            "within-group Agent spacing must stay visibly tighter than the "
+            "cross-group breaks by at least 8px (within="
+            + std::to_string(within_group_gap) + ", breaks="
+            + std::to_string(first_group_break) + "/"
+            + std::to_string(second_group_break) + ")");
+    }
+
+    const auto image = surface.viewport()->grab().toImage();
+    const auto h_offset = double(surface.horizontalScrollBar()->value());
+    const auto v_offset = double(surface.verticalScrollBar()->value());
+    const auto avatar_probe = [&](QTextFrame &frame) {
+        const auto text = message_text_bounds(frame)
+            .translated(-h_offset, -v_offset);
+        const auto x = text.left() - 10.0 - 20.0 + 10.0;
+        const auto y = text.center().y();
+        const auto px = int(std::lround(x * image.devicePixelRatio()));
+        const auto py = int(std::lround(y * image.devicePixelRatio()));
+        if (px < 0 || py < 0 || px >= image.width() || py >= image.height()) {
+            throw std::runtime_error("group avatar probe is outside the viewport");
+        }
+        return image.pixelColor(px, py);
+    };
+    const auto avatar_fill = st::dialogsNameFg->c;
+    const auto backdrop = st::windowBg->c;
+    if (avatar_probe(*first_incoming) != avatar_fill
+        || avatar_probe(*next_group_incoming) != avatar_fill) {
+        throw std::runtime_error(
+            "the first visible message of each Agent group must paint the "
+            "40px Agent avatar");
+    }
+    if (avatar_probe(*continued_incoming) != backdrop) {
+        throw std::runtime_error(
+            "a consecutive same-Agent message after the group first must leave "
+            "the avatar lane empty instead of repeating the avatar");
+    }
+}
+
 } // namespace
 
 int run_typography_test(int argc, char **argv) {
     try {
         QApplication application(argc, argv);
         style::internal::init_palette(style::kScaleDefault);
+        if (argc > 1
+                && QString::fromLocal8Bit(argv[1])
+                    == QStringLiteral("--message-grouping-only")) {
+            verify_same_agent_grouping_only();
+            std::cout << "conversation surface message grouping: OK\n";
+            return 0;
+        }
         if (argc > 1
                 && QString::fromLocal8Bit(argv[1])
                     == QStringLiteral("--history-window-only")) {
