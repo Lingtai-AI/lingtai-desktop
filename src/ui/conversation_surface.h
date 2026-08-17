@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+class QKeyEvent;
 class QPaintEvent;
 class QResizeEvent;
 
@@ -43,19 +44,33 @@ protected:
     // Recomputes the content-driven message widths and reflows the document
     // when the quantized layout width meaningfully changes.
     void resizeEvent(QResizeEvent *event) override;
+    // Ctrl+U at the top reveals the next older page of the cached history.
+    void keyPressEvent(QKeyEvent *event) override;
 
 private:
-    void rebuild_document(
-        const std::vector<DirectConversationMessage> &messages);
+    void rebuild_document();
     void rebuild_empty_state();
+    void reveal_older();
     [[nodiscard]] bool same_content(
         const std::vector<DirectConversationMessage> &messages) const;
+
+    // The render-time history window reveals the cached rows in fixed pages:
+    // initially only the chronological tail is materialized and each reveal
+    // brings in one more page of older rows.
+    static constexpr int kHistoryPageSize = 100;
 
     QString them_;
     std::vector<DirectConversationMessage> last_messages_;
     QString last_plain_state_;
     bool empty_state_active_ = false;
     int last_layout_width_ = 0;
+    // The number of oldest cached rows still hidden above the visible window;
+    // also the count shown by the leading banner when it is nonzero.
+    int history_offset_ = 0;
+    // A scrollbar-driven viewport resize can arrive while QTextDocument is
+    // being rebuilt. Ignore that nested reflow instead of recursively clearing
+    // and appending into the same document.
+    bool rebuild_in_progress_ = false;
 };
 
 } // namespace lingtai::desktop

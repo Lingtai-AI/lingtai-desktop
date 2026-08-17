@@ -9,6 +9,7 @@
 #include <QtGui/QColor>
 #include <QtGui/QFont>
 #include <QtGui/QFontMetricsF>
+#include <QtGui/QKeyEvent>
 #include <QtGui/QPainter>
 #include <QtGui/QPaintEvent>
 #include <QtGui/QPalette>
@@ -60,6 +61,11 @@ constexpr auto kEmptyTitleGap = 6;
 constexpr auto kEmptyStateHeadroom = 28;
 constexpr auto kEmptyStateTitleSize = 15;
 constexpr auto kEmptyStateAvatarLetterSize = 14;
+// The leading lazy-history banner's vertical breathing room around the single
+// centered muted line. It is deliberately small so the banner reads as a quiet
+// inline note above the first revealed message rather than a tall separator.
+constexpr auto kBannerTopMargin = 6;
+constexpr auto kBannerBottomMargin = 8;
 
 // The symmetric gutter of the centered reading column for a viewport: fixed
 // 12px edge gutters until the column max, then a shared share of the excess.
@@ -448,6 +454,9 @@ void ConversationSurface::set_plain_state(const QString &text) {
     }
     last_plain_state_ = text;
     last_messages_.clear();
+    // A plain (selection/no-route/empty) state has no lazy history, so the
+    // render-time window resets to the full initial tail.
+    history_offset_ = 0;
     setPlainText(text);
     if (!text.isEmpty()) {
         apply_plain_state_formatting(
@@ -485,15 +494,25 @@ void ConversationSurface::set_conversation(
     last_messages_ = messages;
     last_plain_state_.clear();
     empty_state_active_ = messages.empty();
+    // Reset the render-time window to the initial chronological tail whenever
+    // the conversation identity or content is replaced: nothing is paged in
+    // beyond what the fresh cache naturally reveals.
+    history_offset_ = int(messages.size() > std::size_t(kHistoryPageSize)
+        ? messages.size() - std::size_t(kHistoryPageSize)
+        : std::size_t{0});
     if (messages.empty()) {
         rebuild_empty_state();
     } else {
-        rebuild_document(messages);
+        rebuild_document();
     }
 }
 
-void ConversationSurface::rebuild_document(
-        const std::vector<DirectConversationMessage> &messages) {
+void ConversationSurface::rebuild_document() {
+    if (rebuild_in_progress_) {
+        return;
+    }
+    rebuild_in_progress_ = true;
+
     // Capture the human's exact scroll state before rebuilding the document,
     // so a changed refresh follows the new bottom only when the human was
     // already there and otherwise preserves the prior non-bottom position.
@@ -505,6 +524,34 @@ void ConversationSurface::rebuild_document(
     document->clear();
     clear_plain_state_anchor(document);
 
+    // The render-time history window: only the cached rows from history_offset_
+    // to the end become real message frames, so an unchanged cache is never
+    // paged in beyond the window a reveal already requested.
+    const auto visible_begin = std::size_t(history_offset_);
+    const auto visible_end = last_messages_.size();
+    const auto viewport_width = viewport()->width();
+
+    // When older rows are hidden, one centered muted banner on the root frame
+    // leads the stream. It is plain root blocks, never a message QTextFrame, so
+    // the banner does not count among the direct child message frames and keeps
+    // the per-message container contract intact.
+    if (history_offset_ > 0) {
+        auto banner_cursor = QTextCursor(document);
+        banner_cursor.movePosition(QTextCursor::Start);
+        auto banner_format = QTextBlockFormat();
+        banner_format.setAlignment(Qt::AlignCenter);
+        const auto gutter = reading_column_margins(viewport_width);
+        banner_format.setLeftMargin(gutter);
+        banner_format.setRightMargin(gutter);
+        banner_format.setTopMargin(kBannerTopMargin);
+        banner_format.setBottomMargin(kBannerBottomMargin);
+        banner_cursor.setBlockFormat(banner_format);
+        banner_cursor.insertText(
+            QStringLiteral("\u25B2 %1 older \u2014 ctrl+u to load")
+                .arg(history_offset_),
+            secondary_format());
+    }
+
     // One transparent borderless sibling QTextFrame per message under the root
     // frame, each owning its header and body blocks: the frame's first block
     // is the header carrying the message block format, and every body logical
@@ -512,9 +559,9 @@ void ConversationSurface::rebuild_document(
     // so the standard layout honors the block alignment and the margins bind
     // each message to the shared reading-column width.
     const auto separator = QString(QChar::LineSeparator);
-    const auto viewport_width = viewport()->width();
     const auto lane_max = message_block_width(viewport_width);
-    for (const auto &message : messages) {
+    for (auto index = visible_begin; index != visible_end; ++index) {
+        const auto &message = last_messages_[index];
         const auto outgoing = message.outgoing;
         // Each message's width is content-driven: its own widest visible line
         // plus the existing horizontal bubble padding, clamped between the
@@ -597,6 +644,8 @@ void ConversationSurface::rebuild_document(
     scrollbar->setValue(was_at_bottom
         ? scrollbar->maximum()
         : std::min(previous, scrollbar->maximum()));
+
+    rebuild_in_progress_ = false;
 }
 
 void ConversationSurface::rebuild_empty_state() {
@@ -647,6 +696,23 @@ void ConversationSurface::rebuild_empty_state() {
         QTextDocument::ImageResource,
         QUrl(QStringLiteral("empty-state-agent-avatar")),
         empty_state_avatar(initial, kEmptyAvatarDiameter));
+}
+
+void ConversationSurface::reveal_older() {
+    // Page one more older slice of the cached history into the render-time
+    // window, clamped so the offset never goes below zero (the full stream).
+    history_offset_ = std::max(0, history_offset_ - kHistoryPageSize);
+
+    // Rebuild with the wider window, then restore the previously first-visible
+    // message's viewport Y. Revealing rows at the top grows the document by
+    // exactly the new scroll maximum's increase, so shifting the current
+    // scroll position by that delta keeps the old anchor frame on screen.
+    auto *scrollbar = verticalScrollBar();
+    const auto old_maximum = scrollbar->maximum();
+    const auto previous = scrollbar->value();
+    rebuild_document();
+    const auto delta = scrollbar->maximum() - old_maximum;
+    scrollbar->setValue(std::min(previous + delta, scrollbar->maximum()));
 }
 
 void ConversationSurface::paintEvent(QPaintEvent *event) {
@@ -791,11 +857,31 @@ void ConversationSurface::resizeEvent(QResizeEvent *event) {
         return;
     }
     last_layout_width_ = width;
+    if (rebuild_in_progress_) {
+        return;
+    }
     if (empty_state_active_) {
         rebuild_empty_state();
     } else if (!last_messages_.empty()) {
-        rebuild_document(last_messages_);
+        // A resize reflows the already-materialized render-time window; it
+        // never pages older rows in, so the current history offset is kept.
+        rebuild_document();
     }
+}
+
+void ConversationSurface::keyPressEvent(QKeyEvent *event) {
+    // Ctrl+U reveals the next older page, but only while the window is pinned
+    // to the very top and older rows remain hidden. Everywhere else the
+    // inherited text-edit key handling (scrolling, selection, copy) stays.
+    if (event->modifiers() == Qt::ControlModifier
+        && event->key() == Qt::Key_U
+        && history_offset_ > 0
+        && verticalScrollBar()->value() <= verticalScrollBar()->minimum()) {
+        reveal_older();
+        event->accept();
+        return;
+    }
+    QTextEdit::keyPressEvent(event);
 }
 
 } // namespace lingtai::desktop
