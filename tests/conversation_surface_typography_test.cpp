@@ -1133,6 +1133,65 @@ void verify_directional_bubble_policy() {
                 "st::msgOutBg");
         }
     }
+
+    // Incoming must reserve a 40px avatar lane immediately to the left of its
+    // text bounds. Relationally, the incoming header's left margin must reach
+    // at least 50px (40 avatar + 10 gap) further left than the outgoing
+    // header's right margin, which today sits at the same symmetric gutter.
+    const auto incoming_left = incoming->begin().currentBlock()
+        .blockFormat().leftMargin();
+    const auto outgoing_right = outgoing->begin().currentBlock()
+        .blockFormat().rightMargin();
+    if (incoming_left - outgoing_right < 50.0) {
+        throw std::runtime_error(
+            "incoming must reserve a 50px Agent avatar lane beside its text "
+            "(40px avatar + 10px gap): the incoming header left margin must "
+            "reach at least 50px further left than the outgoing header right "
+            "margin, but it is "
+            + std::to_string(incoming_left) + "px vs "
+            + std::to_string(outgoing_right) + "px, so the reserved avatar "
+              "extent is missing");
+    }
+
+    // The expected 40x40 avatar circle sits immediately left of the incoming
+    // text bounds with a 10px gap, in viewport coordinates.
+    const auto incoming_text = message_text_bounds(*incoming)
+        .translated(-h_offset, -v_offset);
+    const auto avatar_rect = QRectF(
+        incoming_text.left() - 10.0 - 40.0,
+        incoming_text.center().y() - 20.0,
+        40.0, 40.0);
+    const auto avatar_fill = st::dialogsNameFg->c;
+    const auto sample_avatar = [&](double x, double y) {
+        const auto px = int(std::lround(x * image.devicePixelRatio()));
+        const auto py = int(std::lround(y * image.devicePixelRatio()));
+        if (px < 0 || py < 0 || px >= image.width() || py >= image.height()) {
+            throw std::runtime_error(
+                "an avatar sample is outside the viewport");
+        }
+        return image.pixelColor(px, py);
+    };
+    const auto ax = avatar_rect.center().x();
+    const auto ay = avatar_rect.center().y();
+    const double avatar_offsets[] = {-10.0, 10.0};
+    for (const auto dx : avatar_offsets) {
+        if (sample_avatar(ax + dx, ay) != avatar_fill) {
+            throw std::runtime_error(
+                "incoming must draw a 40px Agent avatar circle filled with "
+                "st::dialogsNameFg immediately left of its text bounds, but "
+                "the sampled avatar interior is not the circle fill (the "
+                "avatar circle is missing)");
+        }
+    }
+    for (const auto dy : avatar_offsets) {
+        if (sample_avatar(ax, ay + dy) != avatar_fill) {
+            throw std::runtime_error(
+                "incoming must draw a 40px Agent avatar circle filled with "
+                "st::dialogsNameFg immediately left of its text bounds, but "
+                "the sampled avatar interior is not the circle fill (the "
+                "avatar circle is missing)");
+        }
+    }
 }
 
 } // namespace
