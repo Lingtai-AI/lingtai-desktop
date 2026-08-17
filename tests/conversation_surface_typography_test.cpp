@@ -108,10 +108,11 @@ void require_hierarchy(
         int author_size,
         int body_size,
         int timestamp_size) {
-    if (!(author_size > body_size && body_size > timestamp_size)) {
+    if (!(body_size > author_size && author_size > timestamp_size)) {
         throw std::runtime_error(
             std::string("the ") + direction
-            + " message must read author > body > metadata (author "
+            + " message must read body > semibold sender > metadata by size "
+              "while sender weight preserves identity emphasis (sender "
             + std::to_string(author_size) + "px, body "
             + std::to_string(body_size) + "px, timestamp "
             + std::to_string(timestamp_size) + "px)");
@@ -459,7 +460,7 @@ void verify_turn_rhythm() {
     // relationally from the detected rendered bubble bounds: the visible gap
     // between consecutive bubbles must be at least one body-pixel-size of
     // separation, not a screenshot coordinate.
-    constexpr double kBodyPixelSize = 14.0;
+    constexpr double kBodyPixelSize = 16.0;
     for (auto i = std::size_t{1}; i != message_frames.size(); ++i) {
         const auto gap = message_bubble_rect(*message_frames[i]).top()
             - message_bubble_rect(*message_frames[i - 1]).bottom();
@@ -515,12 +516,12 @@ void verify_typography(ConversationSurface &surface, const QString &them) {
         incoming_fragments, them, true, "incoming sender");
     require_font(in_sender, 15, QFont::DemiBold, "incoming sender");
 
-    // Incoming metadata remains 12px Normal. Per-email subjects are source
+    // Incoming message metadata scales to 13px Normal. Per-email subjects are source
     // metadata, not conversation content, and must not enter either direction's
     // rendered message surface.
     const auto &in_metadata = require_fragment(
         incoming_fragments, QStringLiteral(" · "), false, "incoming metadata");
-    require_font(in_metadata, 12, QFont::Normal, "incoming metadata");
+    require_font(in_metadata, 13, QFont::Normal, "incoming metadata");
     const auto rendered = surface.document()->toPlainText();
     if (rendered.contains(QStringLiteral("Slice done"))
         || rendered.contains(QStringLiteral("Re: Slice done"))) {
@@ -529,15 +530,15 @@ void verify_typography(ConversationSurface &surface, const QString &them) {
             "conversation surface");
     }
 
-    // message body: 14px normal.
+    // The reading-first message body scales to 16px Normal.
     const auto &in_body = require_fragment(
         incoming_fragments, QStringLiteral("PR published, not merged."), true,
         "incoming body");
-    require_font(in_body, 14, QFont::Normal, "incoming body");
+    require_font(in_body, 16, QFont::Normal, "incoming body");
     const auto &out_body = require_fragment(
         outgoing_fragments, QStringLiteral("Thanks, reviewing tomorrow."), true,
         "outgoing body");
-    require_font(out_body, 14, QFont::Normal, "outgoing body");
+    require_font(out_body, 16, QFont::Normal, "outgoing body");
 
     // The pinned visual hierarchy for both directions.
     require_hierarchy("incoming", in_sender.font.pixelSize(),
@@ -550,7 +551,7 @@ void verify_typography(ConversationSurface &surface, const QString &them) {
 // lane (symmetric 162px outer gutters), anchor at the perceptual ~1/3 of the
 // usable viewport, render in the quiet secondary tone (12px Normal,
 // st::msgServiceFg) and recompute all of that after a resize. The modern type
-// ladder (sender 15px DemiBold / metadata 12px Normal / body 14px
+// ladder (sender 15px DemiBold / metadata 13px Normal / body 16px
 // Normal) is asserted by verify_typography, while the existing opposite sender
 // anchors and the directional width-dependent inner slack stay covered by the
 // pre-existing responsive/content geometry tests. Fails on the exact base: the
@@ -751,7 +752,7 @@ void verify_empty_state_contract() {
 // distinct QTextCharFormat runs in the existing QTextDocument, raw HTML is
 // never interpreted as HTML, and no image or other resource enters the
 // document. Fails on the exact base: rebuild_document inserts the whole body
-// as one literal 14px Normal run, so '# Plan', '- **bold** item',
+// as one literal 16px Normal run, so '# Plan', '- **bold** item',
 // '[docs](https://example.com)', the backticks, '> note', and '<b>unsafe</b>'
 // all survive verbatim with no distinct formatted runs at all.
 //
@@ -851,17 +852,17 @@ void verify_markdown_safe_formatting() {
     }
 
     // Heading: every 'Plan' run (one per direction) is visually distinct from
-    // the 14px plain body (a larger size or an emphasized weight).
+    // the 16px plain body (a larger size or an emphasized weight).
     const auto heading = require_formatted(
         document, QStringLiteral("Plan"), "markdown heading");
     if (!std::all_of(heading.begin(), heading.end(),
             [](const QTextCharFormat &format) {
-                return format.font().pixelSize() > 14
+                return format.font().pixelSize() > 16
                     || format.font().weight() >= QFont::DemiBold;
             })) {
         throw std::runtime_error(
             "the '# Plan' heading must render as its own visually distinct "
-            "run (larger or emphasized) in both directions, not as 14px "
+            "run (larger or emphasized) in both directions, not as 16px "
             "plain body text");
     }
 
