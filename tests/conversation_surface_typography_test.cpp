@@ -12,8 +12,10 @@
 #include <QtGui/QTextBlock>
 #include <QtGui/QTextBlockFormat>
 #include <QtGui/QTextCharFormat>
+#include <QtGui/QTextCursor>
 #include <QtGui/QTextDocument>
 #include <QtGui/QTextFragment>
+#include <QtGui/QTextFrame>
 #include <QtGui/QTextLayout>
 #include <QtWidgets/QApplication>
 
@@ -900,6 +902,116 @@ void verify_markdown_safe_formatting() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Per-message-container RED contract: each message (one incoming and one
+// outgoing, with bodies that need several QTextBlocks for a standard Markdown
+// presentation) must own exactly one direct child QTextFrame of the root
+// frame, in order, with its sender header and every body block inside that
+// frame. A whole-frame selection must capture the sender plus all body
+// content, so copy/selection act on the one message rather than the whole
+// document. Fails on the exact base: rebuild_document writes each message as
+// one root block and keeps the body inside it with U+2028 line separators, so
+// the root frame has zero child frames and there are no per-message blocks to
+// select.
+// ---------------------------------------------------------------------------
+std::vector<QTextBlock> frame_blocks(const QTextFrame &frame) {
+    std::vector<QTextBlock> blocks;
+    for (auto it = frame.begin(); !it.atEnd(); ++it) {
+        const auto block = it.currentBlock();
+        if (block.isValid()) {
+            blocks.push_back(block);
+        }
+    }
+    return blocks;
+}
+
+void verify_per_message_containers() {
+    ConversationSurface surface;
+    surface.resize(kRedViewportWidth, 480);
+    surface.show();
+    QCoreApplication::processEvents();
+
+    // Exactly two messages, one per direction, each with a heading, a list
+    // item, and a fenced code block so its Markdown structure needs several
+    // distinct QTextBlocks inside its message container.
+    const auto raw_body = QStringLiteral(
+        "# Plan\n"
+        "- **bold** item\n"
+        "```cpp\n"
+        "int main() { return 0; }\n"
+        "```");
+    std::vector<DirectConversationMessage> messages;
+    messages.push_back({
+        .id = "in-1",
+        .outgoing = false,
+        .timestamp = "2026-08-07T18:48:52Z",
+        .subject = "Slice done",
+        .text = raw_body.toStdString(),
+    });
+    messages.push_back({
+        .id = "out-1",
+        .outgoing = true,
+        .timestamp = "2026-08-07T19:00:00Z",
+        .subject = "Re: Slice done",
+        .text = raw_body.toStdString(),
+    });
+    surface.set_conversation(QStringLiteral("Telegram Bot"), messages);
+    surface.document()->documentLayout()->documentSize();
+    QCoreApplication::processEvents();
+
+    // One direct child frame per message, in chronological order.
+    const auto &frames = surface.document()->rootFrame()->childFrames();
+    if (frames.size() != 2) {
+        throw std::runtime_error(
+            "each message must own exactly one direct child QTextFrame of the "
+            "root frame (incoming then outgoing), but the document has "
+            + std::to_string(frames.size()) + " child frame(s)");
+    }
+    const auto &incoming_frame = *frames[0];
+    const auto &outgoing_frame = *frames[1];
+
+    // Each message frame must hold the multiple body blocks a standard
+    // Markdown presentation needs: at least a heading, a list item, and a
+    // fenced code block, besides its sender header.
+    const auto incoming_blocks = frame_blocks(incoming_frame);
+    const auto outgoing_blocks = frame_blocks(outgoing_frame);
+    if (incoming_blocks.size() < 3 || outgoing_blocks.size() < 3) {
+        throw std::runtime_error(
+            "each message frame must contain at least three direct QTextBlocks "
+            "for its internal Markdown structure (heading, list item, fenced "
+            "code), but the incoming frame has "
+            + std::to_string(incoming_blocks.size()) + " and the outgoing "
+              "frame has " + std::to_string(outgoing_blocks.size()));
+    }
+
+    // Whole-frame selection ownership: selecting from the frame's first to its
+    // last cursor position must capture the sender plus every body block, so
+    // copy/select act on the one message, not the whole document.
+    const auto require_frame_selection = [](
+            const QTextFrame &frame,
+            const QString &sender,
+            const char *direction) {
+        auto cursor = QTextCursor(frame.document());
+        cursor.setPosition(frame.firstPosition());
+        cursor.setPosition(frame.lastPosition(), QTextCursor::KeepAnchor);
+        const auto selected = cursor.selectedText();
+        if (!selected.contains(sender)
+            || !selected.contains(QStringLiteral("Plan"))
+            || !selected.contains(QStringLiteral("bold item"))
+            || !selected.contains(
+                QStringLiteral("int main() { return 0; }"))) {
+            throw std::runtime_error(
+                std::string("the ") + direction
+                + " message frame's whole selection must capture its sender "
+                  "plus all body content (heading, list item, fenced code), "
+                  "but it selects '" + selected.toStdString() + "'");
+        }
+    };
+    require_frame_selection(
+        incoming_frame, QStringLiteral("Telegram Bot"), "incoming");
+    require_frame_selection(outgoing_frame, QStringLiteral("You"), "outgoing");
+}
+
 } // namespace
 
 int run_typography_test(int argc, char **argv) {
@@ -915,6 +1027,7 @@ int run_typography_test(int argc, char **argv) {
         verify_plain_state_resize_journey();
         verify_empty_state_contract();
         verify_markdown_safe_formatting();
+        verify_per_message_containers();
         std::cout << "conversation surface typography: OK\n";
         return 0;
     } catch (const std::exception &error) {
