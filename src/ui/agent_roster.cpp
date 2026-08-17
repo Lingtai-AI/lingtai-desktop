@@ -5,6 +5,7 @@
 #include <QtCore/QString>
 #include <QtGui/QAction>
 #include <QtGui/QFont>
+#include <QtGui/QMouseEvent>
 #include <QtGui/QFontMetrics>
 #include <QtGui/QPainter>
 #include <QtWidgets/QMenu>
@@ -244,6 +245,7 @@ public:
     explicit AgentRowsCanvas(QWidget *parent)
     : Ui::RpWidget(parent) {
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        setMouseTracking(true);
     }
 
     void set_rows(
@@ -279,14 +281,36 @@ public:
 
 protected:
     void paintEvent(QPaintEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+    void leaveEvent(QEvent *event) override;
 
 private:
     int content_height() const;
+
+    // Exact row hit-testing from canvas-local coordinates: only the interior
+    // of a real row (not the `kRowSpacing` gap, a negative coordinate, or a
+    // coordinate past the painted model content) yields an index.
+    std::optional<std::size_t> row_index_at(int y) const;
+
+    bool is_valid_row(std::size_t index) const;
+
+    QRect row_rect(std::size_t index) const;
+
+    void set_hovered_row(std::optional<std::size_t> index);
+
+    void set_pressed_row(
+        std::optional<std::size_t> index,
+        std::optional<std::filesystem::path> key);
 
     std::vector<AgentRow> rows_;
     std::optional<std::filesystem::path> selected_key_;
     std::function<void(const std::filesystem::path &)> row_click_handler_;
     std::optional<std::filesystem::path> focus_key_;
+    std::optional<std::size_t> hovered_row_;
+    std::optional<std::size_t> pressed_row_;
+    std::optional<std::filesystem::path> pressed_key_;
 };
 
 QSize AgentRowsCanvas::sizeHint() const {
@@ -306,6 +330,65 @@ int AgentRowsCanvas::content_height() const {
         + (row_count - 1) * kRowSpacing;
 }
 
+std::optional<std::size_t> AgentRowsCanvas::row_index_at(int y) const {
+    if (y < 0 || rows_.empty()) {
+        return std::nullopt;
+    }
+    const auto row_height = agent_row_height(font());
+    const auto stride = row_height + kRowSpacing;
+    const auto index = y / stride;
+    if (static_cast<std::size_t>(index) >= rows_.size()) {
+        return std::nullopt;
+    }
+    if (y - index * stride >= row_height) {
+        return std::nullopt;
+    }
+    return static_cast<std::size_t>(index);
+}
+
+bool AgentRowsCanvas::is_valid_row(std::size_t index) const {
+    return rows_[index].manifest_kind == AgentManifestKind::valid;
+}
+
+QRect AgentRowsCanvas::row_rect(std::size_t index) const {
+    const auto row_height = agent_row_height(font());
+    return QRect(
+        0,
+        static_cast<int>(index) * (row_height + kRowSpacing),
+        width(),
+        row_height);
+}
+
+void AgentRowsCanvas::set_hovered_row(
+        std::optional<std::size_t> index) {
+    if (index == hovered_row_) {
+        return;
+    }
+    if (hovered_row_) {
+        update(row_rect(*hovered_row_));
+    }
+    hovered_row_ = index;
+    if (hovered_row_) {
+        update(row_rect(*hovered_row_));
+    }
+}
+
+void AgentRowsCanvas::set_pressed_row(
+        std::optional<std::size_t> index,
+        std::optional<std::filesystem::path> key) {
+    const auto previous = pressed_row_;
+    pressed_row_ = index;
+    pressed_key_ = std::move(key);
+    if (previous != pressed_row_) {
+        if (previous) {
+            update(row_rect(*previous));
+        }
+        if (pressed_row_) {
+            update(row_rect(*pressed_row_));
+        }
+    }
+}
+
 void AgentRowsCanvas::paintEvent(QPaintEvent *) {
     QPainter painter(this);
     painter.fillRect(rect(), st::windowBgOver);
@@ -316,6 +399,8 @@ void AgentRowsCanvas::paintEvent(QPaintEvent *) {
         primary_text.replace(QLatin1Char('&'), QStringLiteral("&&"));
         const auto selected = selected_key_
             && *selected_key_ == item.directory_key;
+        const auto over = (hovered_row_ && *hovered_row_ == index)
+            || (pressed_row_ && *pressed_row_ == index);
         paint_agent_row(
             painter,
             QRect(
@@ -327,8 +412,54 @@ void AgentRowsCanvas::paintEvent(QPaintEvent *) {
             primary_text,
             row_summary(item),
             selected,
-            false);
+            over);
     }
+}
+
+void AgentRowsCanvas::mouseMoveEvent(QMouseEvent *event) {
+    set_hovered_row(row_index_at(event->pos().y()));
+    QWidget::mouseMoveEvent(event);
+}
+
+void AgentRowsCanvas::mousePressEvent(QMouseEvent *event) {
+    const auto hover = row_index_at(event->pos().y());
+    set_hovered_row(hover);
+    if (event->button() == Qt::LeftButton) {
+        if (hover && is_valid_row(*hover)) {
+            set_pressed_row(hover, rows_[*hover].directory_key);
+        } else {
+            set_pressed_row(std::nullopt, std::nullopt);
+        }
+    } else {
+        set_pressed_row(std::nullopt, std::nullopt);
+    }
+    QWidget::mousePressEvent(event);
+}
+
+void AgentRowsCanvas::mouseReleaseEvent(QMouseEvent *event) {
+    const auto pressed = pressed_row_;
+    const auto pressed_key = pressed_key_;
+    auto clicked_row = std::optional<std::size_t>{};
+    if (event->button() == Qt::LeftButton) {
+        const auto index = row_index_at(event->pos().y());
+        if (index && pressed && *index == *pressed
+            && is_valid_row(*index)
+            && pressed_key
+            && rows_[*index].directory_key == *pressed_key) {
+            clicked_row = index;
+        }
+    }
+    set_pressed_row(std::nullopt, std::nullopt);
+    if (clicked_row && row_click_handler_) {
+        row_click_handler_(rows_[*clicked_row].directory_key);
+    }
+    QWidget::mouseReleaseEvent(event);
+}
+
+void AgentRowsCanvas::leaveEvent(QEvent *event) {
+    set_hovered_row(std::nullopt);
+    set_pressed_row(std::nullopt, std::nullopt);
+    QWidget::leaveEvent(event);
 }
 
 AgentRoster::AgentRoster(QWidget *parent)
