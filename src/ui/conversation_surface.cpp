@@ -183,15 +183,16 @@ QTextCharFormat quote_text_format(const QTextCharFormat &base) {
 // through the accepted safe-markdown contract. Control markers disappear from
 // the displayed plain text, formatted runs become real QTextCharFormat runs in
 // the existing QTextDocument, raw HTML is never interpreted, and no resource,
-// image, URL load, or extra QTextBlock ever enters the document: the body
-// stays inside the caller's single message block with one U+2028 line
-// separator between lines. Everything outside the accepted marker set,
-// including literal HTML, is inserted verbatim with insertText.
+// image, or URL load ever enters the document. Each non-delimiter body line is
+// inserted into its own real, unmarked QTextBlock cloned from the caller's
+// continuation block format; ``` fence delimiters only toggle the fence state
+// and create no block. Everything outside the accepted marker set, including
+// literal HTML, is inserted verbatim with insertText.
 void insert_markdown_body(
         QTextCursor &cursor,
         const QString &body,
-        const QTextCharFormat &base) {
-    const auto separator = QString(QChar::LineSeparator);
+        const QTextCharFormat &base,
+        const QTextBlockFormat &continuation) {
     const auto bold = emphasized_text_format(base);
     const auto heading = heading_text_format(base);
     const auto code = code_text_format(base);
@@ -265,20 +266,19 @@ void insert_markdown_body(
     };
 
     auto in_code_fence = false;
-    auto first_line = true;
     for (const auto &line : body.split(QChar::LineSeparator)) {
-        if (!first_line) {
-            cursor.insertText(separator, base);
-        }
-        first_line = false;
         if (in_code_fence) {
             if (line.startsWith(QStringLiteral("```"))) {
                 in_code_fence = false;
-            } else {
-                cursor.insertText(line, code);
+                continue;
             }
         } else if (line.startsWith(QStringLiteral("```"))) {
             in_code_fence = true;
+            continue;
+        }
+        cursor.insertBlock(continuation);
+        if (in_code_fence) {
+            cursor.insertText(line, code);
         } else if (line.startsWith(QChar('#'))) {
             cursor.insertText(line.mid(1).trimmed(), heading);
         } else if (line.startsWith(QStringLiteral("- "))) {
@@ -487,9 +487,10 @@ void ConversationSurface::rebuild_document(
     auto cursor = QTextCursor(document);
     cursor.movePosition(QTextCursor::Start);
 
-    // One message per QTextBlock; the header/subject/body lines are separated
-    // inside the block so the standard layout honors the block alignment and
-    // the margins bound each message to the shared reading-column width.
+    // One message header per property-marked QTextBlock; every body logical
+    // line becomes its own real unmarked QTextBlock cloned from the message
+    // block format, so the standard layout honors the block alignment and the
+    // margins bound each message to the shared reading-column width.
     const auto separator = QString(QChar::LineSeparator);
     const auto viewport_width = viewport()->width();
     const auto lane_max = message_block_width(viewport_width);
@@ -526,17 +527,23 @@ void ConversationSurface::rebuild_document(
         }
         // The stored raw body is rendered through the accepted safe-markdown
         // contract: only the narrow marker set becomes character formatting,
-        // everything else (including raw HTML) stays literal text, and the
-        // body always stays inside this one message block with U+2028 line
-        // separators, never extra QTextBlocks/bubbles. Paragraph delimiters
-        // are normalized first so a decoded LF, CRLF/CR or U+2029 renders as
-        // a U+2028 line separator; stored source text is untouched.
+        // everything else (including raw HTML) stays literal text. Each body
+        // line becomes its own real unmarked QTextBlock cloned from the
+        // message block format with zero top/bottom margins and no message
+        // property, so only the message header keeps the property. Paragraph
+        // delimiters are normalized first so a decoded LF, CRLF/CR or U+2029
+        // reads as a line break; stored source text is untouched.
         auto body = QString::fromStdString(message.text);
         body.replace(QStringLiteral("\r\n"), QString(QChar::LineSeparator));
         body.replace(QChar::LineFeed, QString(QChar::LineSeparator));
         body.replace(QChar::CarriageReturn, QString(QChar::LineSeparator));
         body.replace(QChar::ParagraphSeparator, QString(QChar::LineSeparator));
-        insert_markdown_body(cursor, body, body_format(outgoing));
+        auto continuation = block_format;
+        continuation.setTopMargin(0);
+        continuation.setBottomMargin(0);
+        continuation.clearProperty(kMessageBlockProperty);
+        insert_markdown_body(
+            cursor, body, body_format(outgoing), continuation);
     }
 
     scrollbar->setValue(was_at_bottom
