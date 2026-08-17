@@ -129,7 +129,7 @@ QTextCharFormat sender_format(bool outgoing) {
     format.setForeground(outgoing ? st::historyTextOutFg
                                   : st::historyTextInFg);
     auto font = format.font();
-    font.setPixelSize(13);
+    font.setPixelSize(15);
     font.setWeight(QFont::DemiBold);
     format.setFont(font);
     return format;
