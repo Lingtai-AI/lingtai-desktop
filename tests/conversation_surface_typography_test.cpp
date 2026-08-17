@@ -256,24 +256,33 @@ void verify_responsive_width() {
     }
 }
 
-// Rebuilds the painted bubble for one message block from the same detected
-// rendered bounds paintEvent uses: the union of every laid-out line's natural
-// text rect translated into document coordinates, padded by the surface's
-// bubble padding. Gaps between these rects are therefore the actual visible
-// rhythm of the rendered stream, expressed relationally rather than as
-// screenshot coordinates.
+// Rebuilds the painted bubble for one whole message frame from the same
+// detected rendered bounds paintEvent uses: the union of every laid-out line's
+// natural text rect translated by its block layout position and the frame's
+// document top-left, padded by the surface's bubble padding. Gaps between
+// these rects are therefore the actual visible rhythm of the rendered stream,
+// expressed relationally rather than as screenshot coordinates.
 constexpr double kBubblePadding = 8.0;
 
-QRectF message_bubble_rect(const QTextBlock &block) {
-    const auto *layout = block.layout();
+QRectF message_bubble_rect(QTextFrame &frame) {
+    const auto frame_top_left = frame.document()->documentLayout()
+        ->frameBoundingRect(&frame).topLeft();
     auto text_bounds = QRectF();
-    for (auto i = 0; i != layout->lineCount(); ++i) {
-        const auto line = layout->lineAt(i);
-        const auto line_bounds = line.naturalTextRect()
-            .translated(layout->position());
-        text_bounds = text_bounds.isNull()
-            ? line_bounds
-            : text_bounds.united(line_bounds);
+    for (auto it = frame.begin(); !it.atEnd(); ++it) {
+        const auto block = it.currentBlock();
+        if (!block.isValid()) {
+            continue;
+        }
+        const auto *layout = block.layout();
+        for (auto i = 0; i != layout->lineCount(); ++i) {
+            const auto line = layout->lineAt(i);
+            const auto line_bounds = line.naturalTextRect()
+                .translated(layout->position())
+                .translated(frame_top_left);
+            text_bounds = text_bounds.isNull()
+                ? line_bounds
+                : text_bounds.united(line_bounds);
+        }
     }
     return text_bounds.adjusted(
         -kBubblePadding, -kBubblePadding, kBubblePadding, kBubblePadding);
@@ -404,17 +413,17 @@ void verify_turn_rhythm() {
     surface.document()->documentLayout()->documentSize();
     QCoreApplication::processEvents();
 
-    std::vector<QTextBlock> message_blocks;
-    for (auto block = surface.document()->begin(); block.isValid();
-         block = block.next()) {
-        if (block.text().startsWith(QStringLiteral("Telegram Bot ·"))
-            || block.text().startsWith(QStringLiteral("You ·"))) {
-            message_blocks.push_back(block);
+    std::vector<QTextFrame *> message_frames;
+    for (auto *frame : surface.document()->rootFrame()->childFrames()) {
+        const auto first_text = frame->begin().currentBlock().text();
+        if (first_text.startsWith(QStringLiteral("Telegram Bot ·"))
+            || first_text.startsWith(QStringLiteral("You ·"))) {
+            message_frames.push_back(frame);
         }
     }
-    if (message_blocks.size() < 2) {
+    if (message_frames.size() < 2) {
         throw std::runtime_error(
-            "the surface must render at least two consecutive message blocks "
+            "the surface must render at least two consecutive message frames "
             "for the turn-rhythm contract");
     }
 
@@ -424,9 +433,9 @@ void verify_turn_rhythm() {
     // between consecutive bubbles must be at least one body-pixel-size of
     // separation, not a screenshot coordinate.
     constexpr double kBodyPixelSize = 14.0;
-    for (auto i = std::size_t{1}; i != message_blocks.size(); ++i) {
-        const auto gap = message_bubble_rect(message_blocks[i]).top()
-            - message_bubble_rect(message_blocks[i - 1]).bottom();
+    for (auto i = std::size_t{1}; i != message_frames.size(); ++i) {
+        const auto gap = message_bubble_rect(*message_frames[i]).top()
+            - message_bubble_rect(*message_frames[i - 1]).bottom();
         if (gap < kBodyPixelSize) {
             throw std::runtime_error(
                 "ordinary consecutive turns must keep a deliberate nonzero "
