@@ -1822,12 +1822,156 @@ void verify_same_agent_grouping_only() {
     }
 }
 
+void verify_readable_semantic_body() {
+    const auto require = [](bool condition, const char *message) {
+        if (!condition) {
+            throw std::runtime_error(message);
+        }
+    };
+    ConversationSurface surface;
+    surface.resize(1200, 760);
+    surface.show();
+    QCoreApplication::processEvents();
+
+    const auto body = QStringLiteral(
+        "# Setup\n\n"
+        "普通正文 should stay regular and comfortable while a deliberately long English sentence proves that assistant prose never stretches across the entire wide window.\n\n"
+        "Second paragraph keeps one controlled paragraph gap.\n"
+        "- first compact list item\n"
+        "2. second compact list item\n"
+        "Use `inline code`, .secrets/telegram.json, and lingtai.mcp_servers.telegram.\n"
+        "```sh\n"
+        "lingtai-agent commands --help\n"
+        "```");
+    std::vector<DirectConversationMessage> messages = {{
+        .id = "reading-1",
+        .outgoing = false,
+        .timestamp = "2026-08-17T12:00:00",
+        .subject = "Body reading",
+        .text = body.toStdString(),
+    }};
+    surface.set_conversation(QStringLiteral("codex"), messages);
+    surface.document()->documentLayout()->documentSize();
+    QCoreApplication::processEvents();
+
+    const auto frames = surface.document()->rootFrame()->childFrames();
+    require(frames.size() == 1,
+        "the body-reading fixture must own exactly one message frame");
+    const auto blocks = frame_blocks(*frames.front());
+    const auto find_block = [&](const QString &needle) -> QTextBlock {
+        for (const auto &block : blocks) {
+            if (block.text().contains(needle)) {
+                return block;
+            }
+        }
+        throw std::runtime_error(
+            "missing semantic body block: " + needle.toStdString());
+    };
+    const auto find_run = [&](const QString &prefix) -> QTextCharFormat {
+        const auto runs = format_runs(*surface.document(), prefix);
+        if (runs.empty()) {
+            throw std::runtime_error(
+                "missing semantic body run: " + prefix.toStdString());
+        }
+        return runs.front();
+    };
+
+    const auto prose_block = find_block(QStringLiteral("普通正文"));
+    const auto prose = find_run(QStringLiteral("普通正文"));
+    require(prose.font().pixelSize() >= 15 && prose.font().pixelSize() <= 16
+            && prose.font().weight() == QFont::Normal
+            && !prose.font().fixedPitch(),
+        "ordinary Chinese/English prose must use the system sans body at "
+        "15-16px Normal/400 without synthetic bold");
+    require(prose.foreground().color() == QColor(QStringLiteral("#26282B")),
+        "light-palette body prose must use the softer #26282B reading tone");
+    require(prose_block.blockFormat().lineHeightType()
+                == QTextBlockFormat::ProportionalHeight
+            && prose_block.blockFormat().lineHeight() >= 155
+            && prose_block.blockFormat().lineHeight() <= 165,
+        "ordinary body prose must use a 1.55-1.65 proportional line height");
+    const auto effective_width = surface.viewport()->width()
+        - int(prose_block.blockFormat().leftMargin())
+        - int(prose_block.blockFormat().rightMargin());
+    require(effective_width <= 570,
+        "wide assistant prose must stay within a roughly 65-72-character "
+        "reading lane (effective width <= 570px)");
+
+    auto empty_blocks = 0;
+    for (const auto &block : blocks) {
+        if (block.text().isEmpty()) {
+            ++empty_blocks;
+        }
+    }
+    require(empty_blocks == 0,
+        "blank Markdown paragraph delimiters must become controlled margins, "
+        "not giant empty QTextBlocks");
+    require(prose_block.blockFormat().bottomMargin() >= 11
+            && prose_block.blockFormat().bottomMargin() <= 14,
+        "paragraph spacing must be about 0.8em (11-14px at this body size)");
+
+    const auto list = find_block(QStringLiteral("first compact list item"));
+    const auto numbered = find_block(QStringLiteral("second compact list item"));
+    for (const auto &block : { list, numbered }) {
+        require(block.blockFormat().textIndent() < 0
+                && block.blockFormat().leftMargin()
+                    > prose_block.blockFormat().leftMargin()
+                && block.blockFormat().bottomMargin() <= 4,
+            "numbered and bulleted lists must use a shallow hanging indent "
+            "with tight item spacing");
+    }
+
+    const auto inline_code = find_run(QStringLiteral("inline code"));
+    const auto path = find_run(QStringLiteral(".secrets/telegram.json"));
+    const auto identifier = find_run(
+        QStringLiteral("lingtai.mcp_servers.telegram"));
+    for (const auto &format : { inline_code, path, identifier }) {
+        require(format.font().fixedPitch()
+                && format.background().style() != Qt::NoBrush
+                && format.background().color().alpha() > 0,
+            "inline code, paths, and dotted IDs must use monospace ink on a "
+            "subtle tinted background");
+    }
+
+    const auto heading = find_block(QStringLiteral("Setup"));
+    const auto heading_run = find_run(QStringLiteral("Setup"));
+    require(heading_run.font().pixelSize() > prose.font().pixelSize()
+            && heading_run.font().weight() == QFont::DemiBold
+            && heading.blockFormat().bottomMargin() <= 14,
+        "Markdown headings must be slightly larger/semibold with controlled "
+        "spacing");
+    const auto code_block = find_block(
+        QStringLiteral("lingtai-agent commands --help"));
+    const auto code_run = find_run(
+        QStringLiteral("lingtai-agent commands --help"));
+    require(code_run.font().fixedPitch()
+            && code_block.blockFormat().background().style() != Qt::NoBrush,
+        "fenced code must own a fixed-pitch low-contrast code surface");
+
+    const auto sender = find_run(QStringLiteral("codex"));
+    const auto time = find_run(QStringLiteral(" · 12:00"));
+    require(sender.font().pixelSize() >= 14 && sender.font().pixelSize() <= 15
+            && sender.font().weight() == QFont::DemiBold,
+        "the sender line must stay 14-15px semibold below the body hierarchy");
+    require(time.font().pixelSize() >= 12 && time.font().pixelSize() <= 13
+            && time.font().weight() == QFont::Normal
+            && time.foreground().color() == QColor(QStringLiteral("#8A8F98")),
+        "message time must stay 12-13px Normal in the muted #8A8F98 tone");
+}
+
 } // namespace
 
 int run_typography_test(int argc, char **argv) {
     try {
         QApplication application(argc, argv);
         style::internal::init_palette(style::kScaleDefault);
+        if (argc > 1
+                && QString::fromLocal8Bit(argv[1])
+                    == QStringLiteral("--body-reading-only")) {
+            verify_readable_semantic_body();
+            std::cout << "conversation surface readable semantic body: OK\n";
+            return 0;
+        }
         if (argc > 1
                 && QString::fromLocal8Bit(argv[1])
                     == QStringLiteral("--message-type-only")) {
