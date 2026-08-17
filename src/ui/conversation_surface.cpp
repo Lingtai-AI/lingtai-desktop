@@ -49,7 +49,8 @@ constexpr auto kMinMessageWidth = 160;
 constexpr auto kHumanMinMessageWidth = 64;
 constexpr auto kMessageAbsoluteCap = 560;
 constexpr auto kHumanMessageAbsoluteCap = 540;
-constexpr auto kReadingColumnMax = 1200;
+constexpr auto kHumanIntrinsicWrapGuard = 32;
+constexpr auto kReadingColumnMax = 1600;
 constexpr auto kNarrowViewportWidth = 480;
 constexpr auto kBubbleHPadding = 11;
 constexpr auto kHumanBubbleHPadding = 15;
@@ -538,7 +539,11 @@ int message_content_width(
     for (const auto &line : body_lines) {
         widest = qMax(widest, body_metrics.horizontalAdvance(line));
     }
-    return int(widest + 0.5);
+    // QTextLayout's line-break shaping can require slightly more advance than
+    // a tight QFontMetrics measure, especially for mixed CJK/Latin text. Give
+    // content-sized Human bubbles one bounded guard so a short uninterrupted
+    // source line cannot orphan its final glyph while ample rail space remains.
+    return int(widest + 0.5) + (outgoing ? kHumanIntrinsicWrapGuard : 0);
 }
 
 // The plain-state vertical anchor lives on the document root frame's top
