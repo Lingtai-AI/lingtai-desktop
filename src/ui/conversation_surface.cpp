@@ -621,22 +621,37 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
     const auto v_offset = verticalScrollBar()->value();
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setPen(Qt::NoPen);
-    for (auto block = document()->begin(); block.isValid();
-         block = block.next()) {
-        if (!block.blockFormat().property(kMessageBlockProperty).toBool()) {
-            continue;
-        }
-        const auto *block_layout = block.layout();
+    const auto message_frames = document()->rootFrame()->childFrames();
+    for (const auto *frame : message_frames) {
+        QTextBlock first_valid_block;
         auto text_bounds = QRectF();
-        for (auto i = 0; i != block_layout->lineCount(); ++i) {
-            const auto line = block_layout->lineAt(i);
-            const auto line_bounds = line.naturalTextRect()
-                .translated(block_layout->position());
+        for (auto block = frame->begin(); !block.atEnd();
+             ++block) {
+            const auto current_block = block.currentBlock();
+            if (!current_block.isValid()) {
+                continue;
+            }
+            const auto *block_layout = current_block.layout();
+            auto block_bounds = QRectF();
+            for (auto i = 0; i != block_layout->lineCount(); ++i) {
+                const auto line = block_layout->lineAt(i);
+                const auto line_bounds = line.naturalTextRect()
+                    .translated(block_layout->position());
+                block_bounds = block_bounds.isNull()
+                    ? line_bounds
+                    : block_bounds.united(line_bounds);
+            }
+            if (block_bounds.isNull()) {
+                continue;
+            }
+            if (!first_valid_block.isValid()) {
+                first_valid_block = current_block;
+            }
             text_bounds = text_bounds.isNull()
-                ? line_bounds
-                : text_bounds.united(line_bounds);
+                ? block_bounds
+                : text_bounds.united(block_bounds);
         }
-        if (text_bounds.isNull()) {
+        if (text_bounds.isNull() || !first_valid_block.isValid()) {
             continue;
         }
         text_bounds.translate(-h_offset, -v_offset);
@@ -648,7 +663,7 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
         if (!bubble.intersects(QRectF(event->rect()))) {
             continue;
         }
-        const auto outgoing = block.blockFormat().alignment()
+        const auto outgoing = first_valid_block.blockFormat().alignment()
             .testFlag(Qt::AlignRight);
         painter.setBrush(outgoing ? st::msgOutBg : st::msgInBg);
         painter.drawRoundedRect(bubble, kBubbleRadius, kBubbleRadius);
