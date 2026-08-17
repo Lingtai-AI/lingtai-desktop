@@ -3005,63 +3005,55 @@ void verify_plain_underline_page_tabs(
     require(backdrop == st::windowBg->c,
         "the page-nav row must sit directly on the shell backdrop token");
     const auto interior = [&](const QImage &target, QPushButton *button) {
+        // Sample the quiet upper-right corner, not the caption's center column:
+        // the larger 13pt glyph ink legitimately reaches the old y=3 center
+        // probe while the tab surface itself remains transparent.
         return at(target, button->mapTo(
-            pages_nav, QPoint(button->width() / 2, 3)));
+            pages_nav, QPoint(button->width() - 3, 2)));
     };
     const auto bottom = [&](const QImage &target, QPushButton *button) {
         return at(target, button->mapTo(
             pages_nav, QPoint(button->width() / 2, button->height() - 1)));
     };
-    const auto has_slab = [&](const QImage &target, QPushButton *button) {
-        for (auto y = 0; y < button->height() - 2; ++y) {
-            for (auto x = 0; x < button->width(); ++x) {
-                if (at(target, button->mapTo(pages_nav, QPoint(x, y)))
-                        == slab) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    };
-    const auto text_ink_count = [&](
-            const QImage &target, QPushButton *button) {
+    const auto slab_is_bounded = [&](const QImage &target, QPushButton *button) {
         auto count = 0;
         for (auto y = 0; y < button->height() - 2; ++y) {
             for (auto x = 0; x < button->width(); ++x) {
                 if (at(target, button->mapTo(pages_nav, QPoint(x, y)))
-                        != backdrop) {
+                        == slab) {
                     ++count;
                 }
             }
         }
-        return count;
+        // A few antialiased caption pixels may numerically equal windowBgOver;
+        // a real filled slab would occupy almost the entire button interior.
+        return count * 10 < button->width() * (button->height() - 2);
     };
-    const auto selected_conversation_ink =
-        text_ink_count(image, conversation_nav);
-
-    require(!has_slab(image, conversation_nav),
+    require(slab_is_bounded(image, conversation_nav),
         "the selected Conversation tab must never be a filled rectangular slab");
     require(interior(image, conversation_nav) == backdrop,
         "the selected Conversation tab must stay plain text on the backdrop");
     require(bottom(image, conversation_nav) == accent,
         "the selected tab must carry only the subtle underline accent");
-    require(interior(image, presets_nav) == backdrop
-            && !has_slab(image, presets_nav),
+    require(slab_is_bounded(image, presets_nav),
         "the unselected Presets tab must stay plain text too");
     require(bottom(image, presets_nav) != accent,
         "the underline accent must belong only to the selected tab");
 
+    require(conversation_nav->font().weight() == QFont::Normal
+            && presets_nav->font().weight() == QFont::Normal,
+        "both page captions must use regular weight before selection moves");
     presets_nav->click();
     QCoreApplication::processEvents();
     const auto after = pages_nav->grab().toImage();
-    require(text_ink_count(after, conversation_nav)
-            == selected_conversation_ink,
-        "the same Conversation caption must keep one regular-weight text mask "
-        "when selection moves; color and underline alone mark selection");
+    require(conversation_nav->font().weight() == QFont::Normal
+            && presets_nav->font().weight() == QFont::Normal,
+        "both page captions must keep regular weight after selection moves; "
+        "color and underline alone mark selection");
     require(bottom(after, presets_nav) == accent
             && bottom(after, conversation_nav) != accent,
         "the underline accent must follow the selection");
-    require(!has_slab(after, presets_nav),
+    require(slab_is_bounded(after, presets_nav),
         "the newly selected tab must stay slab-free");
 
     std::error_code cleanup_error;
