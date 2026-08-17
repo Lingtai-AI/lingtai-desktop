@@ -5,6 +5,7 @@
 
 #include <QtCore/QUrl>
 #include <QtCore/QVariant>
+#include <QtGui/QColor>
 #include <QtGui/QFont>
 #include <QtGui/QFontMetricsF>
 #include <QtGui/QPainter>
@@ -139,6 +140,156 @@ QTextCharFormat body_format(bool outgoing) {
     font.setWeight(QFont::Normal);
     format.setFont(font);
     return format;
+}
+
+// The accepted safe-markdown character formats, each derived from the message
+// body's base format so the direction colors stay intact while the run becomes
+// visually distinct from the plain 14px body.
+QTextCharFormat emphasized_text_format(const QTextCharFormat &base) {
+    auto format = base;
+    auto font = format.font();
+    font.setWeight(QFont::Bold);
+    format.setFont(font);
+    return format;
+}
+
+QTextCharFormat heading_text_format(const QTextCharFormat &base) {
+    auto format = base;
+    auto font = format.font();
+    font.setPixelSize(15);
+    font.setWeight(QFont::DemiBold);
+    format.setFont(font);
+    return format;
+}
+
+QTextCharFormat code_text_format(const QTextCharFormat &base) {
+    auto format = base;
+    auto font = format.font();
+    font.setFixedPitch(true);
+    font.setStyleHint(QFont::Monospace);
+    format.setFont(font);
+    return format;
+}
+
+QTextCharFormat quote_text_format(const QTextCharFormat &base) {
+    auto format = base;
+    auto font = format.font();
+    font.setItalic(true);
+    format.setFont(font);
+    return format;
+}
+
+// One line scanner for the whole message body: the stored raw text is rendered
+// through the accepted safe-markdown contract. Control markers disappear from
+// the displayed plain text, formatted runs become real QTextCharFormat runs in
+// the existing QTextDocument, raw HTML is never interpreted, and no resource,
+// image, URL load, or extra QTextBlock ever enters the document: the body
+// stays inside the caller's single message block with one U+2028 line
+// separator between lines. Everything outside the accepted marker set,
+// including literal HTML, is inserted verbatim with insertText.
+void insert_markdown_body(
+        QTextCursor &cursor,
+        const QString &body,
+        const QTextCharFormat &base) {
+    const auto separator = QString(QChar::LineSeparator);
+    const auto bold = emphasized_text_format(base);
+    const auto heading = heading_text_format(base);
+    const auto code = code_text_format(base);
+    const auto quote = quote_text_format(base);
+
+    // The inline pass over one line's plain remainder: **bold**, `code`, and
+    // [label](url) become real formatted runs, everything else stays literal.
+    const auto insert_inline = [&](
+            const QString &line,
+            const QTextCharFormat &plain) {
+        auto index = 0;
+        while (index < line.size()) {
+            const auto bold_open = line.indexOf(QStringLiteral("**"), index);
+            const auto code_open = line.indexOf(QChar('`'), index);
+            const auto link_open = line.indexOf(QChar('['), index);
+            auto at = -1;
+            auto kind = 0;
+            const auto consider = [&](int candidate, int candidate_kind) {
+                if (candidate >= 0 && (at < 0 || candidate < at)) {
+                    at = candidate;
+                    kind = candidate_kind;
+                }
+            };
+            consider(bold_open, 1);
+            consider(code_open, 2);
+            consider(link_open, 3);
+            if (at < 0) {
+                cursor.insertText(line.mid(index), plain);
+                break;
+            }
+            if (at > index) {
+                cursor.insertText(line.mid(index, at - index), plain);
+            }
+            if (kind == 2) {
+                const auto close = line.indexOf(QChar('`'), at + 1);
+                if (close < 0) {
+                    cursor.insertText(line.mid(at), plain);
+                    break;
+                }
+                cursor.insertText(line.mid(at + 1, close - at - 1), code);
+                index = close + 1;
+            } else if (kind == 3) {
+                const auto close = line.indexOf(QStringLiteral("]("), at + 1);
+                const auto end = close >= 0
+                    ? line.indexOf(QChar(')'), close + 2)
+                    : -1;
+                if (close < 0 || end < 0) {
+                    cursor.insertText(line.mid(at), plain);
+                    break;
+                }
+                auto link_format = base;
+                auto link_font = link_format.font();
+                link_font.setUnderline(true);
+                link_format.setFont(link_font);
+                link_format.setForeground(QColor(0x1a, 0x73, 0xe8));
+                link_format.setAnchor(true);
+                link_format.setAnchorHref(
+                    line.mid(close + 2, end - close - 2));
+                cursor.insertText(line.mid(at + 1, close - at - 1), link_format);
+                index = end + 1;
+            } else {
+                const auto close = line.indexOf(QStringLiteral("**"), at + 2);
+                if (close < 0) {
+                    cursor.insertText(line.mid(at), plain);
+                    break;
+                }
+                cursor.insertText(line.mid(at + 2, close - at - 2), bold);
+                index = close + 2;
+            }
+        }
+    };
+
+    auto in_code_fence = false;
+    auto first_line = true;
+    for (const auto &line : body.split(QChar::LineSeparator)) {
+        if (!first_line) {
+            cursor.insertText(separator, base);
+        }
+        first_line = false;
+        if (in_code_fence) {
+            if (line.startsWith(QStringLiteral("```"))) {
+                in_code_fence = false;
+            } else {
+                cursor.insertText(line, code);
+            }
+        } else if (line.startsWith(QStringLiteral("```"))) {
+            in_code_fence = true;
+        } else if (line.startsWith(QChar('#'))) {
+            cursor.insertText(line.mid(1).trimmed(), heading);
+        } else if (line.startsWith(QStringLiteral("- "))) {
+            cursor.insertText(QStringLiteral("- "), base);
+            insert_inline(line.mid(2), base);
+        } else if (line.startsWith(QStringLiteral("> "))) {
+            insert_inline(line.mid(2), quote);
+        } else {
+            insert_inline(line, base);
+        }
+    }
 }
 
 // A message's own natural content width: the widest single rendered line of
@@ -373,16 +524,19 @@ void ConversationSurface::rebuild_document(
                 subject_format(outgoing));
             cursor.insertText(separator, subject_format(outgoing));
         }
-        // Message text stays literal: the surface never interprets markup.
-        // Paragraph delimiters are normalized so a decoded LF, CRLF/CR or
-        // U+2029 renders as a U+2028 line separator inside this one block,
-        // never as extra QTextBlocks/bubbles; stored source text is untouched.
+        // The stored raw body is rendered through the accepted safe-markdown
+        // contract: only the narrow marker set becomes character formatting,
+        // everything else (including raw HTML) stays literal text, and the
+        // body always stays inside this one message block with U+2028 line
+        // separators, never extra QTextBlocks/bubbles. Paragraph delimiters
+        // are normalized first so a decoded LF, CRLF/CR or U+2029 renders as
+        // a U+2028 line separator; stored source text is untouched.
         auto body = QString::fromStdString(message.text);
         body.replace(QStringLiteral("\r\n"), QString(QChar::LineSeparator));
         body.replace(QChar::LineFeed, QString(QChar::LineSeparator));
         body.replace(QChar::CarriageReturn, QString(QChar::LineSeparator));
         body.replace(QChar::ParagraphSeparator, QString(QChar::LineSeparator));
-        cursor.insertText(body, body_format(outgoing));
+        insert_markdown_body(cursor, body, body_format(outgoing));
     }
 
     scrollbar->setValue(was_at_bottom
