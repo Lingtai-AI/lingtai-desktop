@@ -8,13 +8,17 @@
 
 #include <QtCore/QCoreApplication>
 #include <QtGui/QAbstractTextDocumentLayout>
+#include <QtGui/QColor>
 #include <QtGui/QFont>
+#include <QtGui/QImage>
+#include <QtGui/QPixmap>
 #include <QtGui/QTextBlock>
 #include <QtGui/QTextBlockFormat>
 #include <QtGui/QTextCharFormat>
 #include <QtGui/QTextCursor>
 #include <QtGui/QTextDocument>
 #include <QtGui/QTextFragment>
+#include <QtWidgets/QScrollBar>
 #include <QtGui/QTextFrame>
 #include <QtGui/QTextLayout>
 #include <QtWidgets/QApplication>
@@ -264,7 +268,7 @@ void verify_responsive_width() {
 // expressed relationally rather than as screenshot coordinates.
 constexpr double kBubblePadding = 8.0;
 
-QRectF message_bubble_rect(QTextFrame &frame) {
+QRectF message_text_bounds(QTextFrame &frame) {
     const auto frame_top_left = frame.document()->documentLayout()
         ->frameBoundingRect(&frame).topLeft();
     auto text_bounds = QRectF();
@@ -284,7 +288,11 @@ QRectF message_bubble_rect(QTextFrame &frame) {
                 : text_bounds.united(line_bounds);
         }
     }
-    return text_bounds.adjusted(
+    return text_bounds;
+}
+
+QRectF message_bubble_rect(QTextFrame &frame) {
+    return message_text_bounds(frame).adjusted(
         -kBubblePadding, -kBubblePadding, kBubblePadding, kBubblePadding);
 }
 
@@ -1035,6 +1043,98 @@ void verify_per_message_containers() {
     require_frame_selection(outgoing_frame, QStringLiteral("You"), "outgoing");
 }
 
+// ---------------------------------------------------------------------------
+// Directional bubble-policy RED contract: incoming renders with NO bubble (the
+// backdrop st::windowBgOver), outgoing keeps the st::msgOutBg bubble. Fails on
+// the base: paintEvent fills a bubble for both lanes.
+// ---------------------------------------------------------------------------
+std::vector<QColor> bubble_padding_colors(
+        QTextFrame &frame,
+        const QImage &image,
+        double h_offset,
+        double v_offset) {
+    const auto text = message_text_bounds(frame)
+        .translated(-h_offset, -v_offset);
+    const auto sample = [&](double x, double y) {
+        const auto px = int(std::lround(x * image.devicePixelRatio()));
+        const auto py = int(std::lround(y * image.devicePixelRatio()));
+        if (px < 0 || py < 0 || px >= image.width() || py >= image.height()) {
+            throw std::runtime_error("a padding sample is outside the viewport");
+        }
+        return image.pixelColor(px, py);
+    };
+    const auto cy = text.center().y();
+    return {
+        sample(text.left() - 6.0, cy - 4.0),
+        sample(text.left() - 6.0, cy),
+        sample(text.left() - 6.0, cy + 4.0),
+        sample(text.right() + 6.0, cy - 4.0),
+        sample(text.right() + 6.0, cy),
+        sample(text.right() + 6.0, cy + 4.0),
+    };
+}
+
+void verify_directional_bubble_policy() {
+    ConversationSurface surface;
+    surface.resize(1600, 480);
+    surface.show();
+    QCoreApplication::processEvents();
+
+    const std::vector<DirectConversationMessage> messages = {
+        {.id = "in-1", .outgoing = false,
+            .timestamp = "2026-08-07T18:48:52Z",
+            .text = "Incoming reads like an Agent note."},
+        {.id = "out-1", .outgoing = true,
+            .timestamp = "2026-08-07T19:00:00Z",
+            .text = "OK, go ahead."},
+    };
+    surface.set_conversation(QStringLiteral("Telegram Bot"), messages);
+    surface.document()->documentLayout()->documentSize();
+    QCoreApplication::processEvents();
+
+    QTextFrame *incoming = nullptr;
+    QTextFrame *outgoing = nullptr;
+    for (auto *frame : surface.document()->rootFrame()->childFrames()) {
+        const auto first_text = frame->begin().currentBlock().text();
+        if (first_text.startsWith(QStringLiteral("Telegram Bot ·"))) {
+            incoming = frame;
+        } else if (first_text.startsWith(QStringLiteral("You ·"))) {
+            outgoing = frame;
+        }
+    }
+    if (!incoming || !outgoing) {
+        throw std::runtime_error("no incoming/outgoing message frame rendered");
+    }
+    const auto image = surface.viewport()->grab().toImage();
+    const auto h_offset = double(surface.horizontalScrollBar()->value());
+    const auto v_offset = double(surface.verticalScrollBar()->value());
+    const auto backdrop = st::windowBgOver->c;
+    const auto incoming_fill = st::msgInBg->c;
+    const auto outgoing_fill = st::msgOutBg->c;
+
+    for (const auto &color : bubble_padding_colors(
+            *incoming, image, h_offset, v_offset)) {
+        if (color == incoming_fill) {
+            throw std::runtime_error(
+                "incoming must have NO bubble: padding is st::msgInBg, not "
+                "the backdrop st::windowBgOver");
+        }
+        if (color != backdrop) {
+            throw std::runtime_error(
+                "incoming must stay on the backdrop st::windowBgOver");
+        }
+    }
+
+    for (const auto &color : bubble_padding_colors(
+            *outgoing, image, h_offset, v_offset)) {
+        if (color != outgoing_fill) {
+            throw std::runtime_error(
+                "outgoing must keep its content-width bubble filled with "
+                "st::msgOutBg");
+        }
+    }
+}
+
 } // namespace
 
 int run_typography_test(int argc, char **argv) {
@@ -1051,6 +1151,7 @@ int run_typography_test(int argc, char **argv) {
         verify_empty_state_contract();
         verify_markdown_safe_formatting();
         verify_per_message_containers();
+        verify_directional_bubble_policy();
         std::cout << "conversation surface typography: OK\n";
         return 0;
     } catch (const std::exception &error) {
