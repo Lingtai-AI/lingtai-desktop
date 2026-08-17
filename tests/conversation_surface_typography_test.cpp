@@ -11,6 +11,7 @@
 #include <QtGui/QColor>
 #include <QtGui/QFont>
 #include <QtGui/QImage>
+#include <QtGui/QKeyEvent>
 #include <QtGui/QPixmap>
 #include <QtGui/QTextBlock>
 #include <QtGui/QTextBlockFormat>
@@ -26,6 +27,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -1289,12 +1291,185 @@ void verify_outgoing_body_first_and_external_time() {
 }
 
 
+// ---------------------------------------------------------------------------
+// Render-time lazy history RED contract: even though all 205 cached rows are
+// already present, the surface must reveal them lazily in a render-time
+// window instead of materializing every frame. Initially only the
+// chronological tail 100 (messages 105..204) become direct child message
+// frames in order with no 104, plus the `▲ 105 older — ctrl+u to load`
+// banner. A Ctrl+U at the top reveals another 100 (messages 005..204), no
+// 004, no duplicates, banner `▲ 5 older`, and the previously first-visible
+// message keeps its viewport Y (no scroll jump). Fails on the exact base:
+// rebuild_document writes every one of the 205 rows as a direct child frame
+// (205 frames and no banner), so the initial frame-count 100 check fails
+// first.
+// ---------------------------------------------------------------------------
+int history_index(const QTextFrame &frame) {
+    QString text;
+    for (auto it = frame.begin(); !it.atEnd(); ++it) {
+        const auto block = it.currentBlock();
+        if (block.isValid()) {
+            text += block.text();
+        }
+    }
+    const auto needle = QStringLiteral("message ");
+    const auto pos = text.indexOf(needle);
+    if (pos < 0) {
+        return -1;
+    }
+    return text.mid(pos + needle.size(), 3).toInt();
+}
+
+std::vector<int> history_sequence(
+        const QList<QTextFrame *> &frames) {
+    std::vector<int> sequence;
+    for (const auto *frame : frames) {
+        const auto index = history_index(*frame);
+        if (index >= 0) {
+            sequence.push_back(index);
+        }
+    }
+    return sequence;
+}
+
+double history_viewport_y(
+        const QTextDocument &document,
+        QTextFrame &frame,
+        int v_offset) {
+    return document.documentLayout()->frameBoundingRect(&frame).topLeft().y()
+        - v_offset;
+}
+
+void require_history_sequence(
+        const std::vector<int> &sequence,
+        int first,
+        int last,
+        const char *stage) {
+    const auto expected_size = std::size_t(last - first + 1);
+    if (sequence.size() != expected_size) {
+        throw std::runtime_error(
+            std::string("the ") + stage
+            + " history window must reveal exactly "
+            + std::to_string(expected_size)
+            + " direct child message frames in order (messages "
+            + std::to_string(first) + ".." + std::to_string(last)
+            + "), but it has " + std::to_string(sequence.size()));
+    }
+    for (auto i = std::size_t{0}; i != sequence.size(); ++i) {
+        if (sequence[i] != first + int(i)) {
+            throw std::runtime_error(
+                std::string("the ") + stage
+                + " history window must show messages "
+                + std::to_string(first) + ".." + std::to_string(last)
+                + " in order with no gap and no duplicates, but frame "
+                + std::to_string(i) + " is message "
+                + std::to_string(sequence[i]));
+        }
+    }
+}
+
+void require_history_banner(
+        const QTextDocument &document,
+        int count,
+        const char *stage) {
+    const auto banner = QStringLiteral("▲ %1 older — ctrl+u to load")
+        .arg(count);
+    if (!document.toPlainText().contains(banner)) {
+        throw std::runtime_error(
+            std::string("the ") + stage
+            + " history window must render the banner '" + banner.toStdString()
+            + "'");
+    }
+}
+
+void verify_history_window_only() {
+    std::vector<DirectConversationMessage> messages;
+    messages.reserve(205);
+    for (auto i = 0; i != 205; ++i) {
+        char id[8];
+        std::snprintf(id, sizeof id, "%03d", i);
+        messages.push_back({
+            .id = id,
+            .outgoing = (i % 2) == 1,
+            .timestamp = "2026-08-07T18:00:00Z",
+            .subject = std::string(),
+            .text = std::string("message ") + id,
+        });
+    }
+
+    ConversationSurface surface;
+    surface.resize(640, 480);
+    surface.show();
+    QCoreApplication::processEvents();
+    surface.set_conversation(QStringLiteral("Telegram Bot"), messages);
+    surface.document()->documentLayout()->documentSize();
+    QCoreApplication::processEvents();
+
+    // Pin the window to the top before inspecting the revealed frames.
+    auto *scrollbar = surface.verticalScrollBar();
+    scrollbar->setValue(scrollbar->minimum());
+    QCoreApplication::processEvents();
+
+    // RED first: the initial render-time window is exactly the tail 100.
+    auto frames = surface.document()->rootFrame()->childFrames();
+    auto sequence = history_sequence(frames);
+    if (sequence.size() != 100) {
+        throw std::runtime_error(
+            "the render-time history window must initially reveal exactly 100 "
+            "direct child message frames (messages 105..204), but the surface "
+            "materialized " + std::to_string(sequence.size()));
+    }
+    require_history_sequence(sequence, 105, 204, "initial");
+    require_history_banner(*surface.document(), 105, "initial");
+
+    // Capture the old first-visible message's viewport Y so a reveal at the
+    // top must preserve it (no scroll jump).
+    const auto old_y = history_viewport_y(
+        *surface.document(), *frames.front(), scrollbar->value());
+
+    // Ctrl+U at the top reveals another 100 cached rows.
+    QKeyEvent press(QEvent::KeyPress, Qt::Key_U, Qt::ControlModifier);
+    QCoreApplication::sendEvent(&surface, &press);
+    QCoreApplication::processEvents();
+
+    frames = surface.document()->rootFrame()->childFrames();
+    sequence = history_sequence(frames);
+    if (sequence.size() != 200) {
+        throw std::runtime_error(
+            "after Ctrl+U the history window must reveal exactly 200 direct "
+            "child message frames (messages 005..204), but the surface has "
+            + std::to_string(sequence.size()));
+    }
+    require_history_sequence(sequence, 5, 204, "revealed");
+    require_history_banner(*surface.document(), 5, "revealed");
+
+    // The old first-visible message (105, now the 101st frame) keeps its
+    // viewport Y after the reveal.
+    const auto new_y = history_viewport_y(
+        *surface.document(), *frames[100], scrollbar->value());
+    if (std::abs(new_y - old_y) > 2.0) {
+        throw std::runtime_error(
+            "revealing older messages at the top must preserve the previously "
+            "first-visible message's viewport Y, but it moved from "
+            + std::to_string(old_y) + "px to " + std::to_string(new_y)
+            + "px");
+    }
+}
+
+
 } // namespace
 
 int run_typography_test(int argc, char **argv) {
     try {
         QApplication application(argc, argv);
         style::internal::init_palette(style::kScaleDefault);
+        if (argc > 1
+                && QString::fromLocal8Bit(argv[1])
+                    == QStringLiteral("--history-window-only")) {
+            verify_history_window_only();
+            std::cout << "conversation surface lazy history window: OK\n";
+            return 0;
+        }
         ConversationSurface surface;
         surface.resize(640, 480);
         verify_typography(surface, QStringLiteral("Telegram Bot"));
