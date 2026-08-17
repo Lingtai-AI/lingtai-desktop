@@ -288,6 +288,32 @@ void verify_roster_rows_are_virtual_canvas() {
         "Agent rows are virtual canvas data, not child QPushButtons");
 }
 
+void verify_sidebar_header_typography() {
+    AgentSnapshot snapshot;
+    snapshot.scan = AgentScanState::complete;
+    snapshot.items = { make_row("a-agent", AgentRole::agent) };
+
+    QWidget parent;
+    AgentRoster roster(&parent);
+    roster.set_rows(snapshot, std::nullopt);
+
+    auto *heading = roster.findChild<QLabel *>(
+        "lingtai_agent_roster_heading");
+    auto *state = roster.findChild<QLabel *>(
+        "lingtai_agent_roster_state");
+    require(heading != nullptr && state != nullptr,
+        "the compact Agents heading and count must exist");
+    require(heading->font().weight() == QFont::Normal,
+        "the compact Agents heading must use regular weight so it does not "
+        "compete with the semibold app and selected-Agent titles");
+    require(state->font().weight() == QFont::Normal,
+        "the tertiary Agent count must remain regular weight");
+    require(state->palette().color(QPalette::WindowText)
+            == st::windowSubTextFg->c,
+        "the tertiary Agent count must use the smaller/lighter shared "
+        "windowSubTextFg tone");
+}
+
 void verify_human_hidden_from_roster() {
     AgentSnapshot snapshot;
     snapshot.scan = AgentScanState::complete;
@@ -608,6 +634,13 @@ int main(int argc, char **argv) {
                     == QStringLiteral("--project-toolbar-only")) {
             verify_compact_project_selector_and_menu();
             std::cout << "project toolbar presentation: OK\n";
+            return 0;
+        }
+        if (argc > 1
+                && QString::fromLocal8Bit(argv[1])
+                    == QStringLiteral("--header-typography-only")) {
+            verify_sidebar_header_typography();
+            std::cout << "agent roster header typography: OK\n";
             return 0;
         }
         verify_roster_rows_are_virtual_canvas();
