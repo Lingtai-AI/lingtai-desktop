@@ -3411,8 +3411,8 @@ void verify_modern_composer_surface(
                 handle_image.width() / 2, handle_image.height() / 2)
             == st::windowBg->c,
         "the wide resize target must paint windowBg");
-    require(separator->width() == 0 || !separator->isVisible(),
-        "the accepted single canvas must expose no visible center divider");
+    require(!separator->isVisible(),
+        "responsive recompute must not re-show the center divider");
 
     const auto painted_bounds = [](const QImage &image, QColor surface) {
         auto bounds = QRect();
