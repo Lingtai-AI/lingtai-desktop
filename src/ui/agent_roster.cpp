@@ -166,23 +166,25 @@ protected:
     void keyPressEvent(QKeyEvent *event) override;
 };
 
-QSize AgentRowButton::sizeHint() const {
-    auto primary_font = font();
+int agent_row_height(const QFont &base_font) {
+    auto primary_font = base_font;
     primary_font.setPointSize(13);
     primary_font.setWeight(QFont::DemiBold);
-    auto secondary_font = font();
+    auto secondary_font = base_font;
     secondary_font.setPointSize(12);
     const auto text_height = QFontMetrics(primary_font).height()
         + QFontMetrics(secondary_font).height();
-    return QSize(
-        std::min(QPushButton::sizeHint().width(), kRosterColumnWidth),
-        std::max(kAvatarDiameter, text_height) + 2 * kRowVerticalFrame);
+    return std::max(kAvatarDiameter, text_height) + 2 * kRowVerticalFrame;
 }
 
-void AgentRowButton::paintEvent(QPaintEvent *) {
-    QPainter painter(this);
-    const auto selected = isChecked();
-    const auto over = isDown() || underMouse();
+void paint_agent_row(
+        QPainter &painter,
+        const QRect &row_rect,
+        const QFont &base_font,
+        const QString &primary_text,
+        const QString &secondary_text,
+        bool selected,
+        bool over) {
     painter.setRenderHint(QPainter::Antialiasing, true);
     constexpr auto kSelectedRadius = 8.0;
     painter.setPen(Qt::NoPen);
@@ -190,10 +192,10 @@ void AgentRowButton::paintEvent(QPaintEvent *) {
         ? st::windowBgRipple
         : st::windowBgOver);
     painter.drawRoundedRect(
-        QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5),
+        QRectF(row_rect).adjusted(0.5, 0.5, -0.5, -0.5),
         kSelectedRadius, kSelectedRadius);
 
-    const auto content_rect = rect().adjusted(
+    const auto content_rect = row_rect.adjusted(
         kRowHorizontalFrame, kRowVerticalFrame,
         -kRowHorizontalFrame, -kRowVerticalFrame);
     const auto avatar_rect = QRect(
@@ -212,11 +214,10 @@ void AgentRowButton::paintEvent(QPaintEvent *) {
         text_rect.x(), text_rect.y() + primary_height,
         text_rect.width(), text_rect.height() - primary_height);
 
-    const auto lines = text().split(QLatin1Char('\n'));
-    const auto primary_display = QString(lines.value(0))
+    const auto primary_display = QString(primary_text)
         .replace(QLatin1String("&&"), QLatin1String("&"));
 
-    auto primary_font = font();
+    auto primary_font = base_font;
     primary_font.setPointSize(13);
     primary_font.setWeight(QFont::DemiBold);
     const auto primary_color = over
@@ -244,7 +245,7 @@ void AgentRowButton::paintEvent(QPaintEvent *) {
             Qt::ElideRight,
             std::max(0, primary_rect.width())));
 
-    auto secondary_font = font();
+    auto secondary_font = base_font;
     secondary_font.setPointSize(12);
     painter.setFont(secondary_font);
     painter.setPen(st::windowSubTextFg);
@@ -252,9 +253,26 @@ void AgentRowButton::paintEvent(QPaintEvent *) {
         secondary_rect,
         flags,
         QFontMetrics(secondary_font).elidedText(
-            lines.value(1),
+            secondary_text,
             Qt::ElideRight,
             std::max(0, secondary_rect.width())));
+}
+
+QSize AgentRowButton::sizeHint() const {
+    return QSize(
+        std::min(QPushButton::sizeHint().width(), kRosterColumnWidth),
+        agent_row_height(font()));
+}
+
+void AgentRowButton::paintEvent(QPaintEvent *) {
+    QPainter painter(this);
+    const auto selected = isChecked();
+    const auto over = isDown() || underMouse();
+    const auto lines = text().split(QLatin1Char('\n'));
+    paint_agent_row(
+        painter, rect(), font(),
+        lines.value(0), lines.value(1),
+        selected, over);
 
     if (hasFocus()) {
         QStyleOptionFocusRect option;
