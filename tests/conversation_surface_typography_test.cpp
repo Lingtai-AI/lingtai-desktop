@@ -162,7 +162,7 @@ std::pair<MessageGeometry, MessageGeometry> measure_at_width(int width) {
     messages.push_back({
         .id = "in-1",
         .outgoing = false,
-        .timestamp = "2026-08-07T18:48:52Z",
+        .timestamp = "2026-08-07T18:48:52",
         .subject = "Direct-message projection is ready for review",
         .text = "The direct-message projection now routes the selected "
                 "agent's conversation through the existing reader, and the "
@@ -330,7 +330,7 @@ void verify_content_geometry() {
     messages.push_back({
         .id = "in-long",
         .outgoing = false,
-        .timestamp = "2026-08-07T18:48:52Z",
+        .timestamp = "2026-08-07T18:48:52",
         .subject = "Long report",
         .text = "This is a genuinely long incoming message whose body wraps "
                 "well inside the accepted readable cap, so a content-driven "
@@ -418,7 +418,7 @@ void verify_turn_rhythm() {
     messages.push_back({
         .id = "in-1",
         .outgoing = false,
-        .timestamp = "2026-08-07T18:48:52Z",
+        .timestamp = "2026-08-07T18:48:52",
         .subject = "Slice done",
         .text = "PR published, not merged.",
     });
@@ -482,7 +482,7 @@ void verify_typography(ConversationSurface &surface, const QString &them) {
     messages.push_back({
         .id = "in-1",
         .outgoing = false,
-        .timestamp = "2026-08-07T18:48:52Z",
+        .timestamp = "2026-08-07T18:48:52",
         .subject = "Slice done",
         .text = "PR published, not merged.",
     });
@@ -818,7 +818,7 @@ void verify_markdown_safe_formatting() {
     messages.push_back({
         .id = "in-1",
         .outgoing = false,
-        .timestamp = "2026-08-07T18:48:52Z",
+        .timestamp = "2026-08-07T18:48:52",
         .subject = "Slice done",
         .text = raw_body.toStdString(),
     });
@@ -987,7 +987,7 @@ void verify_per_message_containers() {
     messages.push_back({
         .id = "in-1",
         .outgoing = false,
-        .timestamp = "2026-08-07T18:48:52Z",
+        .timestamp = "2026-08-07T18:48:52",
         .subject = "Slice done",
         .text = raw_body.toStdString(),
     });
@@ -1094,7 +1094,7 @@ void verify_directional_bubble_policy() {
 
     const std::vector<DirectConversationMessage> messages = {
         {.id = "in-1", .outgoing = false,
-            .timestamp = "2026-08-07T18:48:52Z",
+            .timestamp = "2026-08-07T18:48:52",
             .text = "Incoming reads like an Agent note."},
         {.id = "out-1", .outgoing = true,
             .timestamp = "2026-08-07T19:00:00Z",
@@ -1457,6 +1457,192 @@ void verify_history_window_only() {
 }
 
 
+// ---------------------------------------------------------------------------
+// Time-separators-only RED contract: a chronological stream that crosses a
+// midnight must expose only short wall-clock times and never the full raw ISO.
+// The incoming messages render their short HH:MM (18:48 and 00:05), the
+// outgoing frame carries its timestamp as the short time 19:05 on the
+// message-timestamp frame property (QTextFormat::UserProperty + 2), and no
+// full "2026-08-07T18:48:52" string survives in the exposed document. Between
+// the two day boundaries the document inserts exactly one centered root block
+// day separator (2026/08/07 positioned before the first day-one message and
+// 2026/08/08 before the first day-two message), the three message frames stay
+// as the only direct child frames of the root in chronological order, and a
+// same-day message adds no duplicate separator. Fails on the exact base:
+// rebuild_document renders the full raw ISO inside every incoming header and
+// creates no centered day-separator root blocks at all.
+// ---------------------------------------------------------------------------
+std::vector<QTextBlock> root_blocks(const QTextDocument &document) {
+    std::vector<QTextBlock> blocks;
+    for (auto item = document.rootFrame()->begin(); !item.atEnd(); ++item) {
+        const auto block = item.currentBlock();
+        if (block.isValid()) {
+            blocks.push_back(block);
+        }
+    }
+    return blocks;
+}
+
+std::vector<QTextBlock> centered_root_blocks(
+        const QTextDocument &document,
+        const QString &text) {
+    std::vector<QTextBlock> matches;
+    for (const auto &block : root_blocks(document)) {
+        if (block.text().trimmed() == text) {
+            matches.push_back(block);
+        }
+    }
+    return matches;
+}
+
+QTextFrame *frame_by_body(
+        const QList<QTextFrame *> &frames,
+        const QString &body) {
+    for (auto *frame : frames) {
+        for (auto it = frame->begin(); !it.atEnd(); ++it) {
+            const auto block = it.currentBlock();
+            if (block.isValid() && block.text().contains(body)) {
+                return frame;
+            }
+        }
+    }
+    return nullptr;
+}
+
+void verify_time_separators_only() {
+    const std::vector<DirectConversationMessage> messages = {
+        {.id = "d1-in", .outgoing = false,
+            .timestamp = "2026-08-07T18:48:52",
+            .subject = std::string(), .text = "day-one-first"},
+        {.id = "d1-out", .outgoing = true,
+            .timestamp = "2026-08-07T19:05:01",
+            .subject = std::string(), .text = "day-one-second"},
+        {.id = "d2-in", .outgoing = false,
+            .timestamp = "2026-08-08T00:05:02",
+            .subject = std::string(), .text = "day-two-first"},
+    };
+
+    ConversationSurface surface;
+    surface.resize(kRedViewportWidth, 480);
+    surface.show();
+    QCoreApplication::processEvents();
+    surface.set_conversation(QStringLiteral("Telegram Bot"), messages);
+    surface.document()->documentLayout()->documentSize();
+    QCoreApplication::processEvents();
+    const auto &document = *surface.document();
+
+    const auto plain = document.toPlainText();
+
+    // No full raw ISO may survive anywhere in the exposed document: every
+    // stored timestamp must surface only as a short wall-clock time.
+    for (const auto *raw : {"2026-08-07T18:48:52", "2026-08-07T19:05:01",
+            "2026-08-08T00:05:02"}) {
+        if (plain.contains(QString::fromUtf8(raw))) {
+            throw std::runtime_error(
+                std::string("the time-separators document must expose only "
+                    "short wall-clock times, but the full raw ISO '") + raw
+                + "' still appears in the rendered plain text");
+        }
+    }
+
+    // The two incoming messages expose exactly the short wall-clock times
+    // 18:48 and 00:05 (HH:MM, minutes only, no seconds).
+    if (!plain.contains(QStringLiteral("18:48"))
+        || !plain.contains(QStringLiteral("00:05"))) {
+        throw std::runtime_error(
+            "the time-separators document must expose the short incoming "
+            "wall-clock times 18:48 and 00:05, but one or both are absent");
+    }
+
+    // The outgoing message's timestamp rides on its frame's message-timestamp
+    // property as the short time 19:05, not the full raw ISO.
+    const auto frames = document.rootFrame()->childFrames();
+    QTextFrame *outgoing = nullptr;
+    for (auto *frame : frames) {
+        if (is_outgoing_frame(*frame)) {
+            outgoing = frame;
+        }
+    }
+    if (!outgoing) {
+        throw std::runtime_error(
+            "the time-separators document must render the outgoing message "
+            "frame so its timestamp property can be checked");
+    }
+    const auto outgoing_time = outgoing->frameFormat()
+        .property(QTextFormat::UserProperty + 2).toString();
+    if (outgoing_time != QStringLiteral("19:05")) {
+        throw std::runtime_error(
+            "the outgoing frame's message-timestamp property must be the short "
+            "time 19:05, but it is '" + outgoing_time.toStdString() + "'");
+    }
+
+    // Exactly one centered root block day separator per day boundary: one
+    // 2026/08/07 before the first day-one message and one 2026/08/08 before
+    // the first day-two message, each centered in the reading column.
+    const auto sep_day_one = centered_root_blocks(
+        document, QStringLiteral("2026/08/07"));
+    const auto sep_day_two = centered_root_blocks(
+        document, QStringLiteral("2026/08/08"));
+    if (sep_day_one.size() != 1 || sep_day_two.size() != 1) {
+        throw std::runtime_error(
+            "the time-separators document must insert exactly one centered "
+            "root block per day boundary, but it has "
+            + std::to_string(sep_day_one.size()) + " 2026/08/07 and "
+            + std::to_string(sep_day_two.size()) + " 2026/08/08");
+    }
+    for (const auto &block : sep_day_one) {
+        if (!block.blockFormat().alignment().testFlag(Qt::AlignCenter)) {
+            throw std::runtime_error(
+                "the day separator must be a centered root block, but "
+                "2026/08/07 is not centered");
+        }
+    }
+    for (const auto &block : sep_day_two) {
+        if (!block.blockFormat().alignment().testFlag(Qt::AlignCenter)) {
+            throw std::runtime_error(
+                "the day separator must be a centered root block, but "
+                "2026/08/08 is not centered");
+        }
+    }
+
+    // Exactly three direct child message frames remain, in chronological
+    // order, one per message with no extra frames.
+    if (frames.size() != 3) {
+        throw std::runtime_error(
+            "the time-separators document must keep exactly three direct child "
+            "message frames, but it has " + std::to_string(frames.size()));
+    }
+    const auto *day_one_in = frame_by_body(frames, QStringLiteral("day-one-first"));
+    const auto *day_one_out = frame_by_body(frames, QStringLiteral("day-one-second"));
+    const auto *day_two_in = frame_by_body(frames, QStringLiteral("day-two-first"));
+    if (!day_one_in || !day_one_out || !day_two_in) {
+        throw std::runtime_error(
+            "all three message frames must render their bodies in the "
+            "time-separators document");
+    }
+    if (!(day_one_in->firstPosition() < day_one_out->firstPosition()
+            && day_one_out->firstPosition() < day_two_in->firstPosition())) {
+        throw std::runtime_error(
+            "the three message frames must stay in chronological order: "
+            "day-one-first, then day-one-second, then day-two-first");
+    }
+
+    // The 2026/08/07 separator sits before the first day-one message, and the
+    // 2026/08/08 separator sits before the first day-two message but after the
+    // last day-one message.
+    const auto sep_one_pos = sep_day_one.front().position();
+    const auto sep_two_pos = sep_day_two.front().position();
+    if (!(sep_one_pos < day_one_in->firstPosition()
+            && sep_two_pos > day_one_out->lastPosition()
+            && sep_two_pos < day_two_in->firstPosition())) {
+        throw std::runtime_error(
+            "the 2026/08/07 separator must precede the first day-one message "
+            "and the 2026/08/08 separator must sit between the day-one messages "
+            "and the first day-two message");
+    }
+
+}
+
 } // namespace
 
 int run_typography_test(int argc, char **argv) {
@@ -1468,6 +1654,13 @@ int run_typography_test(int argc, char **argv) {
                     == QStringLiteral("--history-window-only")) {
             verify_history_window_only();
             std::cout << "conversation surface lazy history window: OK\n";
+            return 0;
+        }
+        if (argc > 1
+                && QString::fromLocal8Bit(argv[1])
+                    == QStringLiteral("--time-separators-only")) {
+            verify_time_separators_only();
+            std::cout << "conversation surface time separators: OK\n";
             return 0;
         }
         ConversationSurface surface;
