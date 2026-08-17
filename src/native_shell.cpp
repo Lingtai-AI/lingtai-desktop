@@ -987,6 +987,7 @@ NativeShell::NativeShell()
     detail_scroll->setObjectName("lingtai_agent_detail_scroll");
     detail_scroll->setAccessibleName(QStringLiteral("Selected Agent detail"));
     detail_scroll->setWidgetResizable(true);
+    detail_scroll->setFrameShape(QFrame::NoFrame);
     detail_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     directory_layout->addWidget(detail_scroll, 1);
     auto *detail = new Ui::RpWidget(detail_scroll);
