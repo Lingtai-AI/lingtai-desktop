@@ -120,6 +120,7 @@ QTextBlockFormat message_block_format(
     format.setRightMargin(outgoing ? outer : inner);
     format.setTopMargin(kMessageTopMargin);
     format.setBottomMargin(0);
+    format.setLineHeight(110, QTextBlockFormat::ProportionalHeight);
     format.setProperty(kMessageBlockProperty, true);
     return format;
 }

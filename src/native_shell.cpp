@@ -212,16 +212,17 @@ public:
     explicit PageNavButton(QWidget *parent, const QString &text)
     : QPushButton(text, parent) {
         setCheckable(true);
-        setFixedHeight(24);
+        setFixedHeight(28);
+        auto font = this->font();
+        font.setPointSize(13);
+        font.setWeight(QFont::Normal);
+        setFont(font);
     }
 
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter painter(this);
-        auto font = this->font();
-        font.setPointSize(11);
-        font.setWeight(QFont::Normal);
-        painter.setFont(font);
+        painter.setFont(font());
         painter.setPen(isChecked() ? st::dialogsTextFgService : st::windowSubTextFg);
         painter.drawText(rect(), Qt::AlignCenter, text());
         if (isChecked()) {
@@ -949,13 +950,13 @@ NativeShell::NativeShell()
     identity_column->setContentsMargins(0, 0, 0, 0);
     identity_column->setSpacing(2);
     auto *presentation_name = make_label(
-        top_bar, QString(), "lingtai_selected_agent_presentation_name", 14,
+        top_bar, QString(), "lingtai_selected_agent_presentation_name", 16,
         QFont::DemiBold);
     presentation_name->setAccessibleName(
         QStringLiteral("Selected Agent presentation name"));
     identity_column->addWidget(presentation_name);
     auto *detail_key = make_label(
-        top_bar, QString(), "lingtai_selected_agent_key", 10);
+        top_bar, QString(), "lingtai_selected_agent_key", 12);
     detail_key->setAccessibleName(
         QStringLiteral("Selected Agent status and role"));
     detail_key->setWordWrap(false);
