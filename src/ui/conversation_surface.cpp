@@ -44,15 +44,20 @@ constexpr auto kWithinGroupBottomMargin = 0;
 constexpr auto kBetweenGroupBottomMargin = 28;
 constexpr qint64 kSameAgentGroupMaxSeconds = 5 * 60;
 constexpr auto kMessageRatio = 0.72;
+constexpr auto kHumanMessageRatio = 0.60;
 constexpr auto kMinMessageWidth = 160;
+constexpr auto kHumanMinMessageWidth = 64;
 constexpr auto kMessageAbsoluteCap = 560;
 constexpr auto kReadingColumnMax = 900;
 constexpr auto kNarrowViewportWidth = 480;
 constexpr auto kBubbleHPadding = 11;
-constexpr auto kBubbleVPadding = 8;
-constexpr auto kBubbleRadius = 8;
-// The gap between the outgoing bubble's left edge and the external timestamp.
-constexpr auto kTimestampGap = 6;
+constexpr auto kHumanBubbleHPadding = 15;
+constexpr auto kHumanBubbleVPadding = 11;
+constexpr auto kHumanBubbleRadius = 12;
+// The Human timestamp sits below the bubble with a small quiet gap; the frame
+// reserves enough bottom space for the 12px metadata line and this padding.
+constexpr auto kTimestampGap = 4;
+constexpr auto kHumanMessageBottomMargin = 36;
 constexpr auto kMessageAvatarDiameter = 34;
 constexpr auto kMessageAvatarGap = 8;
 constexpr auto kMessageBlockProperty = QTextFormat::UserProperty + 1;
@@ -80,6 +85,9 @@ constexpr auto kDayBottomMargin = 8;
 constexpr auto kParagraphBottomMargin = 13;
 constexpr auto kListBottomMargin = 3;
 constexpr auto kCodeBlockProperty = QTextFormat::UserProperty + 4;
+// Direction is frame metadata, not body alignment: Human body text stays left
+// aligned while the frame's margins and painter keep the bubble on the right.
+constexpr auto kMessageOutgoingProperty = QTextFormat::UserProperty + 5;
 
 // The symmetric gutter of the centered reading column for a viewport: fixed
 // 12px edge gutters until the column max, then a shared share of the excess.
@@ -104,12 +112,24 @@ int message_block_width(int viewport_width) {
         kMessageAbsoluteCap);
 }
 
+// Human bubbles use the same centered reading column but a quieter 60% cap.
+// On narrow panes the common near-full lane remains the usable fallback.
+int human_message_block_width(int viewport_width) {
+    if (viewport_width < kNarrowViewportWidth) {
+        return qMax(0, viewport_width - 2 * kMessageEdgeMargin);
+    }
+    const auto column = qMin(viewport_width, kReadingColumnMax);
+    return qMax(kHumanMinMessageWidth, int(column * kHumanMessageRatio));
+}
+
 QTextBlockFormat message_block_format(
         bool outgoing,
         int viewport_width,
         int width) {
     auto format = QTextBlockFormat();
-    format.setAlignment(outgoing ? Qt::AlignRight : Qt::AlignLeft);
+    // Reading direction and lane position are independent. Both message bodies
+    // read left-to-right; asymmetric margins below anchor the Human lane right.
+    format.setAlignment(Qt::AlignLeft);
     // Derive one outer gutter (the centered reading column's offset plus the
     // fixed edge gutter) and one inner remainder, then cross-assign them so
     // incoming stays left-anchored and outgoing right-anchored inside the same
@@ -152,6 +172,12 @@ QColor secondary_reading_color() {
     return st::windowBg->c.lightness() >= 128
         ? QColor(QStringLiteral("#8A8F98"))
         : st::msgServiceFg->c;
+}
+
+QColor human_bubble_color() {
+    return st::windowBg->c.lightness() >= 128
+        ? QColor(QStringLiteral("#EEF7F3"))
+        : st::msgOutBg->c;
 }
 
 QTextCharFormat secondary_format() {
@@ -708,7 +734,8 @@ void ConversationSurface::rebuild_document() {
     // so the standard layout honors the block alignment and the margins bind
     // each message to the shared reading-column width.
     const auto separator = QString(QChar::LineSeparator);
-    const auto lane_max = message_block_width(viewport_width);
+    const auto agent_lane_max = message_block_width(viewport_width);
+    const auto human_lane_max = human_message_block_width(viewport_width);
     // The formatted day tracks only this visible lazy suffix, so a separator
     // appears before the first message of each changed nonempty day within the
     // window and never leaks across reveals.
@@ -763,14 +790,21 @@ void ConversationSurface::rebuild_document() {
                 || next_day == present.day;
         }
 
-        // Each message's width is content-driven: its own widest visible line
-        // plus the existing horizontal bubble padding, clamped between the
-        // modest 160px lower bound and the shared responsive lane maximum.
+        // Each message's width is content-driven. Agent prose retains the
+        // established 72% lane and minimum; Human bubbles use a smaller 60%
+        // column cap, a genuinely compact minimum, and their own 15px padding.
+        const auto lane_max = outgoing ? human_lane_max : agent_lane_max;
+        const auto lane_min = outgoing
+            ? kHumanMinMessageWidth
+            : kMinMessageWidth;
+        const auto horizontal_padding = outgoing
+            ? kHumanBubbleHPadding
+            : kBubbleHPadding;
         const auto width = qBound(
-            qMin(kMinMessageWidth, lane_max),
+            qMin(lane_min, lane_max),
             message_content_width(
                 message, them_, present.time, incoming_group_first)
-                + 2 * kBubbleHPadding,
+                + 2 * horizontal_padding,
             lane_max);
         const auto block_format = message_block_format(
             outgoing, viewport_width, width);
@@ -787,15 +821,18 @@ void ConversationSurface::rebuild_document() {
         // The current frame owns its gap to the next sibling: consecutive
         // short-interval same-Agent rows keep a small rendered rhythm, while a
         // long-pause/direction/day/end boundary gets the visibly larger break.
-        frame_format.setBottomMargin(group_continues
-            ? kWithinGroupBottomMargin
-            : kBetweenGroupBottomMargin);
+        frame_format.setBottomMargin(outgoing
+            ? kHumanMessageBottomMargin
+            : (group_continues
+                ? kWithinGroupBottomMargin
+                : kBetweenGroupBottomMargin));
         frame_format.setBackground(Qt::transparent);
+        frame_format.setProperty(kMessageOutgoingProperty, outgoing);
         frame_format.setProperty(
             kMessageAvatarProperty, incoming_group_first);
-        // The outgoing timestamp is not a visible header: it rides on the frame
-        // so paintEvent can draw it outside the body-only bubble. It holds the
-        // presented HH:mm, or stays empty so the external painter omits it.
+        // The Human timestamp is not a visible header: it rides on the frame so
+        // paintEvent can draw a compact muted line below-right of the body-only
+        // bubble, or omit it when the presented HH:mm is empty.
         if (outgoing) {
             frame_format.setProperty(kMessageTimestampProperty, present.time);
         }
@@ -987,38 +1024,40 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
         if (!code_bounds.isNull()) {
             code_bounds.translate(-h_offset, -v_offset);
         }
-        const auto bubble = text_bounds.adjusted(
-            -kBubbleHPadding,
-            -kBubbleVPadding,
-            kBubbleHPadding,
-            kBubbleVPadding);
-        const auto outgoing = first_valid_block.blockFormat().alignment()
-            .testFlag(Qt::AlignRight);
+        const auto outgoing = frame->frameFormat()
+            .property(kMessageOutgoingProperty)
+            .toBool();
         if (outgoing) {
+            const auto bubble = text_bounds.adjusted(
+                -kHumanBubbleHPadding,
+                -kHumanBubbleVPadding,
+                kHumanBubbleHPadding,
+                kHumanBubbleVPadding);
             // The painter is already clipped to event->rect(). Do not skip the
             // whole message merely because the bubble itself misses a partial
-            // repaint: the external timestamp may still intersect that event.
-            painter.setBrush(st::msgOutBg);
-            painter.drawRoundedRect(bubble, kBubbleRadius, kBubbleRadius);
-            // The stored timestamp is drawn immediately left of the bubble in
-            // the shared secondary tone, right-aligned and vertically centered
-            // against the bubble's left edge, then the painter state restores.
+            // repaint: the below-bubble timestamp may still intersect it.
+            painter.setBrush(human_bubble_color());
+            painter.drawRoundedRect(
+                bubble, kHumanBubbleRadius, kHumanBubbleRadius);
+            // The stored HH:mm is one compact muted 12px line below the bubble,
+            // sharing its right edge instead of floating beside the top.
             const auto timestamp = frame->frameFormat()
                 .property(kMessageTimestampProperty)
                 .toString();
             if (!timestamp.isEmpty()) {
-                const auto metrics = QFontMetricsF(message_metadata_format().font());
+                const auto metadata = secondary_format();
+                const auto metrics = QFontMetricsF(metadata.font());
                 const auto text_width = metrics.horizontalAdvance(timestamp);
                 const auto text_height = metrics.height();
                 const auto time_rect = QRectF(
-                    bubble.left() - kTimestampGap - text_width,
-                    bubble.center().y() - text_height / 2.0,
+                    bubble.right() - text_width,
+                    bubble.bottom() + kTimestampGap,
                     text_width,
                     text_height);
                 if (time_rect.intersects(QRectF(event->rect()))) {
                     painter.save();
-                    painter.setPen(st::msgServiceFg);
-                    painter.setFont(message_metadata_format().font());
+                    painter.setPen(secondary_reading_color());
+                    painter.setFont(metadata.font());
                     painter.drawText(
                         time_rect,
                         Qt::AlignRight | Qt::AlignVCenter,

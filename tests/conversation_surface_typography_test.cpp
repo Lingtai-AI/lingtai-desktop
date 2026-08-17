@@ -37,6 +37,8 @@
 namespace lingtai::desktop {
 namespace {
 
+constexpr auto kMessageOutgoingProperty = QTextFormat::UserProperty + 5;
+
 struct FragmentView {
     QString text;
     QFont font;
@@ -136,13 +138,7 @@ MessageGeometry message_geometry(
 }
 
 bool is_outgoing_frame(const QTextFrame &frame) {
-    for (auto it = frame.begin(); !it.atEnd(); ++it) {
-        const auto block = it.currentBlock();
-        if (block.isValid()) {
-            return block.blockFormat().alignment().testFlag(Qt::AlignRight);
-        }
-    }
-    return false;
+    return frame.frameFormat().property(kMessageOutgoingProperty).toBool();
 }
 
 std::pair<MessageGeometry, MessageGeometry> measure_at_width(int width) {
@@ -1072,9 +1068,8 @@ void verify_per_message_containers() {
 }
 
 // ---------------------------------------------------------------------------
-// Directional bubble-policy RED contract: incoming renders with NO bubble (the
-// single light-canvas backdrop st::windowBg), outgoing keeps the st::msgOutBg
-// bubble. Fails on the base: paintEvent fills a bubble for both lanes.
+// Directional bubble policy: incoming stays on the single window backdrop;
+// Human keeps a distinct but deliberately pale low-saturation light bubble.
 // ---------------------------------------------------------------------------
 std::vector<QColor> bubble_padding_colors(
         QTextFrame &frame,
@@ -1137,7 +1132,7 @@ void verify_directional_bubble_policy() {
     const auto v_offset = double(surface.verticalScrollBar()->value());
     const auto backdrop = st::windowBg->c;
     const auto incoming_fill = st::msgInBg->c;
-    const auto outgoing_fill = st::msgOutBg->c;
+    const auto outgoing_fill = QColor(QStringLiteral("#EEF7F3"));
 
     for (const auto &color : bubble_padding_colors(
             *incoming, image, h_offset, v_offset)) {
@@ -1156,38 +1151,37 @@ void verify_directional_bubble_policy() {
             *outgoing, image, h_offset, v_offset)) {
         if (color != outgoing_fill) {
             throw std::runtime_error(
-                "outgoing must keep its content-width bubble filled with "
-                "st::msgOutBg");
+                "Human must keep its content-width bubble filled with the "
+                "accepted pale low-saturation tint");
         }
     }
 
-    // Incoming must reserve a 40px avatar lane immediately to the left of its
-    // text bounds. Relationally, the incoming header's left margin must reach
-    // at least 50px (40 avatar + 10 gap) further left than the outgoing
-    // header's right margin, which today sits at the same symmetric gutter.
+    // Incoming reserves the accepted smaller 34px avatar lane immediately to
+    // the left of its text. Relationally, its left margin reaches at least 42px
+    // (34 avatar + 8 gap) beyond the Human frame's outer right margin.
     const auto incoming_left = incoming->begin().currentBlock()
         .blockFormat().leftMargin();
     const auto outgoing_right = outgoing->begin().currentBlock()
         .blockFormat().rightMargin();
-    if (incoming_left - outgoing_right < 50.0) {
+    if (incoming_left - outgoing_right < 42.0) {
         throw std::runtime_error(
-            "incoming must reserve a 50px Agent avatar lane beside its text "
-            "(40px avatar + 10px gap): the incoming header left margin must "
-            "reach at least 50px further left than the outgoing header right "
-            "margin, but it is "
+            "incoming must reserve a 42px Agent avatar lane beside its text "
+            "(34px avatar + 8px gap): the incoming header left margin must "
+            "reach at least 42px further left than the Human outer margin, "
+            "but it is "
             + std::to_string(incoming_left) + "px vs "
             + std::to_string(outgoing_right) + "px, so the reserved avatar "
               "extent is missing");
     }
 
-    // The expected 40x40 avatar circle sits immediately left of the incoming
-    // text bounds with a 10px gap, in viewport coordinates.
+    // The accepted 34x34 avatar circle sits top-aligned immediately left of the
+    // incoming text bounds with an 8px gap, in viewport coordinates.
     const auto incoming_text = message_text_bounds(*incoming)
         .translated(-h_offset, -v_offset);
     const auto avatar_rect = QRectF(
-        incoming_text.left() - 10.0 - 40.0,
-        incoming_text.center().y() - 20.0,
-        40.0, 40.0);
+        incoming_text.left() - 8.0 - 34.0,
+        incoming_text.top(),
+        34.0, 34.0);
     const auto avatar_fill = st::dialogsNameFg->c;
     const auto sample_avatar = [&](double x, double y) {
         const auto px = int(std::lround(x * image.devicePixelRatio()));
@@ -1204,7 +1198,7 @@ void verify_directional_bubble_policy() {
     for (const auto dx : avatar_offsets) {
         if (sample_avatar(ax + dx, ay) != avatar_fill) {
             throw std::runtime_error(
-                "incoming must draw a 40px Agent avatar circle filled with "
+                "incoming must draw a 34px Agent avatar circle filled with "
                 "st::dialogsNameFg immediately left of its text bounds, but "
                 "the sampled avatar interior is not the circle fill (the "
                 "avatar circle is missing)");
@@ -1213,7 +1207,7 @@ void verify_directional_bubble_policy() {
     for (const auto dy : avatar_offsets) {
         if (sample_avatar(ax, ay + dy) != avatar_fill) {
             throw std::runtime_error(
-                "incoming must draw a 40px Agent avatar circle filled with "
+                "incoming must draw a 34px Agent avatar circle filled with "
                 "st::dialogsNameFg immediately left of its text bounds, but "
                 "the sampled avatar interior is not the circle fill (the "
                 "avatar circle is missing)");
