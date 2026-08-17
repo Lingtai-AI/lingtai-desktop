@@ -3397,6 +3397,20 @@ void verify_modern_composer_surface(
         window, "lingtai_agent_detail_scroll");
     auto *project_selector = required_child<QPushButton>(
         window, "lingtai_project_selector");
+    auto *startup_route = required_child<QWidget>(
+        window, "lingtai_startup_route");
+    auto *startup_illustration = required_child<QWidget>(
+        window, "lingtai_startup_illustration");
+    auto *startup_heading = required_child<QLabel>(
+        window, "lingtai_startup_heading");
+    auto *startup_tagline = required_child<QLabel>(
+        window, "lingtai_startup_tagline");
+    auto *choose_project = required_child<QPushButton>(
+        window, "lingtai_startup_choose_project");
+    auto *agent_roster = required_child<QWidget>(
+        window, "lingtai_agent_roster");
+    auto *workspace_content = required_child<QWidget>(
+        window, "lingtai_desktop_content");
 
     auto *titlebar = [&]() -> Ui::Platform::TitleWidget * {
         for (auto *child : window.findChildren<QWidget *>(
@@ -3417,12 +3431,18 @@ void verify_modern_composer_surface(
         "the pure LingTai brand must be painted inside Telegram's TitleWidget owner");
     require(window.body()->geometry().top() == titlebar->height(),
         "the content body must begin below the restored unified title row");
-    const auto native_anchor = titlebar_brand->property(
-        "lingtai_native_traffic_light_anchor").toPoint();
-    require(native_anchor.x() > 0
-            && qAbs(titlebar_brand->geometry().left() - native_anchor.x()) <= 1
-            && qAbs(titlebar_brand->geometry().center().y() - native_anchor.y()) <= 1,
-        "the title-row brand must begin after the green button and share its vertical center");
+    require(startup_route->isVisible()
+            && startup_illustration->isVisible()
+            && startup_heading->text() == QStringLiteral("LingTai Orchestration")
+            && startup_tagline->text()
+                == QStringLiteral("Awaken under Bodhi\nOne soul, thousand avatars")
+            && choose_project->text() == QStringLiteral("Choose project"),
+        "startup must show the reference illustration, copy and one project CTA");
+    require(!agent_roster->isVisible() && !workspace_content->isVisible(),
+        "startup must be one uninterrupted canvas without the project workspace");
+    require(qAbs(titlebar_brand->geometry().center().x()
+                - titlebar->rect().center().x()) <= 1,
+        "startup LingTai title must be centered in the native title row");
     require(titlebar_brand->palette().color(QPalette::WindowText)
                 == st::dialogsNameFg->c
             && titlebar_brand->palette().color(QPalette::Text)
@@ -3573,6 +3593,16 @@ void verify_modern_composer_surface(
     const auto outcome = shell.open_project(project, std::nullopt);
     require(outcome.disposition == ProjectOpenDisposition::opened,
         "the modern-composer fixture project must open");
+    QCoreApplication::processEvents();
+    require(!startup_route->isVisible()
+            && agent_roster->isVisible() && workspace_content->isVisible(),
+        "choosing a project must replace startup with the existing workspace");
+    const auto native_anchor = titlebar_brand->property(
+        "lingtai_native_traffic_light_anchor").toPoint();
+    require(native_anchor.x() > 0
+            && qAbs(titlebar_brand->geometry().left() - native_anchor.x()) <= 1
+            && qAbs(titlebar_brand->geometry().center().y() - native_anchor.y()) <= 1,
+        "opened-project LingTai brand must return beside the traffic lights");
     require(tree_snapshot(project) == fixture_before,
         "opening the modern-composer fixture must remain read-only");
     require(project_selector->text() == QStringLiteral("project"),
