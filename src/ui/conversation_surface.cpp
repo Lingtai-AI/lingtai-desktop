@@ -4,6 +4,7 @@
 #include "styles/palette.h"
 
 #include <QtCore/QDateTime>
+#include <QtCore/QRegularExpression>
 #include <QtCore/QUrl>
 #include <QtCore/QVariant>
 #include <QtGui/QAbstractTextDocumentLayout>
@@ -25,6 +26,7 @@
 #include <QtGui/QTextFrame>
 #include <QtGui/QTextImageFormat>
 #include <QtGui/QTextLayout>
+#include <QtWidgets/QApplication>
 #include <QtWidgets/QScrollBar>
 
 #include <algorithm>
@@ -38,12 +40,12 @@ constexpr auto kMessageEdgeMargin = 12;
 constexpr auto kMessageTopMargin = 4;
 // One readable rhythm inside a same-Agent group and a larger break between
 // groups. The current frame's bottom margin owns the gap to its next sibling.
-constexpr auto kWithinGroupBottomMargin = 8;
+constexpr auto kWithinGroupBottomMargin = 0;
 constexpr auto kBetweenGroupBottomMargin = 28;
 constexpr qint64 kSameAgentGroupMaxSeconds = 5 * 60;
 constexpr auto kMessageRatio = 0.72;
 constexpr auto kMinMessageWidth = 160;
-constexpr auto kMessageAbsoluteCap = 640;
+constexpr auto kMessageAbsoluteCap = 560;
 constexpr auto kReadingColumnMax = 900;
 constexpr auto kNarrowViewportWidth = 480;
 constexpr auto kBubbleHPadding = 11;
@@ -51,8 +53,8 @@ constexpr auto kBubbleVPadding = 8;
 constexpr auto kBubbleRadius = 8;
 // The gap between the outgoing bubble's left edge and the external timestamp.
 constexpr auto kTimestampGap = 6;
-constexpr auto kMessageAvatarDiameter = 40;
-constexpr auto kMessageAvatarGap = 10;
+constexpr auto kMessageAvatarDiameter = 34;
+constexpr auto kMessageAvatarGap = 8;
 constexpr auto kMessageBlockProperty = QTextFormat::UserProperty + 1;
 // The outgoing message timestamp rides on the sibling frame so paintEvent can
 // place it outside the body-only bubble without a visible header block.
@@ -75,6 +77,9 @@ constexpr auto kBannerBottomMargin = 8;
 // yyyy/MM/dd line, kept small so it reads as a quiet divider between days.
 constexpr auto kDayTopMargin = 6;
 constexpr auto kDayBottomMargin = 8;
+constexpr auto kParagraphBottomMargin = 13;
+constexpr auto kListBottomMargin = 3;
+constexpr auto kCodeBlockProperty = QTextFormat::UserProperty + 4;
 
 // The symmetric gutter of the centered reading column for a viewport: fixed
 // 12px edge gutters until the column max, then a shared share of the excess.
@@ -120,7 +125,7 @@ QTextBlockFormat message_block_format(
     format.setRightMargin(outgoing ? outer : inner);
     format.setTopMargin(kMessageTopMargin);
     format.setBottomMargin(0);
-    format.setLineHeight(110, QTextBlockFormat::ProportionalHeight);
+    format.setLineHeight(160, QTextBlockFormat::ProportionalHeight);
     format.setProperty(kMessageBlockProperty, true);
     return format;
 }
@@ -136,9 +141,22 @@ QTextCharFormat sender_format(bool outgoing) {
     return format;
 }
 
+QColor body_reading_color(bool outgoing) {
+    if (st::windowBg->c.lightness() >= 128) {
+        return QColor(QStringLiteral("#26282B"));
+    }
+    return outgoing ? st::historyTextOutFg->c : st::historyTextInFg->c;
+}
+
+QColor secondary_reading_color() {
+    return st::windowBg->c.lightness() >= 128
+        ? QColor(QStringLiteral("#8A8F98"))
+        : st::msgServiceFg->c;
+}
+
 QTextCharFormat secondary_format() {
     auto format = QTextCharFormat();
-    format.setForeground(st::msgServiceFg);
+    format.setForeground(secondary_reading_color());
     auto font = format.font();
     font.setPixelSize(12);
     font.setWeight(QFont::Normal);
@@ -151,7 +169,7 @@ QTextCharFormat secondary_format() {
 // secondary format above, while per-message time scales with the body.
 QTextCharFormat message_metadata_format() {
     auto format = QTextCharFormat();
-    format.setForeground(st::msgServiceFg);
+    format.setForeground(secondary_reading_color());
     auto font = format.font();
     font.setPixelSize(13);
     font.setWeight(QFont::Normal);
@@ -213,11 +231,11 @@ QTextCharFormat day_format() {
 
 QTextCharFormat body_format(bool outgoing) {
     auto format = QTextCharFormat();
-    format.setForeground(outgoing ? st::historyTextOutFg
-                                  : st::historyTextInFg);
-    auto font = format.font();
+    format.setForeground(body_reading_color(outgoing));
+    auto font = QApplication::font();
     font.setPixelSize(16);
     font.setWeight(QFont::Normal);
+    font.setStyleHint(QFont::SansSerif);
     format.setFont(font);
     return format;
 }
@@ -242,12 +260,19 @@ QTextCharFormat heading_text_format(const QTextCharFormat &base) {
     return format;
 }
 
+QColor code_surface_color() {
+    return st::windowBg->c.lightness() >= 128
+        ? QColor(QStringLiteral("#F1F3F5"))
+        : QColor(255, 255, 255, 24);
+}
+
 QTextCharFormat code_text_format(const QTextCharFormat &base) {
     auto format = base;
     auto font = format.font();
     font.setFixedPitch(true);
     font.setStyleHint(QFont::Monospace);
     format.setFont(font);
+    format.setBackground(code_surface_color());
     return format;
 }
 
@@ -278,12 +303,27 @@ void insert_markdown_body(
     const auto heading = heading_text_format(base);
     const auto code = code_text_format(base);
     const auto quote = quote_text_format(base);
+    const QRegularExpression technical(
+        QStringLiteral(R"((\.[A-Za-z0-9_-]+(?:[/.][A-Za-z0-9_.-]+)+|[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+){2,}|--[A-Za-z0-9-]+))"));
 
-    // The inline pass over one line's plain remainder: **bold**, `code`, and
-    // [label](url) become real formatted runs, everything else stays literal.
-    const auto insert_inline = [&](
-            const QString &line,
-            const QTextCharFormat &plain) {
+    const auto insert_plain = [&](const QString &text,
+                                  const QTextCharFormat &plain) {
+        auto offset = 0;
+        auto matches = technical.globalMatch(text);
+        while (matches.hasNext()) {
+            const auto match = matches.next();
+            if (match.capturedStart() > offset) {
+                cursor.insertText(text.mid(
+                    offset, match.capturedStart() - offset), plain);
+            }
+            cursor.insertText(match.captured(), code);
+            offset = match.capturedEnd();
+        }
+        cursor.insertText(text.mid(offset), plain);
+    };
+
+    const auto insert_inline = [&](const QString &line,
+                                   const QTextCharFormat &plain) {
         auto index = 0;
         while (index < line.size()) {
             const auto bold_open = line.indexOf(QStringLiteral("**"), index);
@@ -301,16 +341,16 @@ void insert_markdown_body(
             consider(code_open, 2);
             consider(link_open, 3);
             if (at < 0) {
-                cursor.insertText(line.mid(index), plain);
+                insert_plain(line.mid(index), plain);
                 break;
             }
             if (at > index) {
-                cursor.insertText(line.mid(index, at - index), plain);
+                insert_plain(line.mid(index, at - index), plain);
             }
             if (kind == 2) {
                 const auto close = line.indexOf(QChar('`'), at + 1);
                 if (close < 0) {
-                    cursor.insertText(line.mid(at), plain);
+                    insert_plain(line.mid(at), plain);
                     break;
                 }
                 cursor.insertText(line.mid(at + 1, close - at - 1), code);
@@ -321,7 +361,7 @@ void insert_markdown_body(
                     ? line.indexOf(QChar(')'), close + 2)
                     : -1;
                 if (close < 0 || end < 0) {
-                    cursor.insertText(line.mid(at), plain);
+                    insert_plain(line.mid(at), plain);
                     break;
                 }
                 auto link_format = base;
@@ -337,7 +377,7 @@ void insert_markdown_body(
             } else {
                 const auto close = line.indexOf(QStringLiteral("**"), at + 2);
                 if (close < 0) {
-                    cursor.insertText(line.mid(at), plain);
+                    insert_plain(line.mid(at), plain);
                     break;
                 }
                 cursor.insertText(line.mid(at + 2, close - at - 2), bold);
@@ -347,31 +387,76 @@ void insert_markdown_body(
     };
 
     auto in_code_fence = false;
+    auto paragraph_break = false;
+    const QRegularExpression heading_line(QStringLiteral(R"(^(#{1,6})\s+(.+)$)"));
+    const QRegularExpression unordered(QStringLiteral(R"(^[-*]\s+(.+)$)"));
+    const QRegularExpression ordered(QStringLiteral(R"(^(\d+[.)])\s+(.+)$)"));
     for (const auto &line : body.split(QChar::LineSeparator)) {
-        if (in_code_fence) {
-            if (line.startsWith(QStringLiteral("```"))) {
-                in_code_fence = false;
-                continue;
-            }
-        } else if (line.startsWith(QStringLiteral("```"))) {
-            in_code_fence = true;
+        if (line.startsWith(QStringLiteral("```"))) {
+            in_code_fence = !in_code_fence;
             continue;
         }
+        if (line.trimmed().isEmpty()) {
+            if (cursor.block().isValid() && !cursor.block().text().isEmpty()) {
+                auto previous = cursor.block().blockFormat();
+                previous.setBottomMargin(kParagraphBottomMargin);
+                cursor.setBlockFormat(previous);
+            }
+            paragraph_break = true;
+            continue;
+        }
+
         if (first_line_in_current_block) {
             first_line_in_current_block = false;
         } else {
             cursor.insertBlock(continuation);
         }
+        auto block = continuation;
+        block.setLineHeight(160, QTextBlockFormat::ProportionalHeight);
+        block.setTopMargin(0);
+        block.setBottomMargin(0);
+        if (paragraph_break) {
+            paragraph_break = false;
+        }
+
+        const auto heading_match = heading_line.match(line);
+        const auto unordered_match = unordered.match(line);
+        const auto ordered_match = ordered.match(line);
         if (in_code_fence) {
+            block.setAlignment(Qt::AlignLeft);
+            block.setLeftMargin(block.leftMargin() + 8);
+            block.setRightMargin(block.rightMargin() + 8);
+            block.setTopMargin(4);
+            block.setBottomMargin(4);
+            block.setBackground(code_surface_color());
+            block.setProperty(kCodeBlockProperty, true);
+            cursor.setBlockFormat(block);
             cursor.insertText(line, code);
-        } else if (line.startsWith(QChar('#'))) {
-            cursor.insertText(line.mid(1).trimmed(), heading);
-        } else if (line.startsWith(QStringLiteral("- "))) {
-            cursor.insertText(QStringLiteral("- "), base);
-            insert_inline(line.mid(2), base);
+        } else if (heading_match.hasMatch()) {
+            block.setAlignment(Qt::AlignLeft);
+            block.setTopMargin(6);
+            block.setBottomMargin(6);
+            cursor.setBlockFormat(block);
+            cursor.insertText(heading_match.captured(2), heading);
+        } else if (unordered_match.hasMatch() || ordered_match.hasMatch()) {
+            block.setAlignment(Qt::AlignLeft);
+            block.setLeftMargin(block.leftMargin() + 16);
+            block.setTextIndent(-14);
+            block.setBottomMargin(kListBottomMargin);
+            block.setLineHeight(150, QTextBlockFormat::ProportionalHeight);
+            cursor.setBlockFormat(block);
+            if (ordered_match.hasMatch()) {
+                cursor.insertText(ordered_match.captured(1) + QChar(' '), base);
+                insert_inline(ordered_match.captured(2), base);
+            } else {
+                cursor.insertText(QStringLiteral("• "), base);
+                insert_inline(unordered_match.captured(1), base);
+            }
         } else if (line.startsWith(QStringLiteral("> "))) {
+            cursor.setBlockFormat(block);
             insert_inline(line.mid(2), quote);
         } else {
+            cursor.setBlockFormat(block);
             insert_inline(line, base);
         }
     }
