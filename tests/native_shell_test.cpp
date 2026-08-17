@@ -3405,9 +3405,12 @@ void verify_modern_composer_surface(
     const auto native_anchor = titlebar_brand->property(
         "lingtai_native_traffic_light_anchor").toPoint();
     require(native_anchor.x() > 0
+            && native_anchor.y() >= 8 && native_anchor.y() <= 32
+            && titlebar_brand->geometry().top() >= 0
+            && titlebar_brand->geometry().bottom() <= 48
             && qAbs(titlebar_brand->geometry().left() - native_anchor.x()) <= 1
             && qAbs(titlebar_brand->geometry().center().y() - native_anchor.y()) <= 1,
-        "the titlebar brand must start immediately right of and vertically align with the real macOS traffic lights");
+        "the titlebar brand must stay in the top traffic-light row, start immediately right of it, and share its vertical center");
     require(project_selector->parent() != window.body().get(),
         "the functional project selector must remain in the Sidebar");
 
