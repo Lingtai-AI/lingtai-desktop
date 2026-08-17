@@ -46,9 +46,14 @@ constexpr auto kNarrowViewportWidth = 480;
 constexpr auto kBubbleHPadding = 11;
 constexpr auto kBubbleVPadding = 8;
 constexpr auto kBubbleRadius = 8;
+// The gap between the outgoing bubble's left edge and the external timestamp.
+constexpr auto kTimestampGap = 6;
 constexpr auto kMessageAvatarDiameter = 40;
 constexpr auto kMessageAvatarGap = 10;
 constexpr auto kMessageBlockProperty = QTextFormat::UserProperty + 1;
+// The outgoing message timestamp rides on the sibling frame so paintEvent can
+// place it outside the body-only bubble without a visible header block.
+constexpr auto kMessageTimestampProperty = QTextFormat::UserProperty + 2;
 constexpr auto kEmptyAvatarDiameter = 32;
 constexpr auto kEmptyAvatarGap = 10;
 constexpr auto kEmptyTitleGap = 6;
@@ -197,7 +202,8 @@ void insert_markdown_body(
         QTextCursor &cursor,
         const QString &body,
         const QTextCharFormat &base,
-        const QTextBlockFormat &continuation) {
+        const QTextBlockFormat &continuation,
+        bool first_line_in_current_block = false) {
     const auto bold = emphasized_text_format(base);
     const auto heading = heading_text_format(base);
     const auto code = code_text_format(base);
@@ -281,7 +287,11 @@ void insert_markdown_body(
             in_code_fence = true;
             continue;
         }
-        cursor.insertBlock(continuation);
+        if (first_line_in_current_block) {
+            first_line_in_current_block = false;
+        } else {
+            cursor.insertBlock(continuation);
+        }
         if (in_code_fence) {
             cursor.insertText(line, code);
         } else if (line.startsWith(QChar('#'))) {
@@ -308,12 +318,17 @@ int message_content_width(
         const QString &them) {
     const auto outgoing = message.outgoing;
     auto widest = 0.0;
-    const auto header = QFontMetricsF(sender_format(outgoing).font())
-            .horizontalAdvance(outgoing ? QStringLiteral("You") : them)
-        + QFontMetricsF(secondary_format().font()).horizontalAdvance(
-            QStringLiteral(" · %1")
-                .arg(QString::fromStdString(message.timestamp)));
-    widest = qMax(widest, header);
+    // The outgoing sender/timestamp header is no longer rendered inside the
+    // message lane (the time moved outside the body-only bubble), so only an
+    // incoming row's header contributes to the natural content width.
+    if (!outgoing) {
+        const auto header = QFontMetricsF(sender_format(outgoing).font())
+                .horizontalAdvance(them)
+            + QFontMetricsF(secondary_format().font()).horizontalAdvance(
+                QStringLiteral(" · %1")
+                    .arg(QString::fromStdString(message.timestamp)));
+        widest = qMax(widest, header);
+    }
 
     if (!message.subject.empty()) {
         const auto subject_metrics = QFontMetricsF(
@@ -525,6 +540,13 @@ void ConversationSurface::rebuild_document(
         // spans continuation blocks.
         frame_format.setBottomMargin(kMessageFrameBottomMargin);
         frame_format.setBackground(Qt::transparent);
+        // The outgoing timestamp is not a visible header: it rides on the frame
+        // so paintEvent can draw it outside the body-only bubble.
+        if (outgoing) {
+            frame_format.setProperty(
+                kMessageTimestampProperty,
+                QString::fromStdString(message.timestamp));
+        }
         auto *frame = cursor.insertFrame(frame_format);
         cursor = frame->firstCursorPosition();
         // The header block carries the whole-message lane format with no block
@@ -532,14 +554,14 @@ void ConversationSurface::rebuild_document(
         auto header_format = block_format;
         header_format.setBottomMargin(0);
         cursor.setBlockFormat(header_format);
-        cursor.insertText(
-            outgoing ? QStringLiteral("You") : them_,
-            sender_format(outgoing));
-        cursor.insertText(
-            QStringLiteral(" · %1")
-                .arg(QString::fromStdString(message.timestamp)),
-            secondary_format());
-        cursor.insertText(separator, secondary_format());
+        if (!outgoing) {
+            cursor.insertText(them_, sender_format(outgoing));
+            cursor.insertText(
+                QStringLiteral(" · %1")
+                    .arg(QString::fromStdString(message.timestamp)),
+                secondary_format());
+            cursor.insertText(separator, secondary_format());
+        }
         if (!message.subject.empty()) {
             cursor.insertText(QString::fromStdString(message.subject),
                 subject_format(outgoing));
@@ -562,8 +584,14 @@ void ConversationSurface::rebuild_document(
         continuation.setTopMargin(0);
         continuation.setBottomMargin(0);
         continuation.clearProperty(kMessageBlockProperty);
+        // An outgoing body-only message keeps its first real body line in the
+        // frame's existing initial block (preserving that block's lane and top
+        // margin) instead of opening a fresh continuation block; a subject row
+        // keeps today's subject-in-initial-block and body-continuation layout.
+        const auto first_in_initial = outgoing && message.subject.empty();
         insert_markdown_body(
-            cursor, body, body_format(outgoing), continuation);
+            cursor, body, body_format(outgoing), continuation,
+            first_in_initial);
     }
 
     scrollbar->setValue(was_at_bottom
@@ -686,11 +714,37 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
         const auto outgoing = first_valid_block.blockFormat().alignment()
             .testFlag(Qt::AlignRight);
         if (outgoing) {
-            if (!bubble.intersects(QRectF(event->rect()))) {
-                continue;
-            }
+            // The painter is already clipped to event->rect(). Do not skip the
+            // whole message merely because the bubble itself misses a partial
+            // repaint: the external timestamp may still intersect that event.
             painter.setBrush(st::msgOutBg);
             painter.drawRoundedRect(bubble, kBubbleRadius, kBubbleRadius);
+            // The stored timestamp is drawn immediately left of the bubble in
+            // the shared secondary tone, right-aligned and vertically centered
+            // against the bubble's left edge, then the painter state restores.
+            const auto timestamp = frame->frameFormat()
+                .property(kMessageTimestampProperty)
+                .toString();
+            if (!timestamp.isEmpty()) {
+                const auto metrics = QFontMetricsF(secondary_format().font());
+                const auto text_width = metrics.horizontalAdvance(timestamp);
+                const auto text_height = metrics.height();
+                const auto time_rect = QRectF(
+                    bubble.left() - kTimestampGap - text_width,
+                    bubble.center().y() - text_height / 2.0,
+                    text_width,
+                    text_height);
+                if (time_rect.intersects(QRectF(event->rect()))) {
+                    painter.save();
+                    painter.setPen(st::msgServiceFg);
+                    painter.setFont(secondary_format().font());
+                    painter.drawText(
+                        time_rect,
+                        Qt::AlignRight | Qt::AlignVCenter,
+                        timestamp);
+                    painter.restore();
+                }
+            }
         } else {
             const auto avatar = QRectF(
                 text_bounds.left() - kMessageAvatarGap
