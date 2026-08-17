@@ -34,10 +34,10 @@ namespace {
 constexpr auto kDocumentMargin = 8;
 constexpr auto kMessageEdgeMargin = 12;
 constexpr auto kMessageTopMargin = 4;
-// The combined 4px/30px vertical margins leave at least the test-pinned 14px
-// rendered gap between consecutive bubbles: the 34px text-to-text distance
-// minus the 8px vertical bubble padding drawn on each of the two bubbles.
-constexpr auto kMessageBottomMargin = 30;
+// Sibling-frame spacing, not a final QTextBlock margin, preserves the
+// test-pinned 14px rendered gap between consecutive bubbles: each message
+// frame's bottom margin is the whole outer gap.
+constexpr auto kMessageFrameBottomMargin = 14;
 constexpr auto kMessageRatio = 0.72;
 constexpr auto kMinMessageWidth = 160;
 constexpr auto kMessageAbsoluteCap = 640;
@@ -95,7 +95,7 @@ QTextBlockFormat message_block_format(
     format.setLeftMargin(outgoing ? inner : outer);
     format.setRightMargin(outgoing ? outer : inner);
     format.setTopMargin(kMessageTopMargin);
-    format.setBottomMargin(kMessageBottomMargin);
+    format.setBottomMargin(0);
     format.setProperty(kMessageBlockProperty, true);
     return format;
 }
@@ -516,13 +516,15 @@ void ConversationSurface::rebuild_document(
         frame_format.setBorder(0);
         frame_format.setPadding(0);
         frame_format.setMargin(0);
+        // The whole frame carries the sibling-frame bottom spacing, so
+        // consecutive bubbles keep a positive gap regardless of how the body
+        // spans continuation blocks.
+        frame_format.setBottomMargin(kMessageFrameBottomMargin);
         frame_format.setBackground(Qt::transparent);
         auto *frame = cursor.insertFrame(frame_format);
         cursor = frame->firstCursorPosition();
-        // The header block carries the whole-message lane format but never the
-        // outer bottom margin: the final body block of the message owns that
-        // margin, so consecutive bubbles keep a positive gap even when the body
-        // spans multiple continuation blocks.
+        // The header block carries the whole-message lane format with no block
+        // bottom margin: the frame's bottom margin owns the outer sibling gap.
         auto header_format = block_format;
         header_format.setBottomMargin(0);
         cursor.setBlockFormat(header_format);
@@ -558,14 +560,6 @@ void ConversationSurface::rebuild_document(
         continuation.clearProperty(kMessageBlockProperty);
         insert_markdown_body(
             cursor, body, body_format(outgoing), continuation);
-        // The final block owns the message's outer bottom margin: give it back
-        // the header's original margin so the outer bubble gap survives the
-        // body's zero-margin continuation blocks. When the body creates no
-        // visible continuation block the cursor still sits on the header, which
-        // simply regains the original bottom margin.
-        auto final_format = cursor.blockFormat();
-        final_format.setBottomMargin(block_format.bottomMargin());
-        cursor.setBlockFormat(final_format);
     }
 
     scrollbar->setValue(was_at_bottom
