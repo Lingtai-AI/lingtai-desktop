@@ -199,9 +199,11 @@ void verify_responsive_width() {
     // Very wide: both messages must share one centered reading column while
     // keeping opposite anchors inside it, and the message width is capped
     // near the design's ~636px readable target instead of stretching with the
-    // pane. The shared column is proven by cross-direction symmetry: the
-    // incoming outer-left matches the outgoing outer-right and the incoming
-    // inner-right matches the outgoing inner-left.
+    // pane. The shared column is proven by cross-direction symmetry across
+    // the incoming avatar lane: the incoming envelope's outer-left (its text
+    // left minus the 50px avatar lane) matches the outgoing outer-right and
+    // the incoming envelope's inner-right (its text right plus the 50px
+    // avatar lane) matches the outgoing inner-left.
     const auto wide = measure_at_width(1600);
     const auto wide_in = wide.first;
     const auto wide_out = wide.second;
@@ -212,13 +214,12 @@ void verify_responsive_width() {
             "inside the shared reading column, incoming left and outgoing "
             "right");
     }
-    if (std::abs(wide_in.left - wide_out.right) > 2.0
-        || std::abs(wide_in.right - wide_out.left) > 2.0) {
+    if (std::abs((wide_in.left - 50.0) - wide_out.right) > 2.0
+        || std::abs((wide_in.right + 50.0) - wide_out.left) > 2.0) {
         throw std::runtime_error(
             "at a very wide viewport the messages must share one centered "
-            "reading column: incoming outer-left must match outgoing "
-            "outer-right and incoming inner-right must match outgoing "
-            "inner-left");
+            "reading column: the incoming avatar envelope's outer/inner edges "
+            "must align with the outgoing reading-column edges");
     }
     if (wide_in.content_width < 580.0 || wide_in.content_width > 700.0
         || wide_out.content_width < 580.0
