@@ -499,16 +499,22 @@ void insert_markdown_body(
 // A message's natural width belongs to the same shaped Qt text layout that
 // renders it, not to a parallel QFontMetrics estimate. This mirrors Telegram
 // Desktop's `Ui::Text::String::maxWidth()` -> `countSize()` chain: build the
-// exact header/body character runs in an unwrapped QTextDocument, then take the
-// widest real QTextLine. The caller adds only the declared bubble padding.
+// exact header/body character runs in an unwrapped QTextDocument on the active
+// Conversation paint device, then take each real QTextLine's full advance. The
+// caller adds only the declared bubble padding.
 int message_content_width(
         const DirectConversationMessage &message,
         const QString &them,
         const QString &time_suffix,
-        bool show_incoming_header) {
+        bool show_incoming_header,
+        QPaintDevice *paint_device) {
     const auto outgoing = message.outgoing;
     QTextDocument probe;
     probe.setDocumentMargin(0);
+    // Font fallback and glyph advances can differ between a detached document
+    // and the live native viewport. Bind the probe to the same paint device that
+    // will lay out the real message before shaping any runs.
+    probe.documentLayout()->setPaintDevice(paint_device);
     // A very wide layout prevents automatic wrapping while preserving explicit
     // source line/paragraph boundaries and Qt's real glyph shaping/bearings.
     probe.setTextWidth(1'000'000);
@@ -549,7 +555,10 @@ int message_content_width(
     for (auto current = probe.begin(); current.isValid(); current = current.next()) {
         const auto *layout = current.layout();
         for (auto i = 0; i != layout->lineCount(); ++i) {
-            widest = std::max(widest, layout->lineAt(i).naturalTextRect().width());
+            // `naturalTextRect()` is only visible ink. The real line-breaking
+            // contract owns the full shaped horizontal advance, including
+            // bearings/spacing that must fit before Qt keeps the run on one line.
+            widest = std::max(widest, layout->lineAt(i).horizontalAdvance());
         }
     }
     return int(std::ceil(widest));
@@ -822,7 +831,7 @@ void ConversationSurface::rebuild_document() {
         const auto width = qBound(
             qMin(lane_min, lane_max),
             message_content_width(
-                message, them_, present.time, incoming_group_first)
+                message, them_, present.time, incoming_group_first, viewport())
                 + 2 * horizontal_padding,
             lane_max);
         const auto block_format = message_block_format(

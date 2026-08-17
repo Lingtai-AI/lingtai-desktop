@@ -2,6 +2,7 @@
 
 #include "base/basic_types.h"
 #include "styles/palette.h"
+#include "styles/style_widgets.h"
 #include "ui/style/style_core_scale.h"
 
 #include "direct_conversation_history.h"
@@ -1226,6 +1227,7 @@ struct OutgoingRender {
     QTextBlockFormat block;
     QTextCharFormat body;
     qreal effective_width = 0;
+    qreal first_line_advance = 0;
     int viewport_width = 0;
 };
 
@@ -1277,6 +1279,7 @@ OutgoingRender render_outgoing_at(
         format,
         runs.front(),
         surface.viewport()->width() - format.leftMargin() - format.rightMargin(),
+        blocks.front().layout()->lineAt(0).horizontalAdvance(),
         surface.viewport()->width(),
     };
 }
@@ -1406,20 +1409,17 @@ void verify_human_bubble_contract() {
         throw std::runtime_error(
             "the real short mixed-language Human message must stay on one line");
     }
-    // Telegram Desktop derives the natural bubble width from the same shaped
-    // text layout that renders the message. The local surface must therefore
-    // leave only its declared 15px horizontal padding around this real one-line
-    // mixed CJK/Latin record; a separate arbitrary wrap guard would make the
-    // frame materially wider than its QTextLine ink.
-    const auto shaped_width_slack = real_short_mixed_message.effective_width
-        - std::ceil(real_short_mixed_message.text.width())
-        - 2 * 15;
-    if (shaped_width_slack > 4.0) {
+    // Telegram Desktop derives natural width from shaped layout advances and
+    // bearings, not from the tighter visible-ink rectangle. The bubble must fit
+    // the rendered line's horizontal advance plus its declared padding; an ink-
+    // bounds probe can under-size the live line when its paint device differs.
+    const auto layout_width_deficit = real_short_mixed_message.first_line_advance
+        + 2 * 15 - real_short_mixed_message.effective_width;
+    if (layout_width_deficit > 0.5) {
         throw std::runtime_error(
-            "the real mixed-language Human bubble must be sized from its shaped "
-            "QTextLine width with padding only, but it carries "
-            + std::to_string(shaped_width_slack)
-            + "px of parallel-estimate slack");
+            "the real mixed-language Human bubble must fit its QTextLine "
+            "horizontal advance plus padding, but it is short by "
+            + std::to_string(layout_width_deficit) + "px");
     }
 
     const auto expected_fill = QColor(QStringLiteral("#EEF7F3"));
@@ -2126,6 +2126,10 @@ int run_typography_test(int argc, char **argv) {
     try {
         QApplication application(argc, argv);
         style::internal::init_palette(style::kScaleDefault);
+        // Match the real native shell's font/widget style initialization so the
+        // focused contract uses the configured family and scale, not only its
+        // palette.
+        style::internal::init_style_widgets(style::kScaleDefault);
         if (argc > 1
                 && QString::fromLocal8Bit(argv[1])
                     == QStringLiteral("--human-bubble-only")) {
