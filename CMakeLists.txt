@@ -180,6 +180,12 @@ add_library(lingtai_desktop_native_shell STATIC
     src/ui/agent_roster.cpp
     src/ui/conversation_surface.cpp)
 init_target(lingtai_desktop_native_shell)
+qt_add_resources(lingtai_desktop_native_shell "lingtai_startup_assets"
+    PREFIX "/lingtai/startup"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/startup"
+    FILES
+        resources/startup/lingtai-logo-light-4096.png
+        resources/startup/lingtai-logo-dark-4096.png)
 target_include_directories(lingtai_desktop_native_shell PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_options(lingtai_desktop_native_shell PRIVATE

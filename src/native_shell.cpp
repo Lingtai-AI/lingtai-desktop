@@ -38,6 +38,7 @@
 #include <QtGui/QMouseEvent>
 #include <QtGui/QPainter>
 #include <QtGui/QPainterPath>
+#include <QtGui/QPixmap>
 #include <QtGui/QPalette>
 #include <QtGui/QStyleHints>
 #include <QtWidgets/QBoxLayout>
@@ -158,44 +159,42 @@ private:
 // One Telegram-shaped Composer control envelope: attachment, field and Send
 // share this single rounded base and its one-pixel adaptive palette border.
 // Status text stays in the outer Composer lane rather than widening this frame.
-// The quiet first-launch mark is drawn from evenly spaced dots rather than a
-// bundled raster, so it remains crisp at every Qt scale while retaining the
-// sparse teal line-art character of the accepted reference.
+bool system_prefers_dark_palette();
+
+// Ted's two canonical startup marks are packaged with every native-shell
+// consumer. The widget selects at paint time so the existing palette-change
+// pass can switch the logo without reconstructing the launch route.
 class StartupIllustration final : public QWidget {
 public:
     explicit StartupIllustration(QWidget *parent)
-    : QWidget(parent) {
+    : QWidget(parent)
+    , light_(QStringLiteral(":/lingtai/startup/lingtai-logo-light-4096.png"))
+    , dark_(QStringLiteral(":/lingtai/startup/lingtai-logo-dark-4096.png")) {
         setFixedSize(220, 190);
         setAttribute(Qt::WA_TransparentForMouseEvents);
+        setProperty("lingtai_light_logo_resource",
+            QStringLiteral(":/lingtai/startup/lingtai-logo-light-4096.png"));
+        setProperty("lingtai_dark_logo_resource",
+            QStringLiteral(":/lingtai/startup/lingtai-logo-dark-4096.png"));
     }
 
 protected:
     void paintEvent(QPaintEvent *) override {
+        const auto &logo = system_prefers_dark_palette() ? dark_ : light_;
+        if (logo.isNull()) return;
+        const auto scaled = logo.size().scaled(size(), Qt::KeepAspectRatio);
+        const auto target = QRect(
+            QPoint((width() - scaled.width()) / 2,
+                (height() - scaled.height()) / 2),
+            scaled);
         QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor(QStringLiteral("#008f79")));
-        const auto draw_dotted_segment = [&painter](QPointF from, QPointF to) {
-            const QLineF line(from, to);
-            const auto count = std::max(2, qRound(line.length() / 7.0));
-            for (auto index = 0; index <= count; ++index) {
-                const auto ratio = double(index) / double(count);
-                const auto point = from + (to - from) * ratio;
-                painter.drawEllipse(point, 1.7, 1.7);
-            }
-        };
-        const std::array<std::pair<QPointF, QPointF>, 12> segments = {{
-            {{36, 72}, {72, 24}}, {{72, 24}, {110, 75}},
-            {{110, 75}, {145, 35}}, {{145, 35}, {186, 82}},
-            {{28, 86}, {192, 86}}, {{55, 47}, {55, 150}},
-            {{110, 58}, {110, 150}}, {{165, 58}, {165, 150}},
-            {{35, 150}, {184, 150}}, {{18, 168}, {202, 168}},
-            {{73, 101}, {95, 124}}, {{145, 103}, {128, 126}},
-        }};
-        for (const auto &[from, to] : segments) {
-            draw_dotted_segment(from, to);
-        }
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        painter.drawPixmap(target, logo);
     }
+
+private:
+    QPixmap light_;
+    QPixmap dark_;
 };
 
 class ComposerControls final : public Ui::RpWidget {
