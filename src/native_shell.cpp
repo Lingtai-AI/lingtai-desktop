@@ -212,7 +212,7 @@ public:
     explicit PageNavButton(QWidget *parent, const QString &text)
     : QPushButton(text, parent) {
         setCheckable(true);
-        setFixedHeight(28);
+        setFixedHeight(24);
     }
 
 protected:
@@ -1068,7 +1068,7 @@ NativeShell::NativeShell()
     pages_nav->setObjectName("lingtai_agent_pages_nav");
     pages_nav->setAccessibleName(QStringLiteral("Selected Agent pages"));
     auto *pages_nav_layout = new QHBoxLayout(pages_nav);
-    pages_nav_layout->setContentsMargins(0, 4, 0, 4);
+    pages_nav_layout->setContentsMargins(0, 0, 0, 0);
     pages_nav_layout->setSpacing(4);
     const auto nav_specs = std::array<std::pair<const char *, const char *>, 2>{{
         std::pair{"lingtai_agent_page_nav_conversation", "Conversation"},

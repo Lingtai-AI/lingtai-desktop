@@ -2966,13 +2966,20 @@ void verify_plain_underline_page_tabs(
         R"({"admin":{},"agent_id":"20260712-191609-a001",)"
         R"("agent_name":"alpha","address":"alpha","state":"active"})");
     static_cast<void>(shell.open_project(project, std::nullopt));
-    click_agent(window, "alpha");
     window.resize(1200, 800);
     QCoreApplication::processEvents();
+    click_first_agent_canvas_row(window);
+    QCoreApplication::processEvents();
+
+    auto *pages_nav = presets_nav->parentWidget();
+    require(pages_nav->height() <= 24
+            && conversation_nav->height() <= 24
+            && presets_nav->height() <= 24,
+        "the plain-text tab strip and its buttons must stay compact at no more "
+        "than 24 px high");
 
     const auto slab = st::windowBgOver->c;
     const auto accent = st::dialogsBgActive->c;
-    auto *pages_nav = presets_nav->parentWidget();
     const auto image = pages_nav->grab().toImage();
     // The grab backing is physical device pixels, but every coordinate below
     // is a logical pages_nav point: scale by the image's devicePixelRatio
