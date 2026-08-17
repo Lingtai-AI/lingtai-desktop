@@ -428,7 +428,9 @@ void insert_markdown_body(
             block.setRightMargin(block.rightMargin() + 8);
             block.setTopMargin(4);
             block.setBottomMargin(4);
-            block.setBackground(code_surface_color());
+            // Keep a nonempty semantic brush on the block for document/a11y
+            // inspection, but let paintEvent own the visible rounded surface.
+            block.setBackground(QColor(0, 0, 0, 1));
             block.setProperty(kCodeBlockProperty, true);
             cursor.setBlockFormat(block);
             cursor.insertText(line, code);
@@ -944,6 +946,7 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
             .topLeft();
         QTextBlock first_valid_block;
         auto text_bounds = QRectF();
+        auto code_bounds = QRectF();
         for (auto block = frame->begin(); !block.atEnd();
              ++block) {
             const auto current_block = block.currentBlock();
@@ -964,6 +967,12 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
             if (block_bounds.isNull()) {
                 continue;
             }
+            if (current_block.blockFormat()
+                    .property(kCodeBlockProperty).toBool()) {
+                code_bounds = code_bounds.isNull()
+                    ? block_bounds
+                    : code_bounds.united(block_bounds);
+            }
             if (!first_valid_block.isValid()) {
                 first_valid_block = current_block;
             }
@@ -975,6 +984,9 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
             continue;
         }
         text_bounds.translate(-h_offset, -v_offset);
+        if (!code_bounds.isNull()) {
+            code_bounds.translate(-h_offset, -v_offset);
+        }
         const auto bubble = text_bounds.adjusted(
             -kBubbleHPadding,
             -kBubbleVPadding,
@@ -1014,11 +1026,8 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
                     painter.restore();
                 }
             }
-        } else {
-            if (!frame->frameFormat()
-                    .property(kMessageAvatarProperty).toBool()) {
-                continue;
-            }
+        } else if (frame->frameFormat()
+                .property(kMessageAvatarProperty).toBool()) {
             const auto avatar = QRectF(
                 text_bounds.left() - kMessageAvatarGap
                     - kMessageAvatarDiameter,
@@ -1036,6 +1045,18 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
                 painter.drawText(avatar, Qt::AlignCenter,
                     them_.trimmed().left(1).toUpper());
                 painter.setPen(Qt::NoPen);
+            }
+        }
+        // Only fenced code gets a separate low-contrast rounded surface;
+        // ordinary paragraphs remain on the single Conversation canvas.
+        if (!code_bounds.isNull()) {
+            const auto code_surface = code_bounds.adjusted(-6, -4, 6, 4);
+            if (code_surface.intersects(QRectF(event->rect()))) {
+                painter.save();
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(code_surface_color());
+                painter.drawRoundedRect(code_surface, 6, 6);
+                painter.restore();
             }
         }
     }
