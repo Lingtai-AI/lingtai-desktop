@@ -220,7 +220,7 @@ protected:
         QPainter painter(this);
         auto font = this->font();
         font.setPointSize(11);
-        font.setWeight(isChecked() ? QFont::DemiBold : QFont::Normal);
+        font.setWeight(QFont::Normal);
         painter.setFont(font);
         painter.setPen(isChecked() ? st::dialogsTextFgService : st::windowSubTextFg);
         painter.drawText(rect(), Qt::AlignCenter, text());
