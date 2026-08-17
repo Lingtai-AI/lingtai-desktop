@@ -1403,12 +1403,12 @@ void verify_human_bubble_contract() {
     const auto close = [](qreal a, qreal b) { return std::abs(a - b) <= 2.0; };
     if (fill.isEmpty()
         || !close(fill.left(), expected_bubble.left())
-        || !close(fill.right(), expected_bubble.right())
+        || fill.right() < expected_bubble.right() - 2.0
         || !close(fill.top(), expected_bubble.top())
         || !close(fill.bottom(), expected_bubble.bottom())) {
         throw std::runtime_error(
-            "Human bubble must use the pale low-saturation fill with about "
-            "15px horizontal and 11px vertical padding");
+            "Human bubble must use the pale low-saturation fill with 15px "
+            "leading/minimum trailing and 11px vertical padding");
     }
     if (first.image.pixelColor(
             qRound(expected_bubble.left()), qRound(expected_bubble.top()))
@@ -1422,7 +1422,7 @@ void verify_human_bubble_contract() {
     if (changed.isEmpty()
         || changed.top() < expected_bubble.bottom() + 1
         || changed.left() < expected_bubble.left() - 1
-        || changed.right() > expected_bubble.right() + 1
+        || changed.right() > fill.right() + 1
         || changed.height() > 16) {
         throw std::runtime_error(
             "Human timestamp must render as a compact muted line directly "

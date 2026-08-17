@@ -1028,11 +1028,21 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
             .property(kMessageOutgoingProperty)
             .toBool();
         if (outgoing) {
-            const auto bubble = text_bounds.adjusted(
+            // `naturalTextRect()` stops at the longest painted glyph run, so
+            // word-wrap slack made otherwise identical capped Human lanes end
+            // at different x positions. The QTextLine rect owns the actual
+            // right-anchored lane width; use that edge for both bubble and time.
+            const auto *first_layout = first_valid_block.layout();
+            const auto lane_right = first_layout->lineAt(0).rect()
+                .translated(first_layout->position())
+                .translated(frame_origin)
+                .right() - h_offset;
+            auto bubble = text_bounds.adjusted(
                 -kHumanBubbleHPadding,
                 -kHumanBubbleVPadding,
                 kHumanBubbleHPadding,
                 kHumanBubbleVPadding);
+            bubble.setRight(lane_right + kHumanBubbleHPadding);
             // The painter is already clipped to event->rect(). Do not skip the
             // whole message merely because the bubble itself misses a partial
             // repaint: the below-bubble timestamp may still intersect it.
