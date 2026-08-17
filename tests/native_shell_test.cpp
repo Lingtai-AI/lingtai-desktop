@@ -2689,6 +2689,10 @@ void verify_compact_header_hierarchy(
         "the compact header must keep the selected-Agent title visible");
     require(status->isVisible(),
         "the compact header must show a small status line under the title");
+    require(presentation_name->font().pointSize() == 16,
+        "the selected-Agent title must scale with the 16px Conversation body");
+    require(status->font().pointSize() == 12,
+        "the friendly Status · role line must scale to the legible 12pt secondary rung");
     require(status->font().pointSize() < presentation_name->font().pointSize(),
         "the header status must stay smaller than the title");
     require(status->palette().color(QPalette::WindowText)
@@ -2972,11 +2976,13 @@ void verify_plain_underline_page_tabs(
     QCoreApplication::processEvents();
 
     auto *pages_nav = presets_nav->parentWidget();
-    require(pages_nav->height() <= 24
-            && conversation_nav->height() <= 24
-            && presets_nav->height() <= 24,
-        "the plain-text tab strip and its buttons must stay compact at no more "
-        "than 24 px high");
+    require(conversation_nav->font().pointSize() == 13
+            && presets_nav->font().pointSize() == 13,
+        "Conversation and Presets must share the 13pt main-window navigation rung");
+    require(pages_nav->height() == 28
+            && conversation_nav->height() == 28
+            && presets_nav->height() == 28,
+        "the larger plain-text tab strip must own one exact 28px line box");
 
     const auto slab = st::windowBgOver->c;
     const auto accent = st::dialogsBgActive->c;

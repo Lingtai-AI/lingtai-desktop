@@ -540,6 +540,24 @@ void verify_typography(ConversationSurface &surface, const QString &them) {
         "outgoing body");
     require_font(out_body, 16, QFont::Normal, "outgoing body");
 
+    const auto require_reading_line_height = [](const QTextFrame &frame,
+            const char *direction) {
+        for (auto it = frame.begin(); !it.atEnd(); ++it) {
+            const auto block = it.currentBlock();
+            if (!block.isValid()) continue;
+            const auto format = block.blockFormat();
+            if (format.lineHeightType() != QTextBlockFormat::ProportionalHeight
+                || qRound(format.lineHeight()) != 110) {
+                throw std::runtime_error(
+                    std::string("the ") + direction
+                    + " message blocks must use 110% proportional line height "
+                      "after the reading font scales");
+            }
+        }
+    };
+    require_reading_line_height(*incoming, "incoming");
+    require_reading_line_height(*outgoing, "outgoing");
+
     // The pinned visual hierarchy for both directions.
     require_hierarchy("incoming", in_sender.font.pixelSize(),
         in_body.font.pixelSize(), in_metadata.font.pixelSize());
