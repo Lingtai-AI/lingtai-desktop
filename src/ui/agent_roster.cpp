@@ -29,6 +29,7 @@ constexpr auto kAvatarDiameter = 40;
 constexpr auto kAvatarTextGap = 10;
 constexpr auto kRowHorizontalFrame = 14;
 constexpr auto kRowVerticalFrame = 8;
+constexpr auto kRowSpacing = 2;
 
 // The presentation row set: the shared snapshot keeps the human pseudo-agent
 // (routing, mailbox, and detail truth consume it), but the roster never
@@ -256,6 +257,92 @@ void paint_agent_row(
             secondary_text,
             Qt::ElideRight,
             std::max(0, secondary_rect.width())));
+}
+
+// The virtual Agent rows surface: one canvas owns the visible row model plus
+// the selected key and paints every row itself from the shared row geometry,
+// instead of owning one QPushButton per row. It exposes a minimal model-update
+// and selected-update API; an unchanged model only moves the selected
+// highlight. The canvas is not wired into AgentRoster yet — the ownership
+// swap lands in a follow-up.
+class AgentRowsCanvas final : public Ui::RpWidget {
+public:
+    explicit AgentRowsCanvas(QWidget *parent)
+    : Ui::RpWidget(parent) {
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    }
+
+    void set_rows(
+            const AgentSnapshot &snapshot,
+            const std::optional<std::filesystem::path> &selected_key) {
+        rows_ = visible_rows(snapshot);
+        selected_key_ = selected_key;
+        updateGeometry();
+        update();
+    }
+
+    void set_selected_key(
+            const std::optional<std::filesystem::path> &selected_key) {
+        if (selected_key_ == selected_key) {
+            return;
+        }
+        selected_key_ = selected_key;
+        update();
+    }
+
+    QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+
+private:
+    int content_height() const;
+
+    std::vector<AgentRow> rows_;
+    std::optional<std::filesystem::path> selected_key_;
+};
+
+QSize AgentRowsCanvas::sizeHint() const {
+    return QSize(kRosterColumnWidth, content_height());
+}
+
+QSize AgentRowsCanvas::minimumSizeHint() const {
+    return sizeHint();
+}
+
+int AgentRowsCanvas::content_height() const {
+    if (rows_.empty()) {
+        return 0;
+    }
+    const auto row_count = static_cast<int>(rows_.size());
+    return row_count * agent_row_height(font())
+        + (row_count - 1) * kRowSpacing;
+}
+
+void AgentRowsCanvas::paintEvent(QPaintEvent *) {
+    QPainter painter(this);
+    painter.fillRect(rect(), st::windowBgOver);
+    const auto row_height = agent_row_height(font());
+    for (auto index = std::size_t{0}; index != rows_.size(); ++index) {
+        const auto &item = rows_[index];
+        auto primary_text = path_text(item.directory_key);
+        primary_text.replace(QLatin1Char('&'), QStringLiteral("&&"));
+        const auto selected = selected_key_
+            && *selected_key_ == item.directory_key;
+        paint_agent_row(
+            painter,
+            QRect(
+                0,
+                static_cast<int>(index) * (row_height + kRowSpacing),
+                width(),
+                row_height),
+            font(),
+            primary_text,
+            row_summary(item),
+            selected,
+            false);
+    }
 }
 
 QSize AgentRowButton::sizeHint() const {
