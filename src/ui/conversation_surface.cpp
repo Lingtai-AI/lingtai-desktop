@@ -496,74 +496,6 @@ void insert_markdown_body(
     }
 }
 
-// A message's natural width belongs to the same shaped Qt text layout that
-// renders it, not to a parallel QFontMetrics estimate. This mirrors Telegram
-// Desktop's `Ui::Text::String::maxWidth()` -> `countSize()` chain: build the
-// exact header/body character runs in an unwrapped QTextDocument on the active
-// Conversation paint device, then take each real QTextLine's full advance. The
-// caller adds only the declared bubble padding.
-int message_content_width(
-        const DirectConversationMessage &message,
-        const QString &them,
-        const QString &time_suffix,
-        bool show_incoming_header,
-        QPaintDevice *paint_device) {
-    const auto outgoing = message.outgoing;
-    QTextDocument probe;
-    probe.setDocumentMargin(0);
-    // Font fallback and glyph advances can differ between a detached document
-    // and the live native viewport. Bind the probe to the same paint device that
-    // will lay out the real message before shaping any runs.
-    probe.documentLayout()->setPaintDevice(paint_device);
-    // A very wide layout prevents automatic wrapping while preserving explicit
-    // source line/paragraph boundaries and Qt's real glyph shaping/bearings.
-    probe.setTextWidth(1'000'000);
-    auto cursor = QTextCursor(&probe);
-    auto block = QTextBlockFormat();
-    block.setLeftMargin(0);
-    block.setRightMargin(0);
-    block.setTopMargin(0);
-    block.setBottomMargin(0);
-    cursor.setBlockFormat(block);
-
-    if (!outgoing && show_incoming_header) {
-        cursor.insertText(them, sender_format(outgoing));
-        if (!time_suffix.isEmpty()) {
-            cursor.insertText(
-                QStringLiteral(" · %1").arg(time_suffix),
-                message_metadata_format());
-        }
-        cursor.insertText(QString(QChar::LineSeparator), secondary_format());
-    }
-
-    // Stored subjects remain routing metadata. The body follows the exact same
-    // normalization and safe-markdown inserter as rebuild_document(), so list,
-    // heading, inline-code and fenced-code runs are measured as rendered.
-    auto body = QString::fromStdString(message.text);
-    body.replace(QStringLiteral("\r\n"), QString(QChar::LineSeparator));
-    body.replace(QChar::LineFeed, QString(QChar::LineSeparator));
-    body.replace(QChar::CarriageReturn, QString(QChar::LineSeparator));
-    body.replace(QChar::ParagraphSeparator, QString(QChar::LineSeparator));
-    auto continuation = block;
-    const auto first_in_initial = outgoing || !show_incoming_header;
-    insert_markdown_body(
-        cursor, body, body_format(outgoing), continuation,
-        first_in_initial);
-
-    probe.documentLayout()->documentSize();
-    auto widest = 0.0;
-    for (auto current = probe.begin(); current.isValid(); current = current.next()) {
-        const auto *layout = current.layout();
-        for (auto i = 0; i != layout->lineCount(); ++i) {
-            // `naturalTextRect()` is only visible ink. The real line-breaking
-            // contract owns the full shaped horizontal advance, including
-            // bearings/spacing that must fit before Qt keeps the run on one line.
-            widest = std::max(widest, layout->lineAt(i).horizontalAdvance());
-        }
-    }
-    return int(std::ceil(widest));
-}
-
 // The plain-state vertical anchor lives on the document root frame's top
 // margin rather than on the first block: Qt's first-block layout does not
 // honor a first block's own topMargin and places the line at the frame's top
@@ -767,6 +699,21 @@ void ConversationSurface::rebuild_document() {
     // The formatted day tracks only this visible lazy suffix, so a separator
     // appears before the first message of each changed nonempty day within the
     // window and never leaks across reveals.
+    // Telegram Desktop's sizing is two-stage on one real text object: first lay
+    // the actual message out at its allowed lane, then read that same layout's
+    // real line widths and shrink the lane once. Keep the real frames here for
+    // that second stage; no detached measurement document is involved.
+    struct PendingMessageWidth final {
+        QTextFrame *frame = nullptr;
+        bool outgoing = false;
+        int lane_min = 0;
+        int lane_max = 0;
+        int horizontal_padding = 0;
+        qreal provisional_left = 0;
+        qreal provisional_right = 0;
+    };
+    std::vector<PendingMessageWidth> pending_widths;
+
     QString previous_day;
     for (auto index = visible_begin; index != visible_end; ++index) {
         const auto &message = last_messages_[index];
@@ -828,14 +775,11 @@ void ConversationSurface::rebuild_document() {
         const auto horizontal_padding = outgoing
             ? kHumanBubbleHPadding
             : kBubbleHPadding;
-        const auto width = qBound(
-            qMin(lane_min, lane_max),
-            message_content_width(
-                message, them_, present.time, incoming_group_first, viewport())
-                + 2 * horizontal_padding,
-            lane_max);
+        // Stage one uses the whole allowed lane. This is the same provisional
+        // width Telegram passes into its real text object's countSize(): it lets
+        // the real frame decide line breaks before any content-sized shrink.
         const auto block_format = message_block_format(
-            outgoing, viewport_width, width);
+            outgoing, viewport_width, lane_max);
         // A fresh document-end cursor places every message as its own direct
         // sibling QTextFrame under the root frame, never nested. The frame is
         // transparent with no border, padding, or margin, so only the first
@@ -910,7 +854,60 @@ void ConversationSurface::rebuild_document() {
         insert_markdown_body(
             cursor, body, body_format(outgoing), continuation,
             first_in_initial);
+        pending_widths.push_back({
+            frame,
+            outgoing,
+            lane_min,
+            lane_max,
+            horizontal_padding,
+            block_format.leftMargin(),
+            block_format.rightMargin(),
+        });
     }
+
+    // Stage two reads the real QTextLayouts just created above, equivalent to
+    // Telegram's countSize()/textRealWidth() pass. Shrink every message once to
+    // its widest real line plus declared padding, preserving per-block list
+    // indents and other semantic formatting as the outer lane margins move.
+    document->documentLayout()->documentSize();
+    for (const auto &pending : pending_widths) {
+        auto real_width = 0.0;
+        for (auto it = pending.frame->begin(); !it.atEnd(); ++it) {
+            const auto block = it.currentBlock();
+            if (!block.isValid()) {
+                continue;
+            }
+            const auto *layout = block.layout();
+            for (auto line_index = 0;
+                    line_index != layout->lineCount(); ++line_index) {
+                real_width = std::max(
+                    real_width,
+                    layout->lineAt(line_index).horizontalAdvance());
+            }
+        }
+        const auto final_width = qBound(
+            qMin(pending.lane_min, pending.lane_max),
+            int(std::ceil(real_width)) + 2 * pending.horizontal_padding,
+            pending.lane_max);
+        const auto final_lane = message_block_format(
+            pending.outgoing, viewport_width, final_width);
+        const auto left_delta = final_lane.leftMargin()
+            - pending.provisional_left;
+        const auto right_delta = final_lane.rightMargin()
+            - pending.provisional_right;
+        for (auto it = pending.frame->begin(); !it.atEnd(); ++it) {
+            const auto block = it.currentBlock();
+            if (!block.isValid()) {
+                continue;
+            }
+            auto format = block.blockFormat();
+            format.setLeftMargin(format.leftMargin() + left_delta);
+            format.setRightMargin(format.rightMargin() + right_delta);
+            auto block_cursor = QTextCursor(block);
+            block_cursor.setBlockFormat(format);
+        }
+    }
+    document->documentLayout()->documentSize();
 
     scrollbar->setValue(was_at_bottom
         ? scrollbar->maximum()
