@@ -3,6 +3,7 @@
 #include "base/basic_types.h"
 #include "styles/palette.h"
 
+#include <QtCore/QDateTime>
 #include <QtCore/QUrl>
 #include <QtCore/QVariant>
 #include <QtGui/QAbstractTextDocumentLayout>
@@ -66,6 +67,10 @@ constexpr auto kEmptyStateAvatarLetterSize = 14;
 // inline note above the first revealed message rather than a tall separator.
 constexpr auto kBannerTopMargin = 6;
 constexpr auto kBannerBottomMargin = 8;
+// The day separator's vertical breathing room around the single centered muted
+// yyyy/MM/dd line, kept small so it reads as a quiet divider between days.
+constexpr auto kDayTopMargin = 6;
+constexpr auto kDayBottomMargin = 8;
 
 // The symmetric gutter of the centered reading column for a viewport: fixed
 // 12px edge gutters until the column max, then a shared share of the excess.
@@ -131,6 +136,44 @@ QTextCharFormat secondary_format() {
     format.setForeground(st::msgServiceFg);
     auto font = format.font();
     font.setPixelSize(12);
+    font.setWeight(QFont::Normal);
+    format.setFont(font);
+    return format;
+}
+
+// The renderer-only presentation of one message's stored timestamp: the raw
+// ISO string is parsed with Qt's ISO parser and shown in the local wall clock
+// as HH:mm for the message header/time and yyyy/MM/dd for the day separator.
+// An invalid or empty raw value yields empty strings so the raw input is never
+// shown verbatim.
+struct PresentationTime {
+    QString time;
+    QString day;
+};
+
+PresentationTime present_timestamp(const std::string &raw) {
+    if (raw.empty()) {
+        return {};
+    }
+    const auto parsed = QDateTime::fromString(
+        QString::fromStdString(raw), Qt::ISODate);
+    if (!parsed.isValid()) {
+        return {};
+    }
+    const auto local = parsed.toLocalTime();
+    return {
+        local.toString(QStringLiteral("HH:mm")),
+        local.toString(QStringLiteral("yyyy/MM/dd")),
+    };
+}
+
+// The centered day-separator tone: the same muted secondary gray as message
+// meta, one pixel smaller so it reads as a quiet divider between days.
+QTextCharFormat day_format() {
+    auto format = QTextCharFormat();
+    format.setForeground(st::msgServiceFg);
+    auto font = format.font();
+    font.setPixelSize(11);
     font.setWeight(QFont::Normal);
     format.setFont(font);
     return format;
@@ -321,18 +364,21 @@ void insert_markdown_body(
 // instead of every message stretching to the shared lane maximum.
 int message_content_width(
         const DirectConversationMessage &message,
-        const QString &them) {
+        const QString &them,
+        const QString &time_suffix) {
     const auto outgoing = message.outgoing;
     auto widest = 0.0;
     // The outgoing sender/timestamp header is no longer rendered inside the
     // message lane (the time moved outside the body-only bubble), so only an
-    // incoming row's header contributes to the natural content width.
+    // incoming row's header contributes to the natural content width. The
+    // header shows the presented HH:mm, or no time suffix when it is absent.
     if (!outgoing) {
         const auto header = QFontMetricsF(sender_format(outgoing).font())
                 .horizontalAdvance(them)
             + QFontMetricsF(secondary_format().font()).horizontalAdvance(
-                QStringLiteral(" · %1")
-                    .arg(QString::fromStdString(message.timestamp)));
+                time_suffix.isEmpty()
+                    ? QString()
+                    : QStringLiteral(" · %1").arg(time_suffix));
         widest = qMax(widest, header);
     }
 
@@ -560,15 +606,42 @@ void ConversationSurface::rebuild_document() {
     // each message to the shared reading-column width.
     const auto separator = QString(QChar::LineSeparator);
     const auto lane_max = message_block_width(viewport_width);
+    // The formatted day tracks only this visible lazy suffix, so a separator
+    // appears before the first message of each changed nonempty day within the
+    // window and never leaks across reveals.
+    QString previous_day;
     for (auto index = visible_begin; index != visible_end; ++index) {
         const auto &message = last_messages_[index];
         const auto outgoing = message.outgoing;
+        // The renderer-only presentation (HH:mm time, yyyy/MM/dd day) is
+        // computed once per visible message and shared by the incoming header,
+        // the outgoing frame time, and the day separator.
+        const auto present = present_timestamp(message.timestamp);
+        // Before the first message of a changed nonempty day, one centered
+        // muted yyyy/MM/dd line leads the stream as a plain root document
+        // QTextBlock (never a child message frame), inserted at the document
+        // end ahead of this message's sibling frame.
+        if (!present.day.isEmpty() && present.day != previous_day) {
+            auto day_cursor = QTextCursor(document);
+            day_cursor.movePosition(QTextCursor::End);
+            auto day_block_format = QTextBlockFormat();
+            day_block_format.setAlignment(Qt::AlignCenter);
+            const auto gutter = reading_column_margins(viewport_width);
+            day_block_format.setLeftMargin(gutter);
+            day_block_format.setRightMargin(gutter);
+            day_block_format.setTopMargin(kDayTopMargin);
+            day_block_format.setBottomMargin(kDayBottomMargin);
+            day_cursor.setBlockFormat(day_block_format);
+            day_cursor.insertText(present.day, day_format());
+            previous_day = present.day;
+        }
         // Each message's width is content-driven: its own widest visible line
         // plus the existing horizontal bubble padding, clamped between the
         // modest 160px lower bound and the shared responsive lane maximum.
         const auto width = qBound(
             qMin(kMinMessageWidth, lane_max),
-            message_content_width(message, them_) + 2 * kBubbleHPadding,
+            message_content_width(message, them_, present.time)
+                + 2 * kBubbleHPadding,
             lane_max);
         const auto block_format = message_block_format(
             outgoing, viewport_width, width);
@@ -588,11 +661,10 @@ void ConversationSurface::rebuild_document() {
         frame_format.setBottomMargin(kMessageFrameBottomMargin);
         frame_format.setBackground(Qt::transparent);
         // The outgoing timestamp is not a visible header: it rides on the frame
-        // so paintEvent can draw it outside the body-only bubble.
+        // so paintEvent can draw it outside the body-only bubble. It holds the
+        // presented HH:mm, or stays empty so the external painter omits it.
         if (outgoing) {
-            frame_format.setProperty(
-                kMessageTimestampProperty,
-                QString::fromStdString(message.timestamp));
+            frame_format.setProperty(kMessageTimestampProperty, present.time);
         }
         auto *frame = cursor.insertFrame(frame_format);
         cursor = frame->firstCursorPosition();
@@ -603,10 +675,11 @@ void ConversationSurface::rebuild_document() {
         cursor.setBlockFormat(header_format);
         if (!outgoing) {
             cursor.insertText(them_, sender_format(outgoing));
-            cursor.insertText(
-                QStringLiteral(" · %1")
-                    .arg(QString::fromStdString(message.timestamp)),
-                secondary_format());
+            if (!present.time.isEmpty()) {
+                cursor.insertText(
+                    QStringLiteral(" · %1").arg(present.time),
+                    secondary_format());
+            }
             cursor.insertText(separator, secondary_format());
         }
         if (!message.subject.empty()) {
