@@ -34,6 +34,7 @@
 #include <QtGui/QGuiApplication>
 #include <QtGui/QMouseEvent>
 #include <QtGui/QPainter>
+#include <QtGui/QPainterPath>
 #include <QtGui/QPalette>
 #include <QtGui/QStyleHints>
 #include <QtWidgets/QBoxLayout>
@@ -149,6 +150,61 @@ protected:
 
 private:
     style::color fill_;
+};
+
+// One Telegram-shaped Composer control envelope: attachment, field and Send
+// share this single rounded base and its one-pixel adaptive palette border.
+// Status text stays in the outer Composer lane rather than widening this frame.
+class ComposerControls final : public Ui::RpWidget {
+public:
+    explicit ComposerControls(QWidget *parent)
+    : Ui::RpWidget(parent) {
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const auto outline = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        const auto radius = outline.height() / 2.0;
+        painter.setPen(QPen(st::shadowFg->c, 1.0));
+        painter.setBrush(st::windowBg->c);
+        painter.drawRoundedRect(outline, radius, radius);
+    }
+};
+
+// A flat vector paperclip avoids both the former platform-framed `+` button
+// and an icon-font/emoji dependency while retaining the semantic Attach name.
+class ComposerAttachmentButton final : public QPushButton {
+public:
+    explicit ComposerAttachmentButton(QWidget *parent)
+    : QPushButton(parent) {
+        setFixedSize(40, 40);
+        setCursor(Qt::PointingHandCursor);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        if (underMouse() && isEnabled()) {
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(st::windowBgOver->c);
+            painter.drawEllipse(rect().adjusted(2, 2, -2, -2));
+        }
+        painter.translate(width() / 2.0 - 16.0, height() / 2.0 - 16.0);
+        QPainterPath clip;
+        clip.moveTo(11.0, 19.0);
+        clip.lineTo(20.5, 9.5);
+        clip.cubicTo(23.0, 7.0, 27.0, 10.5, 24.5, 13.0);
+        clip.lineTo(14.0, 23.5);
+        clip.cubicTo(10.0, 27.5, 4.5, 22.0, 8.5, 18.0);
+        clip.lineTo(18.0, 8.5);
+        painter.setBrush(Qt::NoBrush);
+        painter.setPen(QPen(st::windowSubTextFg->c, 1.8, Qt::SolidLine,
+            Qt::RoundCap, Qt::RoundJoin));
+        painter.drawPath(clip);
+    }
 };
 
 // One LingTai-owned semantic drag handle for the roster column: a fixed 8px
@@ -1115,24 +1171,22 @@ NativeShell::NativeShell()
     // shell's palette background rather than a widget-level white base.
     detail_layout->addWidget(conversation, 1);
 
-    // The one floating composer surface, directly under the conversation it
-    // sends into: the surface's base `windowBg` content token sits on the same
-    // base main surface as the content pane -- never a full-width dark band --
-    // and it stays physically inset from both detail edges by a wrapper lane,
-    // while its own layout owns the compact attachment/input/Send action row
-    // and both status read-outs.
+    // The outer Composer lane stays on the same base as the conversation and
+    // owns status read-outs. Its first child is the one inset rounded controls
+    // envelope; no attachment/input/Send control paints an independent frame.
     auto *composer = new PaletteSurface(detail, st::windowBg);
     composer_ = composer;
     composer->setObjectName("lingtai_composer");
     composer->setAccessibleName(QStringLiteral("Send a message"));
     auto *composer_layout = new QVBoxLayout(composer);
-    composer_layout->setContentsMargins(12, 10, 12, 8);
+    composer_layout->setContentsMargins(0, 0, 0, 0);
     composer_layout->setSpacing(4);
-    // The one compact aligned action row: one attachment icon, one vendored
-    // single-line input, and one explicit icon Send action, all owned by the
-    // composer lane and the input/Send both submitting through the same path.
-    auto *composer_action_row = new QHBoxLayout;
-    composer_action_row->setSpacing(8);
+    auto *composer_controls = new ComposerControls(composer);
+    composer_controls->setObjectName("lingtai_composer_controls");
+    composer_controls->setAccessibleName(QStringLiteral("Message controls"));
+    auto *composer_action_row = new QHBoxLayout(composer_controls);
+    composer_action_row->setContentsMargins(6, 4, 6, 4);
+    composer_action_row->setSpacing(4);
     // A borderless copy of the shared single-line field style: the row's own
     // base `windowBg` surface is the only frame, and the field keeps the same
     // text/placeholder face as the standard control.
@@ -1143,7 +1197,7 @@ NativeShell::NativeShell()
         return result;
     }();
     auto *composer_input = new Ui::InputField(
-        composer,
+        composer_controls,
         borderless_composer_input,
         Ui::InputField::Mode::SingleLine,
         rpl::single(QStringLiteral("Message…")));
@@ -1151,27 +1205,26 @@ NativeShell::NativeShell()
     composer_input->setAccessibleName(QStringLiteral("Message"));
     composer_input->setMinHeight(36);
     composer_input->setEnabled(false);
-    auto *attachment_button = new QPushButton(QStringLiteral("+"), composer);
+    auto *attachment_button = new ComposerAttachmentButton(composer_controls);
     attachment_button->setObjectName("lingtai_composer_attachment_button");
     attachment_button->setAccessibleName(QStringLiteral("Attach file"));
     attachment_button->setEnabled(false);
-    attachment_button->setFixedWidth(36);
-    attachment_button->setFixedHeight(36);
     composer_action_row->addWidget(attachment_button);
     composer_action_row->addWidget(composer_input, 1);
     auto *send_button = new Ui::RoundButton(
-        composer,
+        composer_controls,
         rpl::single(QStringLiteral("↑")),
         st::defaultActiveButton);
     send_button->setObjectName("lingtai_composer_send_button");
     send_button->setAccessibleName(QStringLiteral("Send message"));
     send_button->setEnabled(false);
-    send_button->setFixedWidth(40);
+    send_button->setFixedSize(40, 40);
+    send_button->setFullRadius(true);
     send_button->addClickHandler([this] {
         handle_send_message();
     });
     composer_action_row->addWidget(send_button);
-    composer_layout->addLayout(composer_action_row);
+    composer_layout->addWidget(composer_controls);
     // The send status is owned by the lane itself, immediately below the
     // action row -- never a separate detail row.
     auto *composer_status = make_label(
@@ -1186,7 +1239,7 @@ NativeShell::NativeShell()
         QStringLiteral("Selected Agent conversation state"));
     composer_layout->addWidget(conversation_state);
     auto *composer_surface = new QHBoxLayout;
-    composer_surface->setContentsMargins(24, 0, 24, 0);
+    composer_surface->setContentsMargins(16, 0, 16, 12);
     composer_surface->addWidget(composer);
     detail_layout->addLayout(composer_surface);
     composer_input->submits()

@@ -3403,7 +3403,7 @@ void verify_modern_composer_surface(
         "the modern-composer fixture project must open");
     require(tree_snapshot(project) == fixture_before,
         "opening the modern-composer fixture must remain read-only");
-    click_agent(window, "alpha");
+    click_first_agent_canvas_row(window);
     require(shell.selection_state().selected_agent_directory_key()
                 == std::optional<fs::path>("alpha"),
         "the modern-composer fixture Agent must be selectable");
