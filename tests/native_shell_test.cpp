@@ -3431,6 +3431,11 @@ void verify_modern_composer_surface(
         "the pure LingTai brand must be painted inside Telegram's TitleWidget owner");
     require(window.body()->geometry().top() == titlebar->height(),
         "the content body must begin below the restored unified title row");
+    require(startup_illustration->property("lingtai_light_logo_resource").toString()
+                == QStringLiteral(":/lingtai/startup/lingtai-logo-light-4096.png")
+            && startup_illustration->property("lingtai_dark_logo_resource").toString()
+                == QStringLiteral(":/lingtai/startup/lingtai-logo-dark-4096.png"),
+        "startup must bind Ted's exact light and dark logo assets");
     require(startup_route->isVisible()
             && startup_illustration->isVisible()
             && startup_heading->text() == QStringLiteral("LingTai Orchestration")
