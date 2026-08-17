@@ -3017,6 +3017,21 @@ void verify_plain_underline_page_tabs(
         }
         return false;
     };
+    const auto text_ink_count = [&](
+            const QImage &target, QPushButton *button) {
+        auto count = 0;
+        for (auto y = 0; y < button->height() - 2; ++y) {
+            for (auto x = 0; x < button->width(); ++x) {
+                if (at(target, button->mapTo(pages_nav, QPoint(x, y)))
+                        != backdrop) {
+                    ++count;
+                }
+            }
+        }
+        return count;
+    };
+    const auto selected_conversation_ink =
+        text_ink_count(image, conversation_nav);
 
     require(!has_slab(image, conversation_nav),
         "the selected Conversation tab must never be a filled rectangular slab");
@@ -3033,6 +3048,10 @@ void verify_plain_underline_page_tabs(
     presets_nav->click();
     QCoreApplication::processEvents();
     const auto after = pages_nav->grab().toImage();
+    require(text_ink_count(after, conversation_nav)
+            == selected_conversation_ink,
+        "the same Conversation caption must keep one regular-weight text mask "
+        "when selection moves; color and underline alone mark selection");
     require(bottom(after, presets_nav) == accent
             && bottom(after, conversation_nav) != accent,
         "the underline accent must follow the selection");
