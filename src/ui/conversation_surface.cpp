@@ -48,7 +48,8 @@ constexpr auto kHumanMessageRatio = 0.60;
 constexpr auto kMinMessageWidth = 160;
 constexpr auto kHumanMinMessageWidth = 64;
 constexpr auto kMessageAbsoluteCap = 560;
-constexpr auto kReadingColumnMax = 900;
+constexpr auto kHumanMessageAbsoluteCap = 540;
+constexpr auto kReadingColumnMax = 1200;
 constexpr auto kNarrowViewportWidth = 480;
 constexpr auto kBubbleHPadding = 11;
 constexpr auto kHumanBubbleHPadding = 15;
@@ -112,14 +113,18 @@ int message_block_width(int viewport_width) {
         kMessageAbsoluteCap);
 }
 
-// Human bubbles use the same centered reading column but a quieter 60% cap.
-// On narrow panes the common near-full lane remains the usable fallback.
+// Human bubbles use the same wider centered rail but retain the accepted
+// readable prose cap; widening the rail moves its right anchor outward instead
+// of stretching long Human text. On narrow panes the common near-full lane
+// remains the usable fallback.
 int human_message_block_width(int viewport_width) {
     if (viewport_width < kNarrowViewportWidth) {
         return qMax(0, viewport_width - 2 * kMessageEdgeMargin);
     }
     const auto column = qMin(viewport_width, kReadingColumnMax);
-    return qMax(kHumanMinMessageWidth, int(column * kHumanMessageRatio));
+    return qMin(
+        kHumanMessageAbsoluteCap,
+        qMax(kHumanMinMessageWidth, int(column * kHumanMessageRatio)));
 }
 
 QTextBlockFormat message_block_format(

@@ -2598,13 +2598,13 @@ void NativeShell::update_top_bar_fit(int detail_width) {
 // The one full-width composer row, re-entered on every recompute (and so on
 // every real resize and selection change): the row always stretches the full
 // detail width, while its own layout keeps one centered adaptive lane capped
-// at 900px -- outer horizontal margins of at least 12px, growing to split any
-// width beyond 900px -- with the input/Send row and the two status lines
+// at 1200px -- outer horizontal margins of at least 12px, growing to split any
+// width beyond 1200px -- with the input/Send row and the two status lines
 // staying in that same lane. Object names, the input/Send row, and the status
 // wording are never touched.
 void NativeShell::update_composer_width(int detail_width) {
     if (!composer_) return;
-    const auto outer = std::max(12, (detail_width - 900) / 2 + 12);
+    const auto outer = std::max(12, (detail_width - 1200) / 2 + 12);
     composer_->setMinimumWidth(0);
     composer_->setMaximumWidth(QWIDGETSIZE_MAX);
     composer_->layout()->setContentsMargins(outer, 10, outer, 8);
