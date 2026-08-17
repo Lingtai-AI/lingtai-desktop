@@ -15,6 +15,7 @@
 #include "ui/conversation_surface.h"
 #include "ui/effects/animations.h"
 #include "ui/integration.h"
+#include "ui/platform/mac/ui_window_title_mac.h"
 #include "ui/rp_widget.h"
 #include "ui/style/style_core_palette.h"
 #include "ui/widgets/buttons.h"
@@ -786,14 +787,16 @@ std::unique_ptr<Ui::RpWindow> make_native_window() {
         return true;
     }();
     (void)widget_styles_started;
-    // The vendored mac title widget keeps a pointer to the style it is given,
-    // so this zero-height copy must be process-lifetime: it keeps the custom
-    // title hidden (frameMargins().top() == 0) and the explicit window minimum
-    // exactly (720, 480) while the widget styles stay initialized for the
-    // vendored composer controls.
+    // Keep Telegram's real macOS TitleWidget owner. Its height comes from the
+    // native contentLayoutRect, so the traffic lights, app brand and body all
+    // share one borderless window canvas instead of a Qt label being pasted
+    // into the content row below it.
     static const auto desktop_title_style = [] {
         auto style_copy = st::defaultWindowTitle;
-        style_copy.height = 0;
+        style_copy.bg = st::windowBg;
+        style_copy.bgActive = st::windowBg;
+        style_copy.fg = st::dialogsNameFg;
+        style_copy.fgActive = st::dialogsNameFg;
         return style_copy;
     }();
     result->setTitleStyle(desktop_title_style);
@@ -813,7 +816,7 @@ std::unique_ptr<Ui::RpWindow> make_native_window() {
 NativeShell::NativeShell()
 : window_(make_native_window()) {
     window_->setObjectName("lingtai_desktop_window");
-    window_->setTitle(QStringLiteral("LingTai Desktop"));
+    window_->setTitle(QString());
     window_->setWindowTitle(QStringLiteral("LingTai Desktop"));
     window_->setAccessibleName(QStringLiteral("LingTai Desktop"));
     window_->setAccessibleDescription(QStringLiteral(
@@ -1551,24 +1554,34 @@ NativeShell::NativeShell()
             return base::EventFilterResult::Continue;
         });
 
-    const auto traffic_anchor = NativeTrafficLightAnchor(window_.get());
-    auto *titlebar_brand = new QLabel(QStringLiteral("LingTai"), window_.get());
-    titlebar_brand->setObjectName("lingtai_titlebar_brand");
-    titlebar_brand->setAccessibleName(QStringLiteral("LingTai"));
-    titlebar_brand->setAttribute(Qt::WA_TransparentForMouseEvents);
-    titlebar_brand->setStyleSheet(QStringLiteral("background: transparent;"));
-    auto brand_font = titlebar_brand->font();
-    brand_font.setPointSize(11);
-    brand_font.setWeight(QFont::DemiBold);
-    titlebar_brand->setFont(brand_font);
-    titlebar_brand->adjustSize();
-    titlebar_brand->setFixedHeight(30);
-    titlebar_brand->move(
-        traffic_anchor.x(),
-        qMax(0, traffic_anchor.y() - titlebar_brand->height() / 2));
-    titlebar_brand->setProperty(
-        "lingtai_native_traffic_light_anchor", traffic_anchor);
-    titlebar_brand->raise();
+    auto *titlebar = [&]() -> Ui::Platform::TitleWidget * {
+        for (auto *child : window_->findChildren<QWidget *>(
+                QString(), Qt::FindDirectChildrenOnly)) {
+            if (auto *candidate = dynamic_cast<Ui::Platform::TitleWidget *>(child)) {
+                return candidate;
+            }
+        }
+        return nullptr;
+    }();
+    if (titlebar) {
+        const auto traffic_anchor = NativeTrafficLightAnchor(window_.get());
+        auto *titlebar_brand = new QLabel(QStringLiteral("LingTai"), titlebar);
+        titlebar_brand->setObjectName("lingtai_titlebar_brand");
+        titlebar_brand->setAccessibleName(QStringLiteral("LingTai"));
+        titlebar_brand->setAttribute(Qt::WA_TransparentForMouseEvents);
+        titlebar_brand->setStyleSheet(QStringLiteral("background: transparent;"));
+        auto brand_font = titlebar_brand->font();
+        brand_font.setPointSize(11);
+        brand_font.setWeight(QFont::DemiBold);
+        titlebar_brand->setFont(brand_font);
+        titlebar_brand->adjustSize();
+        titlebar_brand->setFixedHeight(titlebar->height());
+        titlebar_brand->move(traffic_anchor.x(), 0);
+        titlebar_brand->setProperty(
+            "lingtai_native_traffic_light_anchor", traffic_anchor);
+        titlebar_brand->show();
+        titlebar_brand->raise();
+    }
 
     refresh_route();
     render_roster();
