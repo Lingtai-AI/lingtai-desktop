@@ -3379,6 +3379,10 @@ void verify_modern_composer_surface(
     auto &window = shell.window();
     auto *composer = required_child<Ui::RpWidget>(
         window, "lingtai_composer");
+    auto *controls = required_child<Ui::RpWidget>(
+        window, "lingtai_composer_controls");
+    auto *attachment_button = required_child<QPushButton>(
+        window, "lingtai_composer_attachment_button");
     auto *composer_input = required_ui_child<Ui::InputField>(
         window, "lingtai_composer_input");
     auto *send_button = required_ui_child<Ui::RoundButton>(
@@ -3404,6 +3408,18 @@ void verify_modern_composer_surface(
                 == std::optional<fs::path>("alpha"),
         "the modern-composer fixture Agent must be selectable");
 
+    require(attachment_button->parent() == controls
+            && composer_input->parent() == controls
+            && send_button->parent() == controls,
+        "attachment, Message input and Send must share one immediate rounded "
+        "controls container");
+    require(attachment_button->text().isEmpty()
+            && attachment_button->accessibleName() == QStringLiteral("Attach file"),
+        "attachment must be icon-only while retaining its accessible name");
+    require(send_button->width() == send_button->height()
+            && send_button->width() <= 40,
+        "Send must be one compact circular candidate, never a rectangular action");
+
     // The empty/status read-out is owned by the composer lane, not a
     // separate dashboard row under the detail.
     auto *status_owner = composer_status->parent();
@@ -3422,23 +3438,44 @@ void verify_modern_composer_surface(
             && send_button->isVisible(),
         "the modern composer and its action row must be visible in a wide "
         "detail");
+    const auto attachment_rect = QRect(
+        attachment_button->mapTo(controls, QPoint(0, 0)),
+        attachment_button->size());
     const auto input_rect = QRect(
-        composer_input->mapTo(composer, QPoint(0, 0)),
+        composer_input->mapTo(controls, QPoint(0, 0)),
         composer_input->size());
     const auto send_rect = QRect(
-        send_button->mapTo(composer, QPoint(0, 0)),
+        send_button->mapTo(controls, QPoint(0, 0)),
         send_button->size());
 
-    // The input and Send action stay one compact aligned action row inside
-    // the lane.
-    require(composer_input->parent() == composer
-            && send_button->parent() == composer,
-        "the composer input and Send action must be owned by the composer "
-        "lane");
+    // Attachment, field and circular Send stay one compact aligned action row
+    // inside the shared container.
+    require(qAbs(attachment_rect.center().y() - input_rect.center().y()) <= 2,
+        "attachment and Message input must align on one compact row");
+    require(attachment_rect.right() < input_rect.left(),
+        "attachment must sit to the left of Message in the shared container");
     require(qAbs(input_rect.center().y() - send_rect.center().y()) <= 2,
         "the composer input and Send action must align on one compact row");
     require(input_rect.right() < send_rect.left(),
         "the composer input must sit to the left of Send in the same row");
+
+    const auto controls_image = controls->grab().toImage();
+    require(controls_image.width() >= 3 && controls_image.height() >= 3,
+        "the shared Composer controls container must render a real surface");
+    const auto interior = controls_image.pixelColor(
+        controls_image.width() / 2, controls_image.height() / 2);
+    const auto border = controls_image.pixelColor(controls_image.width() / 2, 0);
+    const auto corner = controls_image.pixelColor(0, 0);
+    require(border != interior,
+        "the shared Composer container must paint one subtle visible border");
+    require(corner == interior,
+        "the shared Composer container must leave rounded outer corners on "
+        "the common background");
+    auto *detail = required_child<Ui::RpWidget>(window, "lingtai_agent_detail");
+    const auto composer_bottom = composer->mapTo(detail, QPoint(0, 0)).y()
+        + composer->height();
+    require(detail->height() - composer_bottom >= 8,
+        "the Composer must stay inset from the bottom edge");
 
     // Narrow 380 minimum: the input/Send row stays near-full relative to
     // its immediate composer-lane owner.
@@ -3447,15 +3484,19 @@ void verify_modern_composer_surface(
     require(composer->isVisible() && composer_input->isVisible()
             && send_button->isVisible(),
         "the modern composer must stay visible at the narrow minimum");
+    const auto narrow_attachment_rect = QRect(
+        attachment_button->mapTo(controls, QPoint(0, 0)),
+        attachment_button->size());
     const auto narrow_input_rect = QRect(
-        composer_input->mapTo(composer, QPoint(0, 0)),
+        composer_input->mapTo(controls, QPoint(0, 0)),
         composer_input->size());
     const auto narrow_send_rect = QRect(
-        send_button->mapTo(composer, QPoint(0, 0)),
+        send_button->mapTo(controls, QPoint(0, 0)),
         send_button->size());
-    const auto narrow_lane = narrow_input_rect.united(narrow_send_rect);
-    require(narrow_lane.width() * 4 >= composer->width() * 3,
-        "a narrow composer must let its input+Send row grow near-full");
+    const auto narrow_lane = narrow_attachment_rect.united(
+        narrow_input_rect).united(narrow_send_rect);
+    require(narrow_lane.width() * 4 >= controls->width() * 3,
+        "a narrow composer must keep attachment+input+Send near-full");
 
     // The Vision HIGH Send contract at the real visual sizes (1100x720,
     // 820x620, 640x520): the composer field/status surface stays present,
