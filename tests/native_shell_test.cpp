@@ -3421,6 +3421,25 @@ void verify_modern_composer_surface(
             && qAbs(titlebar_brand->geometry().left() - native_anchor.x()) <= 1
             && qAbs(titlebar_brand->geometry().center().y() - native_anchor.y()) <= 1,
         "the title-row brand must begin after the green button and share its vertical center");
+    require(titlebar_brand->palette().color(QPalette::WindowText)
+                == st::dialogsNameFg->c
+            && titlebar_brand->palette().color(QPalette::Text)
+                == st::dialogsNameFg->c,
+        "the title-row brand must own theme foreground ink instead of inheriting platform chrome");
+    const auto titlebar_brand_image = titlebar->grab(
+        titlebar_brand->geometry()).toImage();
+    auto titlebar_brand_has_visible_ink = false;
+    for (auto y = 0; y != titlebar_brand_image.height(); ++y) {
+        for (auto x = 0; x != titlebar_brand_image.width(); ++x) {
+            if (titlebar_brand_image.pixelColor(x, y) != st::windowBg->c) {
+                titlebar_brand_has_visible_ink = true;
+                break;
+            }
+        }
+        if (titlebar_brand_has_visible_ink) break;
+    }
+    require(titlebar_brand_has_visible_ink,
+        "the title-row brand must render visible ink against the unified title background");
     require(project_selector->parent() != window.body().get(),
         "the functional project selector must remain in the Sidebar");
 
