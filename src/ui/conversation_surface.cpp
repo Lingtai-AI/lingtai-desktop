@@ -38,8 +38,9 @@ constexpr auto kMessageEdgeMargin = 12;
 constexpr auto kMessageTopMargin = 4;
 // One readable rhythm inside a same-Agent group and a larger break between
 // groups. The current frame's bottom margin owns the gap to its next sibling.
-constexpr auto kWithinGroupBottomMargin = 19;
+constexpr auto kWithinGroupBottomMargin = 8;
 constexpr auto kBetweenGroupBottomMargin = 28;
+constexpr qint64 kSameAgentGroupMaxSeconds = 5 * 60;
 constexpr auto kMessageRatio = 0.72;
 constexpr auto kMinMessageWidth = 160;
 constexpr auto kMessageAbsoluteCap = 640;
@@ -153,6 +154,20 @@ struct PresentationTime {
     QString time;
     QString day;
 };
+
+bool within_same_agent_interval(
+        const std::string &before,
+        const std::string &after) {
+    const auto first = QDateTime::fromString(
+        QString::fromStdString(before), Qt::ISODate);
+    const auto second = QDateTime::fromString(
+        QString::fromStdString(after), Qt::ISODate);
+    if (!first.isValid() || !second.isValid()) {
+        return false;
+    }
+    const auto seconds = first.secsTo(second);
+    return seconds >= 0 && seconds <= kSameAgentGroupMaxSeconds;
+}
 
 PresentationTime present_timestamp(const std::string &raw) {
     if (raw.empty()) {
@@ -357,14 +372,15 @@ void insert_markdown_body(
 int message_content_width(
         const DirectConversationMessage &message,
         const QString &them,
-        const QString &time_suffix) {
+        const QString &time_suffix,
+        bool show_incoming_header) {
     const auto outgoing = message.outgoing;
     auto widest = 0.0;
     // The outgoing sender/timestamp header is no longer rendered inside the
     // message lane (the time moved outside the body-only bubble), so only an
     // incoming row's header contributes to the natural content width. The
     // header shows the presented HH:mm, or no time suffix when it is absent.
-    if (!outgoing) {
+    if (!outgoing && show_incoming_header) {
         const auto header = QFontMetricsF(sender_format(outgoing).font())
                 .horizontalAdvance(them)
             + QFontMetricsF(secondary_format().font()).horizontalAdvance(
@@ -624,16 +640,21 @@ void ConversationSurface::rebuild_document() {
             previous_day = present.day;
         }
         // A visible Agent group starts at the lazy-window boundary, after a
-        // Human row, or after a day boundary. Consecutive incoming rows stay in
-        // one group. A day change also prevents the prior frame from borrowing
-        // the compact within-group gap across the centered date separator.
-        const auto incoming_group_first = !outgoing
-            && (index == visible_begin
-                || last_messages_[index - 1].outgoing
-                || day_changed);
+        // Human row/day boundary, or when the preceding Agent message is more
+        // than five minutes away. Only a proven short chronological interval
+        // creates a headerless continuation.
+        const auto continues_previous = !outgoing
+            && index > visible_begin
+            && !last_messages_[index - 1].outgoing
+            && !day_changed
+            && within_same_agent_interval(
+                last_messages_[index - 1].timestamp, message.timestamp);
+        const auto incoming_group_first = !outgoing && !continues_previous;
         auto group_continues = !outgoing
             && index + 1 < visible_end
-            && !last_messages_[index + 1].outgoing;
+            && !last_messages_[index + 1].outgoing
+            && within_same_agent_interval(
+                message.timestamp, last_messages_[index + 1].timestamp);
         if (group_continues) {
             const auto next_day = present_timestamp(
                 last_messages_[index + 1].timestamp).day;
@@ -646,7 +667,8 @@ void ConversationSurface::rebuild_document() {
         // modest 160px lower bound and the shared responsive lane maximum.
         const auto width = qBound(
             qMin(kMinMessageWidth, lane_max),
-            message_content_width(message, them_, present.time)
+            message_content_width(
+                message, them_, present.time, incoming_group_first)
                 + 2 * kBubbleHPadding,
             lane_max);
         const auto block_format = message_block_format(
@@ -662,8 +684,8 @@ void ConversationSurface::rebuild_document() {
         frame_format.setPadding(0);
         frame_format.setMargin(0);
         // The current frame owns its gap to the next sibling: consecutive
-        // same-Agent rows keep an enlarged but compact >=18px rendered rhythm,
-        // while a direction/day/end boundary gets the visibly larger break.
+        // short-interval same-Agent rows keep a small rendered rhythm, while a
+        // long-pause/direction/day/end boundary gets the visibly larger break.
         frame_format.setBottomMargin(group_continues
             ? kWithinGroupBottomMargin
             : kBetweenGroupBottomMargin);
@@ -683,7 +705,7 @@ void ConversationSurface::rebuild_document() {
         auto header_format = block_format;
         header_format.setBottomMargin(0);
         cursor.setBlockFormat(header_format);
-        if (!outgoing) {
+        if (!outgoing && incoming_group_first) {
             cursor.insertText(them_, sender_format(outgoing));
             if (!present.time.isEmpty()) {
                 cursor.insertText(
@@ -714,9 +736,11 @@ void ConversationSurface::rebuild_document() {
         continuation.clearProperty(kMessageBlockProperty);
         // An outgoing body-only message keeps its first real body line in the
         // frame's existing initial block (preserving that block's lane and top
-        // margin) instead of opening a fresh continuation block. Incoming rows
-        // retain their sender/time header and begin the body on a new block.
-        const auto first_in_initial = outgoing;
+        // margin) instead of opening a fresh continuation block. Incoming group
+        // firsts retain a sender/time header; headerless continuations put their
+        // body directly in the initial block at the identical left axis.
+        const auto first_in_initial = outgoing
+            || (!outgoing && !incoming_group_first);
         insert_markdown_body(
             cursor, body, body_format(outgoing), continuation,
             first_in_initial);
@@ -899,8 +923,7 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
             const auto avatar = QRectF(
                 text_bounds.left() - kMessageAvatarGap
                     - kMessageAvatarDiameter,
-                text_bounds.center().y()
-                    - kMessageAvatarDiameter / 2.0,
+                text_bounds.top(),
                 kMessageAvatarDiameter,
                 kMessageAvatarDiameter);
             if (avatar.intersects(QRectF(event->rect()))) {
