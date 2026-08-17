@@ -56,6 +56,7 @@ public:
     // The shell owns the actual column width. This setter applies it and keeps
     // the project/Agent header in sync with the avatar-only compact state.
     void set_roster_width(int width);
+    void set_project_display_name(const QString &name);
     // Keyboard focus: focuses the enabled row for `key` when present,
     // otherwise the first enabled (valid-manifest) row. The narrow OneColumn
     // Back path hands keyboard navigation back to the roster through this.
@@ -71,6 +72,7 @@ private:
     QLabel *roster_state_ = nullptr;
     QPushButton *project_selector_ = nullptr;
     QPushButton *new_project_button_ = nullptr;
+    QString project_display_name_ = QStringLiteral("LingTai");
     QScrollArea *scroll_ = nullptr;
     AgentRowsCanvas *canvas_ = nullptr;
     AgentSnapshot visible_snapshot_;

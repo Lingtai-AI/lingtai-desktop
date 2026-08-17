@@ -1551,6 +1551,24 @@ NativeShell::NativeShell()
             return base::EventFilterResult::Continue;
         });
 
+    const auto traffic_anchor = NativeTrafficLightAnchor(window_.get());
+    auto *titlebar_brand = new QLabel(QStringLiteral("LingTai"), body);
+    titlebar_brand->setObjectName("lingtai_titlebar_brand");
+    titlebar_brand->setAccessibleName(QStringLiteral("LingTai"));
+    titlebar_brand->setAttribute(Qt::WA_TransparentForMouseEvents);
+    titlebar_brand->setStyleSheet(QStringLiteral("background: transparent;"));
+    auto brand_font = titlebar_brand->font();
+    brand_font.setPointSize(11);
+    brand_font.setWeight(QFont::DemiBold);
+    titlebar_brand->setFont(brand_font);
+    titlebar_brand->adjustSize();
+    titlebar_brand->setFixedHeight(30);
+    titlebar_brand->move(
+        traffic_anchor.x(), traffic_anchor.y() - titlebar_brand->height() / 2);
+    titlebar_brand->setProperty(
+        "lingtai_native_traffic_light_anchor", traffic_anchor);
+    titlebar_brand->raise();
+
     refresh_route();
     render_roster();
     recompute_layout(window_->body()->width());
@@ -1871,6 +1889,8 @@ ProjectOpenOutcome NativeShell::open_project(
     agents_ = std::move(agents);
     window_->findChild<QLabel *>("lingtai_project_root")
         ->setText(path_text(canonical_root));
+    agent_roster_->set_project_display_name(QString::fromStdString(
+        canonical_root.filename().string()));
     render_roster();
     auto *selection_error = window_->findChild<QLabel *>(
         "lingtai_agent_selection_error");

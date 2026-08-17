@@ -716,11 +716,16 @@ void AgentRoster::set_roster_width(int width) {
     update_narrow_mode();
 }
 
+void AgentRoster::set_project_display_name(const QString &name) {
+    project_display_name_ = name.isEmpty() ? QStringLiteral("LingTai") : name;
+    update_narrow_mode();
+}
+
 void AgentRoster::update_narrow_mode() {
     const auto narrow = width() <= kNarrowRosterWidth;
-    project_selector_->setText(narrow
-        ? QStringLiteral("⋯")
-        : QStringLiteral("LingTai"));
+    const auto available = narrow ? qMax(18, width() - 48) : qMax(40, width() - 58);
+    project_selector_->setText(project_selector_->fontMetrics().elidedText(
+        project_display_name_, Qt::ElideRight, available));
     new_project_button_->setVisible(!narrow);
     roster_heading_->setVisible(!narrow);
     roster_state_->setVisible(!narrow);
