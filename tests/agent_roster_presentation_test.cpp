@@ -622,6 +622,43 @@ void verify_compact_project_selector_and_menu() {
         "the selector menu must surface the current project path");
 }
 
+// Light single-canvas contract. At a normal height the roster exposes a large
+// bare base surface below its compact toolbar, heading, and rows. That field
+// must use the same plain `st::windowBg` canvas as the content pane, not the
+// raised `st::windowBgOver` token reserved for transient interaction states.
+void verify_large_base_surface_is_light_canvas() {
+    AgentSnapshot snapshot;
+    snapshot.scan = AgentScanState::complete;
+    snapshot.items = { make_row("a-main", AgentRole::main) };
+
+    QWidget parent;
+    AgentRoster roster(&parent);
+    roster.set_rows(snapshot, std::nullopt);
+    roster.resize(260, 560);
+    roster.show();
+    QCoreApplication::processEvents();
+    roster.clearFocus();
+
+    const auto image = roster.grab().toImage();
+    const auto base_min_y = int(image.height() * 0.60);
+    require(base_min_y < image.height(),
+        "a normal-height roster must leave room for a sampled base band");
+
+    auto mismatch = 0;
+    auto sampled = 0;
+    for (auto y = base_min_y; y != image.height(); ++y) {
+        for (auto x = 0; x != image.width(); ++x) {
+            ++sampled;
+            if (image.pixelColor(x, y) != st::windowBg->c) {
+                ++mismatch;
+            }
+        }
+    }
+    require(sampled > 0 && mismatch == 0,
+        "the roster's large bare base surface must be the plain light "
+        "st::windowBg canvas rather than the st::windowBgOver Sidebar role");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -641,6 +678,13 @@ int main(int argc, char **argv) {
                     == QStringLiteral("--header-typography-only")) {
             verify_sidebar_header_typography();
             std::cout << "agent roster header typography: OK\n";
+            return 0;
+        }
+        if (argc > 1
+                && QString::fromLocal8Bit(argv[1])
+                    == QStringLiteral("--light-canvas-only")) {
+            verify_large_base_surface_is_light_canvas();
+            std::cout << "agent roster light canvas: OK\n";
             return 0;
         }
         verify_roster_rows_are_virtual_canvas();

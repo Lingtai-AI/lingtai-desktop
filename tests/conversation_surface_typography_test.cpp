@@ -1057,8 +1057,8 @@ void verify_per_message_containers() {
 
 // ---------------------------------------------------------------------------
 // Directional bubble-policy RED contract: incoming renders with NO bubble (the
-// backdrop st::windowBgOver), outgoing keeps the st::msgOutBg bubble. Fails on
-// the base: paintEvent fills a bubble for both lanes.
+// single light-canvas backdrop st::windowBg), outgoing keeps the st::msgOutBg
+// bubble. Fails on the base: paintEvent fills a bubble for both lanes.
 // ---------------------------------------------------------------------------
 std::vector<QColor> bubble_padding_colors(
         QTextFrame &frame,
@@ -1119,7 +1119,7 @@ void verify_directional_bubble_policy() {
     const auto image = surface.viewport()->grab().toImage();
     const auto h_offset = double(surface.horizontalScrollBar()->value());
     const auto v_offset = double(surface.verticalScrollBar()->value());
-    const auto backdrop = st::windowBgOver->c;
+    const auto backdrop = st::windowBg->c;
     const auto incoming_fill = st::msgInBg->c;
     const auto outgoing_fill = st::msgOutBg->c;
 
@@ -1128,11 +1128,11 @@ void verify_directional_bubble_policy() {
         if (color == incoming_fill) {
             throw std::runtime_error(
                 "incoming must have NO bubble: padding is st::msgInBg, not "
-                "the backdrop st::windowBgOver");
+                "the backdrop st::windowBg");
         }
         if (color != backdrop) {
             throw std::runtime_error(
-                "incoming must stay on the backdrop st::windowBgOver");
+                "incoming must stay on the backdrop st::windowBg");
         }
     }
 
@@ -1661,6 +1661,13 @@ int run_typography_test(int argc, char **argv) {
                     == QStringLiteral("--time-separators-only")) {
             verify_time_separators_only();
             std::cout << "conversation surface time separators: OK\n";
+            return 0;
+        }
+        if (argc > 1
+                && QString::fromLocal8Bit(argv[1])
+                    == QStringLiteral("--light-canvas-only")) {
+            verify_directional_bubble_policy();
+            std::cout << "conversation surface light canvas: OK\n";
             return 0;
         }
         ConversationSurface surface;

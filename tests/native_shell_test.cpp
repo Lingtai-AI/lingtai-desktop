@@ -3135,10 +3135,11 @@ void verify_telegram_theme_reset(
     // 2. Palette-owned surfaces and selected row: the list surface is painted
     // from the shared lib_ui palette, the chat surface carries the palette
     // background token, and the selected row resolves its selection color
-    // from the same palette -- never raw/white Qt defaults.
+    // from the same palette -- never raw/white Qt defaults. Both main
+    // surfaces sit on the single light canvas base token st::windowBg.
     require(sidebar->grab().toImage().pixelColor(2, 2)
-            == st::windowBgOver->c,
-        "the dialog list surface must be palette-owned (windowBgOver), not "
+            == st::windowBg->c,
+        "the dialog list surface must be palette-owned (windowBg), not "
         "a raw white Qt surface");
     require(content->grab().toImage().pixelColor(2, 2) == st::windowBg->c,
         "the chat content surface must be palette-owned (windowBg), not a "
@@ -3203,17 +3204,15 @@ void verify_telegram_theme_reset(
     // The surface owns a transparent Base, so no widget palette role is a
     // meaningful backdrop: sample the painted backdrop directly from the grab
     // and compare it to the light lib_ui palette token the surface paints
-    // (`windowBgOver`, the shared warm-neutral field used across the shell).
+    // (`windowBg`, the shared single light-canvas base used across the shell).
     const auto sampled_backdrop = surface_image.pixelColor(
         surface_image.width() / 2, surface_image.height() - 6);
-    require(color_close(sampled_backdrop, st::windowBgOver->c),
+    require(color_close(sampled_backdrop, st::windowBg->c),
         "the sampled chat backdrop pixel must match the lib_ui palette token "
         "the surface paints");
-    require(sampled_backdrop != QColor(Qt::white)
-            && sampled_backdrop != st::msgInBg->c
+    require(sampled_backdrop != st::msgInBg->c
             && sampled_backdrop != st::msgOutBg->c,
-        "the sampled chat backdrop must be distinct from white and from both "
-        "bubble colors");
+        "the sampled chat backdrop must be distinct from both bubble colors");
 
     struct BubbleTrace {
         int min_x = -1, max_x = -1, min_y = -1, max_y = -1;
@@ -4207,13 +4206,12 @@ void verify_conversation_slash_interception(
     require(!cleanup_error, "slash-interception fixtures must be removed");
 }
 
-// The Stage-1 two-surface shell contract: only `lingtai_desktop_sidebar`
-// (the elevated list) and `lingtai_desktop_content` (the base pane) are main
-// surfaces. The selected-Agent header, page nav, conversation, and composer
-// regions must not paint their own boxed dark backgrounds or hard-edged
-// plain-shadow frames, and every surface fill must come from the base
-// (`windowBg`), elevated (`windowBgOver`), or selected (`dialogsBgActive`)
-// palette hierarchy.
+// The Stage-1 two-surface shell contract on the single light canvas: every
+// main surface (`lingtai_desktop_sidebar`, `lingtai_desktop_content`, and the
+// composer) sits on the shared base `windowBg` token. The selected-Agent
+// header, page nav, conversation, and composer regions must not paint their
+// own boxed dark backgrounds or hard-edged plain-shadow frames, and no
+// surface may paint an elevated (`windowBgOver`) band.
 void verify_two_surface_hierarchy(
         lingtai::desktop::NativeShell &shell,
         const fs::path &sandbox) {
@@ -4245,18 +4243,17 @@ void verify_two_surface_hierarchy(
         "alpha must be selectable for the two-surface hierarchy");
     QCoreApplication::processEvents();
 
-    // Only the two main surfaces paint a full-pane background: the sidebar is
-    // the one elevated surface and the content is the one base surface, so no
-    // header/nav/conversation/composer surface may paint a boxed fill of its
-    // own. The composer must sit on the base content surface, never a
-    // full-width dark band from a non-base/elevated/selected token.
+    // On the single light canvas every main surface paints the same base
+    // windowBg fill: the sidebar, content, and composer all sit on the one
+    // single-canvas base token, so no header/nav/conversation/composer surface
+    // may paint a boxed fill of its own or an elevated band.
     require(sidebar->grab().toImage().pixelColor(2, 2)
-            == st::windowBgOver->c,
-        "the sidebar must be the one elevated main surface");
+            == st::windowBg->c,
+        "the sidebar must sit on the single-canvas base surface (windowBg)");
     require(content->grab().toImage().pixelColor(2, 2) == st::windowBg->c,
-        "the content must be the one base main surface");
+        "the content must be on the single-canvas base surface (windowBg)");
     require(composer->grab().toImage().pixelColor(2, 2) == st::windowBg->c,
-        "the composer must sit on the base content surface, never a "
+        "the composer must sit on the single-canvas base surface, never a "
         "full-width dark band of its own");
 
     // No hard-edged plain-shadow frames around the header/nav/conversation/
