@@ -144,9 +144,11 @@ void paint_agent_row(
     painter.setRenderHint(QPainter::Antialiasing, true);
     constexpr auto kSelectedRadius = 8.0;
     painter.setPen(Qt::NoPen);
-    painter.setBrush((selected || over)
-        ? st::windowBgRipple
-        : st::windowBgOver);
+    painter.setBrush(selected
+        ? st::dialogsBgActive
+        : over
+            ? st::windowBgRipple
+            : st::windowBgOver);
     painter.drawRoundedRect(
         QRectF(row_rect).adjusted(0.5, 0.5, -0.5, -0.5),
         kSelectedRadius, kSelectedRadius);
@@ -176,17 +178,21 @@ void paint_agent_row(
     auto primary_font = base_font;
     primary_font.setPointSize(13);
     primary_font.setWeight(QFont::DemiBold);
-    const auto primary_color = over
-        ? st::dialogsNameFgOver
-        : st::dialogsNameFg;
+    const auto primary_color = selected
+        ? st::dialogsNameFgActive
+        : over
+            ? st::dialogsNameFgOver
+            : st::dialogsNameFg;
 
     const auto avatar_initial = primary_display.trimmed().left(1).toUpper();
     painter.setPen(Qt::NoPen);
     painter.setBrush(primary_color);
     painter.drawEllipse(avatar_rect);
-    painter.setPen(over
-        ? st::windowBgRipple
-        : st::windowBg);
+    painter.setPen(selected
+        ? st::dialogsBgActive
+        : over
+            ? st::windowBgRipple
+            : st::windowBg);
     painter.setFont(primary_font);
     painter.drawText(avatar_rect, Qt::AlignCenter, avatar_initial);
 
@@ -204,7 +210,9 @@ void paint_agent_row(
     auto secondary_font = base_font;
     secondary_font.setPointSize(12);
     painter.setFont(secondary_font);
-    painter.setPen(st::windowSubTextFg);
+    painter.setPen(selected
+        ? st::dialogsTextFgActive
+        : st::windowSubTextFg);
     painter.drawText(
         secondary_rect,
         flags,
