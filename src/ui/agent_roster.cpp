@@ -22,6 +22,7 @@ namespace lingtai::desktop {
 namespace {
 
 constexpr auto kRosterColumnWidth = 260;
+constexpr auto kNarrowRosterWidth = 120;
 constexpr auto kAvatarDiameter = 40;
 constexpr auto kAvatarTextGap = 10;
 constexpr auto kRowHorizontalFrame = 14;
@@ -196,6 +197,16 @@ void paint_agent_row(
     painter.setFont(primary_font);
     painter.drawText(avatar_rect, Qt::AlignCenter, avatar_initial);
 
+    // Telegram's dialogs painter returns immediately after the userpic in its
+    // narrow mode. Mirror that behavior when this row has room for no more than
+    // one or two useful name glyphs; above the breakpoint both text lines use
+    // their existing right elision instead of widening the canvas.
+    const auto minimum_useful_text_width =
+        QFontMetrics(primary_font).horizontalAdvance(QStringLiteral("MM…"));
+    if (text_rect.width() < minimum_useful_text_width) {
+        return;
+    }
+
     constexpr auto flags = Qt::AlignLeft | Qt::AlignVCenter;
     painter.setFont(primary_font);
     painter.setPen(primary_color);
@@ -326,7 +337,10 @@ QSize AgentRowsCanvas::sizeHint() const {
 }
 
 QSize AgentRowsCanvas::minimumSizeHint() const {
-    return sizeHint();
+    // The scroll viewport owns the horizontal width. Keeping the 260px
+    // preferred width as a minimum makes the canvas exceed the inset viewport
+    // by the Sidebar margins and creates a pointless horizontal scrollbar.
+    return QSize(0, content_height());
 }
 
 int AgentRowsCanvas::content_height() const {
@@ -503,6 +517,7 @@ AgentRoster::AgentRoster(QWidget *parent)
     open_button->hide();
     header->addWidget(open_button);
     auto *new_button = new QPushButton(QStringLiteral("+"), this);
+    new_project_button_ = new_button;
     new_button->setObjectName("lingtai_new_project_button");
     new_button->setAccessibleName(QStringLiteral("New Project"));
     new_button->setAccessibleDescription(QStringLiteral(
@@ -510,6 +525,7 @@ AgentRoster::AgentRoster(QWidget *parent)
         "canonical TUI, then starts that Agent."));
     new_button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     auto *selector = new QPushButton(QStringLiteral("LingTai ▾"), this);
+    project_selector_ = selector;
     selector->setObjectName("lingtai_project_selector");
     selector->setAccessibleName(QStringLiteral("LingTai project selector"));
     selector->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
@@ -546,9 +562,10 @@ AgentRoster::AgentRoster(QWidget *parent)
     roster_layout->setSpacing(6);
     auto *heading_row = new QHBoxLayout;
     heading_row->setSpacing(6);
-    heading_row->addWidget(make_label(
+    roster_heading_ = make_label(
         roster, QStringLiteral("Agents"), "lingtai_agent_roster_heading", 12,
-        QFont::DemiBold));
+        QFont::DemiBold);
+    heading_row->addWidget(roster_heading_);
     roster_state_ = make_label(
         roster, QString(), "lingtai_agent_roster_state", 10);
     roster_state_->setAccessibleName(QStringLiteral("Agent roster status"));
@@ -559,6 +576,7 @@ AgentRoster::AgentRoster(QWidget *parent)
     scroll_->setObjectName("lingtai_agent_roster_scroll");
     scroll_->setAccessibleName(QStringLiteral("Agent roster rows"));
     scroll_->setWidgetResizable(true);
+    scroll_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     scroll_->setFrameShape(QFrame::NoFrame);
     // The rows surface and its scroll viewport share the Sidebar's
     // `windowBgOver` background instead of forming an independent white field.
@@ -576,6 +594,7 @@ AgentRoster::AgentRoster(QWidget *parent)
     canvas_->setAutoFillBackground(true);
     scroll_->setWidget(canvas_);
     layout->addWidget(roster, 1);
+    update_narrow_mode();
 }
 
 AgentRoster::~AgentRoster() = default;
@@ -583,6 +602,21 @@ AgentRoster::~AgentRoster() = default;
 void AgentRoster::paintEvent(QPaintEvent *) {
     QPainter painter(this);
     painter.fillRect(rect(), st::windowBgOver);
+}
+
+void AgentRoster::set_roster_width(int width) {
+    setFixedWidth(width);
+    update_narrow_mode();
+}
+
+void AgentRoster::update_narrow_mode() {
+    const auto narrow = width() <= kNarrowRosterWidth;
+    project_selector_->setText(narrow
+        ? QStringLiteral("⋯")
+        : QStringLiteral("LingTai ▾"));
+    new_project_button_->setVisible(!narrow);
+    roster_heading_->setVisible(!narrow);
+    roster_state_->setVisible(!narrow);
 }
 
 void AgentRoster::set_row_click_handler(RowClickHandler handler) {

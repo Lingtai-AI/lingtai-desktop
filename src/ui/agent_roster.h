@@ -8,6 +8,7 @@
 #include <optional>
 
 class QLabel;
+class QPushButton;
 class QScrollArea;
 
 namespace lingtai::desktop {
@@ -46,6 +47,9 @@ public:
     void set_rows(const AgentSnapshot &snapshot,
         const std::optional<std::filesystem::path> &selected_key);
     void set_row_click_handler(RowClickHandler handler);
+    // The shell owns the actual column width. This setter applies it and keeps
+    // the project/Agent header in sync with the avatar-only compact state.
+    void set_roster_width(int width);
     // Keyboard focus: focuses the enabled row for `key` when present,
     // otherwise the first enabled (valid-manifest) row. The narrow OneColumn
     // Back path hands keyboard navigation back to the roster through this.
@@ -54,9 +58,13 @@ public:
 
 private:
     void paintEvent(QPaintEvent *event) override;
+    void update_narrow_mode();
     void update_state_label(const AgentSnapshot &snapshot);
 
+    QLabel *roster_heading_ = nullptr;
     QLabel *roster_state_ = nullptr;
+    QPushButton *project_selector_ = nullptr;
+    QPushButton *new_project_button_ = nullptr;
     QScrollArea *scroll_ = nullptr;
     AgentRowsCanvas *canvas_ = nullptr;
     AgentSnapshot visible_snapshot_;

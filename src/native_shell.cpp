@@ -65,19 +65,18 @@ constexpr auto kMinimumWindowHeight = 480;
 constexpr auto kDefaultWindowWidth = 1100;
 constexpr auto kDefaultWindowHeight = 720;
 
-// Telegram's source-backed two-surface minima, from the pinned
-// `computeColumnLayout` / `window.style`: the persistent list column is at
-// least 260px and the detail column at least 380px. The one semantic 8px
-// drag handle between the roster column and detail pane, and the one-pixel
-// plain shadow separator that follows it, are accounted locally rather than
-// by changing the source constants. In Normal mode the list is responsive: it expands from the
-// 260px minimum toward the runtime-only stored ratio (clamped to 22%-30% of
-// the body), clamped so the detail column keeps its source-backed 380px
-// minimum.
+// Telegram's source-backed wide two-surface minima, from the pinned
+// `computeColumnLayout` / `window.style`: the preferred list column is 260px
+// and the detail column remains at least 380px. Unlike the old hard lower
+// bound, a direct drag may collapse the roster to one 40px avatar plus the
+// row and Sidebar framing (96px total), matching Telegram's narrow row paint.
+// The default runtime ratio stays in the 22%-30% wide band; only an explicit
+// drag below that band enters the collapsed range.
 constexpr auto kRosterColumnWidth = 260;
+constexpr auto kCollapsedRosterColumnWidth = 96;
 constexpr auto kDetailColumnMinimumWidth = 380;
 constexpr auto kRosterSeparatorWidth = 1;
-constexpr auto kMinimumRosterWidthRatio = 0.22;
+constexpr auto kWideRosterWidthRatio = 0.22;
 constexpr auto kMaximumRosterWidthRatio = 0.30;
 constexpr auto kRosterResizeHandleWidth = 8;
 constexpr auto kTwoColumnAvailableThreshold =
@@ -720,12 +719,13 @@ NativeShell::NativeShell()
         if (usable < kTwoColumnAvailableThreshold) return;
         const auto local_x = body->mapFromGlobal(QPoint(global_x, 0)).x();
         const auto chosen_px = std::clamp(local_x,
-            kRosterColumnWidth,
+            kCollapsedRosterColumnWidth,
             body_width - kDetailColumnMinimumWidth
                 - kRosterResizeHandleWidth - kRosterSeparatorWidth);
         roster_width_ratio_ = std::clamp(
             double(chosen_px) / double(body_width),
-            kMinimumRosterWidthRatio, kMaximumRosterWidthRatio);
+            double(kCollapsedRosterColumnWidth) / double(body_width),
+            kMaximumRosterWidthRatio);
         recompute_layout(body_width);
     });
     roster_resize_handle_ = resize_handle;
@@ -2301,12 +2301,16 @@ void NativeShell::recompute_layout(int body_width) {
         - kRosterSeparatorWidth;
     if (available >= kTwoColumnAvailableThreshold) {
         auto roster_width = qRound(body_width * roster_width_ratio_);
+        const auto roster_minimum =
+            (roster_width_ratio_ < kWideRosterWidthRatio)
+            ? kCollapsedRosterColumnWidth
+            : kRosterColumnWidth;
         roster_width = std::clamp(roster_width,
-            kRosterColumnWidth,
+            roster_minimum,
             body_width - kDetailColumnMinimumWidth
                 - kRosterResizeHandleWidth - kRosterSeparatorWidth);
         agent_roster_->setVisible(true);
-        agent_roster_->setFixedWidth(roster_width);
+        agent_roster_->set_roster_width(roster_width);
         roster_resize_handle_->setVisible(true);
         separator_->setVisible(true);
         content_->setVisible(true);
@@ -2320,7 +2324,7 @@ void NativeShell::recompute_layout(int body_width) {
     const auto detail_active =
         selection_state_.selected_agent_directory_key().has_value();
     agent_roster_->setVisible(!detail_active);
-    agent_roster_->setFixedWidth(detail_active
+    agent_roster_->set_roster_width(detail_active
         ? kRosterColumnWidth
         : std::max(body_width, kRosterColumnWidth));
     if (roster_resize_handle_) roster_resize_handle_->setVisible(false);
