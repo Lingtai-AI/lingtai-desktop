@@ -135,6 +135,16 @@ MessageGeometry message_geometry(
     return {left, right, content_width, content_width / double(viewport_width)};
 }
 
+bool is_outgoing_frame(const QTextFrame &frame) {
+    for (auto it = frame.begin(); !it.atEnd(); ++it) {
+        const auto block = it.currentBlock();
+        if (block.isValid()) {
+            return block.blockFormat().alignment().testFlag(Qt::AlignRight);
+        }
+    }
+    return false;
+}
+
 std::pair<MessageGeometry, MessageGeometry> measure_at_width(int width) {
     ConversationSurface surface;
     surface.resize(width, 480);
@@ -175,12 +185,15 @@ std::pair<MessageGeometry, MessageGeometry> measure_at_width(int width) {
 
     auto incoming = QTextBlock();
     auto outgoing = QTextBlock();
-    for (auto block = surface.document()->begin(); block.isValid();
-         block = block.next()) {
-        if (block.text().startsWith(QStringLiteral("Telegram Bot ·"))) {
-            incoming = block;
-        } else if (block.text().startsWith(QStringLiteral("You ·"))) {
+    for (auto *frame : surface.document()->rootFrame()->childFrames()) {
+        const auto block = frame->begin().currentBlock();
+        if (!block.isValid()) {
+            continue;
+        }
+        if (is_outgoing_frame(*frame)) {
             outgoing = block;
+        } else {
+            incoming = block;
         }
     }
     if (!incoming.isValid() || !outgoing.isValid()) {
@@ -434,11 +447,7 @@ void verify_turn_rhythm() {
 
     std::vector<QTextFrame *> message_frames;
     for (auto *frame : surface.document()->rootFrame()->childFrames()) {
-        const auto first_text = frame->begin().currentBlock().text();
-        if (first_text.startsWith(QStringLiteral("Telegram Bot ·"))
-            || first_text.startsWith(QStringLiteral("You ·"))) {
-            message_frames.push_back(frame);
-        }
+        message_frames.push_back(frame);
     }
     if (message_frames.size() < 2) {
         throw std::runtime_error(
@@ -487,11 +496,10 @@ void verify_typography(ConversationSurface &surface, const QString &them) {
     const QTextFrame *incoming = nullptr;
     const QTextFrame *outgoing = nullptr;
     for (const auto *frame : surface.document()->rootFrame()->childFrames()) {
-        const auto first_text = frame->begin().currentBlock().text();
-        if (first_text.startsWith(them + QStringLiteral(" ·"))) {
-            incoming = frame;
-        } else if (first_text.startsWith(QStringLiteral("You ·"))) {
+        if (is_outgoing_frame(*frame)) {
             outgoing = frame;
+        } else {
+            incoming = frame;
         }
     }
     if (!incoming || !outgoing) {
@@ -503,21 +511,15 @@ void verify_typography(ConversationSurface &surface, const QString &them) {
     const auto incoming_fragments = fragments_of(*incoming);
     const auto outgoing_fragments = fragments_of(*outgoing);
 
-    // author/sender: 13px DemiBold, its own fragment for each direction.
+    // Incoming keeps its Agent-name header; outgoing is intentionally body-first.
     const auto &in_sender = require_fragment(
         incoming_fragments, them, true, "incoming sender");
     require_font(in_sender, 13, QFont::DemiBold, "incoming sender");
-    const auto &out_sender = require_fragment(
-        outgoing_fragments, QStringLiteral("You"), true, "outgoing sender");
-    require_font(out_sender, 13, QFont::DemiBold, "outgoing sender");
 
-    // metadata (timestamp) and subject: 12px Normal.
+    // Incoming metadata and both subjects: 12px Normal.
     const auto &in_metadata = require_fragment(
         incoming_fragments, QStringLiteral(" · "), false, "incoming metadata");
     require_font(in_metadata, 12, QFont::Normal, "incoming metadata");
-    const auto &out_metadata = require_fragment(
-        outgoing_fragments, QStringLiteral(" · "), false, "outgoing metadata");
-    require_font(out_metadata, 12, QFont::Normal, "outgoing metadata");
     const auto &in_subject = require_fragment(
         incoming_fragments, QStringLiteral("Slice done"), false,
         "incoming subject");
@@ -541,9 +543,6 @@ void verify_typography(ConversationSurface &surface, const QString &them) {
     require_hierarchy("incoming", in_sender.font.pixelSize(),
         in_body.font.pixelSize(), in_metadata.font.pixelSize(),
         in_subject.font.pixelSize());
-    require_hierarchy("outgoing", out_sender.font.pixelSize(),
-        out_body.font.pixelSize(), out_metadata.font.pixelSize(),
-        out_subject.font.pixelSize());
 }
 
 // ---------------------------------------------------------------------------
@@ -1026,9 +1025,9 @@ void verify_per_message_containers() {
               "frame has " + std::to_string(outgoing_blocks.size()));
     }
 
-    // Whole-frame selection ownership: selecting from the frame's first to its
-    // last cursor position must capture the sender plus every body block, so
-    // copy/select act on the one message, not the whole document.
+    // Whole-frame selection ownership: incoming selection includes its sender;
+    // outgoing selection begins with its body. Both still own every body block,
+    // so copy/select act on the one message, not the whole document.
     const auto require_frame_selection = [](
             const QTextFrame &frame,
             const QString &sender,
@@ -1037,21 +1036,21 @@ void verify_per_message_containers() {
         cursor.setPosition(frame.firstPosition());
         cursor.setPosition(frame.lastPosition(), QTextCursor::KeepAnchor);
         const auto selected = cursor.selectedText();
-        if (!selected.contains(sender)
+        if ((!sender.isEmpty() && !selected.contains(sender))
             || !selected.contains(QStringLiteral("Plan"))
             || !selected.contains(QStringLiteral("bold item"))
             || !selected.contains(
                 QStringLiteral("int main() { return 0; }"))) {
             throw std::runtime_error(
                 std::string("the ") + direction
-                + " message frame's whole selection must capture its sender "
-                  "plus all body content (heading, list item, fenced code), "
+                + " message frame's whole selection must capture its optional "
+                  "sender plus all body content (heading, list item, fenced code), "
                   "but it selects '" + selected.toStdString() + "'");
         }
     };
     require_frame_selection(
         incoming_frame, QStringLiteral("Telegram Bot"), "incoming");
-    require_frame_selection(outgoing_frame, QStringLiteral("You"), "outgoing");
+    require_frame_selection(outgoing_frame, QString(), "outgoing");
 }
 
 // ---------------------------------------------------------------------------
@@ -1106,11 +1105,10 @@ void verify_directional_bubble_policy() {
     QTextFrame *incoming = nullptr;
     QTextFrame *outgoing = nullptr;
     for (auto *frame : surface.document()->rootFrame()->childFrames()) {
-        const auto first_text = frame->begin().currentBlock().text();
-        if (first_text.startsWith(QStringLiteral("Telegram Bot ·"))) {
-            incoming = frame;
-        } else if (first_text.startsWith(QStringLiteral("You ·"))) {
+        if (is_outgoing_frame(*frame)) {
             outgoing = frame;
+        } else {
+            incoming = frame;
         }
     }
     if (!incoming || !outgoing) {
@@ -1205,6 +1203,92 @@ void verify_directional_bubble_policy() {
     }
 }
 
+
+// Outgoing human messages are body-first: no in-bubble `You · timestamp`
+// header. The timestamp remains visible immediately outside the bubble on its
+// left, proven without prescribing a document/frame property implementation by
+// comparing two otherwise-identical renders whose timestamps differ.
+struct OutgoingRender {
+    QImage image;
+    QRectF bubble;
+    QString plain;
+};
+
+OutgoingRender render_outgoing_at(const std::string &timestamp) {
+    ConversationSurface surface;
+    surface.resize(1600, 260);
+    surface.show();
+    QCoreApplication::processEvents();
+    surface.set_conversation(QStringLiteral("Telegram Bot"), {{
+        .id = "out-time",
+        .outgoing = true,
+        .timestamp = timestamp,
+        .text = "Human body only.",
+    }});
+    surface.document()->documentLayout()->documentSize();
+    QCoreApplication::processEvents();
+
+    const auto frames = surface.document()->rootFrame()->childFrames();
+    if (frames.size() != 1 || !is_outgoing_frame(*frames.front())) {
+        throw std::runtime_error(
+            "the outgoing body/time fixture must render one right-aligned frame");
+    }
+    const auto h_offset = double(surface.horizontalScrollBar()->value());
+    const auto v_offset = double(surface.verticalScrollBar()->value());
+    return {
+        surface.viewport()->grab().toImage(),
+        message_bubble_rect(*frames.front()).translated(-h_offset, -v_offset),
+        surface.toPlainText().trimmed(),
+    };
+}
+
+int changed_pixels(const QImage &a, const QImage &b, const QRectF &logical) {
+    if (a.size() != b.size() || a.devicePixelRatio() != b.devicePixelRatio()) {
+        throw std::runtime_error("paired outgoing renders must share one image geometry");
+    }
+    const auto dpr = a.devicePixelRatio();
+    const auto left = std::max(0, int(std::floor(logical.left() * dpr)));
+    const auto top = std::max(0, int(std::floor(logical.top() * dpr)));
+    const auto right = std::min(a.width(), int(std::ceil(logical.right() * dpr)));
+    const auto bottom = std::min(a.height(), int(std::ceil(logical.bottom() * dpr)));
+    auto changed = 0;
+    for (auto y = top; y < bottom; ++y) {
+        for (auto x = left; x < right; ++x) {
+            changed += (a.pixel(x, y) != b.pixel(x, y));
+        }
+    }
+    return changed;
+}
+
+void verify_outgoing_body_first_and_external_time() {
+    const auto first = render_outgoing_at("2026-08-07T19:00:00Z");
+    const auto second = render_outgoing_at("2026-08-07T20:11:00Z");
+    const auto expected = QStringLiteral("Human body only.");
+    if (first.plain != expected || second.plain != expected) {
+        throw std::runtime_error(
+            "outgoing bubble document must contain the body only: remove the "
+            "in-bubble `You · timestamp` header");
+    }
+
+    const auto bubble = first.bubble.intersected(second.bubble);
+    if (bubble.isEmpty()) {
+        throw std::runtime_error("paired outgoing bubbles must overlap");
+    }
+    if (changed_pixels(first.image, second.image, bubble) != 0) {
+        throw std::runtime_error(
+            "changing only the timestamp must not change any pixels inside the "
+            "outgoing body bubble");
+    }
+    const auto time_strip = QRectF(
+        bubble.left() - 180.0, bubble.top(), 172.0, bubble.height());
+    if (changed_pixels(first.image, second.image, time_strip) == 0) {
+        throw std::runtime_error(
+            "changing only the timestamp must change rendered pixels in the "
+            "strip immediately left of the outgoing bubble");
+    }
+}
+
+
 } // namespace
 
 int run_typography_test(int argc, char **argv) {
@@ -1222,6 +1306,7 @@ int run_typography_test(int argc, char **argv) {
         verify_markdown_safe_formatting();
         verify_per_message_containers();
         verify_directional_bubble_policy();
+        verify_outgoing_body_first_and_external_time();
         std::cout << "conversation surface typography: OK\n";
         return 0;
     } catch (const std::exception &error) {
