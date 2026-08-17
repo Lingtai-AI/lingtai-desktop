@@ -1,5 +1,6 @@
 #include "native_shell.h"
 
+#include "native_window_background.h"
 #include "agent_preset_summary.h"
 #include "agent_sleep.h"
 #include "direct_conversation_history.h"
@@ -771,6 +772,8 @@ std::unique_ptr<Ui::RpWindow> make_native_window() {
     auto palette = result->palette();
     palette.setColor(QPalette::Window, st::windowBg->c);
     result->setPalette(palette);
+    ApplyNativeWindowBackground(result.get(), st::windowBg->c);
+    result->setProperty("lingtai_window_surface_color", st::windowBg->c);
     return result;
 }
 
@@ -844,13 +847,14 @@ NativeShell::NativeShell()
         "Drag to resize the Agent list"));
     shell_layout->addWidget(resize_handle);
 
-    // One thin lib_ui shadow separates the persistent list column from the
-    // selected-content pane, matching the pinned shell's between-column
-    // `_sideShadow` geometry.
+    // Keep the semantic divider object for layout/state inspection, but the
+    // accepted single canvas has no visible rule between the two white panes.
     auto *separator = new Ui::PlainShadow(body);
     separator_ = separator;
     separator->setObjectName("lingtai_roster_separator");
     separator->setAccessibleName(QStringLiteral("Project list divider"));
+    separator->setFixedWidth(0);
+    separator->hide();
     shell_layout->addWidget(separator);
 
     auto *content = new PaletteSurface(body, st::windowBg);
@@ -1197,6 +1201,7 @@ NativeShell::NativeShell()
     auto *composer_controls = new ComposerControls(composer);
     composer_controls->setObjectName("lingtai_composer_controls");
     composer_controls->setAccessibleName(QStringLiteral("Message controls"));
+    composer_controls->setFixedHeight(52);
     auto *composer_action_row = new QHBoxLayout(composer_controls);
     composer_action_row->setContentsMargins(6, 4, 6, 4);
     composer_action_row->setSpacing(4);
@@ -1216,19 +1221,20 @@ NativeShell::NativeShell()
         rpl::single(QStringLiteral("Message…")));
     composer_input->setObjectName("lingtai_composer_input");
     composer_input->setAccessibleName(QStringLiteral("Message"));
-    composer_input->setMinHeight(36);
+    composer_input->setFixedHeight(40);
     composer_input->setEnabled(false);
     auto *attachment_button = new ComposerAttachmentButton(composer_controls);
     attachment_button->setObjectName("lingtai_composer_attachment_button");
     attachment_button->setAccessibleName(QStringLiteral("Attach file"));
     attachment_button->setEnabled(false);
-    composer_action_row->addWidget(attachment_button);
-    composer_action_row->addWidget(composer_input, 1);
+    composer_action_row->addWidget(attachment_button, 0, Qt::AlignVCenter);
+    composer_action_row->addWidget(composer_input, 1, Qt::AlignVCenter);
     static const auto composer_send_style = [] {
         auto result = st::defaultActiveButton;
         result.height = 40;
         result.radius = 20;
-        result.textTop += 3;
+        result.padding = QMargins(2, 2, 2, 2);
+        result.textTop += 1;
         return result;
     }();
     auto *send_button = new Ui::RoundButton(
@@ -1238,12 +1244,12 @@ NativeShell::NativeShell()
     send_button->setObjectName("lingtai_composer_send_button");
     send_button->setAccessibleName(QStringLiteral("Send message"));
     send_button->setEnabled(false);
-    send_button->setFixedSize(40, 40);
+    send_button->setFixedSize(44, 44);
     send_button->setFullRadius(true);
     send_button->addClickHandler([this] {
         handle_send_message();
     });
-    composer_action_row->addWidget(send_button);
+    composer_action_row->addWidget(send_button, 0, Qt::AlignVCenter);
     composer_layout->addWidget(composer_controls);
     // The send status is owned by the lane itself, immediately below the
     // action row -- never a separate detail row.

@@ -3470,8 +3470,8 @@ void verify_modern_composer_surface(
             && attachment_button->accessibleName() == QStringLiteral("Attach file"),
         "attachment must be icon-only while retaining its accessible name");
     require(send_button->width() == send_button->height()
-            && send_button->width() <= 40,
-        "Send must be one compact circular candidate, never a rectangular action");
+            && send_button->width() <= 44,
+        "Send must keep one compact square layout box around its 40px painted circle");
 
     // The empty/status read-out is owned by the composer lane, not a
     // separate dashboard row under the detail.
@@ -3509,9 +3509,14 @@ void verify_modern_composer_surface(
         "attachment must sit to the left of Message in the shared container");
     require(qAbs(input_rect.center().y() - send_rect.center().y()) <= 2,
         "the composer input and Send action must align on one compact row");
-    require(qAbs(attachment_rect.center().y() - controls->rect().center().y()) <= 1
-            && qAbs(send_rect.center().y() - controls->rect().center().y()) <= 1,
-        "both 40px icon lanes must be vertically centered in the shared Composer");
+    const auto attachment_center_delta =
+        attachment_rect.center().y() - controls->rect().center().y();
+    const auto send_center_delta =
+        send_rect.center().y() - controls->rect().center().y();
+    require(qAbs(attachment_center_delta) <= 1 && qAbs(send_center_delta) <= 1,
+        "both 40px icon lanes must be vertically centered in the shared Composer: attachment="
+            + std::to_string(attachment_center_delta)
+            + ", send=" + std::to_string(send_center_delta));
     require(input_rect.right() < send_rect.left(),
         "the composer input must sit to the left of Send in the same row");
 
