@@ -684,8 +684,10 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
         }
         const auto outgoing = first_valid_block.blockFormat().alignment()
             .testFlag(Qt::AlignRight);
-        painter.setBrush(outgoing ? st::msgOutBg : st::msgInBg);
-        painter.drawRoundedRect(bubble, kBubbleRadius, kBubbleRadius);
+        if (outgoing) {
+            painter.setBrush(st::msgOutBg);
+            painter.drawRoundedRect(bubble, kBubbleRadius, kBubbleRadius);
+        }
     }
     painter.setRenderHint(QPainter::Antialiasing, false);
     painter.end();
