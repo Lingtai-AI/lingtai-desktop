@@ -202,11 +202,41 @@ protected:
         clip.lineTo(18.0, 8.5);
         const auto clip_center = clip.boundingRect().center();
         const auto button_center = QRectF(rect()).center();
-        painter.translate(button_center - clip_center);
+        // Its stroke is geometrically centered already; this quarter-point
+        // optical correction balances the heavier lower-right hook at 2x.
+        painter.translate(
+            button_center - clip_center + QPointF(0.25, -0.25));
         painter.setBrush(Qt::NoBrush);
         painter.setPen(QPen(st::windowSubTextFg->c, 1.8, Qt::SolidLine,
             Qt::RoundCap, Qt::RoundJoin));
         painter.drawPath(clip);
+    }
+};
+
+// Keep the Telegram RoundButton interaction/ripple surface, but paint the Send
+// arrow as vector ink so its visible bounds share the blue circle's true center
+// instead of inheriting a font glyph's asymmetric bearings and baseline.
+class ComposerSendButton final : public Ui::RoundButton {
+public:
+    ComposerSendButton(QWidget *parent, const style::RoundButton &style)
+    : Ui::RoundButton(parent, rpl::single(QString()), style) {
+    }
+
+protected:
+    void paintEvent(QPaintEvent *event) override {
+        Ui::RoundButton::paintEvent(event);
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setPen(QPen(st::defaultActiveButton.textFg->c, 2.0,
+            Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        const auto center = QPointF(width() / 2.0, height() / 2.0);
+        QPainterPath arrow;
+        arrow.moveTo(center.x(), center.y() + 5.5);
+        arrow.lineTo(center.x(), center.y() - 5.5);
+        arrow.moveTo(center.x() - 4.5, center.y() - 1.0);
+        arrow.lineTo(center.x(), center.y() - 5.5);
+        arrow.lineTo(center.x() + 4.5, center.y() - 1.0);
+        painter.drawPath(arrow);
     }
 };
 
@@ -1213,6 +1243,12 @@ NativeShell::NativeShell()
         auto result = st::defaultInputField;
         result.border = 0;
         result.borderActive = 0;
+        // defaultInputField is a 55px floating-label control with a 28px top
+        // inset. This Composer owns a fixed 40px single-line lane instead.
+        result.textMargins = QMargins(0, 11, 0, 0);
+        result.placeholderMargins = QMargins();
+        result.placeholderScale = 0.0;
+        result.placeholderShift = 0;
         return result;
     }();
     auto *composer_input = new Ui::InputField(
@@ -1235,12 +1271,10 @@ NativeShell::NativeShell()
         result.height = 40;
         result.radius = 20;
         result.padding = QMargins(2, 2, 2, 2);
-        result.textTop += 1;
         return result;
     }();
-    auto *send_button = new Ui::RoundButton(
+    auto *send_button = new ComposerSendButton(
         composer_controls,
-        rpl::single(QStringLiteral(" ↑")),
         composer_send_style);
     send_button->setObjectName("lingtai_composer_send_button");
     send_button->setAccessibleName(QStringLiteral("Send message"));
