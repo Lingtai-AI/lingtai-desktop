@@ -284,7 +284,7 @@ protected:
     void mouseMoveEvent(QMouseEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
-    void leaveEvent(QEvent *event) override;
+    void leaveEventHook(QEvent *event) override;
 
 private:
     int content_height() const;
@@ -456,10 +456,10 @@ void AgentRowsCanvas::mouseReleaseEvent(QMouseEvent *event) {
     QWidget::mouseReleaseEvent(event);
 }
 
-void AgentRowsCanvas::leaveEvent(QEvent *event) {
+void AgentRowsCanvas::leaveEventHook(QEvent *event) {
     set_hovered_row(std::nullopt);
     set_pressed_row(std::nullopt, std::nullopt);
-    QWidget::leaveEvent(event);
+    Ui::RpWidget::leaveEventHook(event);
 }
 
 AgentRoster::AgentRoster(QWidget *parent)
