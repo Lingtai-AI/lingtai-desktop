@@ -3447,6 +3447,52 @@ void verify_modern_composer_surface(
     require_centered_paint(send_button,
         "the circular Send paint must be centered in its 40px lane");
 
+    const auto bounds_for_color = [](const QImage &image, QColor target) {
+        auto bounds = QRect();
+        for (auto y = 0; y != image.height(); ++y) {
+            for (auto x = 0; x != image.width(); ++x) {
+                if (image.pixelColor(x, y) != target) {
+                    continue;
+                }
+                bounds = bounds.isNull()
+                    ? QRect(x, y, 1, 1)
+                    : bounds.united(QRect(x, y, 1, 1));
+            }
+        }
+        return bounds;
+    };
+    const auto require_color_ink_centered = [&](
+            QWidget *widget,
+            QColor ink,
+            bool horizontal,
+            const char *message) {
+        const auto image = widget->grab().toImage();
+        const auto bounds = bounds_for_color(image, ink);
+        const auto tolerance = qMax(1, qCeil(image.devicePixelRatio()));
+        const auto x_delta = bounds.isNull()
+            ? image.width()
+            : bounds.left() + bounds.right() - (image.width() - 1);
+        const auto y_delta = bounds.isNull()
+            ? image.height()
+            : bounds.top() + bounds.bottom() - (image.height() - 1);
+        require(!bounds.isNull()
+                && (!horizontal || qAbs(x_delta) <= tolerance)
+                && qAbs(y_delta) <= tolerance,
+            std::string(message)
+                + ": x_delta=" + std::to_string(x_delta)
+                + ", y_delta=" + std::to_string(y_delta));
+    };
+    require_color_ink_centered(
+        composer_input,
+        st::defaultInputField.placeholderFg->c,
+        false,
+        "the Message placeholder ink must be vertically centered in its 40px field");
+    require_color_ink_centered(
+        send_button,
+        st::defaultActiveButton.textFg->c,
+        true,
+        "the white Send arrow ink must be centered inside the blue circle");
+
     const auto project = sandbox / "project";
     write_file(project / ".lingtai/human/.agent.json",
         R"({"agent_id":"20260101-000000-h001","agent_name":"Ted",)"
