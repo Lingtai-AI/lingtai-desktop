@@ -1406,6 +1406,21 @@ void verify_human_bubble_contract() {
         throw std::runtime_error(
             "the real short mixed-language Human message must stay on one line");
     }
+    // Telegram Desktop derives the natural bubble width from the same shaped
+    // text layout that renders the message. The local surface must therefore
+    // leave only its declared 15px horizontal padding around this real one-line
+    // mixed CJK/Latin record; a separate arbitrary wrap guard would make the
+    // frame materially wider than its QTextLine ink.
+    const auto shaped_width_slack = real_short_mixed_message.effective_width
+        - std::ceil(real_short_mixed_message.text.width())
+        - 2 * 15;
+    if (shaped_width_slack > 4.0) {
+        throw std::runtime_error(
+            "the real mixed-language Human bubble must be sized from its shaped "
+            "QTextLine width with padding only, but it carries "
+            + std::to_string(shaped_width_slack)
+            + "px of parallel-estimate slack");
+    }
 
     const auto expected_fill = QColor(QStringLiteral("#EEF7F3"));
     const auto fill = exact_color_bounds(first.image, expected_fill);
