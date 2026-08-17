@@ -1125,7 +1125,7 @@ void verify_directional_bubble_policy() {
 
     for (const auto &color : bubble_padding_colors(
             *incoming, image, h_offset, v_offset)) {
-        if (color == incoming_fill) {
+        if (incoming_fill != backdrop && color == incoming_fill) {
             throw std::runtime_error(
                 "incoming must have NO bubble: padding is st::msgInBg, not "
                 "the backdrop st::windowBg");

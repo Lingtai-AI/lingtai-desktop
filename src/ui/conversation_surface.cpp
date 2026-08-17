@@ -792,10 +792,9 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
     auto *surface_viewport = viewport();
     QPainter painter(surface_viewport);
     painter.setClipRect(event->rect());
-    // The chat backdrop is the existing light palette token (windowBgOver),
-    // the same warm-neutral field the shell list surface paints, so the
-    // non-bubble area reads light rather than a forced-alpha composite.
-    painter.fillRect(event->rect(), st::windowBgOver);
+    // The chat backdrop shares the shell's single-canvas `windowBg` base;
+    // message bubbles and transient interaction states keep their own tokens.
+    painter.fillRect(event->rect(), st::windowBg);
 
     const auto h_offset = horizontalScrollBar()->value();
     const auto v_offset = verticalScrollBar()->value();

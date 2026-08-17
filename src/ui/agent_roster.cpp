@@ -516,7 +516,7 @@ void AgentRowsCanvas::set_pressed_row(
 
 void AgentRowsCanvas::paintEvent(QPaintEvent *) {
     QPainter painter(this);
-    painter.fillRect(rect(), st::windowBgOver);
+    painter.fillRect(rect(), st::windowBg);
     const auto row_height = agent_row_height(font());
     for (auto index = std::size_t{0}; index != rows_.size(); ++index) {
         const auto &item = rows_[index];
@@ -685,10 +685,10 @@ AgentRoster::AgentRoster(QWidget *parent)
     scroll_->setWidgetResizable(true);
     scroll_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     scroll_->setFrameShape(QFrame::NoFrame);
-    // The rows surface and its scroll viewport share the Sidebar's
-    // `windowBgOver` background instead of forming an independent white field.
+    // The rows surface and its scroll viewport share the single-canvas
+    // `windowBg` base instead of forming an independent raised field.
     auto viewport_palette = scroll_->viewport()->palette();
-    viewport_palette.setColor(QPalette::Window, st::windowBgOver->c);
+    viewport_palette.setColor(QPalette::Window, st::windowBg->c);
     scroll_->viewport()->setPalette(viewport_palette);
     scroll_->viewport()->setAutoFillBackground(true);
     roster_layout->addWidget(scroll_, 1);
@@ -696,7 +696,7 @@ AgentRoster::AgentRoster(QWidget *parent)
     canvas_->setObjectName("lingtai_agent_roster_rows");
     canvas_->setAccessibleName(QStringLiteral("Agent roster rows"));
     auto canvas_palette = canvas_->palette();
-    canvas_palette.setColor(QPalette::Window, st::windowBgOver->c);
+    canvas_palette.setColor(QPalette::Window, st::windowBg->c);
     canvas_->setPalette(canvas_palette);
     canvas_->setAutoFillBackground(true);
     scroll_->setWidget(canvas_);
@@ -708,7 +708,7 @@ AgentRoster::~AgentRoster() = default;
 
 void AgentRoster::paintEvent(QPaintEvent *) {
     QPainter painter(this);
-    painter.fillRect(rect(), st::windowBgOver);
+    painter.fillRect(rect(), st::windowBg);
 }
 
 void AgentRoster::set_roster_width(int width) {
