@@ -3664,6 +3664,18 @@ void verify_modern_composer_surface(
             "its surface, not a single-color blank grab");
     }
 
+    // A large detail must use the horizontal room for the shared Composer rail.
+    // The fixed accessory and action lanes keep their accepted sizes; only the
+    // flex input lane absorbs this additional width.
+    window.resize(1600, 900);
+    QCoreApplication::processEvents();
+    require(controls->width() * 4 >= detail->width() * 3,
+        "a very wide Composer rail must occupy at least 75% of the detail pane");
+    require(attachment_button->width() == 40
+            && send_button->width() == send_button->height()
+            && send_button->width() <= 44,
+        "widening the outer rail must not scale the fixed accessory/action lanes");
+
     std::error_code cleanup_error;
     fs::remove_all(sandbox, cleanup_error);
     require(!cleanup_error, "modern-composer fixtures must be removed");

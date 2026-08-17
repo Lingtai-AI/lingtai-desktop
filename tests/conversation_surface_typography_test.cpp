@@ -1333,6 +1333,12 @@ void verify_human_bubble_contract() {
         "This intentionally long Human message proves that the bubble stays "
         "content-sized and stops at a moderate share of the Conversation "
         "column instead of stretching across the available pane.");
+    const auto very_wide_message = render_outgoing_at(
+        "2026-08-07T19:00:00Z",
+        "This intentionally long Human message proves that a very wide pane "
+        "moves the shared message rail outward without stretching prose past "
+        "the accepted readable bubble width.",
+        1600);
     // Exact adjacent Human records from ~/.lingtai/Personal_agent_minimax that
     // exposed the bug: both hit the same capped lane, but different word-wrap
     // slack must never move the bubble/timestamp right edge.
@@ -1382,11 +1388,17 @@ void verify_human_bubble_contract() {
         throw std::runtime_error(
             "a short Human message must retain a narrow content-sized bubble");
     }
-    const auto conversation_column = qMin(long_message.viewport_width, 900);
-    const auto long_ratio = long_message.effective_width / conversation_column;
-    if (long_ratio < 0.55 || long_ratio > 0.65) {
+    if (long_message.effective_width < 500
+        || long_message.effective_width > 560
+        || very_wide_message.effective_width > 560) {
         throw std::runtime_error(
-            "a long Human message must cap at 55-65% of the Conversation column");
+            "long Human prose must keep the accepted 500-560px readable bubble cap");
+    }
+    if (very_wide_message.block.rightMargin() * 5
+        > very_wide_message.viewport_width) {
+        throw std::runtime_error(
+            "a very wide Conversation must place the Human rail in the outer "
+            "80% instead of retaining the old centered 900px column");
     }
 
     const auto expected_fill = QColor(QStringLiteral("#EEF7F3"));
