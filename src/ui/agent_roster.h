@@ -9,9 +9,13 @@
 
 class QLabel;
 class QScrollArea;
-class QVBoxLayout;
 
 namespace lingtai::desktop {
+
+// The virtual Agent rows surface. It is forward-declared here so AgentRoster
+// owns it through a typed pointer; the definition (row model, selected key,
+// and row paint) lives in agent_roster.cpp.
+class AgentRowsCanvas;
 
 // The persistent responsive left project/Agent list column. It owns the
 // project identity header, the compact Open/New Project actions, and the
@@ -25,9 +29,10 @@ namespace lingtai::desktop {
 // The visible rows omit the human pseudo-agent: the shared `AgentSnapshot`
 // keeps the human for routing/mailbox/detail truth, but the roster never
 // renders it as a row, and the status label counts only the visible rows.
-// `set_rows` rebuilds the row tree only when the visible row set actually
-// changed; an unchanged projection refresh only updates checked state, so
-// scroll, focus, and row identity survive the shell's one-second refresh.
+// `set_rows` swaps the virtual canvas model only when the visible row set
+// actually changed; an unchanged projection refresh only moves the selected
+// state, so scroll, focus, and row identity survive the shell's one-second
+// refresh.
 class AgentRoster final : public Ui::RpWidget {
 public:
     using RowClickHandler = std::function<void(const std::filesystem::path &)>;
@@ -50,13 +55,10 @@ public:
 private:
     void paintEvent(QPaintEvent *event) override;
     void update_state_label(const AgentSnapshot &snapshot);
-    void update_checked_states(
-        const std::optional<std::filesystem::path> &selected_key);
 
-    RowClickHandler row_click_handler_;
     QLabel *roster_state_ = nullptr;
     QScrollArea *scroll_ = nullptr;
-    QVBoxLayout *rows_layout_ = nullptr;
+    AgentRowsCanvas *canvas_ = nullptr;
     AgentSnapshot visible_snapshot_;
 };
 

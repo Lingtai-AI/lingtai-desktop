@@ -3,15 +3,11 @@
 #include "styles/palette.h"
 
 #include <QtCore/QString>
-#include <QtCore/QVariant>
 #include <QtGui/QAction>
 #include <QtGui/QFont>
 #include <QtGui/QFontMetrics>
-#include <QtGui/QKeyEvent>
 #include <QtGui/QPainter>
 #include <QtWidgets/QMenu>
-#include <QtWidgets/QStyle>
-#include <QtWidgets/QStyleOptionFocusRect>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QPushButton>
@@ -82,33 +78,10 @@ QString presence_text(AgentPresenceKind presence) {
     return QStringLiteral("unknown");
 }
 
-QString diagnostic_text(AgentManifestDiagnosticKind diagnostic) {
-    switch (diagnostic) {
-    case AgentManifestDiagnosticKind::none: return QString();
-    case AgentManifestDiagnosticKind::unsafe_symlink:
-        return QStringLiteral("unsafe symlink");
-    case AgentManifestDiagnosticKind::unreadable:
-        return QStringLiteral("unreadable");
-    case AgentManifestDiagnosticKind::invalid_json:
-        return QStringLiteral("invalid JSON");
-    case AgentManifestDiagnosticKind::not_object:
-        return QStringLiteral("JSON root is not an object");
-    }
-    return QStringLiteral("unreadable");
-}
-
 QString row_facts(const AgentRow &item) {
     return QStringLiteral("%1 — %2 — %3")
         .arg(manifest_text(item.manifest_kind), role_text(item.role),
             presence_text(item.presence));
-}
-
-QString row_accessible(const AgentRow &item) {
-    const auto diagnostic = diagnostic_text(item.manifest_diagnostic);
-    return diagnostic.isEmpty()
-        ? row_facts(item)
-        : row_facts(item) + QLatin1Char('\n')
-            + QStringLiteral("manifest diagnostic: %1").arg(diagnostic);
 }
 
 QString friendly_role_text(AgentRole role) {
@@ -147,25 +120,6 @@ QString row_summary(const AgentRow &item) {
     }
     return QStringLiteral("%1 · %2").arg(role, presence);
 }
-
-// A LingTai-owned checkable row button. It keeps the plain checkable-button
-// semantics the shell and its tests rely on while painting the selected,
-// hover, pressed, and focus states from the shared lib_ui palette. Idle rows
-// merge into the Sidebar's `windowBgOver`; selected/hover rows alone use the
-// soft rounded `windowBgRipple` surface rather than a QSS clone of Telegram.
-class AgentRowButton final : public QPushButton {
-public:
-    explicit AgentRowButton(QWidget *parent)
-    : QPushButton(parent) {
-        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-        setFocusPolicy(Qt::StrongFocus);
-    }
-
-protected:
-    QSize sizeHint() const override;
-    void paintEvent(QPaintEvent *) override;
-    void keyPressEvent(QKeyEvent *event) override;
-};
 
 int agent_row_height(const QFont &base_font) {
     auto primary_font = base_font;
@@ -259,12 +213,32 @@ void paint_agent_row(
             std::max(0, secondary_rect.width())));
 }
 
+QLabel *make_label(
+        QWidget *parent,
+        const QString &text,
+        const char *object_name,
+        int point_size,
+        QFont::Weight weight = QFont::Normal) {
+    auto *label = new QLabel(text, parent);
+    label->setObjectName(object_name);
+    label->setTextFormat(Qt::PlainText);
+    label->setAccessibleName(text);
+    auto font = label->font();
+    font.setPointSize(point_size);
+    font.setWeight(weight);
+    label->setFont(font);
+    return label;
+}
+
+} // namespace
+
 // The virtual Agent rows surface: one canvas owns the visible row model plus
 // the selected key and paints every row itself from the shared row geometry,
 // instead of owning one QPushButton per row. It exposes a minimal model-update
 // and selected-update API; an unchanged model only moves the selected
-// highlight. The canvas is not wired into AgentRoster yet — the ownership
-// swap lands in a follow-up.
+// highlight. The canvas also stores the row-click callback and the keyboard
+// focus target so the dedicated mouse and keyboard commits can drive them
+// without a QWidget row tree.
 class AgentRowsCanvas final : public Ui::RpWidget {
 public:
     explicit AgentRowsCanvas(QWidget *parent)
@@ -290,6 +264,16 @@ public:
         update();
     }
 
+    void set_row_click_handler(
+            std::function<void(const std::filesystem::path &)> handler) {
+        row_click_handler_ = std::move(handler);
+    }
+
+    void set_focus_key(
+            const std::optional<std::filesystem::path> &key) {
+        focus_key_ = key;
+    }
+
     QSize sizeHint() const override;
     QSize minimumSizeHint() const override;
 
@@ -301,6 +285,8 @@ private:
 
     std::vector<AgentRow> rows_;
     std::optional<std::filesystem::path> selected_key_;
+    std::function<void(const std::filesystem::path &)> row_click_handler_;
+    std::optional<std::filesystem::path> focus_key_;
 };
 
 QSize AgentRowsCanvas::sizeHint() const {
@@ -344,65 +330,6 @@ void AgentRowsCanvas::paintEvent(QPaintEvent *) {
             false);
     }
 }
-
-QSize AgentRowButton::sizeHint() const {
-    return QSize(
-        std::min(QPushButton::sizeHint().width(), kRosterColumnWidth),
-        agent_row_height(font()));
-}
-
-void AgentRowButton::paintEvent(QPaintEvent *) {
-    QPainter painter(this);
-    const auto selected = isChecked();
-    const auto over = isDown() || underMouse();
-    const auto lines = text().split(QLatin1Char('\n'));
-    paint_agent_row(
-        painter, rect(), font(),
-        lines.value(0), lines.value(1),
-        selected, over);
-
-    if (hasFocus()) {
-        QStyleOptionFocusRect option;
-        option.initFrom(this);
-        style()->drawPrimitive(
-            QStyle::PE_FrameFocusRect, &option, &painter, this);
-    }
-}
-
-// Telegram activates a focused chats row on Return/Enter and routes it
-// through the exact same selection callback a click uses. QPushButton's own
-// key handling only activates autoDefault buttons, which these rows never
-// are, so a focused valid row's Return/Enter is forwarded through `click()`
-// to the existing clicked/selection path.
-void AgentRowButton::keyPressEvent(QKeyEvent *event) {
-    if ((event->key() == Qt::Key_Return
-            || event->key() == Qt::Key_Enter)
-        && isEnabled()) {
-        click();
-        event->accept();
-        return;
-    }
-    QPushButton::keyPressEvent(event);
-}
-
-QLabel *make_label(
-        QWidget *parent,
-        const QString &text,
-        const char *object_name,
-        int point_size,
-        QFont::Weight weight = QFont::Normal) {
-    auto *label = new QLabel(text, parent);
-    label->setObjectName(object_name);
-    label->setTextFormat(Qt::PlainText);
-    label->setAccessibleName(text);
-    auto font = label->font();
-    font.setPointSize(point_size);
-    font.setWeight(weight);
-    label->setFont(font);
-    return label;
-}
-
-} // namespace
 
 AgentRoster::AgentRoster(QWidget *parent)
 : Ui::RpWidget(parent) {
@@ -501,18 +428,14 @@ AgentRoster::AgentRoster(QWidget *parent)
     scroll_->viewport()->setPalette(viewport_palette);
     scroll_->viewport()->setAutoFillBackground(true);
     roster_layout->addWidget(scroll_, 1);
-    auto *rows = new Ui::RpWidget(scroll_);
-    rows->setObjectName("lingtai_agent_roster_rows");
-    rows->setAccessibleName(QStringLiteral("Agent roster rows"));
-    auto rows_palette = rows->palette();
-    rows_palette.setColor(QPalette::Window, st::windowBgOver->c);
-    rows->setPalette(rows_palette);
-    rows->setAutoFillBackground(true);
-    rows_layout_ = new QVBoxLayout(rows);
-    rows_layout_->setContentsMargins(0, 0, 0, 0);
-    rows_layout_->setSpacing(2);
-    rows_layout_->setSizeConstraint(QLayout::SetMinAndMaxSize);
-    scroll_->setWidget(rows);
+    canvas_ = new AgentRowsCanvas(scroll_);
+    canvas_->setObjectName("lingtai_agent_roster_rows");
+    canvas_->setAccessibleName(QStringLiteral("Agent roster rows"));
+    auto canvas_palette = canvas_->palette();
+    canvas_palette.setColor(QPalette::Window, st::windowBgOver->c);
+    canvas_->setPalette(canvas_palette);
+    canvas_->setAutoFillBackground(true);
+    scroll_->setWidget(canvas_);
     layout->addWidget(roster, 1);
 }
 
@@ -524,7 +447,7 @@ void AgentRoster::paintEvent(QPaintEvent *) {
 }
 
 void AgentRoster::set_row_click_handler(RowClickHandler handler) {
-    row_click_handler_ = std::move(handler);
+    canvas_->set_row_click_handler(std::move(handler));
 }
 
 void AgentRoster::update_state_label(const AgentSnapshot &snapshot) {
@@ -535,31 +458,17 @@ void AgentRoster::update_state_label(const AgentSnapshot &snapshot) {
         : QString());
 }
 
-void AgentRoster::update_checked_states(
-        const std::optional<std::filesystem::path> &selected_key) {
-    const auto selected_text = selected_key ? path_text(*selected_key)
-                                            : QString();
-    for (auto index = 0; index != rows_layout_->count(); ++index) {
-        if (auto *row = qobject_cast<QPushButton *>(
-                rows_layout_->itemAt(index)->widget())) {
-            row->setChecked(!selected_text.isEmpty()
-                && row->property("directory_key").toString() == selected_text);
-        }
-    }
-}
-
 void AgentRoster::set_rows(
         const AgentSnapshot &snapshot,
         const std::optional<std::filesystem::path> &selected_key) {
     update_state_label(snapshot);
 
     // The visible model is unchanged when every row's identity, facts, and
-    // diagnostic match what is already shown. In that case only the checked
-    // state may have moved: never rebuild the row tree, so an unchanged
+    // diagnostic match what is already shown. In that case only the selected
+    // state may have moved: never rebuild the canvas model, so an unchanged
     // one-second projection refresh preserves scroll, focus, and row identity.
-    // The comparison and the row tree both cover the visible set (the human
-    // pseudo-agent omitted), so a human-only projection change never churns
-    // the real rows.
+    // The comparison covers the visible set (the human pseudo-agent omitted),
+    // so a human-only projection change never churns the real rows.
     const auto visible = visible_rows(snapshot);
     const auto shown = visible_rows(visible_snapshot_);
     const auto rows_match = visible.size() == shown.size();
@@ -580,60 +489,15 @@ void AgentRoster::set_rows(
     }
     visible_snapshot_ = snapshot;
     if (model_unchanged) {
-        update_checked_states(selected_key);
+        canvas_->set_selected_key(selected_key);
         return;
     }
-
-    while (auto *child = rows_layout_->takeAt(0)) {
-        delete child->widget();
-        delete child;
-    }
-    for (auto index = std::size_t{0}; index != visible.size(); ++index) {
-        const auto &item = visible[index];
-        auto button_key = path_text(item.directory_key);
-        button_key.replace(QLatin1Char('&'), QStringLiteral("&&"));
-        auto *row = new AgentRowButton(rows_layout_->parentWidget());
-        row->setObjectName(
-            QStringLiteral("lingtai_agent_row_%1").arg(index));
-        row->setAccessibleName(
-            QStringLiteral("Agent %1").arg(path_text(item.directory_key)));
-        row->setText(QStringLiteral("%1\n%2").arg(button_key, row_summary(item)));
-        row->setAccessibleDescription(row_accessible(item));
-        row->setToolTip(row_facts(item));
-        row->setProperty("directory_key", path_text(item.directory_key));
-        row->setCheckable(true);
-        row->setChecked(selected_key && *selected_key == item.directory_key);
-        row->setEnabled(item.manifest_kind == AgentManifestKind::valid);
-        row->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-        const auto key = item.directory_key;
-        QObject::connect(row, &QPushButton::clicked, [this, key] {
-            if (row_click_handler_) {
-                row_click_handler_(key);
-            }
-        });
-        rows_layout_->addWidget(row);
-    }
-    rows_layout_->addStretch();
+    canvas_->set_rows(snapshot, selected_key);
 }
 
 void AgentRoster::focus_row(
         const std::optional<std::filesystem::path> &key) {
-    const auto key_text = key ? path_text(*key) : QString();
-    auto *target = static_cast<QPushButton *>(nullptr);
-    for (auto index = 0; index != rows_layout_->count(); ++index) {
-        auto *row = qobject_cast<QPushButton *>(
-            rows_layout_->itemAt(index)->widget());
-        if (!row || !row->isEnabled()) continue;
-        if (key && !key_text.isEmpty()
-            && row->property("directory_key").toString() != key_text) {
-            continue;
-        }
-        target = row;
-        break;
-    }
-    if (target) {
-        target->setFocus();
-    }
+    canvas_->set_focus_key(key);
 }
 
 } // namespace lingtai::desktop
