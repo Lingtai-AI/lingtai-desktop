@@ -3394,6 +3394,22 @@ void verify_modern_composer_surface(
         window, "lingtai_roster_separator");
     auto *detail_scroll = required_child<QScrollArea>(
         window, "lingtai_agent_detail_scroll");
+    auto *titlebar_brand = required_child<QLabel>(
+        window, "lingtai_titlebar_brand");
+    auto *project_selector = required_child<QPushButton>(
+        window, "lingtai_project_selector");
+
+    require(titlebar_brand->text() == QStringLiteral("LingTai")
+            && titlebar_brand->parent() == window.body().get(),
+        "the pure LingTai titlebar brand must be a separate body overlay, not the Sidebar selector");
+    const auto native_anchor = titlebar_brand->property(
+        "lingtai_native_traffic_light_anchor").toPoint();
+    require(native_anchor.x() > 0
+            && qAbs(titlebar_brand->geometry().left() - native_anchor.x()) <= 1
+            && qAbs(titlebar_brand->geometry().center().y() - native_anchor.y()) <= 1,
+        "the titlebar brand must start immediately right of and vertically align with the real macOS traffic lights");
+    require(project_selector->parent() != window.body().get(),
+        "the functional project selector must remain in the Sidebar");
 
     // Ted's real-window acceptance is stricter than the source oracle: the
     // macOS titlebar must visibly share the app base, and the white columns
@@ -3525,6 +3541,8 @@ void verify_modern_composer_surface(
         "the modern-composer fixture project must open");
     require(tree_snapshot(project) == fixture_before,
         "opening the modern-composer fixture must remain read-only");
+    require(project_selector->text() == QStringLiteral("project"),
+        "the Sidebar project selector must show the active folder basename");
     click_first_agent_canvas_row(window);
     require(shell.selection_state().selected_agent_directory_key()
                 == std::optional<fs::path>("alpha"),
