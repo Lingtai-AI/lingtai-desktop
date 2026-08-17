@@ -1,5 +1,6 @@
 #include "native_shell.h"
 
+#include "native_window_background.h"
 #include "agent_preset_summary.h"
 #include "agent_sleep.h"
 #include "direct_conversation_history.h"
@@ -34,6 +35,7 @@
 #include <QtGui/QGuiApplication>
 #include <QtGui/QMouseEvent>
 #include <QtGui/QPainter>
+#include <QtGui/QPainterPath>
 #include <QtGui/QPalette>
 #include <QtGui/QStyleHints>
 #include <QtWidgets/QBoxLayout>
@@ -151,6 +153,93 @@ private:
     style::color fill_;
 };
 
+// One Telegram-shaped Composer control envelope: attachment, field and Send
+// share this single rounded base and its one-pixel adaptive palette border.
+// Status text stays in the outer Composer lane rather than widening this frame.
+class ComposerControls final : public Ui::RpWidget {
+public:
+    explicit ComposerControls(QWidget *parent)
+    : Ui::RpWidget(parent) {
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const auto outline = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        const auto radius = outline.height() / 2.0;
+        painter.setPen(QPen(st::shadowFg->c, 1.0));
+        painter.setBrush(st::windowBg->c);
+        painter.drawRoundedRect(outline, radius, radius);
+    }
+};
+
+// A flat vector paperclip avoids both the former platform-framed `+` button
+// and an icon-font/emoji dependency while retaining the semantic Attach name.
+class ComposerAttachmentButton final : public QPushButton {
+public:
+    explicit ComposerAttachmentButton(QWidget *parent)
+    : QPushButton(parent) {
+        setFixedSize(40, 40);
+        setCursor(Qt::PointingHandCursor);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        if (underMouse() && isEnabled()) {
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(st::windowBgOver->c);
+            painter.drawEllipse(rect().adjusted(2, 2, -2, -2));
+        }
+        QPainterPath clip;
+        clip.moveTo(11.0, 19.0);
+        clip.lineTo(20.5, 9.5);
+        clip.cubicTo(23.0, 7.0, 27.0, 10.5, 24.5, 13.0);
+        clip.lineTo(14.0, 23.5);
+        clip.cubicTo(10.0, 27.5, 4.5, 22.0, 8.5, 18.0);
+        clip.lineTo(18.0, 8.5);
+        const auto clip_center = clip.boundingRect().center();
+        const auto button_center = QRectF(rect()).center();
+        // Its stroke is geometrically centered already; this quarter-point
+        // optical correction balances the heavier lower-right hook at 2x.
+        painter.translate(
+            button_center - clip_center + QPointF(0.25, -0.25));
+        painter.setBrush(Qt::NoBrush);
+        painter.setPen(QPen(st::windowSubTextFg->c, 1.8, Qt::SolidLine,
+            Qt::RoundCap, Qt::RoundJoin));
+        painter.drawPath(clip);
+    }
+};
+
+// Keep the Telegram RoundButton interaction/ripple surface, but paint the Send
+// arrow as vector ink so its visible bounds share the blue circle's true center
+// instead of inheriting a font glyph's asymmetric bearings and baseline.
+class ComposerSendButton final : public Ui::RoundButton {
+public:
+    ComposerSendButton(QWidget *parent, const style::RoundButton &style)
+    : Ui::RoundButton(parent, rpl::single(QString()), style) {
+    }
+
+protected:
+    void paintEvent(QPaintEvent *event) override {
+        Ui::RoundButton::paintEvent(event);
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setPen(QPen(st::defaultActiveButton.textFg->c, 2.0,
+            Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        const auto center = QPointF(width() / 2.0, height() / 2.0);
+        QPainterPath arrow;
+        arrow.moveTo(center.x(), center.y() + 5.5);
+        arrow.lineTo(center.x(), center.y() - 5.5);
+        arrow.moveTo(center.x() - 4.5, center.y() - 1.0);
+        arrow.lineTo(center.x(), center.y() - 5.5);
+        arrow.lineTo(center.x() + 4.5, center.y() - 1.0);
+        painter.drawPath(arrow);
+    }
+};
+
 // One LingTai-owned semantic drag handle for the roster column: a fixed 8px
 // strip between the roster and its one-pixel shadow that reports only the
 // pointer's current global x while the primary button is held, so the shell
@@ -171,6 +260,11 @@ public:
     }
 
 protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        painter.fillRect(rect(), st::windowBg->c);
+    }
+
     void mousePressEvent(QMouseEvent *event) override {
         if (event->button() == Qt::LeftButton) {
             dragging_ = true;
@@ -703,6 +797,14 @@ std::unique_ptr<Ui::RpWindow> make_native_window() {
         return style_copy;
     }();
     result->setTitleStyle(desktop_title_style);
+    // Telegram's MainWindow::updatePalette assigns one app-owned base to the
+    // transparent macOS title bar and the content canvas. lib_ui already owns
+    // NoTitleBarBackgroundHint/full-size native title behavior here.
+    auto palette = result->palette();
+    palette.setColor(QPalette::Window, st::windowBg->c);
+    result->setPalette(palette);
+    ApplyNativeWindowBackground(result.get(), st::windowBg->c);
+    result->setProperty("lingtai_window_surface_color", st::windowBg->c);
     return result;
 }
 
@@ -776,13 +878,14 @@ NativeShell::NativeShell()
         "Drag to resize the Agent list"));
     shell_layout->addWidget(resize_handle);
 
-    // One thin lib_ui shadow separates the persistent list column from the
-    // selected-content pane, matching the pinned shell's between-column
-    // `_sideShadow` geometry.
+    // Keep the semantic divider object for layout/state inspection, but the
+    // accepted single canvas has no visible rule between the two white panes.
     auto *separator = new Ui::PlainShadow(body);
     separator_ = separator;
     separator->setObjectName("lingtai_roster_separator");
     separator->setAccessibleName(QStringLiteral("Project list divider"));
+    separator->setFixedWidth(0);
+    separator->hide();
     shell_layout->addWidget(separator);
 
     auto *content = new PaletteSurface(body, st::windowBg);
@@ -915,6 +1018,7 @@ NativeShell::NativeShell()
     detail_scroll->setObjectName("lingtai_agent_detail_scroll");
     detail_scroll->setAccessibleName(QStringLiteral("Selected Agent detail"));
     detail_scroll->setWidgetResizable(true);
+    detail_scroll->setFrameShape(QFrame::NoFrame);
     detail_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     directory_layout->addWidget(detail_scroll, 1);
     auto *detail = new Ui::RpWidget(detail_scroll);
@@ -1116,24 +1220,23 @@ NativeShell::NativeShell()
     // shell's palette background rather than a widget-level white base.
     detail_layout->addWidget(conversation, 1);
 
-    // The one floating composer surface, directly under the conversation it
-    // sends into: the surface's base `windowBg` content token sits on the same
-    // base main surface as the content pane -- never a full-width dark band --
-    // and it stays physically inset from both detail edges by a wrapper lane,
-    // while its own layout owns the compact attachment/input/Send action row
-    // and both status read-outs.
+    // The outer Composer lane stays on the same base as the conversation and
+    // owns status read-outs. Its first child is the one inset rounded controls
+    // envelope; no attachment/input/Send control paints an independent frame.
     auto *composer = new PaletteSurface(detail, st::windowBg);
     composer_ = composer;
     composer->setObjectName("lingtai_composer");
     composer->setAccessibleName(QStringLiteral("Send a message"));
     auto *composer_layout = new QVBoxLayout(composer);
-    composer_layout->setContentsMargins(12, 10, 12, 8);
+    composer_layout->setContentsMargins(0, 0, 0, 0);
     composer_layout->setSpacing(4);
-    // The one compact aligned action row: one attachment icon, one vendored
-    // single-line input, and one explicit icon Send action, all owned by the
-    // composer lane and the input/Send both submitting through the same path.
-    auto *composer_action_row = new QHBoxLayout;
-    composer_action_row->setSpacing(8);
+    auto *composer_controls = new ComposerControls(composer);
+    composer_controls->setObjectName("lingtai_composer_controls");
+    composer_controls->setAccessibleName(QStringLiteral("Message controls"));
+    composer_controls->setFixedHeight(52);
+    auto *composer_action_row = new QHBoxLayout(composer_controls);
+    composer_action_row->setContentsMargins(6, 4, 6, 4);
+    composer_action_row->setSpacing(4);
     // A borderless copy of the shared single-line field style: the row's own
     // base `windowBg` surface is the only frame, and the field keeps the same
     // text/placeholder face as the standard control.
@@ -1141,38 +1244,49 @@ NativeShell::NativeShell()
         auto result = st::defaultInputField;
         result.border = 0;
         result.borderActive = 0;
+        // defaultInputField is a 55px floating-label control with a 28px top
+        // inset. This Composer owns a fixed 40px single-line lane instead.
+        result.textMargins = QMargins(0, 13, 0, 0);
+        result.placeholderMargins = QMargins();
+        result.placeholderScale = 0.0;
+        result.placeholderShift = 0;
         return result;
     }();
     auto *composer_input = new Ui::InputField(
-        composer,
+        composer_controls,
         borderless_composer_input,
         Ui::InputField::Mode::SingleLine,
         rpl::single(QStringLiteral("Message…")));
     composer_input->setObjectName("lingtai_composer_input");
     composer_input->setAccessibleName(QStringLiteral("Message"));
-    composer_input->setMinHeight(36);
+    composer_input->setFixedHeight(40);
     composer_input->setEnabled(false);
-    auto *attachment_button = new QPushButton(QStringLiteral("+"), composer);
+    auto *attachment_button = new ComposerAttachmentButton(composer_controls);
     attachment_button->setObjectName("lingtai_composer_attachment_button");
     attachment_button->setAccessibleName(QStringLiteral("Attach file"));
     attachment_button->setEnabled(false);
-    attachment_button->setFixedWidth(36);
-    attachment_button->setFixedHeight(36);
-    composer_action_row->addWidget(attachment_button);
-    composer_action_row->addWidget(composer_input, 1);
-    auto *send_button = new Ui::RoundButton(
-        composer,
-        rpl::single(QStringLiteral("↑")),
-        st::defaultActiveButton);
+    composer_action_row->addWidget(attachment_button, 0, Qt::AlignVCenter);
+    composer_action_row->addWidget(composer_input, 1, Qt::AlignVCenter);
+    static const auto composer_send_style = [] {
+        auto result = st::defaultActiveButton;
+        result.height = 40;
+        result.radius = 20;
+        result.padding = QMargins(2, 2, 2, 2);
+        return result;
+    }();
+    auto *send_button = new ComposerSendButton(
+        composer_controls,
+        composer_send_style);
     send_button->setObjectName("lingtai_composer_send_button");
     send_button->setAccessibleName(QStringLiteral("Send message"));
     send_button->setEnabled(false);
-    send_button->setFixedWidth(40);
+    send_button->setFixedSize(44, 44);
+    send_button->setFullRadius(true);
     send_button->addClickHandler([this] {
         handle_send_message();
     });
-    composer_action_row->addWidget(send_button);
-    composer_layout->addLayout(composer_action_row);
+    composer_action_row->addWidget(send_button, 0, Qt::AlignVCenter);
+    composer_layout->addWidget(composer_controls);
     // The send status is owned by the lane itself, immediately below the
     // action row -- never a separate detail row.
     auto *composer_status = make_label(
@@ -1187,7 +1301,7 @@ NativeShell::NativeShell()
         QStringLiteral("Selected Agent conversation state"));
     composer_layout->addWidget(conversation_state);
     auto *composer_surface = new QHBoxLayout;
-    composer_surface->setContentsMargins(24, 0, 24, 0);
+    composer_surface->setContentsMargins(16, 0, 16, 12);
     composer_surface->addWidget(composer);
     detail_layout->addLayout(composer_surface);
     composer_input->submits()
@@ -2347,10 +2461,11 @@ void NativeShell::bump_lifecycle_generation() noexcept {
 
 // Telegram's one mode recompute, fed by the body's own size stream: below
 // the source-backed two-surface threshold (`260 + 380` usable column pixels
-// after the one-pixel separator and the 8px drag handle) exactly one
-// full-width surface is shown -- the roster until an Agent is selected, then
-// the detail with Back; at or above it roster + handle + separator + detail
-// all show and Back is hidden. A selected Agent is the sole state that
+// after the 8px drag handle) exactly one full-width surface is shown -- the
+// roster until an Agent is selected, then the detail with Back; at or above it
+// roster + handle + detail all show and Back is hidden. The semantic separator
+// object stays hidden in both modes so responsive recompute cannot restore an
+// unwanted full-height pane edge. A selected Agent is the sole state that
 // decides which narrow surface is active, so a wide->narrow resize with an
 // active selection keeps the detail, exactly as Telegram keeps the active
 // chat in OneColumn.
@@ -2370,7 +2485,7 @@ void NativeShell::recompute_layout(int body_width) {
         agent_roster_->setVisible(true);
         agent_roster_->set_roster_width(roster_width);
         roster_resize_handle_->setVisible(true);
-        separator_->setVisible(true);
+        separator_->setVisible(false);
         content_->setVisible(true);
         detail_back_button_->setVisible(false);
         const auto detail_width = body_width - roster_width

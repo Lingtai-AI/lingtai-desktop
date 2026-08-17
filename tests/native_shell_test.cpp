@@ -25,6 +25,7 @@
 #include <QtGui/QTextDocument>
 #include <QtGui/QTextFormat>
 #include <QtGui/QTextLayout>
+#include <QtGui/QWindow>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QDialog>
@@ -3377,12 +3378,139 @@ void verify_modern_composer_surface(
     auto &window = shell.window();
     auto *composer = required_child<Ui::RpWidget>(
         window, "lingtai_composer");
+    auto *controls = required_child<Ui::RpWidget>(
+        window, "lingtai_composer_controls");
+    auto *attachment_button = required_child<QPushButton>(
+        window, "lingtai_composer_attachment_button");
     auto *composer_input = required_ui_child<Ui::InputField>(
         window, "lingtai_composer_input");
     auto *send_button = required_ui_child<Ui::RoundButton>(
         window, "lingtai_composer_send_button");
     auto *composer_status = required_child<QLabel>(
         window, "lingtai_composer_status");
+    auto *resize_handle = required_child<QWidget>(
+        window, "lingtai_roster_resize_handle");
+    auto *separator = required_ui_child<Ui::PlainShadow>(
+        window, "lingtai_roster_separator");
+    auto *detail_scroll = required_child<QScrollArea>(
+        window, "lingtai_agent_detail_scroll");
+
+    // Ted's real-window acceptance is stricter than the source oracle: the
+    // macOS titlebar must visibly share the app base, and the white columns
+    // must meet without even the optional one-pixel Telegram side shadow.
+    require(window.windowFlags().testFlag(Qt::NoTitleBarBackgroundHint),
+        "the macOS title bar must stay transparent over the app-owned base");
+    require(window.palette().color(QPalette::Window) == st::windowBg->c,
+        "the Qt window palette must own the shared windowBg base");
+    require(window.windowHandle() != nullptr
+            && window.property("lingtai_window_surface_color").value<QColor>()
+                == st::windowBg->c,
+        "the native window surface must receive windowBg, not only QWidget palette");
+    const auto handle_image = resize_handle->grab().toImage();
+    require(handle_image.pixelColor(
+                handle_image.width() / 2, handle_image.height() / 2)
+            == st::windowBg->c,
+        "the wide resize target must paint windowBg");
+    require(!separator->isVisible(),
+        "responsive recompute must not re-show the center divider");
+    require(detail_scroll->frameShape() == QFrame::NoFrame,
+        "the main detail scroll must not draw a rectangular pane border");
+
+    const auto painted_bounds = [](const QImage &image, QColor surface) {
+        auto bounds = QRect();
+        for (auto y = 0; y != image.height(); ++y) {
+            for (auto x = 0; x != image.width(); ++x) {
+                if (image.pixelColor(x, y) != surface) {
+                    bounds = bounds.isNull()
+                        ? QRect(x, y, 1, 1)
+                        : bounds.united(QRect(x, y, 1, 1));
+                }
+            }
+        }
+        return bounds;
+    };
+    const auto require_centered_paint = [&](QWidget *widget, const char *message) {
+        const auto image = widget->grab().toImage();
+        const auto bounds = painted_bounds(image, image.pixelColor(0, 0));
+        const auto tolerance = qMax(1, qCeil(image.devicePixelRatio()));
+        require(!bounds.isNull()
+                && qAbs(bounds.left() + bounds.right() - (image.width() - 1))
+                    <= tolerance
+                && qAbs(bounds.top() + bounds.bottom() - (image.height() - 1))
+                    <= tolerance,
+            message);
+    };
+    require_centered_paint(attachment_button,
+        "the paperclip ink must be mathematically centered in its 40px lane");
+    require_centered_paint(send_button,
+        "the circular Send paint must be centered in its 40px lane");
+
+    const auto bounds_for_color = [](const QImage &image, QColor target) {
+        auto bounds = QRect();
+        for (auto y = 0; y != image.height(); ++y) {
+            for (auto x = 0; x != image.width(); ++x) {
+                if (image.pixelColor(x, y) != target) {
+                    continue;
+                }
+                bounds = bounds.isNull()
+                    ? QRect(x, y, 1, 1)
+                    : bounds.united(QRect(x, y, 1, 1));
+            }
+        }
+        return bounds;
+    };
+    const auto require_color_ink_centered = [&](
+            QWidget *widget,
+            QColor ink,
+            bool horizontal,
+            const char *message) {
+        const auto image = widget->grab().toImage();
+        const auto bounds = bounds_for_color(image, ink);
+        const auto tolerance = qMax(1, qCeil(image.devicePixelRatio()));
+        const auto x_delta = bounds.isNull()
+            ? image.width()
+            : bounds.left() + bounds.right() - (image.width() - 1);
+        const auto y_delta = bounds.isNull()
+            ? image.height()
+            : bounds.top() + bounds.bottom() - (image.height() - 1);
+        require(!bounds.isNull()
+                && (!horizontal || qAbs(x_delta) <= tolerance)
+                && qAbs(y_delta) <= tolerance,
+            std::string(message)
+                + ": x_delta=" + std::to_string(x_delta)
+                + ", y_delta=" + std::to_string(y_delta));
+    };
+    const auto message_controls_image = controls->grab().toImage();
+    const auto controls_scale = message_controls_image.devicePixelRatio();
+    const auto input_left = qRound(
+        composer_input->mapTo(controls, QPoint()).x() * controls_scale);
+    const auto input_right = input_left
+        + qRound(composer_input->width() * controls_scale) - 1;
+    auto message_bounds = QRect();
+    for (auto y = 0; y != message_controls_image.height(); ++y) {
+        for (auto x = input_left; x <= input_right; ++x) {
+            if (message_controls_image.pixelColor(x, y)
+                != st::defaultInputField.placeholderFg->c) {
+                continue;
+            }
+            message_bounds = message_bounds.isNull()
+                ? QRect(x, y, 1, 1)
+                : message_bounds.united(QRect(x, y, 1, 1));
+        }
+    }
+    const auto message_y_delta = message_bounds.isNull()
+        ? message_controls_image.height()
+        : message_bounds.top() + message_bounds.bottom()
+            - (message_controls_image.height() - 1);
+    require(!message_bounds.isNull()
+            && qAbs(message_y_delta) <= qMax(1, qCeil(controls_scale)),
+        "the Message ink must be vertically centered in the whole Composer capsule: y_delta="
+            + std::to_string(message_y_delta));
+    require_color_ink_centered(
+        send_button,
+        st::defaultActiveButton.textFg->c,
+        true,
+        "the white Send arrow ink must be centered inside the blue circle");
 
     const auto project = sandbox / "project";
     write_file(project / ".lingtai/human/.agent.json",
@@ -3397,10 +3525,22 @@ void verify_modern_composer_surface(
         "the modern-composer fixture project must open");
     require(tree_snapshot(project) == fixture_before,
         "opening the modern-composer fixture must remain read-only");
-    click_agent(window, "alpha");
+    click_first_agent_canvas_row(window);
     require(shell.selection_state().selected_agent_directory_key()
                 == std::optional<fs::path>("alpha"),
         "the modern-composer fixture Agent must be selectable");
+
+    require(attachment_button->parent() == controls
+            && composer_input->parent() == controls
+            && send_button->parent() == controls,
+        "attachment, Message input and Send must share one immediate rounded "
+        "controls container");
+    require(attachment_button->text().isEmpty()
+            && attachment_button->accessibleName() == QStringLiteral("Attach file"),
+        "attachment must be icon-only while retaining its accessible name");
+    require(send_button->width() == send_button->height()
+            && send_button->width() <= 44,
+        "Send must keep one compact square layout box around its 40px painted circle");
 
     // The empty/status read-out is owned by the composer lane, not a
     // separate dashboard row under the detail.
@@ -3420,23 +3560,52 @@ void verify_modern_composer_surface(
             && send_button->isVisible(),
         "the modern composer and its action row must be visible in a wide "
         "detail");
+    const auto attachment_rect = QRect(
+        attachment_button->mapTo(controls, QPoint(0, 0)),
+        attachment_button->size());
     const auto input_rect = QRect(
-        composer_input->mapTo(composer, QPoint(0, 0)),
+        composer_input->mapTo(controls, QPoint(0, 0)),
         composer_input->size());
     const auto send_rect = QRect(
-        send_button->mapTo(composer, QPoint(0, 0)),
+        send_button->mapTo(controls, QPoint(0, 0)),
         send_button->size());
 
-    // The input and Send action stay one compact aligned action row inside
-    // the lane.
-    require(composer_input->parent() == composer
-            && send_button->parent() == composer,
-        "the composer input and Send action must be owned by the composer "
-        "lane");
+    // Attachment, field and circular Send stay one compact aligned action row
+    // inside the shared container.
+    require(qAbs(attachment_rect.center().y() - input_rect.center().y()) <= 2,
+        "attachment and Message input must align on one compact row");
+    require(attachment_rect.right() < input_rect.left(),
+        "attachment must sit to the left of Message in the shared container");
     require(qAbs(input_rect.center().y() - send_rect.center().y()) <= 2,
         "the composer input and Send action must align on one compact row");
+    const auto attachment_center_delta =
+        attachment_rect.center().y() - controls->rect().center().y();
+    const auto send_center_delta =
+        send_rect.center().y() - controls->rect().center().y();
+    require(qAbs(attachment_center_delta) <= 1 && qAbs(send_center_delta) <= 1,
+        "both 40px icon lanes must be vertically centered in the shared Composer: attachment="
+            + std::to_string(attachment_center_delta)
+            + ", send=" + std::to_string(send_center_delta));
     require(input_rect.right() < send_rect.left(),
         "the composer input must sit to the left of Send in the same row");
+
+    const auto controls_image = controls->grab().toImage();
+    require(controls_image.width() >= 3 && controls_image.height() >= 3,
+        "the shared Composer controls container must render a real surface");
+    const auto interior = controls_image.pixelColor(
+        controls_image.width() / 2, controls_image.height() / 2);
+    const auto border = controls_image.pixelColor(controls_image.width() / 2, 0);
+    const auto corner = controls_image.pixelColor(0, 0);
+    require(border != interior,
+        "the shared Composer container must paint one subtle visible border");
+    require(corner == interior,
+        "the shared Composer container must leave rounded outer corners on "
+        "the common background");
+    auto *detail = required_child<Ui::RpWidget>(window, "lingtai_agent_detail");
+    const auto composer_bottom = composer->mapTo(detail, QPoint(0, 0)).y()
+        + composer->height();
+    require(detail->height() - composer_bottom >= 8,
+        "the Composer must stay inset from the bottom edge");
 
     // Narrow 380 minimum: the input/Send row stays near-full relative to
     // its immediate composer-lane owner.
@@ -3445,15 +3614,19 @@ void verify_modern_composer_surface(
     require(composer->isVisible() && composer_input->isVisible()
             && send_button->isVisible(),
         "the modern composer must stay visible at the narrow minimum");
+    const auto narrow_attachment_rect = QRect(
+        attachment_button->mapTo(controls, QPoint(0, 0)),
+        attachment_button->size());
     const auto narrow_input_rect = QRect(
-        composer_input->mapTo(composer, QPoint(0, 0)),
+        composer_input->mapTo(controls, QPoint(0, 0)),
         composer_input->size());
     const auto narrow_send_rect = QRect(
-        send_button->mapTo(composer, QPoint(0, 0)),
+        send_button->mapTo(controls, QPoint(0, 0)),
         send_button->size());
-    const auto narrow_lane = narrow_input_rect.united(narrow_send_rect);
-    require(narrow_lane.width() * 4 >= composer->width() * 3,
-        "a narrow composer must let its input+Send row grow near-full");
+    const auto narrow_lane = narrow_attachment_rect.united(
+        narrow_input_rect).united(narrow_send_rect);
+    require(narrow_lane.width() * 4 >= controls->width() * 3,
+        "a narrow composer must keep attachment+input+Send near-full");
 
     // The Vision HIGH Send contract at the real visual sizes (1100x720,
     // 820x620, 640x520): the composer field/status surface stays present,
