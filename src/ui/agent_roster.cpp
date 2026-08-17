@@ -667,11 +667,14 @@ AgentRoster::AgentRoster(QWidget *parent)
     auto *heading_row = new QHBoxLayout;
     heading_row->setSpacing(6);
     roster_heading_ = make_label(
-        roster, QStringLiteral("Agents"), "lingtai_agent_roster_heading", 12,
-        QFont::DemiBold);
+        roster, QStringLiteral("Agents"), "lingtai_agent_roster_heading", 12);
     heading_row->addWidget(roster_heading_);
     roster_state_ = make_label(
         roster, QString(), "lingtai_agent_roster_state", 10);
+    auto roster_state_palette = roster_state_->palette();
+    roster_state_palette.setColor(
+        QPalette::WindowText, st::windowSubTextFg->c);
+    roster_state_->setPalette(roster_state_palette);
     roster_state_->setAccessibleName(QStringLiteral("Agent roster status"));
     heading_row->addStretch();
     heading_row->addWidget(roster_state_);
