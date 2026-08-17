@@ -36,10 +36,10 @@ namespace {
 constexpr auto kDocumentMargin = 8;
 constexpr auto kMessageEdgeMargin = 12;
 constexpr auto kMessageTopMargin = 4;
-// Sibling-frame spacing, not a final QTextBlock margin, preserves the
-// test-pinned 14px rendered gap between consecutive bubbles: each message
-// frame's bottom margin is the whole outer gap.
-constexpr auto kMessageFrameBottomMargin = 14;
+// One readable rhythm inside a same-Agent group and a larger break between
+// groups. The current frame's bottom margin owns the gap to its next sibling.
+constexpr auto kWithinGroupBottomMargin = 19;
+constexpr auto kBetweenGroupBottomMargin = 28;
 constexpr auto kMessageRatio = 0.72;
 constexpr auto kMinMessageWidth = 160;
 constexpr auto kMessageAbsoluteCap = 640;
@@ -56,6 +56,9 @@ constexpr auto kMessageBlockProperty = QTextFormat::UserProperty + 1;
 // The outgoing message timestamp rides on the sibling frame so paintEvent can
 // place it outside the body-only bubble without a visible header block.
 constexpr auto kMessageTimestampProperty = QTextFormat::UserProperty + 2;
+// Incoming frames paint an avatar only when they start a visible same-Agent
+// group; continuation frames retain the shared text lane but leave it empty.
+constexpr auto kMessageAvatarProperty = QTextFormat::UserProperty + 3;
 constexpr auto kEmptyAvatarDiameter = 32;
 constexpr auto kEmptyAvatarGap = 10;
 constexpr auto kEmptyTitleGap = 6;
@@ -174,17 +177,6 @@ QTextCharFormat day_format() {
     format.setForeground(st::msgServiceFg);
     auto font = format.font();
     font.setPixelSize(11);
-    font.setWeight(QFont::Normal);
-    format.setFont(font);
-    return format;
-}
-
-QTextCharFormat subject_format(bool outgoing) {
-    auto format = QTextCharFormat();
-    format.setForeground(outgoing ? st::historyTextOutFg
-                                  : st::historyTextInFg);
-    auto font = format.font();
-    font.setPixelSize(12);
     font.setWeight(QFont::Normal);
     format.setFont(font);
     return format;
@@ -357,8 +349,8 @@ void insert_markdown_body(
 }
 
 // A message's own natural content width: the widest single rendered line of
-// its visible text (the sender · timestamp header, the optional subject, and
-// every body line), measured with the exact same fonts rebuild_document
+// its visible text (the incoming sender · timestamp header and every body
+// line), measured with the exact same fonts rebuild_document
 // applies. The caller adds the existing horizontal bubble padding, so a short
 // message owns a visibly narrower lane than a longer one in the same state
 // instead of every message stretching to the shared lane maximum.
@@ -382,13 +374,8 @@ int message_content_width(
         widest = qMax(widest, header);
     }
 
-    if (!message.subject.empty()) {
-        const auto subject_metrics = QFontMetricsF(
-            subject_format(outgoing).font());
-        widest = qMax(widest,
-            subject_metrics.horizontalAdvance(
-                QString::fromStdString(message.subject)));
-    }
+    // Stored email subjects are routing metadata, not visible conversation
+    // content, so they do not affect the message lane's natural width.
 
     // The body is measured line by line: the same paragraph-delimiter
     // normalization rebuild_document applies, so only the widest single line
@@ -522,7 +509,6 @@ bool ConversationSurface::same_content(
         const auto &after = messages[index];
         if (before.id != after.id || before.outgoing != after.outgoing
             || before.timestamp != after.timestamp
-            || before.subject != after.subject
             || before.text != after.text) {
             return false;
         }
@@ -617,11 +603,13 @@ void ConversationSurface::rebuild_document() {
         // computed once per visible message and shared by the incoming header,
         // the outgoing frame time, and the day separator.
         const auto present = present_timestamp(message.timestamp);
+        const auto day_changed = !present.day.isEmpty()
+            && present.day != previous_day;
         // Before the first message of a changed nonempty day, one centered
         // muted yyyy/MM/dd line leads the stream as a plain root document
         // QTextBlock (never a child message frame), inserted at the document
         // end ahead of this message's sibling frame.
-        if (!present.day.isEmpty() && present.day != previous_day) {
+        if (day_changed) {
             auto day_cursor = QTextCursor(document);
             day_cursor.movePosition(QTextCursor::End);
             auto day_block_format = QTextBlockFormat();
@@ -635,6 +623,24 @@ void ConversationSurface::rebuild_document() {
             day_cursor.insertText(present.day, day_format());
             previous_day = present.day;
         }
+        // A visible Agent group starts at the lazy-window boundary, after a
+        // Human row, or after a day boundary. Consecutive incoming rows stay in
+        // one group. A day change also prevents the prior frame from borrowing
+        // the compact within-group gap across the centered date separator.
+        const auto incoming_group_first = !outgoing
+            && (index == visible_begin
+                || last_messages_[index - 1].outgoing
+                || day_changed);
+        auto group_continues = !outgoing
+            && index + 1 < visible_end
+            && !last_messages_[index + 1].outgoing;
+        if (group_continues) {
+            const auto next_day = present_timestamp(
+                last_messages_[index + 1].timestamp).day;
+            group_continues = present.day.isEmpty() || next_day.isEmpty()
+                || next_day == present.day;
+        }
+
         // Each message's width is content-driven: its own widest visible line
         // plus the existing horizontal bubble padding, clamped between the
         // modest 160px lower bound and the shared responsive lane maximum.
@@ -655,11 +661,15 @@ void ConversationSurface::rebuild_document() {
         frame_format.setBorder(0);
         frame_format.setPadding(0);
         frame_format.setMargin(0);
-        // The whole frame carries the sibling-frame bottom spacing, so
-        // consecutive bubbles keep a positive gap regardless of how the body
-        // spans continuation blocks.
-        frame_format.setBottomMargin(kMessageFrameBottomMargin);
+        // The current frame owns its gap to the next sibling: consecutive
+        // same-Agent rows keep an enlarged but compact >=18px rendered rhythm,
+        // while a direction/day/end boundary gets the visibly larger break.
+        frame_format.setBottomMargin(group_continues
+            ? kWithinGroupBottomMargin
+            : kBetweenGroupBottomMargin);
         frame_format.setBackground(Qt::transparent);
+        frame_format.setProperty(
+            kMessageAvatarProperty, incoming_group_first);
         // The outgoing timestamp is not a visible header: it rides on the frame
         // so paintEvent can draw it outside the body-only bubble. It holds the
         // presented HH:mm, or stays empty so the external painter omits it.
@@ -682,11 +692,9 @@ void ConversationSurface::rebuild_document() {
             }
             cursor.insertText(separator, secondary_format());
         }
-        if (!message.subject.empty()) {
-            cursor.insertText(QString::fromStdString(message.subject),
-                subject_format(outgoing));
-            cursor.insertText(separator, subject_format(outgoing));
-        }
+        // Stored email subject/title metadata is deliberately absent from every
+        // message surface; the conversation begins with sender metadata (Agent)
+        // or the body itself (Human).
         // The stored raw body is rendered through the accepted safe-markdown
         // contract: only the narrow marker set becomes character formatting,
         // everything else (including raw HTML) stays literal text. Each body
@@ -706,9 +714,9 @@ void ConversationSurface::rebuild_document() {
         continuation.clearProperty(kMessageBlockProperty);
         // An outgoing body-only message keeps its first real body line in the
         // frame's existing initial block (preserving that block's lane and top
-        // margin) instead of opening a fresh continuation block; a subject row
-        // keeps today's subject-in-initial-block and body-continuation layout.
-        const auto first_in_initial = outgoing && message.subject.empty();
+        // margin) instead of opening a fresh continuation block. Incoming rows
+        // retain their sender/time header and begin the body on a new block.
+        const auto first_in_initial = outgoing;
         insert_markdown_body(
             cursor, body, body_format(outgoing), continuation,
             first_in_initial);
@@ -884,6 +892,10 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
                 }
             }
         } else {
+            if (!frame->frameFormat()
+                    .property(kMessageAvatarProperty).toBool()) {
+                continue;
+            }
             const auto avatar = QRectF(
                 text_bounds.left() - kMessageAvatarGap
                     - kMessageAvatarDiameter,
