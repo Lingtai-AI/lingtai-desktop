@@ -368,18 +368,22 @@ void verify_content_geometry() {
     // incoming/outgoing directions stay intact for both messages under the
     // accepted R3 wide bounds. Only the outer lane equality is pinned: the two
     // messages share the centered lane's outer anchor pair, while their inner
-    // edges differ with each message's content width.
+    // edges differ with each message's content width. The long message is
+    // incoming and reserves its 50px avatar lane (40px circle + 10px gap) on
+    // its outer edge, so its left anchor sits that lane inside the shared
+    // centered lane's left edge.
     if (!(long_geometry.left < long_geometry.right
             && short_geometry.right < short_geometry.left)) {
         throw std::runtime_error(
             "at a very wide viewport the long and short messages must keep "
             "opposite anchors, incoming left and outgoing right");
     }
-    if (std::abs(long_geometry.left - short_geometry.right) > 2.0) {
+    if (std::abs((long_geometry.left - 50.0) - short_geometry.right) > 2.0) {
         throw std::runtime_error(
             "at a very wide viewport the long and short messages must share "
             "the centered reading column's stable outer anchors, while their "
-            "inner edges differ with each message's content width");
+            "inner edges differ with each message's content width; the long "
+            "incoming message's outer edge reserves its 50px avatar envelope");
     }
 }
 
