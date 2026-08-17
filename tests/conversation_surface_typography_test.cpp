@@ -1333,6 +1333,25 @@ void verify_human_bubble_contract() {
         "This intentionally long Human message proves that the bubble stays "
         "content-sized and stops at a moderate share of the Conversation "
         "column instead of stretching across the available pane.");
+    // Exact adjacent Human records from ~/.lingtai/Personal_agent_minimax that
+    // exposed the bug: both hit the same capped lane, but different word-wrap
+    // slack must never move the bubble/timestamp right edge.
+    const auto real_aug_1 = render_outgoing_at(
+        "2026-08-01T10:00:58Z",
+        "Automated LingTai 05:00 Chicago maintenance result: 已停止 "
+        "lingtai-tui（PID 28358）；检查完成：LingTai TUI 已是当前版本 unknown，无需升级\n"
+        "Send exactly one concise Telegram message to Ted (chat_id 6992160568) "
+        "with this result. Do not rerun the upgrade. Do not send a duplicate "
+        "internal-email reply; this mailbox item is an automation trigger.",
+        800);
+    const auto real_aug_2 = render_outgoing_at(
+        "2026-08-02T10:00:42Z",
+        "Automated LingTai 05:00 Chicago maintenance result: 检查完成：LingTai TUI "
+        "已是当前版本 unknown，无需升级\nSend exactly one concise Telegram message "
+        "to Ted (chat_id 6992160568) with this result. Do not rerun the upgrade. "
+        "Do not send a duplicate internal-email reply; this mailbox item is an "
+        "automation trigger.",
+        800);
     const auto expected = QStringLiteral("Human body only.");
     if (first.plain != expected || second.plain != expected) {
         throw std::runtime_error(
@@ -1372,6 +1391,14 @@ void verify_human_bubble_contract() {
 
     const auto expected_fill = QColor(QStringLiteral("#EEF7F3"));
     const auto fill = exact_color_bounds(first.image, expected_fill);
+    const auto aug_1_fill = exact_color_bounds(real_aug_1.image, expected_fill);
+    const auto aug_2_fill = exact_color_bounds(real_aug_2.image, expected_fill);
+    if (aug_1_fill.isEmpty() || aug_2_fill.isEmpty()
+        || std::abs(aug_1_fill.right() - aug_2_fill.right()) > 2.0) {
+        throw std::runtime_error(
+            "capped Human bubbles must share one right edge regardless of "
+            "word-wrap slack; the real Personal_agent_minimax records drift");
+    }
     const auto expected_bubble = first.text.adjusted(-15, -11, 15, 11);
     const auto close = [](qreal a, qreal b) { return std::abs(a - b) <= 2.0; };
     if (fill.isEmpty()
