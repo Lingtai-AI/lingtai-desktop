@@ -30,6 +30,7 @@
 #include <QtWidgets/QScrollBar>
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace lingtai::desktop {
@@ -49,7 +50,6 @@ constexpr auto kMinMessageWidth = 160;
 constexpr auto kHumanMinMessageWidth = 64;
 constexpr auto kMessageAbsoluteCap = 560;
 constexpr auto kHumanMessageAbsoluteCap = 540;
-constexpr auto kHumanIntrinsicWrapGuard = 32;
 constexpr auto kReadingColumnMax = 1600;
 constexpr auto kNarrowViewportWidth = 480;
 constexpr auto kBubbleHPadding = 11;
@@ -496,54 +496,63 @@ void insert_markdown_body(
     }
 }
 
-// A message's own natural content width: the widest single rendered line of
-// its visible text (the incoming sender · timestamp header and every body
-// line), measured with the exact same fonts rebuild_document
-// applies. The caller adds the existing horizontal bubble padding, so a short
-// message owns a visibly narrower lane than a longer one in the same state
-// instead of every message stretching to the shared lane maximum.
+// A message's natural width belongs to the same shaped Qt text layout that
+// renders it, not to a parallel QFontMetrics estimate. This mirrors Telegram
+// Desktop's `Ui::Text::String::maxWidth()` -> `countSize()` chain: build the
+// exact header/body character runs in an unwrapped QTextDocument, then take the
+// widest real QTextLine. The caller adds only the declared bubble padding.
 int message_content_width(
         const DirectConversationMessage &message,
         const QString &them,
         const QString &time_suffix,
         bool show_incoming_header) {
     const auto outgoing = message.outgoing;
-    auto widest = 0.0;
-    // The outgoing sender/timestamp header is no longer rendered inside the
-    // message lane (the time moved outside the body-only bubble), so only an
-    // incoming row's header contributes to the natural content width. The
-    // header shows the presented HH:mm, or no time suffix when it is absent.
+    QTextDocument probe;
+    probe.setDocumentMargin(0);
+    // A very wide layout prevents automatic wrapping while preserving explicit
+    // source line/paragraph boundaries and Qt's real glyph shaping/bearings.
+    probe.setTextWidth(1'000'000);
+    auto cursor = QTextCursor(&probe);
+    auto block = QTextBlockFormat();
+    block.setLeftMargin(0);
+    block.setRightMargin(0);
+    block.setTopMargin(0);
+    block.setBottomMargin(0);
+    cursor.setBlockFormat(block);
+
     if (!outgoing && show_incoming_header) {
-        const auto header = QFontMetricsF(sender_format(outgoing).font())
-                .horizontalAdvance(them)
-            + QFontMetricsF(message_metadata_format().font()).horizontalAdvance(
-                time_suffix.isEmpty()
-                    ? QString()
-                    : QStringLiteral(" · %1").arg(time_suffix));
-        widest = qMax(widest, header);
+        cursor.insertText(them, sender_format(outgoing));
+        if (!time_suffix.isEmpty()) {
+            cursor.insertText(
+                QStringLiteral(" · %1").arg(time_suffix),
+                message_metadata_format());
+        }
+        cursor.insertText(QString(QChar::LineSeparator), secondary_format());
     }
 
-    // Stored email subjects are routing metadata, not visible conversation
-    // content, so they do not affect the message lane's natural width.
+    // Stored subjects remain routing metadata. The body follows the exact same
+    // normalization and safe-markdown inserter as rebuild_document(), so list,
+    // heading, inline-code and fenced-code runs are measured as rendered.
+    auto body = QString::fromStdString(message.text);
+    body.replace(QStringLiteral("\r\n"), QString(QChar::LineSeparator));
+    body.replace(QChar::LineFeed, QString(QChar::LineSeparator));
+    body.replace(QChar::CarriageReturn, QString(QChar::LineSeparator));
+    body.replace(QChar::ParagraphSeparator, QString(QChar::LineSeparator));
+    auto continuation = block;
+    const auto first_in_initial = outgoing || !show_incoming_header;
+    insert_markdown_body(
+        cursor, body, body_format(outgoing), continuation,
+        first_in_initial);
 
-    // The body is measured line by line: the same paragraph-delimiter
-    // normalization rebuild_document applies, so only the widest single line
-    // contributes instead of an unwrapped paragraph.
-    const auto body_metrics = QFontMetricsF(body_format(outgoing).font());
-    const auto body_lines = QString::fromStdString(message.text)
-        .replace(QStringLiteral("\r\n"), QString(QChar::LineSeparator))
-        .replace(QChar::LineFeed, QString(QChar::LineSeparator))
-        .replace(QChar::CarriageReturn, QString(QChar::LineSeparator))
-        .replace(QChar::ParagraphSeparator, QString(QChar::LineSeparator))
-        .split(QChar::LineSeparator);
-    for (const auto &line : body_lines) {
-        widest = qMax(widest, body_metrics.horizontalAdvance(line));
+    probe.documentLayout()->documentSize();
+    auto widest = 0.0;
+    for (auto current = probe.begin(); current.isValid(); current = current.next()) {
+        const auto *layout = current.layout();
+        for (auto i = 0; i != layout->lineCount(); ++i) {
+            widest = std::max(widest, layout->lineAt(i).naturalTextRect().width());
+        }
     }
-    // QTextLayout's line-break shaping can require slightly more advance than
-    // a tight QFontMetrics measure, especially for mixed CJK/Latin text. Give
-    // content-sized Human bubbles one bounded guard so a short uninterrupted
-    // source line cannot orphan its final glyph while ample rail space remains.
-    return int(widest + 0.5) + (outgoing ? kHumanIntrinsicWrapGuard : 0);
+    return int(std::ceil(widest));
 }
 
 // The plain-state vertical anchor lives on the document root frame's top
