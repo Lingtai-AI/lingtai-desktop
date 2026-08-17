@@ -1640,14 +1640,13 @@ void verify_time_separators_only() {
 
 }
 
-// Real same-Agent grouping contract from Ted's file19 sequence: consecutive
-// incoming rows form one visual group. Only the first visible row in the group
-// carries the Agent avatar, stored email subjects never enter the conversation
-// document, and the enlarged within-group rhythm remains visibly tighter than
-// the break around an outgoing row.
+// Corrected same-Agent grouping contract from Ted's file20: the group first is
+// one flex row (top-aligned avatar beside a sender/time header and body column),
+// every body shares the same x-axis, and a same-Agent row within five minutes is
+// a headerless continuation with a small gap. A longer pause starts a new group.
 void verify_same_agent_grouping_only() {
     ConversationSurface surface;
-    surface.resize(1600, 720);
+    surface.resize(1600, 760);
     surface.show();
     QCoreApplication::processEvents();
 
@@ -1655,21 +1654,26 @@ void verify_same_agent_grouping_only() {
         {.id = "in-1", .outgoing = false,
             .timestamp = "2026-08-17T15:40:00Z",
             .subject = "private mail subject one",
-            .text = "First Agent message."},
+            .text = "First Agent line.\nSecond Agent line.\nThird Agent line."},
         {.id = "in-2", .outgoing = false,
-            .timestamp = "2026-08-17T15:41:00Z",
-            .subject = "private mail subject two",
-            .text = "Second consecutive Agent message."},
-        {.id = "out-1", .outgoing = true,
             .timestamp = "2026-08-17T15:42:00Z",
+            .subject = "private mail subject two",
+            .text = "Short-interval continuation."},
+        {.id = "in-3", .outgoing = false,
+            .timestamp = "2026-08-17T15:50:00Z",
+            .subject = "private mail subject three",
+            .text = "Long-pause Agent message."},
+        {.id = "out-1", .outgoing = true,
+            .timestamp = "2026-08-17T15:51:00Z",
             .subject = "private human reply subject",
             .text = "Human reply breaks the Agent group."},
-        {.id = "in-3", .outgoing = false,
-            .timestamp = "2026-08-17T15:43:00Z",
-            .subject = "private mail subject three",
-            .text = "First message in the next Agent group."},
+        {.id = "in-4", .outgoing = false,
+            .timestamp = "2026-08-17T15:52:00Z",
+            .subject = "private mail subject four",
+            .text = "Agent message after the Human reply."},
     };
-    surface.set_conversation(QStringLiteral("Telegram Bot"), messages);
+    const auto them = QStringLiteral("Telegram Bot");
+    surface.set_conversation(them, messages);
     surface.document()->documentLayout()->documentSize();
     QCoreApplication::processEvents();
 
@@ -1682,55 +1686,100 @@ void verify_same_agent_grouping_only() {
     }
 
     const auto frames = surface.document()->rootFrame()->childFrames();
-    if (frames.size() != 4) {
+    if (frames.size() != 5) {
         throw std::runtime_error(
-            "the grouping fixture must keep four chronological message frames");
+            "the short-interval grouping fixture must keep five chronological "
+            "message frames");
     }
-    auto *first_incoming = frames[0];
-    auto *continued_incoming = frames[1];
-    auto *outgoing = frames[2];
-    auto *next_group_incoming = frames[3];
-    if (is_outgoing_frame(*first_incoming)
-        || is_outgoing_frame(*continued_incoming)
-        || !is_outgoing_frame(*outgoing)
-        || is_outgoing_frame(*next_group_incoming)) {
+    auto *first = frames[0];
+    auto *continuation = frames[1];
+    auto *long_pause = frames[2];
+    auto *outgoing = frames[3];
+    auto *after_human = frames[4];
+    if (is_outgoing_frame(*first) || is_outgoing_frame(*continuation)
+        || is_outgoing_frame(*long_pause) || !is_outgoing_frame(*outgoing)
+        || is_outgoing_frame(*after_human)) {
         throw std::runtime_error(
-            "the grouping fixture must remain incoming, incoming, outgoing, "
-            "incoming in chronological order");
+            "the grouping fixture must remain incoming, incoming, incoming, "
+            "outgoing, incoming in chronological order");
     }
 
-    const auto within_group_gap = message_bubble_rect(*continued_incoming).top()
-        - message_bubble_rect(*first_incoming).bottom();
-    const auto first_group_break = message_bubble_rect(*outgoing).top()
-        - message_bubble_rect(*continued_incoming).bottom();
-    const auto second_group_break = message_bubble_rect(*next_group_incoming).top()
-        - message_bubble_rect(*outgoing).bottom();
-    constexpr auto kMinimumWithinGroupGap = 18.0;
-    constexpr auto kMinimumGroupDelta = 8.0;
-    if (within_group_gap < kMinimumWithinGroupGap) {
+    const auto frame_text = [](QTextFrame &frame) {
+        auto cursor = QTextCursor(frame.document());
+        cursor.setPosition(frame.firstPosition());
+        cursor.setPosition(frame.lastPosition(), QTextCursor::KeepAnchor);
+        return cursor.selectedText();
+    };
+    if (!frame_text(*first).contains(them)
+        || !frame_text(*long_pause).contains(them)
+        || !frame_text(*after_human).contains(them)) {
         throw std::runtime_error(
-            "consecutive Agent messages need an enlarged readable gap of at "
-            "least 18px, but the rendered within-group gap is "
-            + std::to_string(within_group_gap) + "px");
+            "each Agent group first must render sender name directly above its "
+            "body with muted time beside it");
     }
-    if (first_group_break < within_group_gap + kMinimumGroupDelta
-        || second_group_break < within_group_gap + kMinimumGroupDelta) {
+    if (frame_text(*continuation).contains(them)) {
         throw std::runtime_error(
-            "within-group Agent spacing must stay visibly tighter than the "
-            "cross-group breaks by at least 8px (within="
-            + std::to_string(within_group_gap) + ", breaks="
-            + std::to_string(first_group_break) + "/"
-            + std::to_string(second_group_break) + ")");
+            "a same-Agent message within five minutes must not repeat the "
+            "avatar/name header");
+    }
+    for (const auto &fragment : fragments_of(*continuation)) {
+        if (fragment.text.startsWith(QStringLiteral(" · "))) {
+            throw std::runtime_error(
+                "a headerless same-Agent continuation must not repeat the "
+                "timestamp metadata either");
+        }
+    }
+
+    const auto body_left = [](QTextFrame &frame, const QString &needle) {
+        for (auto it = frame.begin(); !it.atEnd(); ++it) {
+            const auto block = it.currentBlock();
+            if (block.isValid() && block.text().contains(needle)) {
+                return block.blockFormat().leftMargin();
+            }
+        }
+        throw std::runtime_error("expected grouped body block is missing");
+    };
+    const auto first_left = body_left(*first, QStringLiteral("First Agent line"));
+    const auto continuation_left = body_left(
+        *continuation, QStringLiteral("Short-interval continuation"));
+    const auto long_pause_left = body_left(
+        *long_pause, QStringLiteral("Long-pause Agent message"));
+    if (std::abs(first_left - continuation_left) > 0.5
+        || std::abs(first_left - long_pause_left) > 0.5) {
+        throw std::runtime_error(
+            "all assistant body text must start on exactly the same x-axis, "
+            "including headerless short-interval continuations");
+    }
+
+    const auto within_gap = message_bubble_rect(*continuation).top()
+        - message_bubble_rect(*first).bottom();
+    const auto time_break = message_bubble_rect(*long_pause).top()
+        - message_bubble_rect(*continuation).bottom();
+    const auto human_break = message_bubble_rect(*outgoing).top()
+        - message_bubble_rect(*long_pause).bottom();
+    constexpr auto kSmallGapMin = 4.0;
+    constexpr auto kSmallGapMax = 10.0;
+    constexpr auto kGroupDelta = 12.0;
+    if (within_gap < kSmallGapMin || within_gap > kSmallGapMax) {
+        throw std::runtime_error(
+            "a short-interval continuation needs a small 4-10px vertical gap, "
+            "but the rendered gap is " + std::to_string(within_gap) + "px");
+    }
+    if (time_break < within_gap + kGroupDelta
+        || human_break < within_gap + kGroupDelta) {
+        throw std::runtime_error(
+            "a long pause or sender change must open a visibly larger group "
+            "break than the short-interval continuation gap");
     }
 
     const auto image = surface.viewport()->grab().toImage();
     const auto h_offset = double(surface.horizontalScrollBar()->value());
     const auto v_offset = double(surface.verticalScrollBar()->value());
-    const auto avatar_probe = [&](QTextFrame &frame) {
+    const auto avatar_top_probe = [&](QTextFrame &frame) {
         const auto text = message_text_bounds(frame)
             .translated(-h_offset, -v_offset);
-        const auto x = text.left() - 10.0 - 20.0 + 10.0;
-        const auto y = text.center().y();
+        const auto x = text.left() - 20.0;
+        const auto y = text.top() + 10.0;
         const auto px = int(std::lround(x * image.devicePixelRatio()));
         const auto py = int(std::lround(y * image.devicePixelRatio()));
         if (px < 0 || py < 0 || px >= image.width() || py >= image.height()) {
@@ -1740,16 +1789,17 @@ void verify_same_agent_grouping_only() {
     };
     const auto avatar_fill = st::dialogsNameFg->c;
     const auto backdrop = st::windowBg->c;
-    if (avatar_probe(*first_incoming) != avatar_fill
-        || avatar_probe(*next_group_incoming) != avatar_fill) {
+    if (avatar_top_probe(*first) != avatar_fill
+        || avatar_top_probe(*long_pause) != avatar_fill
+        || avatar_top_probe(*after_human) != avatar_fill) {
         throw std::runtime_error(
-            "the first visible message of each Agent group must paint the "
-            "40px Agent avatar");
+            "each group-first avatar must align to the top of its sender/body "
+            "message column instead of centering against the whole body height");
     }
-    if (avatar_probe(*continued_incoming) != backdrop) {
+    if (avatar_top_probe(*continuation) != backdrop) {
         throw std::runtime_error(
-            "a consecutive same-Agent message after the group first must leave "
-            "the avatar lane empty instead of repeating the avatar");
+            "a short-interval same-Agent continuation must leave the avatar "
+            "lane empty");
     }
 }
 
