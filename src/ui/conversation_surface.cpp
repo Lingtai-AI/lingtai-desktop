@@ -145,6 +145,19 @@ QTextCharFormat secondary_format() {
     return format;
 }
 
+// Message timestamps are the legible secondary rung of the reading surface.
+// Empty-state prompts and the lazy-history banner keep the quieter 12px
+// secondary format above, while per-message time scales with the body.
+QTextCharFormat message_metadata_format() {
+    auto format = QTextCharFormat();
+    format.setForeground(st::msgServiceFg);
+    auto font = format.font();
+    font.setPixelSize(13);
+    font.setWeight(QFont::Normal);
+    format.setFont(font);
+    return format;
+}
+
 // The renderer-only presentation of one message's stored timestamp: the raw
 // ISO string is parsed with Qt's ISO parser and shown in the local wall clock
 // as HH:mm for the message header/time and yyyy/MM/dd for the day separator.
@@ -202,7 +215,7 @@ QTextCharFormat body_format(bool outgoing) {
     format.setForeground(outgoing ? st::historyTextOutFg
                                   : st::historyTextInFg);
     auto font = format.font();
-    font.setPixelSize(14);
+    font.setPixelSize(16);
     font.setWeight(QFont::Normal);
     format.setFont(font);
     return format;
@@ -210,7 +223,7 @@ QTextCharFormat body_format(bool outgoing) {
 
 // The accepted safe-markdown character formats, each derived from the message
 // body's base format so the direction colors stay intact while the run becomes
-// visually distinct from the plain 14px body.
+// visually distinct from the plain 16px body.
 QTextCharFormat emphasized_text_format(const QTextCharFormat &base) {
     auto format = base;
     auto font = format.font();
@@ -222,7 +235,7 @@ QTextCharFormat emphasized_text_format(const QTextCharFormat &base) {
 QTextCharFormat heading_text_format(const QTextCharFormat &base) {
     auto format = base;
     auto font = format.font();
-    font.setPixelSize(15);
+    font.setPixelSize(17);
     font.setWeight(QFont::DemiBold);
     format.setFont(font);
     return format;
@@ -383,7 +396,7 @@ int message_content_width(
     if (!outgoing && show_incoming_header) {
         const auto header = QFontMetricsF(sender_format(outgoing).font())
                 .horizontalAdvance(them)
-            + QFontMetricsF(secondary_format().font()).horizontalAdvance(
+            + QFontMetricsF(message_metadata_format().font()).horizontalAdvance(
                 time_suffix.isEmpty()
                     ? QString()
                     : QStringLiteral(" · %1").arg(time_suffix));
@@ -710,7 +723,7 @@ void ConversationSurface::rebuild_document() {
             if (!present.time.isEmpty()) {
                 cursor.insertText(
                     QStringLiteral(" · %1").arg(present.time),
-                    secondary_format());
+                    message_metadata_format());
             }
             cursor.insertText(separator, secondary_format());
         }
@@ -896,7 +909,7 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
                 .property(kMessageTimestampProperty)
                 .toString();
             if (!timestamp.isEmpty()) {
-                const auto metrics = QFontMetricsF(secondary_format().font());
+                const auto metrics = QFontMetricsF(message_metadata_format().font());
                 const auto text_width = metrics.horizontalAdvance(timestamp);
                 const auto text_height = metrics.height();
                 const auto time_rect = QRectF(
@@ -907,7 +920,7 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
                 if (time_rect.intersects(QRectF(event->rect()))) {
                     painter.save();
                     painter.setPen(st::msgServiceFg);
-                    painter.setFont(secondary_format().font());
+                    painter.setFont(message_metadata_format().font());
                     painter.drawText(
                         time_rect,
                         Qt::AlignRight | Qt::AlignVCenter,
