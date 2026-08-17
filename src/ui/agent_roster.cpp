@@ -189,37 +189,14 @@ QString row_facts(const AgentRow &item) {
             presence_text(item.presence));
 }
 
-QString friendly_role_text(AgentRole role) {
-    switch (role) {
-    case AgentRole::main: return QStringLiteral("Main Agent");
-    case AgentRole::agent: return QStringLiteral("Agent");
-    case AgentRole::human: return QStringLiteral("Human");
-    case AgentRole::unknown: return QString();
-    }
-    return QString();
-}
-
-QString friendly_presence_text(AgentPresenceKind presence) {
-    switch (presence) {
-    case AgentPresenceKind::alive_human:
-    case AgentPresenceKind::alive: return QStringLiteral("Active");
-    case AgentPresenceKind::stale: return QStringLiteral("Stale");
-    case AgentPresenceKind::missing: return QStringLiteral("Missing");
-    case AgentPresenceKind::invalid: return QStringLiteral("Invalid");
-    case AgentPresenceKind::unavailable: return QStringLiteral("Unavailable");
-    case AgentPresenceKind::unknown: return QString();
-    }
-    return QString();
-}
-
 // The visible two-line row renders a friendly 1:1 summary (`Main Agent ·
 // Active`) instead of the raw fact codes, so the compact row stays
 // human-readable; the accessible description and tooltip keep the raw facts
 // verbatim. An unknown role or presence falls back to the raw facts rather
 // than inventing a friendly label.
 QString row_summary(const AgentRow &item) {
-    const auto role = friendly_role_text(item.role);
-    const auto presence = friendly_presence_text(item.presence);
+    const auto role = friendly_agent_role_text(item.role);
+    const auto presence = friendly_agent_presence_text(item.presence);
     if (role.isEmpty() || presence.isEmpty()) {
         return row_facts(item);
     }
@@ -354,6 +331,29 @@ QLabel *make_label(
 }
 
 } // namespace
+
+QString friendly_agent_role_text(AgentRole role) {
+    switch (role) {
+    case AgentRole::main: return QStringLiteral("Main Agent");
+    case AgentRole::agent: return QStringLiteral("Agent");
+    case AgentRole::human: return QStringLiteral("Human");
+    case AgentRole::unknown: return QString();
+    }
+    return QString();
+}
+
+QString friendly_agent_presence_text(AgentPresenceKind presence) {
+    switch (presence) {
+    case AgentPresenceKind::alive_human:
+    case AgentPresenceKind::alive: return QStringLiteral("Active");
+    case AgentPresenceKind::stale: return QStringLiteral("Stale");
+    case AgentPresenceKind::missing: return QStringLiteral("Missing");
+    case AgentPresenceKind::invalid: return QStringLiteral("Invalid");
+    case AgentPresenceKind::unavailable: return QStringLiteral("Unavailable");
+    case AgentPresenceKind::unknown: return QString();
+    }
+    return QString();
+}
 
 // The virtual Agent rows surface: one canvas owns the visible row model plus
 // the selected key and paints every row itself from the shared row geometry,

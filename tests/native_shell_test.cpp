@@ -276,6 +276,29 @@ void click_agent(QWidget &window, std::string_view key) {
     QCoreApplication::processEvents();
 }
 
+void click_first_agent_canvas_row(QWidget &window) {
+    auto *canvas = required_child<QWidget>(
+        window, "lingtai_agent_roster_rows");
+    const auto point = QPointF(20.0, 24.0);
+    auto press = QMouseEvent(
+        QEvent::MouseButtonPress,
+        point,
+        point,
+        Qt::LeftButton,
+        Qt::LeftButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(canvas, &press);
+    auto release = QMouseEvent(
+        QEvent::MouseButtonRelease,
+        point,
+        point,
+        Qt::LeftButton,
+        Qt::NoButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(canvas, &release);
+    QCoreApplication::processEvents();
+}
+
 void verify_dark_application_palette_inheritance(const fs::path &sandbox) {
     // Capture the harness's original color scheme and application palette
     // before any mutation and restore both on every exit. The later
@@ -582,11 +605,11 @@ void verify_open_project_behavior(
             && label_text(window, "lingtai_selected_agent_presentation_name")
                 == QStringLiteral("A&B-agent")
             && label_text(window, "lingtai_selected_agent_key")
-                == QStringLiteral("role: agent · presence: missing")
+                == QStringLiteral("Missing · Agent")
             && required_child<QLabel>(window, "lingtai_selected_agent_key")
                 ->textFormat() == Qt::PlainText,
-        "a key-fallback header must show the directory key once and never "
-        "repeat it inside the detail header");
+        "a key-fallback header must keep one title and friendly Status · "
+        "role below it");
     require(tree_snapshot(roster.project) == roster_before_selection,
         "ampersand selection at its exact project-relative path must remain read-only");
     click_agent(window, "agent");
@@ -598,9 +621,9 @@ void verify_open_project_behavior(
             == QStringLiteral("Research Nickname"),
         "selected detail must prefer the manifest nickname as its presentation name");
     require(label_text(window, "lingtai_selected_agent_key")
-            == QStringLiteral("agent · role: agent · presence: alive"),
-        "a distinct presentation title must keep one compact secondary line "
-        "with the directory key plus the existing role/presence summary");
+            == QStringLiteral("Active · Agent"),
+        "a distinct presentation title must keep one compact friendly "
+        "Status · role line below the name");
     require(label_text(window, "lingtai_selected_agent_manifest_identity")
             == QStringLiteral("Manifest identity\naddress: agent@example.test\n"
                 "agent ID: manifest-agent-id\nstate: manifest-ready"),
@@ -2624,6 +2647,8 @@ void verify_compact_header_hierarchy(
         window, "lingtai_selected_agent_presentation_name");
     auto *status = required_child<QLabel>(
         window, "lingtai_selected_agent_key");
+    auto *avatar = required_child<QWidget>(
+        window, "lingtai_selected_agent_avatar");
 
     const auto project = sandbox / "project";
     write_file(project / ".lingtai/human/.agent.json",
@@ -2644,7 +2669,7 @@ void verify_compact_header_hierarchy(
 
     window.resize(1200, 800);
     QCoreApplication::processEvents();
-    click_agent(window, "alpha");
+    click_first_agent_canvas_row(window);
     require(shell.selection_state().selected_agent_directory_key()
             == std::optional<fs::path>("alpha"),
         "the compact-header fixture Agent must be selectable");
@@ -2670,6 +2695,22 @@ void verify_compact_header_hierarchy(
             != presentation_name->palette().color(QPalette::WindowText),
         "the header status must render in a distinct muted ink, never the "
         "same prominent color as the title");
+    require(avatar->isVisible()
+            && avatar->width() == avatar->height()
+            && avatar->width() <= 40,
+        "the selected-Agent header must show one compact square avatar");
+    require(top_bar->layout()->itemAt(0)->widget() == avatar,
+        "the selected-Agent avatar must be the leftmost header item");
+    require(avatar->accessibleDescription()
+            == presentation_name->text(),
+        "the header avatar must identify the same selected Agent as the "
+        "prominent name");
+    require(status->text().contains(QStringLiteral(" · "))
+            && status->text().endsWith(QStringLiteral("Agent"))
+            && !status->text().contains(QStringLiteral("role:"))
+            && !status->text().contains(QStringLiteral("presence:")),
+        "the secondary line must read friendly Status · role, matching the "
+        "Sidebar semantics without raw fact labels");
 
     // Exactly one primary action: the header owns one primary-action anchor
     // and, in wide mode, exactly one visible action button carries a caption.

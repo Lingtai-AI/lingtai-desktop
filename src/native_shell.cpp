@@ -313,6 +313,46 @@ protected:
     }
 };
 
+// The selected-Agent header reuses the Sidebar's initial-circle avatar
+// language on a neutral header surface. The owning title is also exposed as
+// its accessibility description, so the glyph never becomes an opaque icon.
+class SelectedAgentAvatar final : public QWidget {
+public:
+    explicit SelectedAgentAvatar(QWidget *parent)
+    : QWidget(parent) {
+        setFixedSize(38, 38);
+        setAccessibleName(QStringLiteral("Selected Agent avatar"));
+        setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    }
+
+    void set_agent_name(QString name) {
+        if (name_ == name) return;
+        name_ = std::move(name);
+        setAccessibleDescription(name_);
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        if (name_.isEmpty()) return;
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(st::dialogsNameFg);
+        painter.drawEllipse(QRectF(rect()).adjusted(1, 1, -1, -1));
+        auto font = this->font();
+        font.setPointSize(13);
+        font.setWeight(QFont::DemiBold);
+        painter.setFont(font);
+        painter.setPen(st::windowBg);
+        painter.drawText(
+            rect(), Qt::AlignCenter, name_.left(1).toUpper());
+    }
+
+private:
+    QString name_;
+};
+
 // One shared structural owner for the one retained read-only selected-Agent
 // source section (Presets). Each section directly owns its own semibold
 // heading, read-only plain-text surface, and state line, with the same inner
@@ -901,6 +941,10 @@ NativeShell::NativeShell()
     auto *top_bar_layout = new QHBoxLayout(top_bar);
     top_bar_layout->setContentsMargins(12, 8, 12, 8);
     top_bar_layout->setSpacing(8);
+    auto *selected_avatar = new SelectedAgentAvatar(top_bar);
+    selected_avatar->setObjectName("lingtai_selected_agent_avatar");
+    selected_avatar->hide();
+    top_bar_layout->addWidget(selected_avatar);
     auto *identity_column = new QVBoxLayout;
     identity_column->setContentsMargins(0, 0, 0, 0);
     identity_column->setSpacing(2);
@@ -912,7 +956,8 @@ NativeShell::NativeShell()
     identity_column->addWidget(presentation_name);
     auto *detail_key = make_label(
         top_bar, QString(), "lingtai_selected_agent_key", 10);
-    detail_key->setAccessibleName(QStringLiteral("Selected Agent key"));
+    detail_key->setAccessibleName(
+        QStringLiteral("Selected Agent status and role"));
     detail_key->setWordWrap(false);
     detail_key->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     // The status line stays visually subordinate to the title: a smaller
@@ -1773,6 +1818,8 @@ void NativeShell::render_roster() {
         "lingtai_selected_agent_key");
     auto *presentation_name = window_->findChild<QLabel *>(
         "lingtai_selected_agent_presentation_name");
+    auto *selected_avatar = static_cast<SelectedAgentAvatar *>(
+        window_->findChild<QWidget *>("lingtai_selected_agent_avatar"));
     auto *manifest_identity = window_->findChild<QLabel *>(
         "lingtai_selected_agent_manifest_identity");
     auto *manifest_llm = window_->findChild<QLabel *>(
@@ -1785,7 +1832,8 @@ void NativeShell::render_roster() {
         "lingtai_selected_agent_status_context");
     auto *selected_facts = window_->findChild<QLabel *>(
         "lingtai_selected_agent_facts");
-    if (!selected_key || !presentation_name || !manifest_identity
+    if (!selected_key || !presentation_name || !selected_avatar
+        || !manifest_identity
         || !manifest_llm || !manifest_capabilities || !status_activity
         || !status_context || !selected_facts) {
         return;
@@ -1813,6 +1861,8 @@ void NativeShell::render_roster() {
         presentation_name->clear();
         presentation_name->setProperty("lingtai_full_text", QString());
         presentation_name->setAccessibleDescription(QString());
+        selected_avatar->set_agent_name(QString());
+        selected_avatar->hide();
         manifest_identity->clear();
         manifest_llm->clear();
         manifest_capabilities->clear();
@@ -1843,12 +1893,19 @@ void NativeShell::render_roster() {
     // can elide only the visible text without ever losing the identity.
     presentation_name->setProperty("lingtai_full_text", title);
     presentation_name->setAccessibleDescription(title);
-    const auto role_presence = QStringLiteral("role: %1 · presence: %2")
-        .arg(role_text(detail_item->role),
-            presence_text(detail_item->presence));
-    selected_key->setText(title == key
-        ? role_presence
-        : key + QStringLiteral(" · ") + role_presence);
+    selected_avatar->set_agent_name(title);
+    selected_avatar->show();
+    const auto friendly_role = friendly_agent_role_text(detail_item->role);
+    const auto friendly_presence = friendly_agent_presence_text(
+        detail_item->presence);
+    const auto role = friendly_role.isEmpty()
+        ? role_text(detail_item->role)
+        : friendly_role;
+    const auto presence = friendly_presence.isEmpty()
+        ? presence_text(detail_item->presence)
+        : friendly_presence;
+    selected_key->setText(
+        QStringLiteral("%1 · %2").arg(presence, role));
     if (identity) {
         manifest_identity->setText(QStringLiteral(
             "Manifest identity\naddress: %1\nagent ID: %2\nstate: %3")
@@ -2396,14 +2453,14 @@ void NativeShell::update_top_bar_fit(int detail_width) {
     presentation_name->setMinimumWidth(0);
     presentation_name->setMaximumWidth(0);
     presentation_name->setText(QString());
-    // Measure only the top-level horizontal items after the vertically
-    // stacked identity column; the key and name share item 0 and therefore
-    // never count as horizontal non-name cost.
+    // Measure every visible top-level widget. The vertically stacked
+    // identity layout has no widget and is skipped automatically; the avatar
+    // and actions all count against the title allocation.
     auto *top_layout = chat_top_bar_->layout();
     const auto margins = top_layout->contentsMargins();
     auto non_name_width = margins.left() + margins.right();
     auto visible_non_identity_items = 0;
-    for (auto i = 1; i != top_layout->count(); ++i) {
+    for (auto i = 0; i != top_layout->count(); ++i) {
         auto *item = top_layout->itemAt(i);
         auto *widget = item ? item->widget() : nullptr;
         if (!widget || !widget->isVisible()) continue;

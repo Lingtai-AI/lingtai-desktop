@@ -3,6 +3,8 @@
 #include "agent_projection.h"
 #include "ui/rp_widget.h"
 
+#include <QtCore/QString>
+
 #include <filesystem>
 #include <functional>
 #include <optional>
@@ -12,6 +14,10 @@ class QPushButton;
 class QScrollArea;
 
 namespace lingtai::desktop {
+
+[[nodiscard]] QString friendly_agent_role_text(AgentRole role);
+[[nodiscard]] QString friendly_agent_presence_text(
+    AgentPresenceKind presence);
 
 // The virtual Agent rows surface. It is forward-declared here so AgentRoster
 // owns it through a typed pointer; the definition (row model, selected key,
