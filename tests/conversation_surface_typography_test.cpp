@@ -48,6 +48,20 @@ std::vector<FragmentView> fragments_of(const QTextBlock &block) {
     return fragments;
 }
 
+std::vector<FragmentView> fragments_of(const QTextFrame &frame) {
+    std::vector<FragmentView> fragments;
+    for (auto it = frame.begin(); !it.atEnd(); ++it) {
+        const auto block = it.currentBlock();
+        if (!block.isValid()) {
+            continue;
+        }
+        const auto block_fragments = fragments_of(block);
+        fragments.insert(fragments.end(), block_fragments.begin(),
+            block_fragments.end());
+    }
+    return fragments;
+}
+
 const FragmentView &require_fragment(
         const std::vector<FragmentView> &fragments,
         const QString &text,
@@ -442,24 +456,24 @@ void verify_typography(ConversationSurface &surface, const QString &them) {
     });
     surface.set_conversation(them, messages);
 
-    auto incoming = QTextBlock();
-    auto outgoing = QTextBlock();
-    for (auto block = surface.document()->begin(); block.isValid();
-         block = block.next()) {
-        if (block.text().startsWith(them + QStringLiteral(" ·"))) {
-            incoming = block;
-        } else if (block.text().startsWith(QStringLiteral("You ·"))) {
-            outgoing = block;
+    const QTextFrame *incoming = nullptr;
+    const QTextFrame *outgoing = nullptr;
+    for (const auto *frame : surface.document()->rootFrame()->childFrames()) {
+        const auto first_text = frame->begin().currentBlock().text();
+        if (first_text.startsWith(them + QStringLiteral(" ·"))) {
+            incoming = frame;
+        } else if (first_text.startsWith(QStringLiteral("You ·"))) {
+            outgoing = frame;
         }
     }
-    if (!incoming.isValid() || !outgoing.isValid()) {
+    if (!incoming || !outgoing) {
         throw std::runtime_error(
             "the surface must render one incoming and one outgoing message "
-            "block for the typography contract");
+            "frame for the typography contract");
     }
 
-    const auto incoming_fragments = fragments_of(incoming);
-    const auto outgoing_fragments = fragments_of(outgoing);
+    const auto incoming_fragments = fragments_of(*incoming);
+    const auto outgoing_fragments = fragments_of(*outgoing);
 
     // author/sender: 13px DemiBold, its own fragment for each direction.
     const auto &in_sender = require_fragment(
