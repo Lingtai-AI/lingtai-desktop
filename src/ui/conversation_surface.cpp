@@ -484,17 +484,16 @@ void ConversationSurface::rebuild_document(
     auto *document = this->document();
     document->clear();
     clear_plain_state_anchor(document);
-    auto cursor = QTextCursor(document);
-    cursor.movePosition(QTextCursor::Start);
 
-    // One message header per property-marked QTextBlock; every body logical
-    // line becomes its own real unmarked QTextBlock cloned from the message
-    // block format, so the standard layout honors the block alignment and the
-    // margins bound each message to the shared reading-column width.
+    // One transparent borderless sibling QTextFrame per message under the root
+    // frame, each owning its header and body blocks: the frame's first block
+    // is the header carrying the message block format, and every body logical
+    // line becomes its own real unmarked QTextBlock cloned from that format,
+    // so the standard layout honors the block alignment and the margins bind
+    // each message to the shared reading-column width.
     const auto separator = QString(QChar::LineSeparator);
     const auto viewport_width = viewport()->width();
     const auto lane_max = message_block_width(viewport_width);
-    auto first_block = true;
     for (const auto &message : messages) {
         const auto outgoing = message.outgoing;
         // Each message's width is content-driven: its own widest visible line
@@ -506,12 +505,20 @@ void ConversationSurface::rebuild_document(
             lane_max);
         const auto block_format = message_block_format(
             outgoing, viewport_width, width);
-        if (first_block) {
-            cursor.setBlockFormat(block_format);
-            first_block = false;
-        } else {
-            cursor.insertBlock(block_format);
-        }
+        // A fresh document-end cursor places every message as its own direct
+        // sibling QTextFrame under the root frame, never nested. The frame is
+        // transparent with no border, padding, or margin, so only the first
+        // block's own alignment and margins shape the message lane.
+        auto cursor = QTextCursor(document);
+        cursor.movePosition(QTextCursor::End);
+        auto frame_format = QTextFrameFormat();
+        frame_format.setBorder(0);
+        frame_format.setPadding(0);
+        frame_format.setMargin(0);
+        frame_format.setBackground(Qt::transparent);
+        auto *frame = cursor.insertFrame(frame_format);
+        cursor = frame->firstCursorPosition();
+        cursor.setBlockFormat(block_format);
         cursor.insertText(
             outgoing ? QStringLiteral("You") : them_,
             sender_format(outgoing));
