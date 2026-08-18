@@ -301,16 +301,10 @@ void recompute_setup_layout(QDialog *dialog) {
     const auto t_w = std::clamp(size.width() / 920.0, 0.85, 1.25);
     const auto t_h = std::clamp(size.height() / 840.0, 0.85, 1.25);
     const auto margin = qRound(32 * t_w);
-    if (auto *header = dialog->findChild<QWidget *>(
-            "lingtai_setup_header")) {
-        if (auto *layout = header->layout()) {
-            layout->setContentsMargins(margin, qRound(16 * t_h), margin, 0);
-        }
-    }
     if (auto *steps = dialog->findChild<QWidget *>("lingtai_setup_steps")) {
         steps->setFixedHeight(std::min(140, qRound(64 * t_h)));
         if (auto *layout = qobject_cast<QHBoxLayout *>(steps->layout())) {
-            layout->setContentsMargins(margin, 0, margin, qRound(8 * t_h));
+            layout->setContentsMargins(margin, qRound(16 * t_h), margin, qRound(8 * t_h));
             layout->setSpacing(qRound(12 * t_w));
         }
         for (auto *connector : steps->findChildren<QLabel *>()) {
@@ -1796,24 +1790,13 @@ NativeShell::NativeShell()
     wizard_layout->setContentsMargins(0, 0, 0, 0);
     wizard_layout->setSpacing(0);
 
-    // Ted's reference owns the flow above the page: centered brand, then one
-    // horizontal Preset / Agents / Review sequence. It is not a left rail.
-    auto *header = new QWidget(bootstrap_dialog_);
-    header->setObjectName("lingtai_setup_header");
-    auto *header_layout = new QVBoxLayout(header);
-    header_layout->setContentsMargins(32, 18, 32, 0);
-    header_layout->setSpacing(6);
-    auto *brand = make_setup_label(header, QStringLiteral("LingTai"),
-        "lingtai_setup_brand", 14, QFont::DemiBold);
-    brand->setAlignment(Qt::AlignCenter);
-    header_layout->addWidget(brand);
-    wizard_layout->addWidget(header);
-
+    // The native window title already says LingTai. Own the flow with one
+    // horizontal Preset / Agents / Review sequence, not a second brand.
     auto *steps = new QWidget(bootstrap_dialog_);
     steps->setObjectName("lingtai_setup_steps");
     steps->setFixedHeight(72);
     auto *steps_layout = new QHBoxLayout(steps);
-    steps_layout->setContentsMargins(32, 0, 32, 8);
+    steps_layout->setContentsMargins(32, 16, 32, 8);
     steps_layout->setSpacing(12);
     steps_layout->addStretch();
     const auto make_step = [&](const QString &number, const QString &text,
