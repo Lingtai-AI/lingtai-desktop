@@ -34,7 +34,6 @@
 #include <QtCore/QStringList>
 #include <QtCore/QTimer>
 #include <QtCore/QVariant>
-#include <QtGui/QBrush>
 #include <QtGui/QColor>
 #include <QtGui/QFont>
 #include <QtGui/QFontMetrics>
@@ -62,6 +61,8 @@
 #include <QtWidgets/QSizePolicy>
 #include <QtWidgets/QStackedWidget>
 #include <QtWidgets/QTextEdit>
+#include <QtWidgets/QStyle>
+#include <QtWidgets/QStyledItemDelegate>
 #include <QtWidgets/QTreeWidget>
 #include <QtWidgets/QWidget>
 
@@ -174,57 +175,125 @@ QLabel *make_setup_label(
 const auto kPresetSelectedFg = QStringLiteral("#10221e");
 const auto kPresetMutedFg = QStringLiteral("#8a8f98");
 const auto kPresetAccent = QStringLiteral("#13a58f");
+constexpr auto kPresetSummaryRole = Qt::UserRole + 10;
+constexpr auto kPresetRowHeight = 56;
 
-QWidget *make_preset_name_cell(
-        QWidget *parent, const QString &name, const QString &summary) {
-    auto *cell = new QWidget(parent);
-    cell->setObjectName("lingtai_setup_preset_name_cell");
-    cell->setAutoFillBackground(false);
-    auto *layout = new QHBoxLayout(cell);
-    layout->setContentsMargins(2, 4, 8, 4);
-    layout->setSpacing(8);
-    auto *check = new QLabel(cell);
-    check->setObjectName("lingtai_setup_preset_check");
-    check->setAlignment(Qt::AlignCenter);
-    check->setFixedSize(18, 18);
-    check->setStyleSheet(QStringLiteral("background: transparent;"));
-    auto *text = new QWidget(cell);
-    auto *text_layout = new QVBoxLayout(text);
-    text_layout->setContentsMargins(0, 0, 0, 0);
-    text_layout->setSpacing(1);
-    auto *name_label = new QLabel(name, text);
-    name_label->setObjectName("lingtai_setup_preset_row_name");
-    name_label->setTextFormat(Qt::PlainText);
-    auto name_font = name_label->font();
-    name_font.setPointSize(12);
-    name_font.setWeight(QFont::DemiBold);
-    name_label->setFont(name_font);
-    auto *summary_label = new QLabel(summary, text);
-    summary_label->setObjectName("lingtai_setup_preset_row_summary");
-    summary_label->setTextFormat(Qt::PlainText);
-    auto summary_font = summary_label->font();
-    summary_font.setPointSize(11);
-    summary_label->setFont(summary_font);
-    summary_label->setStyleSheet(
-        QStringLiteral("color: %1;").arg(kPresetMutedFg));
-    summary_label->setVisible(!summary.isEmpty());
-    text_layout->addWidget(name_label);
-    text_layout->addWidget(summary_label);
-    layout->addWidget(check, 0, Qt::AlignVCenter);
-    layout->addWidget(text, 1);
-    return cell;
-}
+class PresetRowDelegate final : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
 
-QLabel *make_vision_chip(QWidget *parent) {
-    auto *chip = new QLabel(QStringLiteral("Vision"), parent);
-    chip->setObjectName("lingtai_setup_vision_chip");
-    chip->setAlignment(Qt::AlignCenter);
-    chip->setFixedHeight(22);
-    chip->setStyleSheet(QStringLiteral(
-        "background: palette(midlight); color: palette(window-text); "
-        "border-radius: 11px; padding: 0 10px; font-size: 11px;"));
-    return chip;
-}
+    void paint(
+            QPainter *painter,
+            const QStyleOptionViewItem &option,
+            const QModelIndex &index) const override {
+        auto opt = option;
+        initStyleOption(&opt, index);
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing, true);
+        painter->setClipRect(opt.rect);
+        const auto selected = opt.state.testFlag(QStyle::State_Selected);
+        if (selected) {
+            painter->fillRect(opt.rect, QColor(QStringLiteral("#d8f3ee")));
+        }
+        const auto text_color = selected
+            ? QColor(kPresetSelectedFg)
+            : opt.palette.color(QPalette::WindowText);
+        const auto muted = selected
+            ? QColor(QStringLiteral("#3d5c56"))
+            : QColor(kPresetMutedFg);
+        const auto inner = opt.rect.adjusted(8, 6, -8, -6);
+        if (index.column() == 0) {
+            const auto name = index.data(Qt::DisplayRole).toString();
+            const auto summary = index.data(kPresetSummaryRole).toString();
+            auto text_left = inner.left();
+            if (selected) {
+                const auto check = QRect(
+                    inner.left(), inner.center().y() - 8, 16, 16);
+                painter->setPen(Qt::NoPen);
+                painter->setBrush(QColor(kPresetAccent));
+                painter->drawEllipse(check);
+                painter->setPen(Qt::white);
+                auto check_font = opt.font;
+                check_font.setPointSize(10);
+                check_font.setWeight(QFont::DemiBold);
+                painter->setFont(check_font);
+                painter->drawText(
+                    check, Qt::AlignCenter, QStringLiteral("✓"));
+                text_left = check.right() + 8;
+            }
+            auto name_font = opt.font;
+            name_font.setPointSize(12);
+            name_font.setWeight(QFont::DemiBold);
+            painter->setFont(name_font);
+            painter->setPen(text_color);
+            const auto name_height = summary.isEmpty()
+                ? inner.height()
+                : inner.height() / 2;
+            const auto name_rect = QRect(
+                text_left, inner.top(), inner.right() - text_left, name_height);
+            painter->drawText(
+                name_rect, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
+                painter->fontMetrics().elidedText(
+                    name, Qt::ElideRight, name_rect.width()));
+            if (!summary.isEmpty()) {
+                auto summary_font = opt.font;
+                summary_font.setPointSize(11);
+                painter->setFont(summary_font);
+                painter->setPen(muted);
+                const auto summary_rect = QRect(
+                    text_left, inner.top() + name_height,
+                    inner.right() - text_left, inner.height() - name_height);
+                painter->drawText(
+                    summary_rect,
+                    Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
+                    painter->fontMetrics().elidedText(
+                        summary, Qt::ElideRight, summary_rect.width()));
+            }
+        } else if (index.column() == 2) {
+            const auto capability = index.data(Qt::DisplayRole).toString();
+            if (!capability.isEmpty()) {
+                auto chip_font = opt.font;
+                chip_font.setPointSize(11);
+                painter->setFont(chip_font);
+                const auto chip_width =
+                    painter->fontMetrics().horizontalAdvance(capability) + 20;
+                const auto chip = QRect(
+                    inner.left(), inner.center().y() - 11, chip_width, 22);
+                painter->setPen(Qt::NoPen);
+                painter->setBrush(opt.palette.midlight());
+                painter->drawRoundedRect(chip, 11, 11);
+                painter->setPen(text_color);
+                painter->drawText(chip, Qt::AlignCenter, capability);
+            }
+        } else if (index.column() == 3) {
+            if (index.data(Qt::DisplayRole).toString()
+                    == QStringLiteral("Configure")) {
+                auto link_font = opt.font;
+                link_font.setWeight(QFont::DemiBold);
+                painter->setFont(link_font);
+                painter->setPen(QColor(kPresetAccent));
+                painter->drawText(
+                    inner,
+                    Qt::AlignVCenter | Qt::AlignRight | Qt::TextSingleLine,
+                    QStringLiteral("Configure"));
+            }
+        } else {
+            painter->setPen(text_color);
+            painter->drawText(
+                inner, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
+                painter->fontMetrics().elidedText(
+                    index.data(Qt::DisplayRole).toString(),
+                    Qt::ElideRight, inner.width()));
+        }
+        painter->restore();
+    }
+
+    QSize sizeHint(
+            const QStyleOptionViewItem &,
+            const QModelIndex &) const override {
+        return {120, kPresetRowHeight};
+    }
+};
 
 QWidget *make_setup_gap(QWidget *parent, int reference_height) {
     auto *gap = new QWidget(parent);
@@ -269,41 +338,6 @@ void recompute_setup_layout(QDialog *dialog) {
         const auto reference = gap->property("lingtai_setup_gap");
         if (!reference.isValid()) continue;
         gap->setFixedHeight(qRound(reference.toInt() * t_h));
-    }
-}
-
-void apply_preset_row_chrome(QTreeWidgetItem *item, bool selected) {
-    if (!item) return;
-    auto *table = item->treeWidget();
-    if (!table) return;
-    const auto fg = selected ? QColor(kPresetSelectedFg) : QColor();
-    for (auto column = 0; column != table->columnCount(); ++column) {
-        item->setForeground(column, fg.isValid() ? QBrush(fg) : QBrush());
-    }
-    if (auto *cell = table->itemWidget(item, 0)) {
-        if (auto *check = cell->findChild<QLabel *>(
-                "lingtai_setup_preset_check")) {
-            check->setText(selected ? QStringLiteral("✓") : QString());
-            check->setStyleSheet(selected
-                ? QStringLiteral(
-                    "background: %1; color: white; border-radius: 9px; "
-                    "font-size: 11px; font-weight: 700;")
-                    .arg(kPresetAccent)
-                : QStringLiteral("background: transparent; color: transparent;"));
-        }
-        if (auto *name = cell->findChild<QLabel *>(
-                "lingtai_setup_preset_row_name")) {
-            name->setStyleSheet(selected
-                ? QStringLiteral("color: %1;").arg(kPresetSelectedFg)
-                : QStringLiteral("color: palette(window-text);"));
-        }
-        if (auto *summary = cell->findChild<QLabel *>(
-                "lingtai_setup_preset_row_summary")) {
-            summary->setStyleSheet(selected
-                ? QStringLiteral("color: #3d5c56; font-size: 11px;")
-                : QStringLiteral("color: %1; font-size: 11px;")
-                    .arg(kPresetMutedFg));
-        }
     }
 }
 
@@ -1869,9 +1903,9 @@ NativeShell::NativeShell()
     preset_layout->addWidget(preset_search);
     preset_layout->addWidget(make_setup_gap(preset_page, 12));
 
-    auto *saved_label = make_label(preset_page, QStringLiteral("Saved presets"),
+    auto *saved_label = make_setup_label(preset_page, QStringLiteral("Saved presets"),
         "lingtai_setup_saved_label", 12, QFont::DemiBold);
-    saved_label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    saved_label->setWordWrap(false);
     preset_layout->addWidget(saved_label);
     preset_layout->addWidget(make_setup_gap(preset_page, 5));
     auto *saved_presets = new QTreeWidget(preset_page);
@@ -1881,7 +1915,9 @@ NativeShell::NativeShell()
     saved_presets->setHeaderLabels({ QStringLiteral("Preset"),
         QStringLiteral("Provider / model"), QStringLiteral("Capabilities") });
     saved_presets->setRootIsDecorated(false);
-    saved_presets->setUniformRowHeights(false);
+    saved_presets->setUniformRowHeights(true);
+    saved_presets->setIndentation(0);
+    saved_presets->setItemDelegate(new PresetRowDelegate(saved_presets));
     saved_presets->setSelectionMode(QAbstractItemView::SingleSelection);
     saved_presets->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     saved_presets->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
@@ -1894,9 +1930,9 @@ NativeShell::NativeShell()
     preset_layout->addWidget(saved_presets, 2);
     preset_layout->addWidget(make_setup_gap(preset_page, 11));
 
-    auto *templates_label = make_label(preset_page, QStringLiteral("Preset templates"),
+    auto *templates_label = make_setup_label(preset_page, QStringLiteral("Preset templates"),
         "lingtai_setup_templates_label", 12, QFont::DemiBold);
-    templates_label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    templates_label->setWordWrap(false);
     preset_layout->addWidget(templates_label);
     preset_layout->addWidget(make_setup_gap(preset_page, 5));
     auto *preset_templates = new QTreeWidget(preset_page);
@@ -1906,7 +1942,9 @@ NativeShell::NativeShell()
     preset_templates->setHeaderLabels({ QStringLiteral("Preset"),
         QStringLiteral("Provider / model"), QStringLiteral("Capabilities"), QString() });
     preset_templates->setRootIsDecorated(false);
-    preset_templates->setUniformRowHeights(false);
+    preset_templates->setUniformRowHeights(true);
+    preset_templates->setIndentation(0);
+    preset_templates->setItemDelegate(new PresetRowDelegate(preset_templates));
     preset_templates->setSelectionMode(QAbstractItemView::SingleSelection);
     preset_templates->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     preset_templates->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
@@ -1930,6 +1968,7 @@ NativeShell::NativeShell()
     auto *preset_detail = new QWidget(preset_page);
     preset_detail->setObjectName("lingtai_setup_preset_detail");
     preset_detail->setMinimumHeight(92);
+    preset_detail->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     preset_detail->setStyleSheet(QStringLiteral(
         "background: palette(alternate-base); border: 1px solid palette(mid); border-radius: 8px;"));
     auto *preset_detail_layout = new QHBoxLayout(preset_detail);
@@ -2107,12 +2146,6 @@ NativeShell::NativeShell()
             QTreeWidget *other) {
         sync_table_selection(selected, other);
         update_review();
-        for (auto *table : { saved_presets, preset_templates }) {
-            for (auto index = 0; index != table->topLevelItemCount(); ++index) {
-                auto *item = table->topLevelItem(index);
-                apply_preset_row_chrome(item, item->isSelected());
-            }
-        }
     };
     QObject::connect(saved_presets, &QTreeWidget::itemSelectionChanged,
         [saved_presets, preset_templates, refresh_preset_selection] {
@@ -2381,7 +2414,7 @@ void NativeShell::show_bootstrap_dialog(
     templates->clear();
 
     const auto catalog = build_preset_catalog_rows(presets);
-    const auto add_preset_row = [chooser](QTreeWidget *table,
+    const auto add_preset_row = [](QTreeWidget *table,
             const PresetCatalogRow &row, int index, bool is_template) {
         const auto name = QString::fromStdString(row.entry.name);
         const auto capability = row.has_vision
@@ -2389,36 +2422,15 @@ void NativeShell::show_bootstrap_dialog(
             : QString();
         auto *item = new QTreeWidgetItem(table);
         item->setData(0, Qt::UserRole, index);
+        item->setData(0, kPresetSummaryRole, row.summary);
         item->setText(0, name);
         item->setText(1, row.provider_model);
         item->setText(2, capability);
+        if (is_template) {
+            item->setText(3, QStringLiteral("Configure"));
+        }
         item->setToolTip(0, row.summary);
         item->setToolTip(1, row.provider_model);
-        item->setSizeHint(0, QSize(0, row.summary.isEmpty() ? 44 : 56));
-        table->setItemWidget(item, 0,
-            make_preset_name_cell(table, name, row.summary));
-        if (row.has_vision) {
-            auto *chip = make_vision_chip(table);
-            auto *chip_host = new QWidget(table);
-            auto *chip_layout = new QHBoxLayout(chip_host);
-            chip_layout->setContentsMargins(0, 0, 8, 0);
-            chip_layout->addWidget(chip, 0, Qt::AlignVCenter);
-            chip_layout->addStretch();
-            table->setItemWidget(item, 2, chip_host);
-        }
-        if (is_template) {
-            auto *configure = new QPushButton(QStringLiteral("Configure"), table);
-            configure->setObjectName("lingtai_setup_configure_template");
-            configure->setCursor(Qt::PointingHandCursor);
-            configure->setFlat(true);
-            configure->setFixedHeight(22);
-            QObject::connect(configure, &QPushButton::clicked,
-                [table, item, chooser, index] {
-                    table->setCurrentItem(item);
-                    chooser->setCurrentIndex(index);
-                });
-            table->setItemWidget(item, 3, configure);
-        }
     };
 
     for (const auto &row : catalog) {
