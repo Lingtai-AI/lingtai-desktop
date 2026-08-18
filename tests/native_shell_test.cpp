@@ -2194,8 +2194,8 @@ exit 7)");
         "a spawn failure must leave the currently attached project unchanged");
     require(new_project_button->isEnabled() && open_button->isEnabled(),
         "a spawn failure must re-enable both actions");
-    require(!dialog->isVisible(),
-        "a failed spawn must close the New Project dialog");
+    require(!wizard->isVisible(),
+        "a failed spawn must close the New Project wizard");
     require(fs::exists(fail_argv_record)
             && read_file(fail_argv_record)
                 == fixture_tui_argv({"presets"})
@@ -2234,9 +2234,9 @@ exit 0)",
     require(status->accessibilityName().contains(
                 QStringLiteral("could not be used")),
         "malformed preset output must fail closed with one concise failure");
-    require(!dialog->isVisible() && new_project_button->isEnabled()
+    require(!wizard->isVisible() && new_project_button->isEnabled()
             && open_button->isEnabled(),
-        "a malformed preset list must never show the dialog and must "
+        "a malformed preset list must never show the wizard and must "
         "re-enable actions");
     require(read_file(malformed_argv_record) == fixture_tui_argv({"presets"}),
         "a malformed preset list must never reach spawn");
