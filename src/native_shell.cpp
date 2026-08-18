@@ -59,6 +59,7 @@
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QScrollBar>
 #include <QtWidgets/QSizePolicy>
+#include <QtWidgets/QSplitter>
 #include <QtWidgets/QStackedWidget>
 #include <QtWidgets/QTextEdit>
 #include <QtWidgets/QStyle>
@@ -192,14 +193,17 @@ public:
         painter->setRenderHint(QPainter::Antialiasing, true);
         painter->setClipRect(opt.rect);
         const auto selected = opt.state.testFlag(QStyle::State_Selected);
+        const auto dark = opt.palette.color(QPalette::Window).lightness() < 128;
         if (selected) {
-            painter->fillRect(opt.rect, QColor(QStringLiteral("#d8f3ee")));
+            painter->fillRect(opt.rect, dark
+                ? QColor(QStringLiteral("#1c3d38"))
+                : QColor(QStringLiteral("#d8f3ee")));
         }
         const auto text_color = selected
-            ? QColor(kPresetSelectedFg)
+            ? (dark ? QColor(QStringLiteral("#e8fffa")) : QColor(kPresetSelectedFg))
             : opt.palette.color(QPalette::WindowText);
         const auto muted = selected
-            ? QColor(QStringLiteral("#3d5c56"))
+            ? (dark ? QColor(QStringLiteral("#9ec9c0")) : QColor(QStringLiteral("#3d5c56")))
             : QColor(kPresetMutedFg);
         const auto inner = opt.rect.adjusted(8, 6, -8, -6);
         if (index.column() == 0) {
@@ -306,38 +310,40 @@ QWidget *make_setup_gap(QWidget *parent, int reference_height) {
 void recompute_setup_layout(QDialog *dialog) {
     if (!dialog) return;
     const auto size = dialog->size();
-    const auto t_w = std::clamp(size.width() / 920.0, 0.8, 1.4);
-    const auto t_h = std::clamp(size.height() / 840.0, 0.8, 1.4);
+    const auto t_w = std::clamp(size.width() / 920.0, 0.85, 1.25);
+    const auto t_h = std::clamp(size.height() / 840.0, 0.85, 1.25);
     const auto margin = qRound(32 * t_w);
     if (auto *header = dialog->findChild<QWidget *>(
             "lingtai_setup_header")) {
         if (auto *layout = header->layout()) {
-            layout->setContentsMargins(margin, qRound(18 * t_h), margin, 0);
+            layout->setContentsMargins(margin, qRound(16 * t_h), margin, 0);
         }
     }
     if (auto *steps = dialog->findChild<QWidget *>("lingtai_setup_steps")) {
-        steps->setFixedHeight(std::min(140, qRound(72 * t_h)));
+        steps->setFixedHeight(std::min(140, qRound(64 * t_h)));
         if (auto *layout = qobject_cast<QHBoxLayout *>(steps->layout())) {
             layout->setContentsMargins(margin, 0, margin, qRound(8 * t_h));
             layout->setSpacing(qRound(12 * t_w));
         }
         for (auto *connector : steps->findChildren<QLabel *>()) {
             if (connector->text().startsWith(QStringLiteral("─"))) {
-                connector->setFixedWidth(qRound(66 * t_w));
+                connector->setFixedWidth(qRound(48 * t_w));
             }
         }
     }
     if (auto *body = dialog->findChild<QWidget *>("lingtai_setup_body")) {
         if (auto *layout = body->layout()) {
-            const auto pad = qRound(18 * t_w);
+            const auto pad = qRound(24 * t_w);
             layout->setContentsMargins(
-                pad, qRound(10 * t_h), pad, qRound(18 * t_h));
+                pad, qRound(8 * t_h), pad, qRound(16 * t_h));
         }
     }
-    for (auto *gap : dialog->findChildren<QWidget *>()) {
-        const auto reference = gap->property("lingtai_setup_gap");
-        if (!reference.isValid()) continue;
-        gap->setFixedHeight(qRound(reference.toInt() * t_h));
+    if (auto *lists = dialog->findChild<QSplitter *>(
+            "lingtai_setup_preset_lists")) {
+        const auto available = lists->size().height();
+        if (available > 80) {
+            lists->setSizes({ available * 2 / 7, available * 5 / 7 });
+        }
     }
 }
 
@@ -1780,7 +1786,7 @@ NativeShell::NativeShell()
     bootstrap_dialog_->setObjectName("lingtai_project_setup_wizard");
     bootstrap_dialog_->setWindowTitle(QStringLiteral("LingTai"));
     bootstrap_dialog_->setAccessibleName(QStringLiteral("Set up LingTai project"));
-    bootstrap_dialog_->setMinimumSize(840, 600);
+    bootstrap_dialog_->setMinimumSize(840, 720);
     bootstrap_dialog_->resize(920, 840);
     bootstrap_dialog_->setSizeGripEnabled(true);
     apply_project_setup_palette(bootstrap_dialog_);
@@ -1873,24 +1879,48 @@ NativeShell::NativeShell()
     right_layout->setSpacing(0);
     auto *pages = new QStackedWidget(right);
     pages->setObjectName("lingtai_setup_pages");
+    pages->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
     const auto make_heading = [](QWidget *page, QVBoxLayout *layout,
             const QString &title, const QString &subtitle, const char *name) {
         auto *heading = make_setup_label(page, title, name, 20, QFont::DemiBold);
         heading->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         layout->addWidget(heading);
-        layout->addWidget(make_setup_gap(page, 6));
+        layout->addSpacing(6);
         auto *note = make_setup_label(page, subtitle, "lingtai_setup_page_note", 13);
         note->setWordWrap(true);
         note->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         layout->addWidget(note);
-        layout->addWidget(make_setup_gap(page, 18));
+        layout->addSpacing(12);
+    };
+
+    const auto configure_preset_table = [](QTreeWidget *table) {
+        table->setRootIsDecorated(false);
+        table->setUniformRowHeights(true);
+        table->setIndentation(0);
+        table->setItemsExpandable(false);
+        table->setAnimated(false);
+        table->setItemDelegate(new PresetRowDelegate(table));
+        table->setSelectionMode(QAbstractItemView::SingleSelection);
+        table->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        table->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        table->setAutoFillBackground(true);
+        table->viewport()->setAutoFillBackground(true);
+        table->setClipping(true);
+        table->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+        table->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        table->header()->setStretchLastSection(false);
+        table->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+        table->header()->setSectionResizeMode(1, QHeaderView::Stretch);
+        table->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     };
 
     auto *preset_page = new QWidget(pages);
     preset_page->setObjectName("lingtai_setup_preset_page");
+    preset_page->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     auto *preset_layout = new QVBoxLayout(preset_page);
     preset_layout->setContentsMargins(0, 0, 0, 0);
+    preset_layout->setSpacing(8);
     make_heading(preset_page, preset_layout,
         QStringLiteral("Choose how your orchestrator runs"),
         QStringLiteral("Select a saved preset or configure a template."),
@@ -1901,61 +1931,60 @@ NativeShell::NativeShell()
     preset_search->setClearButtonEnabled(true);
     preset_search->setFixedHeight(34);
     preset_layout->addWidget(preset_search);
-    preset_layout->addWidget(make_setup_gap(preset_page, 12));
 
     auto *saved_label = make_setup_label(preset_page, QStringLiteral("Saved presets"),
         "lingtai_setup_saved_label", 12, QFont::DemiBold);
     saved_label->setWordWrap(false);
-    preset_layout->addWidget(saved_label);
-    preset_layout->addWidget(make_setup_gap(preset_page, 5));
     auto *saved_presets = new QTreeWidget(preset_page);
     saved_presets->setObjectName("lingtai_setup_saved_presets");
     saved_presets->setAccessibleName(QStringLiteral("Saved presets"));
     saved_presets->setColumnCount(3);
     saved_presets->setHeaderLabels({ QStringLiteral("Preset"),
         QStringLiteral("Provider / model"), QStringLiteral("Capabilities") });
-    saved_presets->setRootIsDecorated(false);
-    saved_presets->setUniformRowHeights(true);
-    saved_presets->setIndentation(0);
-    saved_presets->setItemDelegate(new PresetRowDelegate(saved_presets));
-    saved_presets->setSelectionMode(QAbstractItemView::SingleSelection);
-    saved_presets->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    saved_presets->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    saved_presets->header()->setSectionResizeMode(0, QHeaderView::Stretch);
-    saved_presets->header()->setSectionResizeMode(1, QHeaderView::Stretch);
-    saved_presets->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
-    saved_presets->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    saved_presets->setMinimumHeight(156);
-    saved_presets->setMaximumHeight(QWIDGETSIZE_MAX);
-    preset_layout->addWidget(saved_presets, 2);
-    preset_layout->addWidget(make_setup_gap(preset_page, 11));
+    configure_preset_table(saved_presets);
+    saved_presets->setMinimumHeight(150);
+
+    auto *saved_pane = new QWidget(preset_page);
+    saved_pane->setObjectName("lingtai_setup_saved_pane");
+    auto *saved_pane_layout = new QVBoxLayout(saved_pane);
+    saved_pane_layout->setContentsMargins(0, 0, 0, 0);
+    saved_pane_layout->setSpacing(6);
+    saved_pane_layout->addWidget(saved_label);
+    saved_pane_layout->addWidget(saved_presets, 1);
 
     auto *templates_label = make_setup_label(preset_page, QStringLiteral("Preset templates"),
         "lingtai_setup_templates_label", 12, QFont::DemiBold);
     templates_label->setWordWrap(false);
-    preset_layout->addWidget(templates_label);
-    preset_layout->addWidget(make_setup_gap(preset_page, 5));
     auto *preset_templates = new QTreeWidget(preset_page);
     preset_templates->setObjectName("lingtai_setup_preset_templates");
     preset_templates->setAccessibleName(QStringLiteral("Preset templates"));
     preset_templates->setColumnCount(4);
     preset_templates->setHeaderLabels({ QStringLiteral("Preset"),
         QStringLiteral("Provider / model"), QStringLiteral("Capabilities"), QString() });
-    preset_templates->setRootIsDecorated(false);
-    preset_templates->setUniformRowHeights(true);
-    preset_templates->setIndentation(0);
-    preset_templates->setItemDelegate(new PresetRowDelegate(preset_templates));
-    preset_templates->setSelectionMode(QAbstractItemView::SingleSelection);
-    preset_templates->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    preset_templates->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    preset_templates->header()->setSectionResizeMode(0, QHeaderView::Stretch);
-    preset_templates->header()->setSectionResizeMode(1, QHeaderView::Stretch);
-    preset_templates->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    configure_preset_table(preset_templates);
     preset_templates->header()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
-    preset_templates->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    preset_templates->setMinimumHeight(240);
-    preset_templates->setMaximumHeight(QWIDGETSIZE_MAX);
-    preset_layout->addWidget(preset_templates, 5);
+    preset_templates->setMinimumHeight(190);
+
+    auto *templates_pane = new QWidget(preset_page);
+    templates_pane->setObjectName("lingtai_setup_templates_pane");
+    auto *templates_pane_layout = new QVBoxLayout(templates_pane);
+    templates_pane_layout->setContentsMargins(0, 0, 0, 0);
+    templates_pane_layout->setSpacing(6);
+    templates_pane_layout->addWidget(templates_label);
+    templates_pane_layout->addWidget(preset_templates, 1);
+
+    auto *preset_lists = new QSplitter(Qt::Vertical, preset_page);
+    preset_lists->setObjectName("lingtai_setup_preset_lists");
+    preset_lists->setChildrenCollapsible(false);
+    preset_lists->setOpaqueResize(true);
+    preset_lists->setHandleWidth(8);
+    preset_lists->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    preset_lists->addWidget(saved_pane);
+    preset_lists->addWidget(templates_pane);
+    preset_lists->setStretchFactor(0, 2);
+    preset_lists->setStretchFactor(1, 5);
+    preset_lists->setSizes({ 220, 420 });
+    preset_layout->addWidget(preset_lists, 1);
 
     // The existing spawn owner still consumes one canonical selected preset.
     // Keep that state in a hidden chooser; browsing and comparison belong to
@@ -1983,8 +2012,7 @@ NativeShell::NativeShell()
     preset_configure->setObjectName("lingtai_setup_detail_configure");
     preset_configure->setFixedWidth(96);
     preset_detail_layout->addWidget(preset_configure, 0, Qt::AlignVCenter);
-    preset_layout->addWidget(make_setup_gap(preset_page, 8));
-    preset_layout->addWidget(preset_detail);
+    preset_layout->addWidget(preset_detail, 0);
 
     auto *preset_actions = new QHBoxLayout;
     auto *preset_back = new QPushButton(QStringLiteral("Back"), preset_page);
@@ -1997,7 +2025,7 @@ NativeShell::NativeShell()
     preset_actions->addWidget(preset_back);
     preset_actions->addStretch();
     preset_actions->addWidget(preset_continue);
-    preset_layout->addLayout(preset_actions);
+    preset_layout->addLayout(preset_actions, 0);
     pages->addWidget(preset_page);
 
     auto *agents_page = new QWidget(pages);

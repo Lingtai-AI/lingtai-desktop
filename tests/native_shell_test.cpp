@@ -4552,6 +4552,10 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
         *preset_page, "lingtai_setup_saved_presets");
     auto *preset_templates = required_child<QTreeWidget>(
         *preset_page, "lingtai_setup_preset_templates");
+    auto *templates_label = required_child<QLabel>(
+        *preset_page, "lingtai_setup_templates_label");
+    auto *preset_lists = required_child<QWidget>(
+        *preset_page, "lingtai_setup_preset_lists");
     auto *preset_detail = required_child<QWidget>(
         *preset_page, "lingtai_setup_preset_detail");
     auto *agent_heading = required_child<QLabel>(
@@ -4607,11 +4611,25 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
     wizard->show();
     wizard->resize(920, 840);
     QCoreApplication::processEvents();
+    const auto below = [](QWidget *upper, QWidget *lower, QWidget *root) {
+        return upper->mapTo(root, QPoint(0, upper->height())).y()
+            <= lower->mapTo(root, QPoint(0, 0)).y();
+    };
+    require(below(saved_presets, templates_label, wizard)
+            && below(preset_templates, preset_detail, wizard)
+            && below(preset_detail, continue_button, wizard),
+        "preset lists, detail card, and footer must stack without overlapping");
+    require(preset_lists->height() > saved_presets->minimumHeight()
+                + preset_templates->minimumHeight(),
+        "the two preset lists share leftover wizard height inside one split owner");
     const auto compact_templates = preset_templates->height();
     wizard->resize(1100, 1040);
     QCoreApplication::processEvents();
-    require(preset_templates->height() > compact_templates,
-        "extra wizard height must go into the preset lists rather than empty space below the footer");
+    require(preset_templates->height() > compact_templates
+            && below(saved_presets, templates_label, wizard)
+            && below(preset_templates, preset_detail, wizard)
+            && below(preset_detail, continue_button, wizard),
+        "extra wizard height must go into the preset lists without introducing overlap");
     wizard->hide();
     for (auto *label : wizard->findChildren<QLabel *>()) {
         const auto text = label->text();
