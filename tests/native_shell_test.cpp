@@ -4602,10 +4602,15 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
             && preset_detail->minimumHeight() >= 88
             && preset_detail->layout() != nullptr,
         "Preset page must preserve list density and a separate full-width selected-preset detail card before the footer");
-    require(wizard->styleSheet().contains(QStringLiteral("color: #10221e"))
-            && !wizard->styleSheet().contains(
-                QStringLiteral("item:selected { background: #e7f7f3; color: palette(text); }")),
-        "selected preset rows must keep dark readable text on the mint highlight, including in dark palettes");
+    require(preset_catalog->palette().color(QPalette::Base)
+                == QColor(wizard->palette().color(QPalette::Window).lightness() < 128
+                    ? QStringLiteral("#181B1A")
+                    : QStringLiteral("#FFFFFF"))
+            && (preset_catalog->styleSheet().contains(QStringLiteral("#E1F3EC"))
+                || preset_catalog->styleSheet().contains(QStringLiteral("#213A31")))
+            && (preset_catalog->styleSheet().contains(QStringLiteral("#ECEFED"))
+                || preset_catalog->styleSheet().contains(QStringLiteral("#202422"))),
+        "preset catalog chrome must use the supplied light/dark surface, header, and selection tokens");
     require(continue_button->text() == QStringLiteral("Continue")
             && review_button->text() == QStringLiteral("Continue")
             && create_button->text() == QStringLiteral("Create project"),

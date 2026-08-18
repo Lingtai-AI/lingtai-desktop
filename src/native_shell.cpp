@@ -138,6 +138,8 @@ Ui::FlatLabel *make_flat_label(
     return label;
 }
 
+void apply_preset_catalog_chrome(QDialog *dialog);
+
 void apply_project_setup_palette(QDialog *dialog) {
     if (!dialog) return;
     auto palette = dialog->palette();
@@ -149,6 +151,7 @@ void apply_project_setup_palette(QDialog *dialog) {
     palette.setColor(QPalette::ButtonText, st::windowFg->c);
     dialog->setPalette(palette);
     dialog->setAutoFillBackground(true);
+    apply_preset_catalog_chrome(dialog);
 }
 
 QLabel *make_setup_label(
@@ -173,13 +176,84 @@ QLabel *make_setup_label(
     return label;
 }
 
-const auto kPresetSelectedFg = QStringLiteral("#10221e");
-const auto kPresetMutedFg = QStringLiteral("#8a8f98");
-const auto kPresetAccent = QStringLiteral("#13a58f");
 constexpr auto kPresetSummaryRole = Qt::UserRole + 10;
 constexpr auto kPresetSectionRole = Qt::UserRole + 11;
 constexpr auto kPresetRowHeight = 56;
 constexpr auto kPresetSectionHeight = 28;
+
+struct PresetCatalogTokens {
+    QColor surface;
+    QColor header;
+    QColor section_band;
+    QColor section_text;
+    QColor divider;
+    QColor selected_row;
+    QColor selection_accent;
+};
+
+bool preset_catalog_is_dark(const QPalette &palette) {
+    return palette.color(QPalette::Window).lightness() < 128;
+}
+
+PresetCatalogTokens preset_catalog_tokens(const QPalette &palette) {
+    if (preset_catalog_is_dark(palette)) {
+        return {
+            QColor(QStringLiteral("#181B1A")),
+            QColor(QStringLiteral("#202422")),
+            QColor(QStringLiteral("#222A26")),
+            QColor(QStringLiteral("#B8CBC2")),
+            QColor(255, 255, 255, 0x14),
+            QColor(QStringLiteral("#213A31")),
+            QColor(QStringLiteral("#78C9A7")),
+        };
+    }
+    return {
+        QColor(QStringLiteral("#FFFFFF")),
+        QColor(QStringLiteral("#ECEFED")),
+        QColor(QStringLiteral("#F1F5F3")),
+        QColor(QStringLiteral("#4D6259")),
+        QColor(QStringLiteral("#DCE2DF")),
+        QColor(QStringLiteral("#E1F3EC")),
+        QColor(QStringLiteral("#16785C")),
+    };
+}
+
+void apply_preset_catalog_chrome(QDialog *dialog) {
+    if (!dialog) return;
+    auto *table = dialog->findChild<QTreeWidget *>(
+        "lingtai_setup_preset_catalog");
+    if (!table) return;
+    const auto tokens = preset_catalog_tokens(dialog->palette());
+    auto palette = table->palette();
+    palette.setColor(QPalette::Base, tokens.surface);
+    palette.setColor(QPalette::AlternateBase, tokens.surface);
+    table->setPalette(palette);
+    table->viewport()->setPalette(palette);
+    table->viewport()->setAutoFillBackground(true);
+    auto header_palette = table->header()->palette();
+    header_palette.setColor(QPalette::Button, tokens.header);
+    header_palette.setColor(QPalette::Window, tokens.header);
+    header_palette.setColor(QPalette::ButtonText, tokens.section_text);
+    header_palette.setColor(QPalette::WindowText, tokens.section_text);
+    table->header()->setPalette(header_palette);
+    table->header()->setAutoFillBackground(true);
+    const auto divider = tokens.divider.alpha() < 255
+        ? QStringLiteral("rgba(255, 255, 255, %1)").arg(tokens.divider.alpha())
+        : tokens.divider.name();
+    table->setStyleSheet(QStringLiteral(
+        "QTreeWidget { background: %1; border: 1px solid %2; "
+        "border-radius: 8px; outline: none; } "
+        "QTreeWidget::item { padding: 0px; border: none; } "
+        "QTreeWidget::item:selected { background: %3; } "
+        "QHeaderView::section { background: %4; color: %5; border: none; "
+        "border-bottom: 1px solid %2; padding: 6px 8px; "
+        "font-size: 11px; font-weight: 600; }")
+        .arg(tokens.surface.name(QColor::HexRgb).toUpper(),
+            divider,
+            tokens.selected_row.name(QColor::HexRgb).toUpper(),
+            tokens.header.name(QColor::HexRgb).toUpper(),
+            tokens.section_text.name(QColor::HexRgb).toUpper()));
+}
 
 bool is_preset_section_index(const QModelIndex &index) {
     return index.isValid()
@@ -196,20 +270,6 @@ QRect preset_section_band_rect(
     const auto last = index.model()->columnCount(index.parent()) - 1;
     return view->visualRect(index.siblingAtColumn(0)).united(
         view->visualRect(index.siblingAtColumn(last)));
-}
-
-QColor preset_section_band_color(const QPalette &palette) {
-    const auto base = palette.color(QPalette::Base);
-    if (base.lightness() < 128) {
-        return QColor(
-            std::min(255, base.red() + 22),
-            std::min(255, base.green() + 24),
-            std::min(255, base.blue() + 28));
-    }
-    return QColor(
-        std::max(0, base.red() - 22),
-        std::max(0, base.green() - 22),
-        std::max(0, base.blue() - 20));
 }
 
 class PresetRowDelegate final : public QStyledItemDelegate {
@@ -229,10 +289,11 @@ public:
                 painter->restore();
                 return;
             }
+            const auto tokens = preset_catalog_tokens(opt.palette);
             const auto band = preset_section_band_rect(opt, index);
             painter->setClipRect(band);
-            painter->fillRect(band, preset_section_band_color(opt.palette));
-            painter->setPen(opt.palette.color(QPalette::Mid));
+            painter->fillRect(band, tokens.section_band);
+            painter->setPen(tokens.divider);
             painter->drawLine(band.topLeft(), band.topRight());
             painter->drawLine(band.bottomLeft(), band.bottomRight());
             auto section_font = opt.font;
@@ -240,7 +301,7 @@ public:
             section_font.setWeight(QFont::DemiBold);
             section_font.setLetterSpacing(QFont::PercentageSpacing, 118);
             painter->setFont(section_font);
-            painter->setPen(QColor(kPresetMutedFg));
+            painter->setPen(tokens.section_text);
             painter->drawText(
                 band.adjusted(12, 0, -12, 0),
                 Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
@@ -249,19 +310,17 @@ public:
             return;
         }
         painter->setClipRect(opt.rect);
+        const auto tokens = preset_catalog_tokens(opt.palette);
         const auto selected = opt.state.testFlag(QStyle::State_Selected);
-        const auto dark = opt.palette.color(QPalette::Window).lightness() < 128;
         if (selected) {
-            painter->fillRect(opt.rect, dark
-                ? QColor(QStringLiteral("#1c3d38"))
-                : QColor(QStringLiteral("#d8f3ee")));
+            painter->fillRect(opt.rect, tokens.selected_row);
         }
         const auto text_color = selected
-            ? (dark ? QColor(QStringLiteral("#e8fffa")) : QColor(kPresetSelectedFg))
+            ? (preset_catalog_is_dark(opt.palette)
+                ? QColor(QStringLiteral("#E8FFFA"))
+                : QColor(QStringLiteral("#10221E")))
             : opt.palette.color(QPalette::WindowText);
-        const auto muted = selected
-            ? (dark ? QColor(QStringLiteral("#9ec9c0")) : QColor(QStringLiteral("#3d5c56")))
-            : QColor(kPresetMutedFg);
+        const auto muted = tokens.section_text;
         const auto inner = opt.rect.adjusted(8, 6, -8, -6);
         if (index.column() == 0) {
             const auto name = index.data(Qt::DisplayRole).toString();
@@ -271,9 +330,11 @@ public:
                 const auto check = QRect(
                     inner.left(), inner.center().y() - 8, 16, 16);
                 painter->setPen(Qt::NoPen);
-                painter->setBrush(QColor(kPresetAccent));
+                painter->setBrush(tokens.selection_accent);
                 painter->drawEllipse(check);
-                painter->setPen(Qt::white);
+                painter->setPen(preset_catalog_is_dark(opt.palette)
+                    ? QColor(QStringLiteral("#181B1A"))
+                    : Qt::white);
                 auto check_font = opt.font;
                 check_font.setPointSize(10);
                 check_font.setWeight(QFont::DemiBold);
@@ -334,7 +395,7 @@ public:
                     index.data(Qt::DisplayRole).toString(),
                     Qt::ElideRight, inner.width()));
         }
-        painter->setPen(opt.palette.color(QPalette::Midlight));
+        painter->setPen(tokens.divider);
         painter->drawLine(opt.rect.bottomLeft(), opt.rect.bottomRight());
         painter->restore();
     }
@@ -1866,12 +1927,7 @@ NativeShell::NativeShell()
         "QPushButton#lingtai_bootstrap_create_start { "
         "min-height: 34px; background: #13a58f; color: white; border: none; font-weight: 600; } "
         "QLineEdit#lingtai_setup_preset_search { min-height: 36px; padding: 0 12px; border: 1px solid palette(mid); "
-        "border-radius: 8px; background: palette(base); color: palette(text); } "
-        "QTreeWidget { border: 1px solid palette(mid); border-radius: 8px; background: palette(base); outline: none; } "
-        "QTreeWidget::item { padding: 0px; border: none; } "
-        "QTreeWidget::item:selected { background: #d8f3ee; color: #10221e; } "
-        "QHeaderView::section { background: palette(window); color: #8a8f98; border: none; "
-        "border-bottom: 1px solid palette(mid); padding: 6px 8px; font-size: 11px; font-weight: 600; }"));
+        "border-radius: 8px; background: palette(base); color: palette(text); }"));
     auto *wizard_layout = new QVBoxLayout(bootstrap_dialog_);
     wizard_layout->setContentsMargins(0, 0, 0, 0);
     wizard_layout->setSpacing(0);
@@ -1997,6 +2053,7 @@ NativeShell::NativeShell()
     add_preset_section(preset_catalog, QStringLiteral("Saved presets"));
     add_preset_section(preset_catalog, QStringLiteral("Preset templates"));
     preset_layout->addWidget(preset_catalog, 1);
+    apply_preset_catalog_chrome(bootstrap_dialog_);
 
     // The existing spawn owner still consumes one canonical selected preset.
     // Keep that state in a hidden chooser; browsing belongs to the one catalog
