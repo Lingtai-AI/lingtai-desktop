@@ -45,6 +45,7 @@
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QDialog>
 #include <QtWidgets/QFileDialog>
+#include <QtWidgets/QHeaderView>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLayout>
 #include <QtWidgets/QLineEdit>
@@ -56,6 +57,7 @@
 #include <QtWidgets/QSizePolicy>
 #include <QtWidgets/QStackedWidget>
 #include <QtWidgets/QTextEdit>
+#include <QtWidgets/QTreeWidget>
 #include <QtWidgets/QWidget>
 
 #include <rpl/range.h>
@@ -1542,22 +1544,21 @@ NativeShell::NativeShell()
     // only the human decisions that must be reviewed before that side effect.
     bootstrap_dialog_ = new QDialog(window_.get());
     bootstrap_dialog_->setObjectName("lingtai_project_setup_wizard");
-    bootstrap_dialog_->setWindowTitle(QStringLiteral("Set up LingTai project"));
+    bootstrap_dialog_->setWindowTitle(QStringLiteral("LingTai"));
     bootstrap_dialog_->setAccessibleName(QStringLiteral("Set up LingTai project"));
-    bootstrap_dialog_->setMinimumSize(840, 600);
-    bootstrap_dialog_->resize(920, 640);
+    bootstrap_dialog_->setMinimumSize(840, 760);
+    bootstrap_dialog_->resize(920, 840);
     apply_project_setup_palette(bootstrap_dialog_);
     bootstrap_dialog_->setStyleSheet(QStringLiteral(
         "QDialog { background: palette(window); } "
-        "QLabel#lingtai_setup_step_title { color: #8a8f98; font-size: 13px; } "
-        "QLabel#lingtai_setup_step_active { color: #1769e0; font-size: 13px; font-weight: 600; } "
-        "QPushButton { min-height: 38px; padding: 0 18px; border-radius: 7px; } "
+        "QPushButton { min-height: 34px; padding: 0 16px; border-radius: 6px; } "
         "QPushButton#lingtai_setup_primary { background: #1769e0; color: white; border: none; font-weight: 600; } "
-        "QPushButton#lingtai_setup_secondary { background: transparent; color: #3b3f45; border: 1px solid #d9dde3; } "
-        "QComboBox { min-height: 42px; padding: 0 12px; border: 1px solid #d9dde3; border-radius: 7px; background: palette(base); color: palette(text); } "
-        "QListWidget { border: 1px solid palette(mid); border-radius: 8px; background: palette(base); outline: none; } "
-        "QListWidget::item { border-bottom: 1px solid palette(midlight); padding: 7px 10px; } "
-        "QListWidget::item:selected { background: #e8f4ff; color: #1769e0; }"));
+        "QPushButton#lingtai_setup_secondary { background: transparent; color: palette(text); border: 1px solid palette(mid); } "
+        "QComboBox { min-height: 36px; padding: 0 12px; border: 1px solid palette(mid); border-radius: 6px; background: palette(base); color: palette(text); } "
+        "QTreeWidget { border: 1px solid palette(mid); border-radius: 6px; background: palette(base); outline: none; } "
+        "QTreeWidget::item { min-height: 30px; border-bottom: 1px solid palette(midlight); padding: 3px 7px; } "
+        "QTreeWidget::item:selected { background: #e7f7f3; color: palette(text); border: 1px solid #13a58f; } "
+        "QHeaderView::section { background: palette(window); color: #8a8f98; border: none; border-bottom: 1px solid palette(mid); padding: 5px 8px; font-size: 11px; }"));
     auto *wizard_layout = new QVBoxLayout(bootstrap_dialog_);
     wizard_layout->setContentsMargins(0, 0, 0, 0);
     wizard_layout->setSpacing(0);
@@ -1566,49 +1567,62 @@ NativeShell::NativeShell()
     // horizontal Preset / Agents / Review sequence. It is not a left rail.
     auto *steps = new QWidget(bootstrap_dialog_);
     steps->setObjectName("lingtai_setup_steps");
-    steps->setFixedHeight(112);
-    auto *steps_layout = new QVBoxLayout(steps);
-    steps_layout->setContentsMargins(32, 18, 32, 14);
+    steps->setFixedHeight(62);
+    auto *steps_layout = new QHBoxLayout(steps);
+    steps_layout->setContentsMargins(32, 13, 32, 9);
     steps_layout->setSpacing(12);
-    auto *setup_brand = make_label(steps, QStringLiteral("LingTai"),
-        "lingtai_setup_brand", 16, QFont::DemiBold);
-    setup_brand->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-    setup_brand->setAlignment(Qt::AlignCenter);
-    steps_layout->addWidget(setup_brand);
-    auto *flow = new QHBoxLayout;
-    flow->setSpacing(28);
-    flow->addStretch();
+    steps_layout->addStretch();
     const auto make_step = [&](const QString &number, const QString &text,
             const char *name, bool active) {
-        auto *label = make_label(steps,
-            number + QStringLiteral("   ") + text, name, 13,
+        auto *step = new QWidget(steps);
+        auto *layout = new QHBoxLayout(step);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(7);
+        auto *badge = make_label(step, number, "lingtai_setup_step_badge", 11,
+            QFont::DemiBold);
+        badge->setAlignment(Qt::AlignCenter);
+        badge->setFixedSize(22, 22);
+        badge->setStyleSheet(active
+            ? QStringLiteral("background: #13a58f; color: white; border-radius: 11px;")
+            : QStringLiteral("background: palette(base); color: #8a8f98; border: 1px solid palette(mid); border-radius: 11px;"));
+        auto *label = make_label(step, text, name, 12,
             active ? QFont::DemiBold : QFont::Normal);
         label->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         label->setStyleSheet(active
-            ? QStringLiteral("color: #1769e0;")
+            ? QStringLiteral("color: #13a58f;")
             : QStringLiteral("color: #8a8f98;"));
-        flow->addWidget(label);
+        layout->addWidget(badge);
+        layout->addWidget(label);
+        steps_layout->addWidget(step);
+    };
+    const auto add_connector = [&] {
+        auto *connector = new QLabel(QStringLiteral("────────"), steps);
+        connector->setFixedWidth(66);
+        connector->setStyleSheet(QStringLiteral("color: palette(mid);"));
+        connector->setAlignment(Qt::AlignCenter);
+        steps_layout->addWidget(connector);
     };
     make_step(QStringLiteral("1"), QStringLiteral("Preset"),
         "lingtai_setup_step_preset", true);
+    add_connector();
     make_step(QStringLiteral("2"), QStringLiteral("Agents"),
         "lingtai_setup_step_agents", false);
+    add_connector();
     make_step(QStringLiteral("3"), QStringLiteral("Review"),
         "lingtai_setup_step_review", false);
-    flow->addStretch();
-    steps_layout->addLayout(flow);
+    steps_layout->addStretch();
     wizard_layout->addWidget(steps);
 
     auto *right = new QWidget(bootstrap_dialog_);
     auto *right_layout = new QVBoxLayout(right);
-    right_layout->setContentsMargins(34, 18, 34, 28);
+    right_layout->setContentsMargins(18, 10, 18, 18);
     right_layout->setSpacing(0);
     auto *pages = new QStackedWidget(right);
     pages->setObjectName("lingtai_setup_pages");
 
     const auto make_heading = [](QWidget *page, QVBoxLayout *layout,
             const QString &title, const QString &subtitle, const char *name) {
-        auto *heading = make_label(page, title, name, 24, QFont::DemiBold);
+        auto *heading = make_label(page, title, name, 20, QFont::DemiBold);
         heading->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         layout->addWidget(heading);
         layout->addSpacing(8);
@@ -1626,48 +1640,87 @@ NativeShell::NativeShell()
     make_heading(preset_page, preset_layout, QStringLiteral("Choose a preset"),
         QStringLiteral("Preset templates define the first Agent's model and authorized capabilities."),
         "lingtai_setup_preset_heading");
+    auto *preset_search = new QLineEdit(preset_page);
+    preset_search->setObjectName("lingtai_setup_preset_search");
+    preset_search->setPlaceholderText(QStringLiteral("Search presets"));
+    preset_search->setClearButtonEnabled(true);
+    preset_search->setFixedHeight(34);
+    preset_layout->addWidget(preset_search);
+    preset_layout->addSpacing(12);
+
     auto *saved_label = make_label(preset_page, QStringLiteral("Saved presets"),
-        "lingtai_setup_saved_label", 13, QFont::DemiBold);
+        "lingtai_setup_saved_label", 12, QFont::DemiBold);
     saved_label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     preset_layout->addWidget(saved_label);
-    preset_layout->addSpacing(6);
-    auto *saved_presets = new QListWidget(preset_page);
+    preset_layout->addSpacing(5);
+    auto *saved_presets = new QTreeWidget(preset_page);
     saved_presets->setObjectName("lingtai_setup_saved_presets");
     saved_presets->setAccessibleName(QStringLiteral("Saved presets"));
-    saved_presets->setFixedHeight(132);
+    saved_presets->setColumnCount(3);
+    saved_presets->setHeaderLabels({ QStringLiteral("Preset"),
+        QStringLiteral("Provider / model"), QStringLiteral("Capabilities") });
+    saved_presets->setRootIsDecorated(false);
+    saved_presets->setUniformRowHeights(true);
     saved_presets->setSelectionMode(QAbstractItemView::SingleSelection);
     saved_presets->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     saved_presets->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    saved_presets->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    saved_presets->header()->setSectionResizeMode(1, QHeaderView::Stretch);
+    saved_presets->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    saved_presets->setFixedHeight(162);
     preset_layout->addWidget(saved_presets);
-    preset_layout->addSpacing(14);
+    preset_layout->addSpacing(11);
 
     auto *templates_label = make_label(preset_page, QStringLiteral("Preset templates"),
-        "lingtai_setup_templates_label", 13, QFont::DemiBold);
+        "lingtai_setup_templates_label", 12, QFont::DemiBold);
     templates_label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     preset_layout->addWidget(templates_label);
-    preset_layout->addSpacing(6);
-    auto *preset_templates = new QListWidget(preset_page);
+    preset_layout->addSpacing(5);
+    auto *preset_templates = new QTreeWidget(preset_page);
     preset_templates->setObjectName("lingtai_setup_preset_templates");
     preset_templates->setAccessibleName(QStringLiteral("Preset templates"));
-    preset_templates->setFixedHeight(132);
+    preset_templates->setColumnCount(4);
+    preset_templates->setHeaderLabels({ QStringLiteral("Preset"),
+        QStringLiteral("Provider / model"), QStringLiteral("Capabilities"), QString() });
+    preset_templates->setRootIsDecorated(false);
+    preset_templates->setUniformRowHeights(true);
     preset_templates->setSelectionMode(QAbstractItemView::SingleSelection);
     preset_templates->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     preset_templates->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    preset_templates->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    preset_templates->header()->setSectionResizeMode(1, QHeaderView::Stretch);
+    preset_templates->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    preset_templates->header()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    preset_templates->setFixedHeight(214);
     preset_layout->addWidget(preset_templates);
 
     // The existing spawn owner still consumes one canonical selected preset.
     // Keep that state in a hidden chooser; browsing and comparison belong to
-    // the two visible scroll surfaces above, never to a dropdown.
+    // the two visible tables above, never to a dropdown.
     auto *preset_chooser = new QComboBox(preset_page);
     preset_chooser->setObjectName("lingtai_bootstrap_preset_chooser");
     preset_chooser->setAccessibleName(QStringLiteral("Selected preset"));
     preset_chooser->hide();
-    auto *preset_description = make_label(preset_page, QString(),
-        "lingtai_setup_preset_description", 12);
+
+    auto *preset_detail = new QWidget(preset_page);
+    preset_detail->setObjectName("lingtai_setup_preset_detail");
+    preset_detail->setMinimumHeight(88);
+    preset_detail->setStyleSheet(QStringLiteral(
+        "background: palette(base); border: 1px solid palette(mid); border-radius: 7px;"));
+    auto *preset_detail_layout = new QHBoxLayout(preset_detail);
+    preset_detail_layout->setContentsMargins(14, 10, 14, 10);
+    preset_detail_layout->setSpacing(16);
+    auto *preset_description = make_label(preset_detail, QString(),
+        "lingtai_setup_preset_description", 11);
     preset_description->setWordWrap(true);
-    preset_description->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    preset_description->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    preset_detail_layout->addWidget(preset_description, 1);
+    auto *preset_configure = new QPushButton(QStringLiteral("Configure"), preset_detail);
+    preset_configure->setObjectName("lingtai_setup_detail_configure");
+    preset_configure->setFixedWidth(96);
+    preset_detail_layout->addWidget(preset_configure, 0, Qt::AlignVCenter);
     preset_layout->addSpacing(8);
-    preset_layout->addWidget(preset_description);
+    preset_layout->addWidget(preset_detail);
 
     preset_layout->addStretch();
     auto *preset_continue = new QPushButton(QStringLiteral("Continue"), preset_page);
@@ -1750,29 +1803,48 @@ NativeShell::NativeShell()
     right_layout->addWidget(pages, 1);
     wizard_layout->addWidget(right, 1);
 
-    const auto sync_list_selection = [preset_chooser](
-            QListWidget *selected, QListWidget *other) {
+    const auto sync_table_selection = [preset_chooser](
+            QTreeWidget *selected, QTreeWidget *other) {
         auto *item = selected->currentItem();
         if (!item) return;
         const QSignalBlocker blocker(other);
         other->setCurrentItem(nullptr);
         other->clearSelection();
-        preset_chooser->setCurrentIndex(item->data(Qt::UserRole).toInt());
+        preset_chooser->setCurrentIndex(item->data(0, Qt::UserRole).toInt());
     };
-    QObject::connect(saved_presets, &QListWidget::itemSelectionChanged,
-        [saved_presets, preset_templates, sync_list_selection] {
-            sync_list_selection(saved_presets, preset_templates);
+    QObject::connect(saved_presets, &QTreeWidget::itemSelectionChanged,
+        [saved_presets, preset_templates, sync_table_selection] {
+            sync_table_selection(saved_presets, preset_templates);
         });
-    QObject::connect(preset_templates, &QListWidget::itemSelectionChanged,
-        [preset_templates, saved_presets, sync_list_selection] {
-            sync_list_selection(preset_templates, saved_presets);
+    QObject::connect(preset_templates, &QTreeWidget::itemSelectionChanged,
+        [preset_templates, saved_presets, sync_table_selection] {
+            sync_table_selection(preset_templates, saved_presets);
+        });
+    QObject::connect(preset_search, &QLineEdit::textChanged,
+        [saved_presets, preset_templates](const QString &query) {
+            const auto needle = query.trimmed();
+            for (auto *table : { saved_presets, preset_templates }) {
+                for (auto index = 0; index != table->topLevelItemCount(); ++index) {
+                    auto *item = table->topLevelItem(index);
+                    const auto haystack = item->text(0) + QStringLiteral(" ")
+                        + item->text(1) + QStringLiteral(" ") + item->text(2);
+                    item->setHidden(!needle.isEmpty()
+                        && !haystack.contains(needle, Qt::CaseInsensitive));
+                }
+            }
         });
 
     const auto update_review = [preset_chooser, destination_input, preset_description,
-            review_summary, agent_card] {
+            preset_configure, review_summary, agent_card] {
         const auto preset = preset_chooser->currentText().trimmed();
-        preset_description->setText(
-            preset_chooser->currentData(Qt::UserRole).toString());
+        const auto description = preset_chooser->currentData(Qt::UserRole).toString();
+        const auto source = preset_chooser->currentData(Qt::UserRole + 1).toString();
+        preset_description->setText(QStringLiteral(
+            "Preset     %1\nProvider / model     %2\nSource     %3")
+            .arg(preset.isEmpty() ? QStringLiteral("Not chosen") : preset,
+                description.isEmpty() ? QStringLiteral("—") : description,
+                source.isEmpty() ? QStringLiteral("Catalog") : source));
+        preset_configure->setEnabled(!preset.isEmpty());
         const auto destination = destination_input->getLastText().trimmed();
         const auto folder = QFileInfo(destination).fileName();
         agent_card->setText(QStringLiteral(
@@ -1998,64 +2070,41 @@ void NativeShell::show_bootstrap_dialog(
     auto *chooser = window_->findChild<QComboBox *>(
         "lingtai_bootstrap_preset_chooser");
     if (!chooser) return;
-    auto *saved = window_->findChild<QListWidget *>(
+    auto *saved = window_->findChild<QTreeWidget *>(
         "lingtai_setup_saved_presets");
-    auto *templates = window_->findChild<QListWidget *>(
+    auto *templates = window_->findChild<QTreeWidget *>(
         "lingtai_setup_preset_templates");
     if (!saved || !templates) return;
     chooser->clear();
     saved->clear();
     templates->clear();
-    const auto add_preset_row = [chooser](QListWidget *list,
+    const auto add_preset_row = [chooser](QTreeWidget *table,
             const PresetEntry &preset, int index, bool is_template) {
         const auto name = QString::fromStdString(preset.name);
         const auto description = QString::fromStdString(preset.description);
-        auto *item = new QListWidgetItem(list);
-        item->setData(Qt::UserRole, index);
-        item->setSizeHint(QSize(0, 66));
-        item->setToolTip(description);
-        auto *row = new QWidget(list);
-        row->setAttribute(Qt::WA_TransparentForMouseEvents, false);
-        auto *layout = new QHBoxLayout(row);
-        layout->setContentsMargins(12, 7, 10, 7);
-        layout->setSpacing(10);
-        auto *copy = new QWidget(row);
-        auto *copy_layout = new QVBoxLayout(copy);
-        copy_layout->setContentsMargins(0, 0, 0, 0);
-        copy_layout->setSpacing(2);
-        auto *title = new QLabel(name, copy);
-        auto font = title->font();
-        font.setPointSize(13);
-        font.setWeight(QFont::DemiBold);
-        title->setFont(font);
-        title->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-        auto *detail = new QLabel(description, copy);
-        detail->setWordWrap(false);
-        detail->setTextFormat(Qt::PlainText);
-        detail->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        detail->setStyleSheet(QStringLiteral("color: #8a8f98; font-size: 11px;"));
-        copy_layout->addWidget(title);
-        copy_layout->addWidget(detail);
-        layout->addWidget(copy, 1);
-        if (description.contains(QStringLiteral("vision"), Qt::CaseInsensitive)) {
-            auto *vision = new QLabel(QStringLiteral("Vision"), row);
-            vision->setAlignment(Qt::AlignCenter);
-            vision->setStyleSheet(QStringLiteral(
-                "background: #e8f4ff; color: #1769e0; border-radius: 10px; padding: 3px 7px; font-size: 10px;"));
-            layout->addWidget(vision);
-        }
+        const auto capability = description.contains(
+            QStringLiteral("vision"), Qt::CaseInsensitive)
+            ? QStringLiteral("Vision")
+            : QString();
+        auto *item = new QTreeWidgetItem(table);
+        item->setData(0, Qt::UserRole, index);
+        item->setText(0, name);
+        item->setText(1, description);
+        item->setText(2, capability);
+        item->setToolTip(0, description);
+        item->setToolTip(1, description);
+        item->setSizeHint(0, QSize(0, 34));
         if (is_template) {
-            auto *configure = new QPushButton(QStringLiteral("Configure"), row);
+            auto *configure = new QPushButton(QStringLiteral("Configure"), table);
             configure->setObjectName("lingtai_setup_configure_template");
-            configure->setFixedHeight(30);
+            configure->setFixedSize(90, 28);
             QObject::connect(configure, &QPushButton::clicked,
-                [list, item, chooser, index] {
-                    list->setCurrentItem(item);
+                [table, item, chooser, index] {
+                    table->setCurrentItem(item);
                     chooser->setCurrentIndex(index);
                 });
-            layout->addWidget(configure);
+            table->setItemWidget(item, 3, configure);
         }
-        list->setItemWidget(item, row);
     };
     for (const auto &preset : presets) {
         const auto index = chooser->count();
@@ -2064,15 +2113,18 @@ void NativeShell::show_bootstrap_dialog(
         chooser->addItem(name);
         chooser->setItemData(index, description, Qt::ToolTipRole);
         chooser->setItemData(index, description, Qt::UserRole);
+        chooser->setItemData(index, QString::fromStdString(preset.source),
+            Qt::UserRole + 1);
         const auto is_saved = QString::fromStdString(preset.source)
             .compare(QStringLiteral("saved"), Qt::CaseInsensitive) == 0;
         add_preset_row(is_saved ? saved : templates,
             preset, index, !is_saved);
     }
-    if (saved->count() > 0) {
-        saved->setCurrentRow(0);
-    } else if (templates->count() > 0) {
-        templates->setCurrentRow(0);
+    chooser->setCurrentIndex(-1);
+    if (saved->topLevelItemCount() > 0) {
+        saved->setCurrentItem(saved->topLevelItem(0));
+    } else if (templates->topLevelItemCount() > 0) {
+        templates->setCurrentItem(templates->topLevelItem(0));
     }
     if (auto *status = find_ui_child<Ui::FlatLabel>(
             *window_, "lingtai_bootstrap_dialog_status")) {
