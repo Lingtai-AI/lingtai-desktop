@@ -42,6 +42,7 @@
 #include <QtWidgets/QScrollBar>
 #include <QtWidgets/QSpacerItem>
 #include <QtWidgets/QTextEdit>
+#include <QtWidgets/QTreeWidget>
 
 #include <algorithm>
 #include <chrono>
@@ -4558,10 +4559,12 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
         *preset_page, "lingtai_setup_preset_heading");
     auto *catalog = required_child<QComboBox>(
         *preset_page, "lingtai_bootstrap_preset_chooser");
-    auto *saved_presets = required_child<QListWidget>(
+    auto *saved_presets = required_child<QTreeWidget>(
         *preset_page, "lingtai_setup_saved_presets");
-    auto *preset_templates = required_child<QListWidget>(
+    auto *preset_templates = required_child<QTreeWidget>(
         *preset_page, "lingtai_setup_preset_templates");
+    auto *preset_detail = required_child<QWidget>(
+        *preset_page, "lingtai_setup_preset_detail");
     auto *agent_heading = required_child<QLabel>(
         *agents_page, "lingtai_setup_agents_heading");
     auto *review_heading = required_child<QLabel>(
@@ -4587,9 +4590,18 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
             && review_heading->text() == QStringLiteral("Review project"),
         "setup must expose the accepted Preset, Agents, and Review pages");
     require(catalog->isHidden()
-            && saved_presets->verticalScrollBarPolicy() != Qt::ScrollBarAlwaysOff
-            && preset_templates->verticalScrollBarPolicy() != Qt::ScrollBarAlwaysOff,
-        "Preset page must expose separate scrollable Saved presets and Preset templates lists; the old dropdown is backend state only");
+            && saved_presets->columnCount() == 3
+            && preset_templates->columnCount() == 4
+            && saved_presets->headerItem()->text(0) == QStringLiteral("Preset")
+            && saved_presets->headerItem()->text(1) == QStringLiteral("Provider / model")
+            && saved_presets->headerItem()->text(2) == QStringLiteral("Capabilities")
+            && preset_templates->headerItem()->text(3).isEmpty(),
+        "Preset page must expose the reference's three-column Saved presets and four-column Preset templates tables; one-column cards are not the supplied design");
+    require(saved_presets->height() >= 150
+            && preset_templates->height() >= 190
+            && preset_detail->minimumHeight() >= 88
+            && preset_detail->layout() != nullptr,
+        "Preset page must preserve the reference's list density and a separate full-width selected-preset detail card before the footer");
     require(continue_button->text() == QStringLiteral("Continue")
             && review_button->text() == QStringLiteral("Continue")
             && create_button->text() == QStringLiteral("Create project"),
