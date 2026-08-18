@@ -34,6 +34,8 @@
 #include <QtCore/QStringList>
 #include <QtCore/QTimer>
 #include <QtCore/QVariant>
+#include <QtGui/QBrush>
+#include <QtGui/QColor>
 #include <QtGui/QFont>
 #include <QtGui/QFontMetrics>
 #include <QtGui/QGuiApplication>
@@ -166,6 +168,96 @@ QLabel *make_setup_label(
     font.setWeight(weight);
     label->setFont(font);
     return label;
+}
+
+constexpr auto kPresetSelectedFg = QStringLiteral("#10221e");
+constexpr auto kPresetMutedFg = QStringLiteral("#8a8f98");
+constexpr auto kPresetAccent = QStringLiteral("#13a58f");
+
+QWidget *make_preset_name_cell(
+        QWidget *parent, const QString &name, const QString &summary) {
+    auto *cell = new QWidget(parent);
+    cell->setObjectName("lingtai_setup_preset_name_cell");
+    cell->setAutoFillBackground(false);
+    auto *layout = new QHBoxLayout(cell);
+    layout->setContentsMargins(2, 4, 8, 4);
+    layout->setSpacing(8);
+    auto *check = new QLabel(cell);
+    check->setObjectName("lingtai_setup_preset_check");
+    check->setAlignment(Qt::AlignCenter);
+    check->setFixedSize(18, 18);
+    check->setStyleSheet(QStringLiteral("background: transparent;"));
+    auto *text = new QWidget(cell);
+    auto *text_layout = new QVBoxLayout(text);
+    text_layout->setContentsMargins(0, 0, 0, 0);
+    text_layout->setSpacing(1);
+    auto *name_label = new QLabel(name, text);
+    name_label->setObjectName("lingtai_setup_preset_row_name");
+    name_label->setTextFormat(Qt::PlainText);
+    auto name_font = name_label->font();
+    name_font.setPointSize(12);
+    name_font.setWeight(QFont::DemiBold);
+    name_label->setFont(name_font);
+    auto *summary_label = new QLabel(summary, text);
+    summary_label->setObjectName("lingtai_setup_preset_row_summary");
+    summary_label->setTextFormat(Qt::PlainText);
+    auto summary_font = summary_label->font();
+    summary_font.setPointSize(11);
+    summary_label->setFont(summary_font);
+    summary_label->setStyleSheet(
+        QStringLiteral("color: %1;").arg(kPresetMutedFg));
+    summary_label->setVisible(!summary.isEmpty());
+    text_layout->addWidget(name_label);
+    text_layout->addWidget(summary_label);
+    layout->addWidget(check, 0, Qt::AlignVCenter);
+    layout->addWidget(text, 1);
+    return cell;
+}
+
+QLabel *make_vision_chip(QWidget *parent) {
+    auto *chip = new QLabel(QStringLiteral("Vision"), parent);
+    chip->setObjectName("lingtai_setup_vision_chip");
+    chip->setAlignment(Qt::AlignCenter);
+    chip->setFixedHeight(22);
+    chip->setStyleSheet(QStringLiteral(
+        "background: palette(midlight); color: palette(window-text); "
+        "border-radius: 11px; padding: 0 10px; font-size: 11px;"));
+    return chip;
+}
+
+void apply_preset_row_chrome(QTreeWidgetItem *item, bool selected) {
+    if (!item) return;
+    auto *table = item->treeWidget();
+    if (!table) return;
+    const auto fg = selected ? QColor(kPresetSelectedFg) : QColor();
+    for (auto column = 0; column != table->columnCount(); ++column) {
+        item->setForeground(column, fg.isValid() ? QBrush(fg) : QBrush());
+    }
+    if (auto *cell = table->itemWidget(item, 0)) {
+        if (auto *check = cell->findChild<QLabel *>(
+                "lingtai_setup_preset_check")) {
+            check->setText(selected ? QStringLiteral("✓") : QString());
+            check->setStyleSheet(selected
+                ? QStringLiteral(
+                    "background: %1; color: white; border-radius: 9px; "
+                    "font-size: 11px; font-weight: 700;")
+                    .arg(kPresetAccent)
+                : QStringLiteral("background: transparent; color: transparent;"));
+        }
+        if (auto *name = cell->findChild<QLabel *>(
+                "lingtai_setup_preset_row_name")) {
+            name->setStyleSheet(selected
+                ? QStringLiteral("color: %1;").arg(kPresetSelectedFg)
+                : QStringLiteral("color: palette(window-text);"));
+        }
+        if (auto *summary = cell->findChild<QLabel *>(
+                "lingtai_setup_preset_row_summary")) {
+            summary->setStyleSheet(selected
+                ? QStringLiteral("color: #3d5c56; font-size: 11px;")
+                : QStringLiteral("color: %1; font-size: 11px;")
+                    .arg(kPresetMutedFg));
+        }
+    }
 }
 
 void update_setup_step_indicator(QWidget *steps, int active_index) {
@@ -1612,14 +1704,19 @@ NativeShell::NativeShell()
     apply_project_setup_palette(bootstrap_dialog_);
     bootstrap_dialog_->setStyleSheet(QStringLiteral(
         "QDialog { background: palette(window); } "
-        "QPushButton { min-height: 34px; padding: 0 16px; border-radius: 6px; } "
-        "QPushButton#lingtai_setup_primary { background: #13a58f; color: white; border: none; font-weight: 600; } "
-        "QPushButton#lingtai_setup_secondary { background: transparent; color: palette(text); border: 1px solid palette(mid); } "
+        "QPushButton { border-radius: 6px; padding: 0 16px; } "
+        "QPushButton#lingtai_setup_preset_continue, "
+        "QPushButton#lingtai_setup_agents_continue, "
+        "QPushButton#lingtai_bootstrap_create_start { "
+        "min-height: 34px; background: #13a58f; color: white; border: none; font-weight: 600; } "
+        "QPushButton#lingtai_setup_configure_template { "
+        "min-height: 0; max-height: 22px; padding: 0 2px; background: transparent; "
+        "color: #13a58f; border: none; font-weight: 600; } "
         "QLineEdit#lingtai_setup_preset_search { min-height: 36px; padding: 0 12px; border: 1px solid palette(mid); "
         "border-radius: 8px; background: palette(base); color: palette(text); } "
         "QTreeWidget { border: 1px solid palette(mid); border-radius: 8px; background: palette(base); outline: none; } "
-        "QTreeWidget::item { min-height: 48px; border-bottom: 1px solid palette(midlight); padding: 6px 8px; } "
-        "QTreeWidget::item:selected { background: #e7f7f3; color: palette(text); } "
+        "QTreeWidget::item { min-height: 52px; border-bottom: 1px solid palette(midlight); padding: 4px 8px; } "
+        "QTreeWidget::item:selected { background: #d8f3ee; color: #10221e; } "
         "QHeaderView::section { background: palette(window); color: #8a8f98; border: none; "
         "border-bottom: 1px solid palette(mid); padding: 6px 8px; font-size: 11px; font-weight: 600; }"));
     auto *wizard_layout = new QVBoxLayout(bootstrap_dialog_);
@@ -1743,7 +1840,7 @@ NativeShell::NativeShell()
     saved_presets->header()->setSectionResizeMode(1, QHeaderView::Stretch);
     saved_presets->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     saved_presets->setMinimumHeight(156);
-    saved_presets->setMaximumHeight(180);
+    saved_presets->setMaximumHeight(220);
     preset_layout->addWidget(saved_presets);
     preset_layout->addSpacing(11);
 
@@ -1767,9 +1864,9 @@ NativeShell::NativeShell()
     preset_templates->header()->setSectionResizeMode(1, QHeaderView::Stretch);
     preset_templates->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     preset_templates->header()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
-    preset_templates->setMinimumHeight(200);
-    preset_templates->setMaximumHeight(240);
-    preset_layout->addWidget(preset_templates);
+    preset_templates->setMinimumHeight(240);
+    preset_templates->setMaximumHeight(QWIDGETSIZE_MAX);
+    preset_layout->addWidget(preset_templates, 1);
 
     // The existing spawn owner still consumes one canonical selected preset.
     // Keep that state in a hidden chooser; browsing and comparison belong to
@@ -1785,12 +1882,12 @@ NativeShell::NativeShell()
     preset_detail->setStyleSheet(QStringLiteral(
         "background: palette(alternate-base); border: 1px solid palette(mid); border-radius: 8px;"));
     auto *preset_detail_layout = new QHBoxLayout(preset_detail);
-    preset_detail_layout->setContentsMargins(14, 10, 14, 10);
+    preset_detail_layout->setContentsMargins(18, 14, 18, 14);
     preset_detail_layout->setSpacing(16);
-    auto *preset_description = make_label(preset_detail, QString(),
-        "lingtai_setup_preset_description", 11);
+    auto *preset_description = make_setup_label(preset_detail, QString(),
+        "lingtai_setup_preset_description", 12);
     preset_description->setWordWrap(true);
-    preset_description->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    preset_description->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     preset_detail_layout->addWidget(preset_description, 1);
     auto *preset_configure = new QPushButton(QStringLiteral("Configure"), preset_detail);
     preset_configure->setObjectName("lingtai_setup_detail_configure");
@@ -1910,7 +2007,8 @@ NativeShell::NativeShell()
                 for (auto index = 0; index != table->topLevelItemCount(); ++index) {
                     auto *item = table->topLevelItem(index);
                     const auto haystack = item->text(0) + QStringLiteral(" ")
-                        + item->text(1) + QStringLiteral(" ") + item->text(2);
+                        + item->text(1) + QStringLiteral(" ") + item->text(2)
+                        + QStringLiteral(" ") + item->toolTip(0);
                     item->setHidden(!needle.isEmpty()
                         && !haystack.contains(needle, Qt::CaseInsensitive));
                 }
@@ -1962,12 +2060,7 @@ NativeShell::NativeShell()
         for (auto *table : { saved_presets, preset_templates }) {
             for (auto index = 0; index != table->topLevelItemCount(); ++index) {
                 auto *item = table->topLevelItem(index);
-                const auto row_selected = item->isSelected();
-                auto font = item->font(0);
-                font.setWeight(row_selected ? QFont::DemiBold : QFont::Normal);
-                for (auto column = 0; column != table->columnCount(); ++column) {
-                    item->setFont(column, font);
-                }
+                apply_preset_row_chrome(item, item->isSelected());
             }
         }
     };
@@ -2231,27 +2324,34 @@ void NativeShell::show_bootstrap_dialog(
     const auto add_preset_row = [chooser](QTreeWidget *table,
             const PresetCatalogRow &row, int index, bool is_template) {
         const auto name = QString::fromStdString(row.entry.name);
-        const auto preset_cell = row.summary.isEmpty()
-            ? name
-            : name + QStringLiteral("\n") + row.summary;
         const auto capability = row.has_vision
             ? QStringLiteral("Vision")
             : QString();
         auto *item = new QTreeWidgetItem(table);
         item->setData(0, Qt::UserRole, index);
-        item->setText(0, preset_cell);
+        item->setText(0, name);
         item->setText(1, row.provider_model);
         item->setText(2, capability);
         item->setToolTip(0, row.summary);
         item->setToolTip(1, row.provider_model);
-        item->setSizeHint(0, QSize(0, row.summary.isEmpty() ? 36 : 52));
+        item->setSizeHint(0, QSize(0, row.summary.isEmpty() ? 44 : 56));
+        table->setItemWidget(item, 0,
+            make_preset_name_cell(table, name, row.summary));
+        if (row.has_vision) {
+            auto *chip = make_vision_chip(table);
+            auto *chip_host = new QWidget(table);
+            auto *chip_layout = new QHBoxLayout(chip_host);
+            chip_layout->setContentsMargins(0, 0, 8, 0);
+            chip_layout->addWidget(chip, 0, Qt::AlignVCenter);
+            chip_layout->addStretch();
+            table->setItemWidget(item, 2, chip_host);
+        }
         if (is_template) {
             auto *configure = new QPushButton(QStringLiteral("Configure"), table);
             configure->setObjectName("lingtai_setup_configure_template");
-            configure->setFixedSize(90, 28);
-            configure->setStyleSheet(QStringLiteral(
-                "background: transparent; color: #13a58f; border: 1px solid #13a58f; "
-                "border-radius: 6px; font-weight: 600;"));
+            configure->setCursor(Qt::PointingHandCursor);
+            configure->setFlat(true);
+            configure->setFixedHeight(22);
             QObject::connect(configure, &QPushButton::clicked,
                 [table, item, chooser, index] {
                     table->setCurrentItem(item);
