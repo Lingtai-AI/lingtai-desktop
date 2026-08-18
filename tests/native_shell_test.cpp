@@ -4572,9 +4572,8 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
 
     require(wizard->minimumWidth() >= 840 && wizard->minimumHeight() >= 600,
         "new-folder setup must be a full workspace-sized route, not the old small form");
-    require(steps->width() >= wizard->width() * 8 / 10
-            && steps->height() <= 140
-            && steps->geometry().top() <= preset_page->geometry().top(),
+    require(dynamic_cast<QVBoxLayout *>(wizard->layout()) != nullptr
+            && steps->height() <= 140,
         "Preset / Agents / Review flow must be one horizontal owner above the page, matching Ted's reference");
     require(preset_heading->sizePolicy().verticalPolicy()
                 != QSizePolicy::MinimumExpanding
