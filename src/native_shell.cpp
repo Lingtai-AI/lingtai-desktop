@@ -269,18 +269,6 @@ public:
                 painter->setPen(text_color);
                 painter->drawText(chip, Qt::AlignCenter, capability);
             }
-        } else if (index.column() == 3) {
-            if (index.data(Qt::DisplayRole).toString()
-                    == QStringLiteral("Configure")) {
-                auto link_font = opt.font;
-                link_font.setWeight(QFont::DemiBold);
-                painter->setFont(link_font);
-                painter->setPen(QColor(kPresetAccent));
-                painter->drawText(
-                    inner,
-                    Qt::AlignVCenter | Qt::AlignRight | Qt::TextSingleLine,
-                    QStringLiteral("Configure"));
-            }
         } else {
             painter->setPen(text_color);
             painter->drawText(
@@ -1797,9 +1785,6 @@ NativeShell::NativeShell()
         "QPushButton#lingtai_setup_agents_continue, "
         "QPushButton#lingtai_bootstrap_create_start { "
         "min-height: 34px; background: #13a58f; color: white; border: none; font-weight: 600; } "
-        "QPushButton#lingtai_setup_configure_template { "
-        "min-height: 0; max-height: 22px; padding: 0 2px; background: transparent; "
-        "color: #13a58f; border: none; font-weight: 600; } "
         "QLineEdit#lingtai_setup_preset_search { min-height: 36px; padding: 0 12px; border: 1px solid palette(mid); "
         "border-radius: 8px; background: palette(base); color: palette(text); } "
         "QTreeWidget { border: 1px solid palette(mid); border-radius: 8px; background: palette(base); outline: none; } "
@@ -1957,11 +1942,10 @@ NativeShell::NativeShell()
     auto *preset_templates = new QTreeWidget(preset_page);
     preset_templates->setObjectName("lingtai_setup_preset_templates");
     preset_templates->setAccessibleName(QStringLiteral("Preset templates"));
-    preset_templates->setColumnCount(4);
+    preset_templates->setColumnCount(3);
     preset_templates->setHeaderLabels({ QStringLiteral("Preset"),
-        QStringLiteral("Provider / model"), QStringLiteral("Capabilities"), QString() });
+        QStringLiteral("Provider / model"), QStringLiteral("Capabilities") });
     configure_preset_table(preset_templates);
-    preset_templates->header()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
     preset_templates->setMinimumHeight(190);
 
     auto *templates_pane = new QWidget(preset_page);
@@ -2441,7 +2425,7 @@ void NativeShell::show_bootstrap_dialog(
 
     const auto catalog = build_preset_catalog_rows(presets);
     const auto add_preset_row = [](QTreeWidget *table,
-            const PresetCatalogRow &row, int index, bool is_template) {
+            const PresetCatalogRow &row, int index) {
         const auto name = QString::fromStdString(row.entry.name);
         const auto capability = row.has_vision
             ? QStringLiteral("Vision")
@@ -2452,9 +2436,6 @@ void NativeShell::show_bootstrap_dialog(
         item->setText(0, name);
         item->setText(1, row.provider_model);
         item->setText(2, capability);
-        if (is_template) {
-            item->setText(3, QStringLiteral("Configure"));
-        }
         item->setToolTip(0, row.summary);
         item->setToolTip(1, row.provider_model);
     };
@@ -2470,8 +2451,7 @@ void NativeShell::show_bootstrap_dialog(
         chooser->setItemData(index, row.model, Qt::UserRole + 3);
         chooser->setItemData(index, row.is_template, Qt::UserRole + 4);
         chooser->setItemData(index, row.has_vision, Qt::UserRole + 5);
-        add_preset_row(row.is_template ? templates : saved, row, index,
-            row.is_template);
+        add_preset_row(row.is_template ? templates : saved, row, index);
     }
 
     chooser->setCurrentIndex(-1);

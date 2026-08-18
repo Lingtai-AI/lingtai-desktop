@@ -4585,12 +4585,13 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
         "setup must expose the accepted Preset, Agents, and Review pages");
     require(catalog->isHidden()
             && saved_presets->columnCount() == 3
-            && preset_templates->columnCount() == 4
+            && preset_templates->columnCount() == 3
             && saved_presets->headerItem()->text(0) == QStringLiteral("Preset")
             && saved_presets->headerItem()->text(1) == QStringLiteral("Provider / model")
             && saved_presets->headerItem()->text(2) == QStringLiteral("Capabilities")
-            && preset_templates->headerItem()->text(3).isEmpty(),
-        "Preset page must expose the reference's three-column Saved presets and four-column Preset templates tables; one-column cards are not the supplied design");
+            && preset_templates->headerItem()->text(0) == QStringLiteral("Preset")
+            && preset_templates->headerItem()->text(2) == QStringLiteral("Capabilities"),
+        "Preset page must expose matching three-column Saved presets and Preset templates tables; templates must not carry a Configure column");
     require(saved_presets->minimumHeight() >= 150
             && preset_templates->minimumHeight() >= 190
             && preset_detail->minimumHeight() >= 88
