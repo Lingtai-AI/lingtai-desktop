@@ -4545,6 +4545,8 @@ void verify_two_surface_hierarchy(
 void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) {
     auto &window = shell.window();
     auto *wizard = required_child<QDialog>(window, "lingtai_project_setup_wizard");
+    auto *steps = required_child<QWidget>(
+        *wizard, "lingtai_setup_steps");
     auto *preset_page = required_child<QWidget>(
         *wizard, "lingtai_setup_preset_page");
     auto *agents_page = required_child<QWidget>(
@@ -4570,6 +4572,14 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
 
     require(wizard->minimumWidth() >= 840 && wizard->minimumHeight() >= 600,
         "new-folder setup must be a full workspace-sized route, not the old small form");
+    require(steps->width() >= wizard->width() * 8 / 10
+            && steps->height() <= 140
+            && steps->geometry().top() <= preset_page->geometry().top(),
+        "Preset / Agents / Review flow must be one horizontal owner above the page, matching Ted's reference");
+    require(preset_heading->sizePolicy().verticalPolicy()
+                != QSizePolicy::MinimumExpanding
+            && !wizard->styleSheet().contains(QStringLiteral("background: #ffffff")),
+        "setup content must keep content-height labels and one theme palette, not expansive white-on-white surfaces");
     require(preset_heading->text() == QStringLiteral("Choose a preset")
             && agent_heading->text() == QStringLiteral("Configure Agents")
             && review_heading->text() == QStringLiteral("Review project"),
