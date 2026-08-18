@@ -42,6 +42,7 @@
 #include <QtWidgets/QScrollBar>
 #include <QtWidgets/QSpacerItem>
 #include <QtWidgets/QTextEdit>
+#include <QtWidgets/QHeaderView>
 #include <QtWidgets/QTreeWidget>
 
 #include <algorithm>
