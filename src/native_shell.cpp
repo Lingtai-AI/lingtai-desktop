@@ -59,7 +59,6 @@
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QScrollBar>
 #include <QtWidgets/QSizePolicy>
-#include <QtWidgets/QSplitter>
 #include <QtWidgets/QStackedWidget>
 #include <QtWidgets/QTextEdit>
 #include <QtWidgets/QStyle>
@@ -177,7 +176,9 @@ const auto kPresetSelectedFg = QStringLiteral("#10221e");
 const auto kPresetMutedFg = QStringLiteral("#8a8f98");
 const auto kPresetAccent = QStringLiteral("#13a58f");
 constexpr auto kPresetSummaryRole = Qt::UserRole + 10;
+constexpr auto kPresetSectionRole = Qt::UserRole + 11;
 constexpr auto kPresetRowHeight = 56;
+constexpr auto kPresetSectionHeight = 32;
 
 class PresetRowDelegate final : public QStyledItemDelegate {
 public:
@@ -192,6 +193,24 @@ public:
         painter->save();
         painter->setRenderHint(QPainter::Antialiasing, true);
         painter->setClipRect(opt.rect);
+        if (index.data(kPresetSectionRole).toBool()) {
+            if (index.column() != 0) {
+                painter->restore();
+                return;
+            }
+            painter->fillRect(opt.rect, opt.palette.color(QPalette::Window));
+            auto section_font = opt.font;
+            section_font.setPointSize(11);
+            section_font.setWeight(QFont::DemiBold);
+            painter->setFont(section_font);
+            painter->setPen(QColor(kPresetMutedFg));
+            painter->drawText(
+                opt.rect.adjusted(8, 0, -8, 0),
+                Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
+                index.data(Qt::DisplayRole).toString());
+            painter->restore();
+            return;
+        }
         const auto selected = opt.state.testFlag(QStyle::State_Selected);
         const auto dark = opt.palette.color(QPalette::Window).lightness() < 128;
         if (selected) {
@@ -282,10 +301,42 @@ public:
 
     QSize sizeHint(
             const QStyleOptionViewItem &,
-            const QModelIndex &) const override {
+            const QModelIndex &index) const override {
+        if (index.data(kPresetSectionRole).toBool()) {
+            return {120, kPresetSectionHeight};
+        }
         return {120, kPresetRowHeight};
     }
 };
+
+bool is_preset_section(const QTreeWidgetItem *item) {
+    return item && item->data(0, kPresetSectionRole).toBool();
+}
+
+QTreeWidgetItem *add_preset_section(QTreeWidget *table, const QString &title) {
+    auto *item = new QTreeWidgetItem(table);
+    item->setText(0, title);
+    item->setData(0, kPresetSectionRole, true);
+    item->setFlags(Qt::ItemIsEnabled);
+    item->setFirstColumnSpanned(true);
+    return item;
+}
+
+QTreeWidgetItem *adjacent_preset_row(
+        QTreeWidget *table, int from, int step) {
+    if (!table || step == 0) {
+        return nullptr;
+    }
+    for (auto index = from + step;
+            index >= 0 && index < table->topLevelItemCount();
+            index += step) {
+        auto *item = table->topLevelItem(index);
+        if (!is_preset_section(item) && !item->isHidden()) {
+            return item;
+        }
+    }
+    return nullptr;
+}
 
 QWidget *make_setup_gap(QWidget *parent, int reference_height) {
     auto *gap = new QWidget(parent);
@@ -318,13 +369,6 @@ void recompute_setup_layout(QDialog *dialog) {
             const auto pad = qRound(24 * t_w);
             layout->setContentsMargins(
                 pad, qRound(8 * t_h), pad, qRound(16 * t_h));
-        }
-    }
-    if (auto *lists = dialog->findChild<QSplitter *>(
-            "lingtai_setup_preset_lists")) {
-        const auto available = lists->size().height();
-        if (available > 80) {
-            lists->setSizes({ available * 2 / 7, available * 5 / 7 });
         }
     }
 }
@@ -1864,7 +1908,7 @@ NativeShell::NativeShell()
 
     const auto configure_preset_table = [](QTreeWidget *table) {
         table->setRootIsDecorated(false);
-        table->setUniformRowHeights(true);
+        table->setUniformRowHeights(false);
         table->setIndentation(0);
         table->setItemsExpandable(false);
         table->setAnimated(false);
@@ -1876,7 +1920,8 @@ NativeShell::NativeShell()
         table->viewport()->setAutoFillBackground(true);
         table->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
         table->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-        table->header()->setStretchLastSection(false);
+        table->header()->setVisible(true);
+        table->header()->setStretchLastSection(true);
         table->header()->setSectionResizeMode(0, QHeaderView::Stretch);
         table->header()->setSectionResizeMode(1, QHeaderView::Stretch);
         table->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
@@ -1899,62 +1944,21 @@ NativeShell::NativeShell()
     preset_search->setFixedHeight(34);
     preset_layout->addWidget(preset_search);
 
-    auto *saved_label = make_setup_label(preset_page, QStringLiteral("Saved presets"),
-        "lingtai_setup_saved_label", 12, QFont::DemiBold);
-    saved_label->setWordWrap(false);
-    auto *saved_presets = new QTreeWidget(preset_page);
-    saved_presets->setObjectName("lingtai_setup_saved_presets");
-    saved_presets->setAccessibleName(QStringLiteral("Saved presets"));
-    saved_presets->setColumnCount(3);
-    saved_presets->setHeaderLabels({ QStringLiteral("Preset"),
+    auto *preset_catalog = new QTreeWidget(preset_page);
+    preset_catalog->setObjectName("lingtai_setup_preset_catalog");
+    preset_catalog->setAccessibleName(QStringLiteral("Presets"));
+    preset_catalog->setColumnCount(3);
+    preset_catalog->setHeaderLabels({ QStringLiteral("Preset"),
         QStringLiteral("Provider / model"), QStringLiteral("Capabilities") });
-    configure_preset_table(saved_presets);
-    saved_presets->setMinimumHeight(150);
-
-    auto *saved_pane = new QWidget(preset_page);
-    saved_pane->setObjectName("lingtai_setup_saved_pane");
-    auto *saved_pane_layout = new QVBoxLayout(saved_pane);
-    saved_pane_layout->setContentsMargins(0, 0, 0, 0);
-    saved_pane_layout->setSpacing(6);
-    saved_pane_layout->addWidget(saved_label);
-    saved_pane_layout->addWidget(saved_presets, 1);
-
-    auto *templates_label = make_setup_label(preset_page, QStringLiteral("Preset templates"),
-        "lingtai_setup_templates_label", 12, QFont::DemiBold);
-    templates_label->setWordWrap(false);
-    auto *preset_templates = new QTreeWidget(preset_page);
-    preset_templates->setObjectName("lingtai_setup_preset_templates");
-    preset_templates->setAccessibleName(QStringLiteral("Preset templates"));
-    preset_templates->setColumnCount(3);
-    preset_templates->setHeaderLabels({ QStringLiteral("Preset"),
-        QStringLiteral("Provider / model"), QStringLiteral("Capabilities") });
-    configure_preset_table(preset_templates);
-    preset_templates->setMinimumHeight(190);
-
-    auto *templates_pane = new QWidget(preset_page);
-    templates_pane->setObjectName("lingtai_setup_templates_pane");
-    auto *templates_pane_layout = new QVBoxLayout(templates_pane);
-    templates_pane_layout->setContentsMargins(0, 0, 0, 0);
-    templates_pane_layout->setSpacing(6);
-    templates_pane_layout->addWidget(templates_label);
-    templates_pane_layout->addWidget(preset_templates, 1);
-
-    auto *preset_lists = new QSplitter(Qt::Vertical, preset_page);
-    preset_lists->setObjectName("lingtai_setup_preset_lists");
-    preset_lists->setChildrenCollapsible(false);
-    preset_lists->setOpaqueResize(true);
-    preset_lists->setHandleWidth(8);
-    preset_lists->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    preset_lists->addWidget(saved_pane);
-    preset_lists->addWidget(templates_pane);
-    preset_lists->setStretchFactor(0, 2);
-    preset_lists->setStretchFactor(1, 5);
-    preset_lists->setSizes({ 220, 420 });
-    preset_layout->addWidget(preset_lists, 1);
+    configure_preset_table(preset_catalog);
+    preset_catalog->setMinimumHeight(340);
+    add_preset_section(preset_catalog, QStringLiteral("Saved presets"));
+    add_preset_section(preset_catalog, QStringLiteral("Preset templates"));
+    preset_layout->addWidget(preset_catalog, 1);
 
     // The existing spawn owner still consumes one canonical selected preset.
-    // Keep that state in a hidden chooser; browsing and comparison belong to
-    // the two visible tables above, never to a dropdown.
+    // Keep that state in a hidden chooser; browsing belongs to the one catalog
+    // table, never to a dropdown.
     auto *preset_chooser = new QComboBox(preset_page);
     preset_chooser->setObjectName("lingtai_bootstrap_preset_chooser");
     preset_chooser->setAccessibleName(QStringLiteral("Selected preset"));
@@ -2074,28 +2078,40 @@ NativeShell::NativeShell()
     right_layout->addWidget(pages, 1);
     wizard_layout->addWidget(right, 1);
 
-    const auto sync_table_selection = [preset_chooser](
-            QTreeWidget *selected, QTreeWidget *other) {
-        auto *item = selected->currentItem();
-        if (!item) return;
-        const QSignalBlocker blocker(other);
-        other->setCurrentItem(nullptr);
-        other->clearSelection();
+    const auto sync_catalog_selection = [preset_chooser](QTreeWidgetItem *item) {
+        if (!item || is_preset_section(item)) return;
         preset_chooser->setCurrentIndex(item->data(0, Qt::UserRole).toInt());
     };
     QObject::connect(preset_search, &QLineEdit::textChanged,
-        [saved_presets, preset_templates](const QString &query) {
+        [preset_catalog](const QString &query) {
             const auto needle = query.trimmed();
-            for (auto *table : { saved_presets, preset_templates }) {
-                for (auto index = 0; index != table->topLevelItemCount(); ++index) {
-                    auto *item = table->topLevelItem(index);
-                    const auto haystack = item->text(0) + QStringLiteral(" ")
-                        + item->text(1) + QStringLiteral(" ") + item->text(2)
-                        + QStringLiteral(" ") + item->toolTip(0);
-                    item->setHidden(!needle.isEmpty()
-                        && !haystack.contains(needle, Qt::CaseInsensitive));
+            QTreeWidgetItem *section = nullptr;
+            auto section_has_visible = false;
+            const auto close_section = [&] {
+                if (!section) return;
+                const auto title_match = !needle.isEmpty()
+                    && section->text(0).contains(needle, Qt::CaseInsensitive);
+                section->setHidden(!needle.isEmpty()
+                    && !section_has_visible && !title_match);
+            };
+            for (auto index = 0; index != preset_catalog->topLevelItemCount();
+                    ++index) {
+                auto *item = preset_catalog->topLevelItem(index);
+                if (is_preset_section(item)) {
+                    close_section();
+                    section = item;
+                    section_has_visible = false;
+                    continue;
                 }
+                const auto haystack = item->text(0) + QStringLiteral(" ")
+                    + item->text(1) + QStringLiteral(" ") + item->text(2)
+                    + QStringLiteral(" ") + item->toolTip(0);
+                const auto match = needle.isEmpty()
+                    || haystack.contains(needle, Qt::CaseInsensitive);
+                item->setHidden(!match);
+                section_has_visible = section_has_visible || match;
             }
+            close_section();
         });
 
     const auto update_review = [preset_chooser, destination_input, preset_description,
@@ -2135,18 +2151,32 @@ NativeShell::NativeShell()
                 provider_model.isEmpty() ? QStringLiteral("Not chosen") : provider_model,
                 capability));
     };
-    const auto refresh_preset_selection = [update_review, sync_table_selection](
-            QTreeWidget *selected, QTreeWidget *other) {
-        sync_table_selection(selected, other);
+    const auto refresh_preset_selection = [update_review, sync_catalog_selection](
+            QTreeWidgetItem *item) {
+        sync_catalog_selection(item);
         update_review();
     };
-    QObject::connect(saved_presets, &QTreeWidget::itemSelectionChanged,
-        [saved_presets, preset_templates, refresh_preset_selection] {
-            refresh_preset_selection(saved_presets, preset_templates);
-        });
-    QObject::connect(preset_templates, &QTreeWidget::itemSelectionChanged,
-        [preset_templates, saved_presets, refresh_preset_selection] {
-            refresh_preset_selection(preset_templates, saved_presets);
+    QObject::connect(preset_catalog, &QTreeWidget::currentItemChanged,
+        [preset_catalog, refresh_preset_selection](
+                QTreeWidgetItem *current, QTreeWidgetItem *previous) {
+            if (!current) return;
+            if (is_preset_section(current)) {
+                const auto current_index =
+                    preset_catalog->indexOfTopLevelItem(current);
+                const auto previous_index = previous
+                    ? preset_catalog->indexOfTopLevelItem(previous)
+                    : current_index - 1;
+                const auto step = current_index >= previous_index ? 1 : -1;
+                if (auto *next = adjacent_preset_row(
+                        preset_catalog, current_index, step)) {
+                    preset_catalog->setCurrentItem(next);
+                } else if (auto *back = adjacent_preset_row(
+                        preset_catalog, current_index, -step)) {
+                    preset_catalog->setCurrentItem(back);
+                }
+                return;
+            }
+            refresh_preset_selection(current);
         });
     const auto go_to_page = [pages, steps = steps](int index) {
         pages->setCurrentIndex(index);
@@ -2155,14 +2185,15 @@ NativeShell::NativeShell()
     QObject::connect(preset_chooser, &QComboBox::currentTextChanged,
         [update_review](const QString &) { update_review(); });
     QObject::connect(preset_configure, &QPushButton::clicked,
-        [preset_chooser, saved_presets, preset_templates] {
+        [preset_chooser, preset_catalog] {
             if (preset_chooser->currentIndex() < 0) return;
-            const auto is_template = preset_chooser->currentData(Qt::UserRole + 4).toBool();
-            auto *table = is_template ? preset_templates : saved_presets;
-            for (auto index = 0; index != table->topLevelItemCount(); ++index) {
-                auto *item = table->topLevelItem(index);
-                if (item->data(0, Qt::UserRole).toInt() == preset_chooser->currentIndex()) {
-                    table->setCurrentItem(item);
+            for (auto index = 0; index != preset_catalog->topLevelItemCount();
+                    ++index) {
+                auto *item = preset_catalog->topLevelItem(index);
+                if (!is_preset_section(item)
+                        && item->data(0, Qt::UserRole).toInt()
+                            == preset_chooser->currentIndex()) {
+                    preset_catalog->setCurrentItem(item);
                     return;
                 }
             }
@@ -2397,16 +2428,13 @@ void NativeShell::show_bootstrap_dialog(
     auto *chooser = window_->findChild<QComboBox *>(
         "lingtai_bootstrap_preset_chooser");
     if (!chooser) return;
-    auto *saved = window_->findChild<QTreeWidget *>(
-        "lingtai_setup_saved_presets");
-    auto *templates = window_->findChild<QTreeWidget *>(
-        "lingtai_setup_preset_templates");
-    if (!saved || !templates) return;
+    auto *catalog = window_->findChild<QTreeWidget *>(
+        "lingtai_setup_preset_catalog");
+    if (!catalog) return;
     chooser->clear();
-    saved->clear();
-    templates->clear();
+    catalog->clear();
 
-    const auto catalog = build_preset_catalog_rows(presets);
+    const auto rows = build_preset_catalog_rows(presets);
     const auto add_preset_row = [](QTreeWidget *table,
             const PresetCatalogRow &row, int index) {
         const auto name = QString::fromStdString(row.entry.name);
@@ -2423,7 +2451,9 @@ void NativeShell::show_bootstrap_dialog(
         item->setToolTip(1, row.provider_model);
     };
 
-    for (const auto &row : catalog) {
+    add_preset_section(catalog, QStringLiteral("Saved presets"));
+    auto added_templates_header = false;
+    for (const auto &row : rows) {
         const auto index = chooser->count();
         const auto name = QString::fromStdString(row.entry.name);
         chooser->addItem(name);
@@ -2434,14 +2464,23 @@ void NativeShell::show_bootstrap_dialog(
         chooser->setItemData(index, row.model, Qt::UserRole + 3);
         chooser->setItemData(index, row.is_template, Qt::UserRole + 4);
         chooser->setItemData(index, row.has_vision, Qt::UserRole + 5);
-        add_preset_row(row.is_template ? templates : saved, row, index);
+        if (row.is_template && !added_templates_header) {
+            add_preset_section(catalog, QStringLiteral("Preset templates"));
+            added_templates_header = true;
+        }
+        add_preset_row(catalog, row, index);
+    }
+    if (!added_templates_header) {
+        add_preset_section(catalog, QStringLiteral("Preset templates"));
     }
 
     chooser->setCurrentIndex(-1);
-    if (saved->topLevelItemCount() > 0) {
-        saved->setCurrentItem(saved->topLevelItem(0));
-    } else if (templates->topLevelItemCount() > 0) {
-        templates->setCurrentItem(templates->topLevelItem(0));
+    for (auto index = 0; index != catalog->topLevelItemCount(); ++index) {
+        auto *item = catalog->topLevelItem(index);
+        if (!is_preset_section(item)) {
+            catalog->setCurrentItem(item);
+            break;
+        }
     }
     if (auto *status = find_ui_child<Ui::FlatLabel>(
             *window_, "lingtai_bootstrap_dialog_status")) {

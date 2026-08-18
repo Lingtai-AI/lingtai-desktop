@@ -4548,14 +4548,8 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
         *preset_page, "lingtai_setup_preset_heading");
     auto *catalog = required_child<QComboBox>(
         *preset_page, "lingtai_bootstrap_preset_chooser");
-    auto *saved_presets = required_child<QTreeWidget>(
-        *preset_page, "lingtai_setup_saved_presets");
-    auto *preset_templates = required_child<QTreeWidget>(
-        *preset_page, "lingtai_setup_preset_templates");
-    auto *templates_label = required_child<QLabel>(
-        *preset_page, "lingtai_setup_templates_label");
-    auto *preset_lists = required_child<QWidget>(
-        *preset_page, "lingtai_setup_preset_lists");
+    auto *preset_catalog = required_child<QTreeWidget>(
+        *preset_page, "lingtai_setup_preset_catalog");
     auto *preset_detail = required_child<QWidget>(
         *preset_page, "lingtai_setup_preset_detail");
     auto *agent_heading = required_child<QLabel>(
@@ -4584,19 +4578,29 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
             && review_heading->text() == QStringLiteral("Review project"),
         "setup must expose the accepted Preset, Agents, and Review pages");
     require(catalog->isHidden()
-            && saved_presets->columnCount() == 3
-            && preset_templates->columnCount() == 3
-            && saved_presets->headerItem()->text(0) == QStringLiteral("Preset")
-            && saved_presets->headerItem()->text(1) == QStringLiteral("Provider / model")
-            && saved_presets->headerItem()->text(2) == QStringLiteral("Capabilities")
-            && preset_templates->headerItem()->text(0) == QStringLiteral("Preset")
-            && preset_templates->headerItem()->text(2) == QStringLiteral("Capabilities"),
-        "Preset page must expose matching three-column Saved presets and Preset templates tables; templates must not carry a Configure column");
-    require(saved_presets->minimumHeight() >= 150
-            && preset_templates->minimumHeight() >= 190
+            && preset_page->findChildren<QTreeWidget *>().size() == 1
+            && preset_catalog->columnCount() == 3
+            && preset_catalog->headerItem()->text(0) == QStringLiteral("Preset")
+            && preset_catalog->headerItem()->text(1) == QStringLiteral("Provider / model")
+            && preset_catalog->headerItem()->text(2) == QStringLiteral("Capabilities")
+            && preset_catalog->header() != nullptr
+            && !preset_catalog->header()->isHidden()
+            && preset_catalog->horizontalScrollBarPolicy() == Qt::ScrollBarAlwaysOff
+            && preset_catalog->verticalScrollBarPolicy() == Qt::ScrollBarAsNeeded,
+        "Preset page must expose one three-column catalog with a sticky header and a single vertical scrollbar");
+    require(preset_catalog->topLevelItemCount() >= 2
+            && preset_catalog->topLevelItem(0)->text(0)
+                == QStringLiteral("Saved presets")
+            && preset_catalog->topLevelItem(1)->text(0)
+                == QStringLiteral("Preset templates")
+            && !preset_catalog->topLevelItem(0)->flags().testFlag(
+                Qt::ItemIsSelectable)
+            && preset_catalog->topLevelItem(0)->isFirstColumnSpanned(),
+        "the catalog must introduce saved presets and templates with non-selectable section rows");
+    require(preset_catalog->minimumHeight() >= 340
             && preset_detail->minimumHeight() >= 88
             && preset_detail->layout() != nullptr,
-        "Preset page must preserve the reference's list density and a separate full-width selected-preset detail card before the footer");
+        "Preset page must preserve list density and a separate full-width selected-preset detail card before the footer");
     require(wizard->styleSheet().contains(QStringLiteral("color: #10221e"))
             && !wizard->styleSheet().contains(
                 QStringLiteral("item:selected { background: #e7f7f3; color: palette(text); }")),
@@ -4605,9 +4609,8 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
             && review_button->text() == QStringLiteral("Continue")
             && create_button->text() == QStringLiteral("Create project"),
         "the three pages must use the accepted Continue / Create project semantics");
-    require(saved_presets->sizePolicy().verticalPolicy() == QSizePolicy::Expanding
-            && preset_templates->sizePolicy().verticalPolicy() == QSizePolicy::Expanding,
-        "preset lists must stretch with the wizard; file33 is the reference size, not a fixed cap");
+    require(preset_catalog->sizePolicy().verticalPolicy() == QSizePolicy::Expanding,
+        "the preset catalog must stretch with the wizard; file33 is the reference size, not a fixed cap");
     wizard->setAttribute(Qt::WA_DontShowOnScreen, true);
     wizard->show();
     wizard->resize(920, 840);
@@ -4616,21 +4619,18 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
         return upper->mapTo(root, QPoint(0, upper->height())).y()
             <= lower->mapTo(root, QPoint(0, 0)).y();
     };
-    require(below(saved_presets, templates_label, wizard)
-            && below(preset_templates, preset_detail, wizard)
+    require(below(preset_catalog, preset_detail, wizard)
             && below(preset_detail, continue_button, wizard),
-        "preset lists, detail card, and footer must stack without overlapping");
-    require(preset_lists->height() > saved_presets->minimumHeight()
-                + preset_templates->minimumHeight(),
-        "the two preset lists share leftover wizard height inside one split owner");
-    const auto compact_templates = preset_templates->height();
+        "preset catalog, detail card, and footer must stack without overlapping");
+    require(preset_catalog->height() > preset_catalog->minimumHeight(),
+        "the catalog must take leftover wizard height inside one scroll owner");
+    const auto compact_catalog = preset_catalog->height();
     wizard->resize(1100, 1040);
     QCoreApplication::processEvents();
-    require(preset_templates->height() > compact_templates
-            && below(saved_presets, templates_label, wizard)
-            && below(preset_templates, preset_detail, wizard)
+    require(preset_catalog->height() > compact_catalog
+            && below(preset_catalog, preset_detail, wizard)
             && below(preset_detail, continue_button, wizard),
-        "extra wizard height must go into the preset lists without introducing overlap");
+        "extra wizard height must go into the preset catalog without introducing overlap");
     wizard->hide();
     for (auto *label : wizard->findChildren<QLabel *>()) {
         const auto text = label->text();
