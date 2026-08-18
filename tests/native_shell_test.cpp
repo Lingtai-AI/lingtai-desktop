@@ -4542,6 +4542,54 @@ void verify_two_surface_hierarchy(
     require(!cleanup_error, "two-surface fixtures must be removed");
 }
 
+void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) {
+    auto &window = shell.window();
+    auto *wizard = required_child<QDialog>(window, "lingtai_project_setup_wizard");
+    auto *preset_page = required_child<QWidget>(
+        *wizard, "lingtai_setup_preset_page");
+    auto *agents_page = required_child<QWidget>(
+        *wizard, "lingtai_setup_agents_page");
+    auto *review_page = required_child<QWidget>(
+        *wizard, "lingtai_setup_review_page");
+    auto *preset_heading = required_child<QLabel>(
+        *preset_page, "lingtai_setup_preset_heading");
+    auto *catalog = required_child<QComboBox>(
+        *preset_page, "lingtai_bootstrap_preset_chooser");
+    auto *vision = required_child<QLabel>(
+        *preset_page, "lingtai_setup_vision_badge");
+    auto *agent_heading = required_child<QLabel>(
+        *agents_page, "lingtai_setup_agents_heading");
+    auto *review_heading = required_child<QLabel>(
+        *review_page, "lingtai_setup_review_heading");
+    auto *continue_button = required_child<QPushButton>(
+        *wizard, "lingtai_setup_preset_continue");
+    auto *review_button = required_child<QPushButton>(
+        *wizard, "lingtai_setup_agents_continue");
+    auto *create_button = required_child<QPushButton>(
+        *wizard, "lingtai_bootstrap_create_start");
+
+    require(wizard->minimumWidth() >= 840 && wizard->minimumHeight() >= 600,
+        "new-folder setup must be a full workspace-sized route, not the old small form");
+    require(preset_heading->text() == QStringLiteral("Choose a preset")
+            && agent_heading->text() == QStringLiteral("Configure Agents")
+            && review_heading->text() == QStringLiteral("Review project"),
+        "setup must expose the accepted Preset, Agents, and Review pages");
+    require(catalog->accessibleName() == QStringLiteral("Preset templates")
+            && vision->text() == QStringLiteral("Vision"),
+        "Preset must stay catalog-driven and V1 may expose only the real Vision badge");
+    require(continue_button->text() == QStringLiteral("Continue")
+            && review_button->text() == QStringLiteral("Continue")
+            && create_button->text() == QStringLiteral("Create project"),
+        "the three pages must use the accepted Continue / Create project semantics");
+    for (auto *label : wizard->findChildren<QLabel *>()) {
+        const auto text = label->text();
+        require(!text.contains(QStringLiteral("Tools"))
+                && !text.contains(QStringLiteral("Tier"))
+                && !text.contains(QStringLiteral("Context")),
+            "V1 must not claim Tools, Tier, or Context capabilities");
+    }
+}
+
 int main(int argc, char **argv) {
     // Test-local execution modes: the exact binary with a fresh fixture root
     // and one literal flag runs only the R1 resizable-sidebar, R4
@@ -4563,15 +4611,19 @@ int main(int argc, char **argv) {
         && std::string_view(argv[2]) == "--plain-underline-only";
     const auto floating_composer_only = argc == 3
         && std::string_view(argv[2]) == "--floating-composer-only";
+    const auto project_setup_only = argc == 3
+        && std::string_view(argv[2]) == "--project-setup-only";
     if (argc != 2 && !responsive_sidebar_only && !responsive_header_only
             && !modern_composer_only && !slash_interception_only
             && !compact_header_only && !two_surface_only
-            && !plain_underline_only && !floating_composer_only) {
+            && !plain_underline_only && !floating_composer_only
+            && !project_setup_only) {
         std::cerr << "usage: native_shell_test PROJECT_ROOT "
                      "[--responsive-sidebar-only|--responsive-header-only|"
                      "--modern-composer-only|--slash-interception-only|"
                      "--compact-header-only|--two-surface-only|"
-                     "--plain-underline-only|--floating-composer-only]\n";
+                     "--plain-underline-only|--floating-composer-only|"
+                     "--project-setup-only]\n";
         return 2;
     }
     try {
@@ -4645,6 +4697,14 @@ int main(int argc, char **argv) {
             QCoreApplication::processEvents();
             verify_floating_composer_surface(
                 shell, project_root / "commit-fc-floating-composer-fixture");
+            std::cout << "native shell behavior: OK\n";
+            return 0;
+        }
+        if (project_setup_only) {
+            lingtai::desktop::NativeShell shell;
+            shell.show_offscreen();
+            QCoreApplication::processEvents();
+            verify_project_setup_wizard_contract(shell);
             std::cout << "native shell behavior: OK\n";
             return 0;
         }
