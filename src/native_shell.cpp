@@ -2141,9 +2141,8 @@ NativeShell::NativeShell()
                 provider_model.isEmpty() ? QStringLiteral("Not chosen") : provider_model,
                 capability));
     };
-    const auto refresh_preset_selection = [update_review, sync_table_selection,
-            saved_presets, preset_templates](QTreeWidget *selected,
-            QTreeWidget *other) {
+    const auto refresh_preset_selection = [update_review, sync_table_selection](
+            QTreeWidget *selected, QTreeWidget *other) {
         sync_table_selection(selected, other);
         update_review();
     };
