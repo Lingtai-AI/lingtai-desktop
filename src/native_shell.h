@@ -78,6 +78,7 @@ public:
     void show();
     void show_offscreen();
     void set_open_project_request_handler(OpenProjectRequestHandler handler);
+    void request_new_project_at(const std::filesystem::path &destination);
     // The one Desktop-configured TUI executable for explicit first-project
     // bootstrap: the shipped `lingtai-tui` or a focused test fixture. It is
     // never interpreted as a shell command string; only exact separate argv

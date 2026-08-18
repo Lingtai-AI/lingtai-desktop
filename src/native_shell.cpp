@@ -53,6 +53,7 @@
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QScrollBar>
 #include <QtWidgets/QSizePolicy>
+#include <QtWidgets/QStackedWidget>
 #include <QtWidgets/QTextEdit>
 #include <QtWidgets/QWidget>
 
@@ -1522,122 +1523,221 @@ NativeShell::NativeShell()
 
     bootstrap_runner_ = std::make_unique<ProjectBootstrapRunner>();
 
-    // The one small Desktop-owned New Project dialog: a destination field
-    // with Browse, a preset chooser populated from discovery, the explicit
-    // Create & Start and Cancel actions, and a truthful note. Built once and
-    // hidden until a successful nonempty preset discovery.
+    // New-folder setup is one workspace-sized, three-page route. It reuses the
+    // canonical headless preset discovery and spawn owner below; the pages own
+    // only the human decisions that must be reviewed before that side effect.
     bootstrap_dialog_ = new QDialog(window_.get());
-    bootstrap_dialog_->setObjectName("lingtai_new_project_dialog");
-    bootstrap_dialog_->setWindowTitle(QStringLiteral("New LingTai Project"));
-    bootstrap_dialog_->setAccessibleName(QStringLiteral("New LingTai Project"));
-    auto *dialog_layout = new QVBoxLayout(bootstrap_dialog_);
-    dialog_layout->setContentsMargins(24, 24, 24, 24);
-    dialog_layout->setSpacing(12);
-    auto *dialog_note = make_flat_label(
-        bootstrap_dialog_,
-        QStringLiteral(
-            "Creates a new LingTai project, names its first Agent from the "
-            "destination folder by default, and starts it."),
-        "lingtai_bootstrap_dialog_note");
-    dialog_note->setAccessibleName(QStringLiteral(
-        "New project note"));
-    dialog_layout->addWidget(dialog_note);
+    bootstrap_dialog_->setObjectName("lingtai_project_setup_wizard");
+    bootstrap_dialog_->setWindowTitle(QStringLiteral("Set up LingTai project"));
+    bootstrap_dialog_->setAccessibleName(QStringLiteral("Set up LingTai project"));
+    bootstrap_dialog_->setMinimumSize(840, 600);
+    bootstrap_dialog_->resize(920, 640);
+    bootstrap_dialog_->setStyleSheet(QStringLiteral(
+        "QDialog { background: #ffffff; } "
+        "QLabel#lingtai_setup_step_title { color: #8a8f98; font-size: 13px; } "
+        "QLabel#lingtai_setup_step_active { color: #1769e0; font-size: 13px; font-weight: 600; } "
+        "QPushButton { min-height: 38px; padding: 0 18px; border-radius: 7px; } "
+        "QPushButton#lingtai_setup_primary { background: #1769e0; color: white; border: none; font-weight: 600; } "
+        "QPushButton#lingtai_setup_secondary { background: transparent; color: #3b3f45; border: 1px solid #d9dde3; } "
+        "QComboBox { min-height: 42px; padding: 0 12px; border: 1px solid #d9dde3; border-radius: 7px; background: white; }"));
+    auto *wizard_layout = new QHBoxLayout(bootstrap_dialog_);
+    wizard_layout->setContentsMargins(0, 0, 0, 0);
+    wizard_layout->setSpacing(0);
 
-    auto *destination_row = new QHBoxLayout;
-    destination_row->setSpacing(8);
-    auto *destination_input = new Ui::InputField(
-        bootstrap_dialog_,
-        st::defaultInputField,
-        Ui::InputField::Mode::SingleLine,
-        rpl::single(QStringLiteral("Destination folder")));
-    destination_input->setObjectName("lingtai_bootstrap_destination_input");
-    destination_input->setAccessibleName(QStringLiteral("Destination folder"));
-    destination_row->addWidget(destination_input, 1);
-    auto *browse_button = new Ui::RoundButton(
-        bootstrap_dialog_,
-        rpl::single(QStringLiteral("Browse…")),
-        st::defaultLightButton);
-    browse_button->setObjectName("lingtai_bootstrap_destination_browse");
-    browse_button->setAccessibleName(
-        QStringLiteral("Browse destination folder"));
-    browse_button->addClickHandler([this] {
-        handle_browse_destination();
-    });
-    destination_row->addWidget(browse_button);
-    dialog_layout->addLayout(destination_row);
+    auto *steps = new QWidget(bootstrap_dialog_);
+    steps->setObjectName("lingtai_setup_steps");
+    steps->setFixedWidth(210);
+    steps->setStyleSheet(QStringLiteral("background: #f6f8fa;"));
+    auto *steps_layout = new QVBoxLayout(steps);
+    steps_layout->setContentsMargins(28, 36, 24, 28);
+    steps_layout->setSpacing(18);
+    auto *setup_brand = make_label(steps, QStringLiteral("LingTai"),
+        "lingtai_setup_brand", 18, QFont::DemiBold);
+    steps_layout->addWidget(setup_brand);
+    steps_layout->addSpacing(26);
+    const auto make_step = [&](const QString &text, const char *name, bool active) {
+        auto *label = make_label(steps, text, name, 13,
+            active ? QFont::DemiBold : QFont::Normal);
+        label->setObjectName(active ? "lingtai_setup_step_active" : "lingtai_setup_step_title");
+        steps_layout->addWidget(label);
+    };
+    make_step(QStringLiteral("1   Preset"), "setup_step_preset", true);
+    make_step(QStringLiteral("2   Agents"), "setup_step_agents", false);
+    make_step(QStringLiteral("3   Review"), "setup_step_review", false);
+    steps_layout->addStretch();
+    auto *cancel_hint = make_label(steps, QStringLiteral("Nothing is written until Review."),
+        "lingtai_setup_write_boundary", 11);
+    cancel_hint->setWordWrap(true);
+    steps_layout->addWidget(cancel_hint);
+    wizard_layout->addWidget(steps);
 
-    auto *preset_label = make_flat_label(
-        bootstrap_dialog_,
-        QStringLiteral("Preset"),
-        "lingtai_bootstrap_preset_label");
-    dialog_layout->addWidget(preset_label);
-    auto *preset_chooser = new QComboBox(bootstrap_dialog_);
+    auto *right = new QWidget(bootstrap_dialog_);
+    auto *right_layout = new QVBoxLayout(right);
+    right_layout->setContentsMargins(54, 42, 54, 34);
+    right_layout->setSpacing(0);
+    auto *pages = new QStackedWidget(right);
+    pages->setObjectName("lingtai_setup_pages");
+
+    const auto make_heading = [](QWidget *page, QVBoxLayout *layout,
+            const QString &title, const QString &subtitle, const char *name) {
+        auto *heading = make_label(page, title, name, 24, QFont::DemiBold);
+        layout->addWidget(heading);
+        layout->addSpacing(8);
+        auto *note = make_label(page, subtitle, "lingtai_setup_page_note", 13);
+        note->setWordWrap(true);
+        layout->addWidget(note);
+        layout->addSpacing(30);
+    };
+
+    auto *preset_page = new QWidget(pages);
+    preset_page->setObjectName("lingtai_setup_preset_page");
+    auto *preset_layout = new QVBoxLayout(preset_page);
+    preset_layout->setContentsMargins(0, 0, 0, 0);
+    make_heading(preset_page, preset_layout, QStringLiteral("Choose a preset"),
+        QStringLiteral("Preset templates define the first Agent's model and authorized capabilities."),
+        "lingtai_setup_preset_heading");
+    auto *templates_label = make_label(preset_page, QStringLiteral("Preset templates"),
+        "lingtai_setup_templates_label", 13, QFont::DemiBold);
+    preset_layout->addWidget(templates_label);
+    preset_layout->addSpacing(8);
+    auto *preset_chooser = new QComboBox(preset_page);
     preset_chooser->setObjectName("lingtai_bootstrap_preset_chooser");
-    preset_chooser->setAccessibleName(QStringLiteral("Preset"));
-    preset_chooser->setAccessibleDescription(QStringLiteral(
-        "Choose the preset the new project's first Agent is created from."));
-    dialog_layout->addWidget(preset_chooser);
+    preset_chooser->setAccessibleName(QStringLiteral("Preset templates"));
+    preset_layout->addWidget(preset_chooser);
+    preset_layout->addSpacing(14);
+    auto *preset_description = make_label(preset_page, QString(),
+        "lingtai_setup_preset_description", 13);
+    preset_description->setWordWrap(true);
+    preset_layout->addWidget(preset_description);
+    preset_layout->addSpacing(18);
+    auto *vision_badge = make_label(preset_page, QStringLiteral("Vision"),
+        "lingtai_setup_vision_badge", 11, QFont::DemiBold);
+    vision_badge->setFixedWidth(64);
+    vision_badge->setAlignment(Qt::AlignCenter);
+    vision_badge->setStyleSheet(QStringLiteral(
+        "background: #e8f4ff; color: #1769e0; border-radius: 11px; padding: 4px 8px;"));
+    preset_layout->addWidget(vision_badge, 0, Qt::AlignLeft);
+    preset_layout->addStretch();
+    auto *preset_continue = new QPushButton(QStringLiteral("Continue"), preset_page);
+    preset_continue->setObjectName("lingtai_setup_preset_continue");
+    preset_continue->setStyleSheet(QStringLiteral(
+        "background: #1769e0; color: white; border: none; font-weight: 600;"));
+    preset_layout->addWidget(preset_continue, 0, Qt::AlignRight);
+    pages->addWidget(preset_page);
 
-    auto *dialog_status = make_flat_label(
-        bootstrap_dialog_,
-        QString(),
+    auto *agents_page = new QWidget(pages);
+    agents_page->setObjectName("lingtai_setup_agents_page");
+    auto *agents_layout = new QVBoxLayout(agents_page);
+    agents_layout->setContentsMargins(0, 0, 0, 0);
+    make_heading(agents_page, agents_layout, QStringLiteral("Configure Agents"),
+        QStringLiteral("Start with one orchestrator. You can add specialists after the project opens."),
+        "lingtai_setup_agents_heading");
+    auto *destination_input = new Ui::InputField(agents_page, st::defaultInputField,
+        Ui::InputField::Mode::SingleLine, rpl::single(QStringLiteral("Project folder")));
+    destination_input->setObjectName("lingtai_bootstrap_destination_input");
+    destination_input->setAccessibleName(QStringLiteral("Project folder"));
+    agents_layout->addWidget(destination_input);
+    agents_layout->addSpacing(18);
+    auto *agent_card = make_label(agents_page,
+        QStringLiteral("Orchestrator Agent\nName: project folder\nDefault + allowed preset: selected template\nRecipe: Default"),
+        "lingtai_setup_agent_card", 13);
+    agent_card->setWordWrap(true);
+    agent_card->setStyleSheet(QStringLiteral(
+        "background: #f6f8fa; border: 1px solid #e1e5ea; border-radius: 9px; padding: 18px;"));
+    agents_layout->addWidget(agent_card);
+    agents_layout->addStretch();
+    auto *agents_actions = new QHBoxLayout;
+    auto *agents_back = new QPushButton(QStringLiteral("Back"), agents_page);
+    agents_back->setObjectName("lingtai_setup_agents_back");
+    auto *agents_continue = new QPushButton(QStringLiteral("Continue"), agents_page);
+    agents_continue->setObjectName("lingtai_setup_agents_continue");
+    agents_continue->setStyleSheet(QStringLiteral(
+        "background: #1769e0; color: white; border: none; font-weight: 600;"));
+    agents_actions->addWidget(agents_back);
+    agents_actions->addStretch();
+    agents_actions->addWidget(agents_continue);
+    agents_layout->addLayout(agents_actions);
+    pages->addWidget(agents_page);
+
+    auto *review_page = new QWidget(pages);
+    review_page->setObjectName("lingtai_setup_review_page");
+    auto *review_layout = new QVBoxLayout(review_page);
+    review_layout->setContentsMargins(0, 0, 0, 0);
+    make_heading(review_page, review_layout, QStringLiteral("Review project"),
+        QStringLiteral("Confirm the destination and authorization before LingTai writes anything."),
+        "lingtai_setup_review_heading");
+    auto *review_summary = make_label(review_page, QString(),
+        "lingtai_setup_review_summary", 13);
+    review_summary->setWordWrap(true);
+    review_summary->setStyleSheet(QStringLiteral(
+        "background: #f6f8fa; border: 1px solid #e1e5ea; border-radius: 9px; padding: 20px;"));
+    review_layout->addWidget(review_summary);
+    auto *dialog_status = make_flat_label(review_page, QString(),
         "lingtai_bootstrap_dialog_status");
-    dialog_status->setAccessibleName(QStringLiteral("New project dialog status"));
-    dialog_layout->addWidget(dialog_status);
-
-    // One thin plain-shadow divider gives the form/actions one visible stable
-    // separation, the same structural cue the dashboard sections use.
-    auto *dialog_divider = new Ui::PlainShadow(bootstrap_dialog_);
-    dialog_divider->setObjectName("lingtai_bootstrap_dialog_divider");
-    dialog_divider->setAccessibleName(QStringLiteral("New project form divider"));
-    dialog_divider->setFixedHeight(st::lineWidth);
-    dialog_layout->addWidget(dialog_divider);
-
-    auto *dialog_actions = new QHBoxLayout;
-    dialog_actions->setSpacing(8);
-    auto *cancel_button = new Ui::RoundButton(
-        bootstrap_dialog_,
-        rpl::single(QStringLiteral("Cancel")),
-        st::defaultLightButton);
+    dialog_status->setAccessibleName(QStringLiteral("Project setup status"));
+    review_layout->addSpacing(12);
+    review_layout->addWidget(dialog_status);
+    review_layout->addStretch();
+    auto *review_actions = new QHBoxLayout;
+    auto *review_back = new QPushButton(QStringLiteral("Back"), review_page);
+    review_back->setObjectName("lingtai_setup_review_back");
+    auto *cancel_button = new QPushButton(QStringLiteral("Cancel"), review_page);
     cancel_button->setObjectName("lingtai_bootstrap_cancel");
-    cancel_button->setAccessibleName(QStringLiteral("Cancel"));
-    cancel_button->addClickHandler([this] {
+    auto *create_button = new QPushButton(QStringLiteral("Create project"), review_page);
+    create_button->setObjectName("lingtai_bootstrap_create_start");
+    create_button->setStyleSheet(QStringLiteral(
+        "background: #1769e0; color: white; border: none; font-weight: 600;"));
+    review_actions->addWidget(review_back);
+    review_actions->addStretch();
+    review_actions->addWidget(cancel_button);
+    review_actions->addWidget(create_button);
+    review_layout->addLayout(review_actions);
+    pages->addWidget(review_page);
+    right_layout->addWidget(pages, 1);
+    wizard_layout->addWidget(right, 1);
+
+    const auto update_review = [preset_chooser, destination_input, preset_description,
+            review_summary, agent_card] {
+        const auto preset = preset_chooser->currentText().trimmed();
+        preset_description->setText(
+            preset_chooser->currentData(Qt::UserRole).toString());
+        const auto destination = destination_input->getLastText().trimmed();
+        const auto folder = QFileInfo(destination).fileName();
+        agent_card->setText(QStringLiteral(
+            "Orchestrator Agent\nName: %1\nDefault preset: %2\nAllowed presets: %2\nCapabilities: Vision\nRecipe: Default")
+            .arg(folder.isEmpty() ? QStringLiteral("project folder") : folder,
+                preset.isEmpty() ? QStringLiteral("Choose on Preset") : preset));
+        review_summary->setText(QStringLiteral(
+            "Destination\n%1\n\nOrchestrator\n%2\n\nDefault + allowed preset\n%3\n\nCapabilities\nVision\n\nRecipe\nDefault")
+            .arg(destination.isEmpty() ? QStringLiteral("Not chosen") : destination,
+                folder.isEmpty() ? QStringLiteral("project folder") : folder,
+                preset.isEmpty() ? QStringLiteral("Not chosen") : preset));
+    };
+    QObject::connect(preset_chooser, &QComboBox::currentTextChanged,
+        [update_review](const QString &) { update_review(); });
+    QObject::connect(preset_continue, &QPushButton::clicked,
+        [pages, update_review] { update_review(); pages->setCurrentIndex(1); });
+    QObject::connect(agents_back, &QPushButton::clicked,
+        [pages] { pages->setCurrentIndex(0); });
+    QObject::connect(agents_continue, &QPushButton::clicked,
+        [pages, update_review] { update_review(); pages->setCurrentIndex(2); });
+    QObject::connect(review_back, &QPushButton::clicked,
+        [pages] { pages->setCurrentIndex(1); });
+    QObject::connect(cancel_button, &QPushButton::clicked, [this] {
         handle_cancel_bootstrap();
     });
-    // The standard QDialog dismissal paths (window close control, Escape) call
-    // `reject()`, which hides the dialog and emits `rejected` -- it never
-    // reaches the explicit Cancel button. Route the real rejected path through
-    // the same no-spawn cancellation. Programmatic hides at spawn or finish
-    // use `hide()`, which does not emit `rejected`, so they cannot misfire
-    // here; `handle_cancel_bootstrap` additionally guards on no pending
-    // subprocess.
+    QObject::connect(create_button, &QPushButton::clicked, [this] {
+        handle_create_and_start();
+    });
     QObject::connect(bootstrap_dialog_, &QDialog::rejected, [this] {
         handle_cancel_bootstrap();
     });
-    auto *create_button = new Ui::RoundButton(
-        bootstrap_dialog_,
-        rpl::single(QStringLiteral("Create & Start")),
-        st::defaultActiveButton);
-    create_button->setObjectName("lingtai_bootstrap_create_start");
-    create_button->setAccessibleName(QStringLiteral("Create and Start"));
-    create_button->setAccessibleDescription(QStringLiteral(
-        "Creates the new project, names its first Agent from the destination "
-        "folder, and starts that Agent."));
-    create_button->addClickHandler([this] {
-        handle_create_and_start();
-    });
-    dialog_actions->addStretch();
-    dialog_actions->addWidget(cancel_button);
-    dialog_actions->addWidget(create_button);
-    dialog_layout->addLayout(dialog_actions);
-    // The QPushButton default-enter path does not survive the switch to
-    // RoundButton, so the destination field's own Return submission keeps the
-    // current useful default activation wired to the same Create & Start
-    // handler. Wider keyboard navigation stays Commit30's work.
     destination_input->submits()
-        | rpl::on_next([this] {
-            handle_create_and_start();
+        | rpl::on_next([pages, update_review] {
+            update_review();
+            pages->setCurrentIndex(2);
         }, submits_lifetime_);
+    pages->setCurrentIndex(0);
     bootstrap_dialog_->hide();
 
     // The one Telegram-derived mode recompute: Telegram's
@@ -1738,6 +1838,14 @@ void NativeShell::set_open_project_request_handler(
     open_project_request_handler_ = std::move(handler);
 }
 
+void NativeShell::request_new_project_at(const fs::path &destination) {
+    if (auto *input = find_ui_child<Ui::InputField>(
+            *window_, "lingtai_bootstrap_destination_input")) {
+        input->setText(QString::fromStdString(destination.string()));
+    }
+    request_new_project();
+}
+
 void NativeShell::set_agent_start_fallback_python(
         fs::path fallback_python) {
     agent_start_fallback_python_ = std::move(fallback_python);
@@ -1832,16 +1940,18 @@ void NativeShell::show_bootstrap_dialog(
                 QString::fromStdString(preset.source));
         }
         chooser->addItem(QString::fromStdString(preset.name));
-        if (!help.isEmpty()) {
-            chooser->setItemData(chooser->count() - 1,
-                help.join(QStringLiteral(" · ")), Qt::ToolTipRole);
-        }
+        const auto detail = help.join(QStringLiteral(" · "));
+        chooser->setItemData(chooser->count() - 1, detail, Qt::ToolTipRole);
+        chooser->setItemData(chooser->count() - 1, detail, Qt::UserRole);
     }
     if (auto *status = find_ui_child<Ui::FlatLabel>(
             *window_, "lingtai_bootstrap_dialog_status")) {
         status->setText(QString());
     }
     set_bootstrap_status(QString());
+    if (auto *pages = window_->findChild<QStackedWidget *>("lingtai_setup_pages")) {
+        pages->setCurrentIndex(0);
+    }
     bootstrap_dialog_->show();
     bootstrap_dialog_->raise();
 }

@@ -34,8 +34,14 @@ int main(int argc, char **argv) {
         if (selected.isEmpty()) {
             return;
         }
-        static_cast<void>(shell.open_project(
-            std::filesystem::path(selected.toStdU16String())));
+        const auto directory = std::filesystem::path(selected.toStdU16String());
+        std::error_code metadata_error;
+        const auto metadata = directory / ".lingtai";
+        if (std::filesystem::is_directory(metadata, metadata_error)) {
+            static_cast<void>(shell.open_project(directory));
+        } else {
+            shell.request_new_project_at(directory);
+        }
     });
     // The shipped default configured TUI executable for the explicit New
     // Project flow: the `lingtai-tui` found on PATH, resolved once at
