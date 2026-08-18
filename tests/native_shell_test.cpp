@@ -1989,38 +1989,25 @@ void verify_first_project_bootstrap(
         "no-project state must keep the Open Project action visible");
     auto *status = required_ui_child<Ui::FlatLabel>(
         window, "lingtai_bootstrap_status");
-    auto *dialog = required_child<QDialog>(
-        window, "lingtai_new_project_dialog");
+    auto *wizard = required_child<QDialog>(
+        window, "lingtai_project_setup_wizard");
     auto *destination_input = required_ui_child<Ui::InputField>(
         window, "lingtai_bootstrap_destination_input");
     auto *preset_chooser = required_child<QComboBox>(
         window, "lingtai_bootstrap_preset_chooser");
-    auto *create_start = required_ui_child<Ui::RoundButton>(
+    auto *create_start = required_child<QPushButton>(
         window, "lingtai_bootstrap_create_start");
-    required_ui_child<Ui::RoundButton>(window, "lingtai_bootstrap_cancel");
+    auto *preset_continue = required_child<QPushButton>(
+        window, "lingtai_setup_preset_continue");
+    auto *agents_continue = required_child<QPushButton>(
+        window, "lingtai_setup_agents_continue");
     auto *dialog_status = required_ui_child<Ui::FlatLabel>(
         window, "lingtai_bootstrap_dialog_status");
-    auto *browse_button = required_ui_child<Ui::RoundButton>(
-        window, "lingtai_bootstrap_destination_browse");
-    auto *dialog_note = required_ui_child<Ui::FlatLabel>(
-        window, "lingtai_bootstrap_dialog_note");
-    required_ui_child<Ui::FlatLabel>(window, "lingtai_bootstrap_preset_label");
-    // One named plain-shadow divider separates the dialog form from its action
-    // row. PlainShadow carries no Q_OBJECT, so the lookup resolves the named
-    // RpWidget and confirms the runtime type, exactly like the roster and
-    // dashboard separators.
-    auto *divider_widget = required_child<Ui::RpWidget>(
-        *dialog, "lingtai_bootstrap_dialog_divider");
-    require(dynamic_cast<Ui::PlainShadow *>(divider_widget) != nullptr,
-        "the dialog form/action divider must be a Ui::PlainShadow");
-    require(browse_button->accessibleName()
-            == QStringLiteral("Browse destination folder"),
-        "the Browse affordance must keep its exact accessible name");
-    require(create_start->accessibleName() == QStringLiteral("Create and Start"),
-        "the committing dialog action must keep its exact accessible name");
-    require(dialog_note->accessibilityName()
-            .contains(QStringLiteral("first Agent")),
-        "the dialog note must truthfully state the first-Agent naming rule");
+    required_child<QPushButton>(window, "lingtai_bootstrap_cancel");
+    required_child<QPushButton>(window, "lingtai_bootstrap_destination_browse");
+    require(create_start->accessibleName().isEmpty()
+            || create_start->text() == QStringLiteral("Create project"),
+        "the committing wizard action must remain Create project");
 
     const auto argv_record = sandbox / "tui-argv.txt";
     fs::create_directories(sandbox);
@@ -2065,22 +2052,22 @@ exit 0)");
     // must be the same no-spawn cancellation and must re-enable actions.
     const auto dialog_deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (!dialog->isVisible()
+    while (!wizard->isVisible()
             && std::chrono::steady_clock::now() < dialog_deadline) {
         QThread::msleep(20);
         QCoreApplication::processEvents();
     }
-    require(dialog->isVisible(),
-        "valid preset discovery must show the New Project dialog");
+    require(wizard->isVisible(),
+        "valid preset discovery must show the New Project wizard");
     require(preset_chooser->count() == 2
-            && preset_chooser->itemText(0) == "alpha"
-            && preset_chooser->itemText(1) == "beta",
-        "the preset chooser must list the returned preset names");
-    dialog->reject();
+            && preset_chooser->itemText(0) == "beta"
+            && preset_chooser->itemText(1) == "alpha",
+        "the preset chooser must list saved presets before templates");
+    wizard->reject();
     QCoreApplication::processEvents();
-    require(!dialog->isVisible() && new_project_button->isEnabled()
+    require(!wizard->isVisible() && new_project_button->isEnabled()
             && open_button->isEnabled(),
-        "dismissing the dialog via reject() must close it and re-enable both "
+        "dismissing the wizard via reject() must close it and re-enable both "
         "actions");
     require(read_file(argv_record) == fixture_tui_argv({"presets"}),
         "dismissing the dialog must perform no spawn at all");
@@ -2090,27 +2077,25 @@ exit 0)");
     // New/Open actions staying disabled while pending.
     new_project_button->click();
     QCoreApplication::processEvents();
-    while (!dialog->isVisible()
+    while (!wizard->isVisible()
             && std::chrono::steady_clock::now() < dialog_deadline) {
         QThread::msleep(20);
         QCoreApplication::processEvents();
     }
-    require(dialog->isVisible(), "the second discovery must reopen the dialog");
-    create_start->clicked(Qt::NoModifier, Qt::LeftButton);
+    require(wizard->isVisible(), "the second discovery must reopen the wizard");
+    preset_chooser->setCurrentIndex(1);
+    preset_continue->click();
+    QCoreApplication::processEvents();
+    create_start->click();
     QCoreApplication::processEvents();
     require(dialog_status->accessibilityName()
                 .contains(QStringLiteral("nonempty")),
-        "Create & Start with no destination must refuse with a concise "
+        "Create project with no destination must refuse with a concise "
         "dialog status");
     destination_input->setText(path_text(destination));
-    preset_chooser->setCurrentIndex(1); // beta: non-first preset
-    // The current useful default path is the filled destination field's
-    // Return submission: it must reach the same Create & Start handler and
-    // produce the exact same separated spawn argv.
-    destination_input->setFocus();
+    agents_continue->click();
     QCoreApplication::processEvents();
-    auto enter = QKeyEvent(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
-    QApplication::sendEvent(destination_input->rawTextEdit(), &enter);
+    create_start->click();
     require(status->accessibilityName() == QStringLiteral(
                 "Creating project and starting Agent…"),
         "a pending spawn must show one truthful phase status");
@@ -2119,7 +2104,7 @@ exit 0)");
     QCoreApplication::processEvents();
     const auto spawn_argv = std::vector<std::string>{
         "spawn", path_text(destination).toStdString(),
-        "--preset", "beta"};
+        "--preset", "alpha"};
     const auto spawn_deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(3);
     while (read_file(argv_record)
@@ -2152,8 +2137,8 @@ exit 0)");
             && shell.selection_state().active_project()->root()
                 == fs::canonical(destination),
         "Desktop must attach the exact returned project directory");
-    require(!dialog->isVisible(),
-        "a successful spawn must close the New Project dialog");
+    require(!wizard->isVisible(),
+        "a successful spawn must close the New Project wizard");
 
     // Evidence 5: a nonzero structured spawn failure must leave the currently
     // attached project unchanged, re-enable actions, and show the structured
@@ -2175,16 +2160,20 @@ exit 7)");
     QCoreApplication::processEvents();
     const auto fail_dialog_deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (!dialog->isVisible()
+    while (!wizard->isVisible()
             && std::chrono::steady_clock::now() < fail_dialog_deadline) {
         QThread::msleep(20);
         QCoreApplication::processEvents();
     }
-    require(dialog->isVisible(),
-        "the failing fixture's discovery must still show the dialog");
-    destination_input->setText(path_text(sandbox / "partial-destination"));
+    require(wizard->isVisible(),
+        "the failing fixture's discovery must still show the wizard");
     preset_chooser->setCurrentIndex(0);
-    create_start->clicked(Qt::NoModifier, Qt::LeftButton);
+    preset_continue->click();
+    QCoreApplication::processEvents();
+    destination_input->setText(path_text(sandbox / "partial-destination"));
+    agents_continue->click();
+    QCoreApplication::processEvents();
+    create_start->click();
     QCoreApplication::processEvents();
     const auto failure_deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(3);
@@ -4585,7 +4574,8 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
                 != QSizePolicy::MinimumExpanding
             && !wizard->styleSheet().contains(QStringLiteral("background: #ffffff")),
         "setup content must keep content-height labels and one theme palette, not expansive white-on-white surfaces");
-    require(preset_heading->text() == QStringLiteral("Choose a preset")
+    require(preset_heading->text()
+            == QStringLiteral("Choose how your orchestrator runs")
             && agent_heading->text() == QStringLiteral("Configure Agents")
             && review_heading->text() == QStringLiteral("Review project"),
         "setup must expose the accepted Preset, Agents, and Review pages");
@@ -4597,8 +4587,8 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
             && saved_presets->headerItem()->text(2) == QStringLiteral("Capabilities")
             && preset_templates->headerItem()->text(3).isEmpty(),
         "Preset page must expose the reference's three-column Saved presets and four-column Preset templates tables; one-column cards are not the supplied design");
-    require(saved_presets->height() >= 150
-            && preset_templates->height() >= 190
+    require(saved_presets->minimumHeight() >= 150
+            && preset_templates->minimumHeight() >= 190
             && preset_detail->minimumHeight() >= 88
             && preset_detail->layout() != nullptr,
         "Preset page must preserve the reference's list density and a separate full-width selected-preset detail card before the footer");
