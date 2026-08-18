@@ -4551,8 +4551,10 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
         *preset_page, "lingtai_bootstrap_preset_chooser");
     auto *preset_catalog = required_child<QTreeWidget>(
         *preset_page, "lingtai_setup_preset_catalog");
-    auto *preset_detail = required_child<QWidget>(
-        *preset_page, "lingtai_setup_preset_detail");
+    auto *preset_search = required_child<QLineEdit>(
+        *preset_page, "lingtai_setup_preset_search");
+    auto *preset_footer = required_child<QLabel>(
+        *preset_page, "lingtai_setup_preset_footer_summary");
     auto *agent_heading = required_child<QLabel>(
         *agents_page, "lingtai_setup_agents_heading");
     auto *review_heading = required_child<QLabel>(
@@ -4599,22 +4601,22 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
             && preset_catalog->topLevelItem(0)->isFirstColumnSpanned(),
         "the catalog must introduce saved presets and templates with non-selectable section rows");
     require(preset_catalog->minimumHeight() >= 340
-            && preset_detail->minimumHeight() >= 88
-            && preset_detail->layout() != nullptr,
-        "Preset page must preserve list density and a separate full-width selected-preset detail card before the footer");
+            && wizard->findChild<QWidget *>("lingtai_setup_preset_detail") == nullptr
+            && wizard->findChild<QLabel *>("lingtai_setup_step_progress") == nullptr,
+        "preset selection must keep one catalog and a compact footer, not a boxed inspector or 1 of 3 chrome");
     require(preset_catalog->palette().color(QPalette::Base)
                 == QColor(wizard->palette().color(QPalette::Window).lightness() < 128
                     ? QStringLiteral("#181B1A")
                     : QStringLiteral("#FFFFFF"))
-            && (preset_catalog->styleSheet().contains(QStringLiteral("#E1F3EC"))
+            && (preset_catalog->styleSheet().contains(QStringLiteral("#E7F4EF"))
                 || preset_catalog->styleSheet().contains(QStringLiteral("#213A31")))
-            && (preset_catalog->styleSheet().contains(QStringLiteral("#ECEFED"))
+            && (preset_catalog->styleSheet().contains(QStringLiteral("#F1F3F2"))
                 || preset_catalog->styleSheet().contains(QStringLiteral("#202422"))),
         "preset catalog chrome must use the supplied light/dark surface, header, and selection tokens");
-    require(continue_button->text() == QStringLiteral("Continue")
+    require(continue_button->text() == QStringLiteral("Use preset")
             && review_button->text() == QStringLiteral("Continue")
             && create_button->text() == QStringLiteral("Create project"),
-        "the three pages must use the accepted Continue / Create project semantics");
+        "the preset page uses one contextual Use/Configure action; later pages keep Continue / Create project");
     require(preset_catalog->sizePolicy().verticalPolicy() == QSizePolicy::Expanding,
         "the preset catalog must stretch with the wizard; file33 is the reference size, not a fixed cap");
     wizard->setAttribute(Qt::WA_DontShowOnScreen, true);
@@ -4625,9 +4627,12 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
         return upper->mapTo(root, QPoint(0, upper->height())).y()
             <= lower->mapTo(root, QPoint(0, 0)).y();
     };
-    require(below(preset_catalog, preset_detail, wizard)
-            && below(preset_detail, continue_button, wizard),
-        "preset catalog, detail card, and footer must stack without overlapping");
+    require(below(preset_catalog, preset_footer, wizard)
+            && below(preset_catalog, continue_button, wizard),
+        "preset catalog and compact footer must stack without overlapping");
+    require(preset_search->width() <= 520 && preset_search->width() >= 240
+            && preset_search->width() < wizard->width() / 2 + 80,
+        "search stays left-aligned at a preferred width instead of stretching across the window");
     require(preset_catalog->visualItemRect(preset_catalog->topLevelItem(0)).height()
                 <= 36,
         "section labels must be short tinted bands, not full-height data rows");
@@ -4637,16 +4642,15 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
     wizard->resize(1100, 1040);
     QCoreApplication::processEvents();
     require(preset_catalog->height() > compact_catalog
-            && below(preset_catalog, preset_detail, wizard)
-            && below(preset_detail, continue_button, wizard),
+            && below(preset_catalog, preset_footer, wizard)
+            && below(preset_catalog, continue_button, wizard),
         "extra wizard height must go into the preset catalog without introducing overlap");
     wizard->hide();
     for (auto *label : wizard->findChildren<QLabel *>()) {
         const auto text = label->text();
-        require(!text.contains(QStringLiteral("Tools"))
-                && !text.contains(QStringLiteral("Tier"))
+        require(!text.contains(QStringLiteral("Tier"))
                 && !text.contains(QStringLiteral("Context")),
-            "V1 must not claim Tools, Tier, or Context capabilities");
+            "V1 must not claim Tier or Context capabilities");
     }
 }
 

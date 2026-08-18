@@ -25,16 +25,20 @@ QString json_string(const QJsonObject &object, QLatin1StringView key) {
     return object.value(key).toString().trimmed();
 }
 
-bool manifest_has_vision(const QJsonObject &manifest) {
+bool manifest_has_capability(
+        const QJsonObject &manifest, QLatin1StringView name) {
     const auto capabilities = manifest.value(QLatin1StringView("capabilities"));
     if (!capabilities.isObject()) {
         return false;
     }
-    const auto vision = capabilities.toObject().value(QLatin1StringView("vision"));
-    if (vision.isNull() || vision.isUndefined()) {
+    const auto value = capabilities.toObject().value(name);
+    if (value.isNull() || value.isUndefined()) {
         return false;
     }
-    if (vision.isObject() && vision.toObject().isEmpty()) {
+    if (value.isBool()) {
+        return value.toBool();
+    }
+    if (value.isObject() && value.toObject().isEmpty()) {
         return false;
     }
     return true;
@@ -68,7 +72,8 @@ void apply_manifest_facts(PresetCatalogRow &row) {
     const auto llm = manifest.value(QLatin1StringView("llm")).toObject();
     row.provider = json_string(llm, QLatin1StringView("provider"));
     row.model = json_string(llm, QLatin1StringView("model"));
-    row.has_vision = manifest_has_vision(manifest);
+    row.has_vision = manifest_has_capability(manifest, QLatin1StringView("vision"));
+    row.has_tools = manifest_has_capability(manifest, QLatin1StringView("tools"));
 }
 
 QString format_provider_model(const QString &provider, const QString &model) {
@@ -102,7 +107,7 @@ std::vector<PresetCatalogRow> build_preset_catalog_rows(
     auto rows = std::vector<PresetCatalogRow>();
     rows.reserve(presets.size());
     for (const auto &entry : presets) {
-        PresetCatalogRow row{entry, {}, {}, {}, {}, false, false};
+        PresetCatalogRow row{entry, {}, {}, {}, {}, false, false, false};
         row.is_template = QString::fromStdString(entry.source)
             .compare(QStringLiteral("template"), Qt::CaseInsensitive) == 0;
         apply_manifest_facts(row);

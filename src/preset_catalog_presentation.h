@@ -15,6 +15,7 @@ struct PresetCatalogRow {
     QString model;
     QString provider_model;
     bool has_vision = false;
+    bool has_tools = false;
     bool is_template = false;
 };
 
