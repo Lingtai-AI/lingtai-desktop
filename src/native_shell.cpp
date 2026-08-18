@@ -170,9 +170,9 @@ QLabel *make_setup_label(
     return label;
 }
 
-constexpr auto kPresetSelectedFg = QStringLiteral("#10221e");
-constexpr auto kPresetMutedFg = QStringLiteral("#8a8f98");
-constexpr auto kPresetAccent = QStringLiteral("#13a58f");
+const auto kPresetSelectedFg = QStringLiteral("#10221e");
+const auto kPresetMutedFg = QStringLiteral("#8a8f98");
+const auto kPresetAccent = QStringLiteral("#13a58f");
 
 QWidget *make_preset_name_cell(
         QWidget *parent, const QString &name, const QString &summary) {
