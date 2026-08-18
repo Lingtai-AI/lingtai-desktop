@@ -6,6 +6,7 @@
 #include "direct_conversation_history.h"
 #include "direct_mail_publisher.h"
 #include "preset_catalog_presentation.h"
+#include "preset_editor_page.h"
 #include "slash_command.h"
 
 #include "base/event_filter.h"
@@ -2007,6 +2008,7 @@ NativeShell::NativeShell()
         "QDialog { background: palette(window); } "
         "QPushButton { border-radius: 6px; padding: 0 16px; } "
         "QPushButton#lingtai_setup_preset_continue, "
+        "QPushButton#lingtai_setup_edit_preset_save, "
         "QPushButton#lingtai_setup_agents_continue, "
         "QPushButton#lingtai_bootstrap_create_start { "
         "min-height: 34px; background: #16785C; color: white; border: none; font-weight: 600; } "
@@ -2164,6 +2166,9 @@ NativeShell::NativeShell()
     preset_actions->addWidget(preset_continue);
     preset_layout->addLayout(preset_actions, 0);
     pages->addWidget(preset_page);
+
+    auto *edit_preset_page = new PresetEditorPage(pages);
+    pages->addWidget(edit_preset_page);
 
     auto *agents_page = new QWidget(pages);
     agents_page->setObjectName("lingtai_setup_agents_page");
@@ -2352,24 +2357,68 @@ NativeShell::NativeShell()
         });
     const auto go_to_page = [pages, steps = steps](int index) {
         pages->setCurrentIndex(index);
-        update_setup_step_indicator(steps, index);
+        const auto step = index <= 1 ? 0 : index - 1;
+        update_setup_step_indicator(steps, step);
+        steps->setVisible(index != 1);
+    };
+    const auto open_preset_editor = [edit_preset_page, preset_chooser, go_to_page,
+            this] {
+        const auto index = preset_chooser->currentIndex();
+        if (index < 0) return;
+        auto existing = QStringList();
+        for (auto item = 0; item != preset_chooser->count(); ++item) {
+            existing.push_back(preset_chooser->itemText(item));
+        }
+        edit_preset_page->load(PresetEditorLoadRequest{
+            preset_chooser->itemData(index, Qt::UserRole + 7).toString(),
+            preset_chooser->itemText(index),
+            preset_chooser->itemData(index, Qt::UserRole).toString(),
+            preset_chooser->itemData(index, Qt::UserRole + 1).toString(),
+            preset_chooser->itemData(index, Qt::UserRole + 4).toBool(),
+            existing,
+        });
+        if (!edit_preset_page->model().codex_auth_allows_editor()) {
+            const auto family = credential_family(
+                edit_preset_page->model().provider());
+            set_bootstrap_status(family == QLatin1String("codex_pool")
+                ? QStringLiteral(
+                    "No eligible Codex pool account is available for this model.")
+                : QStringLiteral(
+                    "Codex login required — sign in from LingTai TUI first."));
+            return;
+        }
+        go_to_page(1);
     };
     QObject::connect(preset_chooser, &QComboBox::currentTextChanged,
         [update_review](const QString &) { update_review(); });
     QObject::connect(preset_continue, &QPushButton::clicked,
-        [go_to_page, update_review] {
-            update_review();
-            go_to_page(1);
-        });
-    QObject::connect(agents_back, &QPushButton::clicked,
+        [open_preset_editor] { open_preset_editor(); });
+    QObject::connect(edit_preset_page, &PresetEditorPage::cancelled,
         [go_to_page] { go_to_page(0); });
-    QObject::connect(agents_continue, &QPushButton::clicked,
-        [go_to_page, update_review] {
+    QObject::connect(edit_preset_page, &PresetEditorPage::saved,
+        [preset_chooser, go_to_page, update_review](const QString &saved_name) {
+            const auto index = preset_chooser->currentIndex();
+            if (index >= 0 && !saved_name.isEmpty()) {
+                preset_chooser->setItemText(index, saved_name);
+                preset_chooser->setItemData(index, false, Qt::UserRole + 4);
+                preset_chooser->setItemData(index,
+                    QDir(lingtai_global_dir()).filePath(
+                        QStringLiteral("presets/saved/") + saved_name
+                            + QStringLiteral(".json")),
+                    Qt::UserRole + 7);
+            }
             update_review();
             go_to_page(2);
         });
-    QObject::connect(review_back, &QPushButton::clicked,
+    QObject::connect(agents_back, &QPushButton::clicked,
         [go_to_page] { go_to_page(1); });
+    QObject::connect(agents_continue, &QPushButton::clicked,
+        [go_to_page, update_review] {
+            update_review();
+            go_to_page(3);
+        });
+    QObject::connect(review_back, &QPushButton::clicked,
+        [go_to_page] { go_to_page(2); });
     QObject::connect(browse_button, &QPushButton::clicked, [this] {
         handle_browse_destination();
     });
@@ -2385,7 +2434,7 @@ NativeShell::NativeShell()
     destination_input->submits()
         | rpl::on_next([go_to_page, update_review] {
             update_review();
-            go_to_page(2);
+            go_to_page(3);
         }, submits_lifetime_);
     pages->setCurrentIndex(0);
     recompute_setup_layout(bootstrap_dialog_);
@@ -2622,6 +2671,8 @@ void NativeShell::show_bootstrap_dialog(
         chooser->setItemData(index, row.is_template, Qt::UserRole + 4);
         chooser->setItemData(index, row.has_vision, Qt::UserRole + 5);
         chooser->setItemData(index, row.has_tools, Qt::UserRole + 6);
+        chooser->setItemData(index,
+            QString::fromStdString(row.entry.path), Qt::UserRole + 7);
         if (row.is_template && !added_templates_header) {
             add_preset_section(catalog, QStringLiteral("Preset templates"));
             added_templates_header = true;
@@ -2650,6 +2701,7 @@ void NativeShell::show_bootstrap_dialog(
     }
     if (auto *steps = window_->findChild<QWidget *>("lingtai_setup_steps")) {
         update_setup_step_indicator(steps, 0);
+        steps->show();
     }
     if (auto *summary = window_->findChild<QLabel *>(
             "lingtai_setup_preset_footer_summary")) {

@@ -1,4 +1,5 @@
 #include "native_shell.h"
+#include "preset_editor_model.h"
 
 #include "styles/palette.h"
 #include "ui/platform/mac/ui_window_title_mac.h"
@@ -28,6 +29,7 @@
 #include <QtGui/QTextLayout>
 #include <QtGui/QWindow>
 #include <QtWidgets/QApplication>
+#include <QtWidgets/QCheckBox>
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QDialog>
 #include <QtWidgets/QHBoxLayout>
@@ -41,6 +43,7 @@
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QScrollBar>
 #include <QtWidgets/QSpacerItem>
+#include <QtWidgets/QStackedWidget>
 #include <QtWidgets/QTextEdit>
 #include <QtWidgets/QHeaderView>
 #include <QtWidgets/QTreeWidget>
@@ -2000,6 +2003,8 @@ void verify_first_project_bootstrap(
         window, "lingtai_bootstrap_create_start");
     auto *preset_continue = required_child<QPushButton>(
         window, "lingtai_setup_preset_continue");
+    auto *save_preset = required_child<QPushButton>(
+        window, "lingtai_setup_edit_preset_save");
     auto *agents_continue = required_child<QPushButton>(
         window, "lingtai_setup_agents_continue");
     auto *dialog_status = required_ui_child<Ui::FlatLabel>(
@@ -2087,6 +2092,8 @@ exit 0)");
     preset_chooser->setCurrentIndex(1);
     preset_continue->click();
     QCoreApplication::processEvents();
+    save_preset->click();
+    QCoreApplication::processEvents();
     create_start->click();
     QCoreApplication::processEvents();
     require(dialog_status->accessibilityName()
@@ -2170,6 +2177,8 @@ exit 7)");
         "the failing fixture's discovery must still show the wizard");
     preset_chooser->setCurrentIndex(0);
     preset_continue->click();
+    QCoreApplication::processEvents();
+    save_preset->click();
     QCoreApplication::processEvents();
     destination_input->setText(path_text(sandbox / "partial-destination"));
     agents_continue->click();
@@ -4534,6 +4543,73 @@ void verify_two_surface_hierarchy(
     require(!cleanup_error, "two-surface fixtures must be removed");
 }
 
+void verify_preset_editor_model(const fs::path &sandbox) {
+    using lingtai::desktop::PresetEditorModel;
+    using lingtai::desktop::PresetEditorLoadRequest;
+    using lingtai::desktop::auto_saved_preset_name;
+
+    require(auto_saved_preset_name(QStringLiteral("codex"),
+            {QStringLiteral("codex"), QStringLiteral("codex-1")})
+            == QStringLiteral("codex-2"),
+        "template clones gap-fill the next <name>-N saved stem");
+
+    const auto dir = sandbox / "preset-editor-model";
+    fs::create_directories(dir);
+    const auto path = dir / "codex.json";
+    {
+        std::ofstream out(path);
+        out << R"({
+  "name": "codex",
+  "description": {
+    "summary": "ChatGPT account — vision + web search + tools",
+    "tier": "5"
+  },
+  "manifest": {
+    "llm": {
+      "provider": "codex",
+      "model": "gpt-5.6-sol",
+      "base_url": "https://chatgpt.com/backend-api/codex",
+      "thinking": "xhigh"
+    }
+  }
+})";
+    }
+    PresetEditorModel model;
+    model.load(PresetEditorLoadRequest{
+        QString::fromStdString(path.string()),
+        QStringLiteral("codex"),
+        QStringLiteral("ChatGPT account — vision + web search + tools"),
+        QStringLiteral("template"),
+        true,
+        {QStringLiteral("codex")},
+    });
+    require(model.is_codex_provider()
+            && model.service_tier_visible()
+            && model.thinking_visible()
+            && !model.wire_api_visible()
+            && model.service_tier() == QStringLiteral("normal")
+            && model.thinking() == QStringLiteral("xhigh"),
+        "Codex presets expose service tier and xhigh reasoning, not wire_api");
+    model.set_model(QStringLiteral("gpt-5.6-terra"));
+    model.set_service_tier(QStringLiteral("fast"));
+    const auto committed = model.commit({QStringLiteral("codex")});
+    require(committed.ok && committed.name == QStringLiteral("codex-1"),
+        "semantic edits on a template must clone to an auto-saved name");
+    require(committed.document.value(QStringLiteral("manifest")).toObject()
+            .value(QStringLiteral("llm")).toObject()
+            .value(QStringLiteral("service_tier")).toString()
+            == QStringLiteral("fast"),
+        "fast Codex service tier is persisted; normal is omitted");
+
+    model.set_provider(QStringLiteral("custom"));
+    model.set_api_compat(QStringLiteral("openai"));
+    require(model.wire_api_visible() && !model.service_tier_visible(),
+        "custom OpenAI shows wire_api and hides Codex service tier");
+    model.set_wire_api(QStringLiteral("responses"));
+    require(model.responses_transport_visible(),
+        "Responses transport appears only for custom OpenAI responses");
+}
+
 void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) {
     auto &window = shell.window();
     auto *wizard = required_child<QDialog>(window, "lingtai_project_setup_wizard");
@@ -4541,6 +4617,8 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
         *wizard, "lingtai_setup_steps");
     auto *preset_page = required_child<QWidget>(
         *wizard, "lingtai_setup_preset_page");
+    auto *edit_page = required_child<QWidget>(
+        *wizard, "lingtai_setup_edit_preset_page");
     auto *agents_page = required_child<QWidget>(
         *wizard, "lingtai_setup_agents_page");
     auto *review_page = required_child<QWidget>(
@@ -4555,12 +4633,20 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
         *preset_page, "lingtai_setup_preset_search");
     auto *preset_footer = required_child<QLabel>(
         *preset_page, "lingtai_setup_preset_footer_summary");
+    auto *edit_heading = required_child<QLabel>(
+        *edit_page, "lingtai_setup_edit_preset_heading");
     auto *agent_heading = required_child<QLabel>(
         *agents_page, "lingtai_setup_agents_heading");
     auto *review_heading = required_child<QLabel>(
         *review_page, "lingtai_setup_review_heading");
     auto *continue_button = required_child<QPushButton>(
         *wizard, "lingtai_setup_preset_continue");
+    auto *save_preset = required_child<QPushButton>(
+        *wizard, "lingtai_setup_edit_preset_save");
+    auto *edit_back = required_child<QPushButton>(
+        *wizard, "lingtai_setup_edit_preset_back");
+    auto *edit_cancel = required_child<QPushButton>(
+        *wizard, "lingtai_setup_edit_preset_cancel");
     auto *review_button = required_child<QPushButton>(
         *wizard, "lingtai_setup_agents_continue");
     auto *create_button = required_child<QPushButton>(
@@ -4577,9 +4663,10 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
         "setup content must keep content-height labels and one theme palette, not expansive white-on-white surfaces");
     require(preset_heading->text()
             == QStringLiteral("Choose how your orchestrator runs")
+            && edit_heading->text() == QStringLiteral("Edit preset")
             && agent_heading->text() == QStringLiteral("Configure Agents")
             && review_heading->text() == QStringLiteral("Review project"),
-        "setup must expose the accepted Preset, Agents, and Review pages");
+        "setup must expose the accepted Preset, Edit preset, Agents, and Review pages");
     require(catalog->isHidden()
             && preset_page->findChildren<QTreeWidget *>().size() == 1
             && preset_catalog->columnCount() == 3
@@ -4614,9 +4701,12 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
                 || preset_catalog->styleSheet().contains(QStringLiteral("#202422"))),
         "preset catalog chrome must use the supplied light/dark surface, header, and selection tokens");
     require(continue_button->text() == QStringLiteral("Use preset")
+            && save_preset->text() == QStringLiteral("Save preset")
+            && edit_back->text() == QStringLiteral("← Presets")
+            && edit_cancel->text() == QStringLiteral("Cancel")
             && review_button->text() == QStringLiteral("Continue")
             && create_button->text() == QStringLiteral("Create project"),
-        "the preset page uses one contextual Use/Configure action; later pages keep Continue / Create project");
+        "the preset page uses one contextual Use/Configure action; Edit preset saves; later pages keep Continue / Create project");
     require(preset_catalog->sizePolicy().verticalPolicy() == QSizePolicy::Expanding,
         "the preset catalog must stretch with the wizard; file33 is the reference size, not a fixed cap");
     wizard->setAttribute(Qt::WA_DontShowOnScreen, true);
@@ -4645,8 +4735,19 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
             && below(preset_catalog, preset_footer, wizard)
             && below(preset_catalog, continue_button, wizard),
         "extra wizard height must go into the preset catalog without introducing overlap");
+    auto *pages = required_child<QStackedWidget>(
+        *wizard, "lingtai_setup_pages");
+    auto *email_cap = required_child<QCheckBox>(
+        *edit_page, "lingtai_setup_edit_preset_cap_email");
+    require(email_cap->isChecked() && !email_cap->isEnabled(),
+        "capabilities in the preset editor are always included and not toggled here");
+    require(pages->indexOf(preset_page) == 0
+            && pages->indexOf(edit_page) == 1
+            && pages->indexOf(agents_page) == 2
+            && pages->indexOf(review_page) == 3,
+        "Edit preset must be the page after catalog selection, before Agents");
     wizard->hide();
-    for (auto *label : wizard->findChildren<QLabel *>()) {
+    for (auto *label : preset_page->findChildren<QLabel *>()) {
         const auto text = label->text();
         require(!text.contains(QStringLiteral("Tier"))
                 && !text.contains(QStringLiteral("Context")),
@@ -4768,6 +4869,7 @@ int main(int argc, char **argv) {
             lingtai::desktop::NativeShell shell;
             shell.show_offscreen();
             QCoreApplication::processEvents();
+            verify_preset_editor_model(project_root / "preset-editor-model-fixture");
             verify_project_setup_wizard_contract(shell);
             std::cout << "native shell behavior: OK\n";
             return 0;
