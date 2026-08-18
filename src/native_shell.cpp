@@ -1906,7 +1906,6 @@ NativeShell::NativeShell()
         table->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
         table->setAutoFillBackground(true);
         table->viewport()->setAutoFillBackground(true);
-        table->setClipping(true);
         table->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
         table->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         table->header()->setStretchLastSection(false);
