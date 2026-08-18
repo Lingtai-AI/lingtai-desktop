@@ -45,6 +45,7 @@
 #include <QtGui/QPixmap>
 #include <QtGui/QPalette>
 #include <QtGui/QStyleHints>
+#include <QtWidgets/QAbstractItemView>
 #include <QtWidgets/QBoxLayout>
 #include <QtWidgets/QComboBox>
 #include <QtWidgets/QDialog>
@@ -178,7 +179,38 @@ const auto kPresetAccent = QStringLiteral("#13a58f");
 constexpr auto kPresetSummaryRole = Qt::UserRole + 10;
 constexpr auto kPresetSectionRole = Qt::UserRole + 11;
 constexpr auto kPresetRowHeight = 56;
-constexpr auto kPresetSectionHeight = 32;
+constexpr auto kPresetSectionHeight = 28;
+
+bool is_preset_section_index(const QModelIndex &index) {
+    return index.isValid()
+        && index.siblingAtColumn(0).data(kPresetSectionRole).toBool();
+}
+
+QRect preset_section_band_rect(
+        const QStyleOptionViewItem &option, const QModelIndex &index) {
+    auto band = option.rect;
+    const auto *view = qobject_cast<const QAbstractItemView *>(option.widget);
+    if (!view || !index.model()) {
+        return band;
+    }
+    const auto last = index.model()->columnCount(index.parent()) - 1;
+    return view->visualRect(index.siblingAtColumn(0)).united(
+        view->visualRect(index.siblingAtColumn(last)));
+}
+
+QColor preset_section_band_color(const QPalette &palette) {
+    const auto base = palette.color(QPalette::Base);
+    if (base.lightness() < 128) {
+        return QColor(
+            std::min(255, base.red() + 22),
+            std::min(255, base.green() + 24),
+            std::min(255, base.blue() + 28));
+    }
+    return QColor(
+        std::max(0, base.red() - 22),
+        std::max(0, base.green() - 22),
+        std::max(0, base.blue() - 20));
+}
 
 class PresetRowDelegate final : public QStyledItemDelegate {
 public:
@@ -192,25 +224,31 @@ public:
         initStyleOption(&opt, index);
         painter->save();
         painter->setRenderHint(QPainter::Antialiasing, true);
-        painter->setClipRect(opt.rect);
-        if (index.data(kPresetSectionRole).toBool()) {
+        if (is_preset_section_index(index)) {
             if (index.column() != 0) {
                 painter->restore();
                 return;
             }
-            painter->fillRect(opt.rect, opt.palette.color(QPalette::Window));
+            const auto band = preset_section_band_rect(opt, index);
+            painter->setClipRect(band);
+            painter->fillRect(band, preset_section_band_color(opt.palette));
+            painter->setPen(opt.palette.color(QPalette::Mid));
+            painter->drawLine(band.topLeft(), band.topRight());
+            painter->drawLine(band.bottomLeft(), band.bottomRight());
             auto section_font = opt.font;
-            section_font.setPointSize(11);
+            section_font.setPointSize(10);
             section_font.setWeight(QFont::DemiBold);
+            section_font.setLetterSpacing(QFont::PercentageSpacing, 118);
             painter->setFont(section_font);
             painter->setPen(QColor(kPresetMutedFg));
             painter->drawText(
-                opt.rect.adjusted(8, 0, -8, 0),
+                band.adjusted(12, 0, -12, 0),
                 Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
-                index.data(Qt::DisplayRole).toString());
+                index.data(Qt::DisplayRole).toString().toUpper());
             painter->restore();
             return;
         }
+        painter->setClipRect(opt.rect);
         const auto selected = opt.state.testFlag(QStyle::State_Selected);
         const auto dark = opt.palette.color(QPalette::Window).lightness() < 128;
         if (selected) {
@@ -296,13 +334,15 @@ public:
                     index.data(Qt::DisplayRole).toString(),
                     Qt::ElideRight, inner.width()));
         }
+        painter->setPen(opt.palette.color(QPalette::Midlight));
+        painter->drawLine(opt.rect.bottomLeft(), opt.rect.bottomRight());
         painter->restore();
     }
 
     QSize sizeHint(
             const QStyleOptionViewItem &,
             const QModelIndex &index) const override {
-        if (index.data(kPresetSectionRole).toBool()) {
+        if (is_preset_section_index(index)) {
             return {120, kPresetSectionHeight};
         }
         return {120, kPresetRowHeight};
@@ -316,8 +356,10 @@ bool is_preset_section(const QTreeWidgetItem *item) {
 QTreeWidgetItem *add_preset_section(QTreeWidget *table, const QString &title) {
     auto *item = new QTreeWidgetItem(table);
     item->setText(0, title);
-    item->setData(0, kPresetSectionRole, true);
     item->setFlags(Qt::ItemIsEnabled);
+    for (auto column = 0; column != table->columnCount(); ++column) {
+        item->setData(column, kPresetSectionRole, true);
+    }
     item->setFirstColumnSpanned(true);
     return item;
 }
@@ -1826,7 +1868,7 @@ NativeShell::NativeShell()
         "QLineEdit#lingtai_setup_preset_search { min-height: 36px; padding: 0 12px; border: 1px solid palette(mid); "
         "border-radius: 8px; background: palette(base); color: palette(text); } "
         "QTreeWidget { border: 1px solid palette(mid); border-radius: 8px; background: palette(base); outline: none; } "
-        "QTreeWidget::item { min-height: 52px; border-bottom: 1px solid palette(midlight); padding: 4px 8px; } "
+        "QTreeWidget::item { padding: 0px; border: none; } "
         "QTreeWidget::item:selected { background: #d8f3ee; color: #10221e; } "
         "QHeaderView::section { background: palette(window); color: #8a8f98; border: none; "
         "border-bottom: 1px solid palette(mid); padding: 6px 8px; font-size: 11px; font-weight: 600; }"));

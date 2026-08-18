@@ -4623,6 +4623,9 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
     require(below(preset_catalog, preset_detail, wizard)
             && below(preset_detail, continue_button, wizard),
         "preset catalog, detail card, and footer must stack without overlapping");
+    require(preset_catalog->visualItemRect(preset_catalog->topLevelItem(0)).height()
+                <= 36,
+        "section labels must be short tinted bands, not full-height data rows");
     require(preset_catalog->height() > preset_catalog->minimumHeight(),
         "the catalog must take leftover wizard height inside one scroll owner");
     const auto compact_catalog = preset_catalog->height();
