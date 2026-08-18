@@ -4600,6 +4600,19 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
             && review_button->text() == QStringLiteral("Continue")
             && create_button->text() == QStringLiteral("Create project"),
         "the three pages must use the accepted Continue / Create project semantics");
+    require(saved_presets->sizePolicy().verticalPolicy() == QSizePolicy::Expanding
+            && preset_templates->sizePolicy().verticalPolicy() == QSizePolicy::Expanding,
+        "preset lists must stretch with the wizard; file33 is the reference size, not a fixed cap");
+    wizard->setAttribute(Qt::WA_DontShowOnScreen, true);
+    wizard->show();
+    wizard->resize(920, 840);
+    QCoreApplication::processEvents();
+    const auto compact_templates = preset_templates->height();
+    wizard->resize(1100, 1040);
+    QCoreApplication::processEvents();
+    require(preset_templates->height() > compact_templates,
+        "extra wizard height must go into the preset lists rather than empty space below the footer");
+    wizard->hide();
     for (auto *label : wizard->findChildren<QLabel *>()) {
         const auto text = label->text();
         require(!text.contains(QStringLiteral("Tools"))
