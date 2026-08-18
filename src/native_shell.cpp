@@ -128,6 +128,19 @@ Ui::FlatLabel *make_flat_label(
     return label;
 }
 
+void apply_project_setup_palette(QDialog *dialog) {
+    if (!dialog) return;
+    auto palette = dialog->palette();
+    palette.setColor(QPalette::Window, st::windowBg->c);
+    palette.setColor(QPalette::WindowText, st::windowFg->c);
+    palette.setColor(QPalette::Text, st::windowFg->c);
+    palette.setColor(QPalette::Base, st::windowBg->c);
+    palette.setColor(QPalette::AlternateBase, st::windowBgOver->c);
+    palette.setColor(QPalette::ButtonText, st::windowFg->c);
+    dialog->setPalette(palette);
+    dialog->setAutoFillBackground(true);
+}
+
 // The vendored lib_ui controls (InputField, RoundButton, FlatLabel) carry no
 // Q_OBJECT macro, so Qt's templated findChild<Ui::X *> cannot name them. These
 // classes are polymorphic, so resolving by object name through a QObject
@@ -1532,48 +1545,59 @@ NativeShell::NativeShell()
     bootstrap_dialog_->setAccessibleName(QStringLiteral("Set up LingTai project"));
     bootstrap_dialog_->setMinimumSize(840, 600);
     bootstrap_dialog_->resize(920, 640);
+    apply_project_setup_palette(bootstrap_dialog_);
     bootstrap_dialog_->setStyleSheet(QStringLiteral(
-        "QDialog { background: #ffffff; } "
+        "QDialog { background: palette(window); } "
         "QLabel#lingtai_setup_step_title { color: #8a8f98; font-size: 13px; } "
         "QLabel#lingtai_setup_step_active { color: #1769e0; font-size: 13px; font-weight: 600; } "
         "QPushButton { min-height: 38px; padding: 0 18px; border-radius: 7px; } "
         "QPushButton#lingtai_setup_primary { background: #1769e0; color: white; border: none; font-weight: 600; } "
         "QPushButton#lingtai_setup_secondary { background: transparent; color: #3b3f45; border: 1px solid #d9dde3; } "
-        "QComboBox { min-height: 42px; padding: 0 12px; border: 1px solid #d9dde3; border-radius: 7px; background: white; }"));
-    auto *wizard_layout = new QHBoxLayout(bootstrap_dialog_);
+        "QComboBox { min-height: 42px; padding: 0 12px; border: 1px solid #d9dde3; border-radius: 7px; background: palette(base); color: palette(text); }"));
+    auto *wizard_layout = new QVBoxLayout(bootstrap_dialog_);
     wizard_layout->setContentsMargins(0, 0, 0, 0);
     wizard_layout->setSpacing(0);
 
+    // Ted's reference owns the flow above the page: centered brand, then one
+    // horizontal Preset / Agents / Review sequence. It is not a left rail.
     auto *steps = new QWidget(bootstrap_dialog_);
     steps->setObjectName("lingtai_setup_steps");
-    steps->setFixedWidth(210);
-    steps->setStyleSheet(QStringLiteral("background: #f6f8fa;"));
+    steps->setFixedHeight(112);
     auto *steps_layout = new QVBoxLayout(steps);
-    steps_layout->setContentsMargins(28, 36, 24, 28);
-    steps_layout->setSpacing(18);
+    steps_layout->setContentsMargins(32, 18, 32, 14);
+    steps_layout->setSpacing(12);
     auto *setup_brand = make_label(steps, QStringLiteral("LingTai"),
-        "lingtai_setup_brand", 18, QFont::DemiBold);
+        "lingtai_setup_brand", 16, QFont::DemiBold);
+    setup_brand->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    setup_brand->setAlignment(Qt::AlignCenter);
     steps_layout->addWidget(setup_brand);
-    steps_layout->addSpacing(26);
-    const auto make_step = [&](const QString &text, const char *name, bool active) {
-        auto *label = make_label(steps, text, name, 13,
+    auto *flow = new QHBoxLayout;
+    flow->setSpacing(28);
+    flow->addStretch();
+    const auto make_step = [&](const QString &number, const QString &text,
+            const char *name, bool active) {
+        auto *label = make_label(steps,
+            number + QStringLiteral("   ") + text, name, 13,
             active ? QFont::DemiBold : QFont::Normal);
-        label->setObjectName(active ? "lingtai_setup_step_active" : "lingtai_setup_step_title");
-        steps_layout->addWidget(label);
+        label->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        label->setStyleSheet(active
+            ? QStringLiteral("color: #1769e0;")
+            : QStringLiteral("color: #8a8f98;"));
+        flow->addWidget(label);
     };
-    make_step(QStringLiteral("1   Preset"), "setup_step_preset", true);
-    make_step(QStringLiteral("2   Agents"), "setup_step_agents", false);
-    make_step(QStringLiteral("3   Review"), "setup_step_review", false);
-    steps_layout->addStretch();
-    auto *cancel_hint = make_label(steps, QStringLiteral("Nothing is written until Review."),
-        "lingtai_setup_write_boundary", 11);
-    cancel_hint->setWordWrap(true);
-    steps_layout->addWidget(cancel_hint);
+    make_step(QStringLiteral("1"), QStringLiteral("Preset"),
+        "lingtai_setup_step_preset", true);
+    make_step(QStringLiteral("2"), QStringLiteral("Agents"),
+        "lingtai_setup_step_agents", false);
+    make_step(QStringLiteral("3"), QStringLiteral("Review"),
+        "lingtai_setup_step_review", false);
+    flow->addStretch();
+    steps_layout->addLayout(flow);
     wizard_layout->addWidget(steps);
 
     auto *right = new QWidget(bootstrap_dialog_);
     auto *right_layout = new QVBoxLayout(right);
-    right_layout->setContentsMargins(54, 42, 54, 34);
+    right_layout->setContentsMargins(34, 18, 34, 28);
     right_layout->setSpacing(0);
     auto *pages = new QStackedWidget(right);
     pages->setObjectName("lingtai_setup_pages");
@@ -1581,10 +1605,12 @@ NativeShell::NativeShell()
     const auto make_heading = [](QWidget *page, QVBoxLayout *layout,
             const QString &title, const QString &subtitle, const char *name) {
         auto *heading = make_label(page, title, name, 24, QFont::DemiBold);
+        heading->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         layout->addWidget(heading);
         layout->addSpacing(8);
         auto *note = make_label(page, subtitle, "lingtai_setup_page_note", 13);
         note->setWordWrap(true);
+        note->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         layout->addWidget(note);
         layout->addSpacing(30);
     };
@@ -1598,6 +1624,7 @@ NativeShell::NativeShell()
         "lingtai_setup_preset_heading");
     auto *templates_label = make_label(preset_page, QStringLiteral("Preset templates"),
         "lingtai_setup_templates_label", 13, QFont::DemiBold);
+    templates_label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     preset_layout->addWidget(templates_label);
     preset_layout->addSpacing(8);
     auto *preset_chooser = new QComboBox(preset_page);
@@ -1608,6 +1635,7 @@ NativeShell::NativeShell()
     auto *preset_description = make_label(preset_page, QString(),
         "lingtai_setup_preset_description", 13);
     preset_description->setWordWrap(true);
+    preset_description->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     preset_layout->addWidget(preset_description);
     preset_layout->addSpacing(18);
     auto *vision_badge = make_label(preset_page, QStringLiteral("Vision"),
@@ -1642,8 +1670,9 @@ NativeShell::NativeShell()
         QStringLiteral("Orchestrator Agent\nName: project folder\nDefault + allowed preset: selected template\nRecipe: Default"),
         "lingtai_setup_agent_card", 13);
     agent_card->setWordWrap(true);
+    agent_card->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     agent_card->setStyleSheet(QStringLiteral(
-        "background: #f6f8fa; border: 1px solid #e1e5ea; border-radius: 9px; padding: 18px;"));
+        "background: palette(alternate-base); border: 1px solid palette(mid); border-radius: 9px; padding: 18px;"));
     agents_layout->addWidget(agent_card);
     agents_layout->addStretch();
     auto *agents_actions = new QHBoxLayout;
@@ -1669,8 +1698,9 @@ NativeShell::NativeShell()
     auto *review_summary = make_label(review_page, QString(),
         "lingtai_setup_review_summary", 13);
     review_summary->setWordWrap(true);
+    review_summary->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     review_summary->setStyleSheet(QStringLiteral(
-        "background: #f6f8fa; border: 1px solid #e1e5ea; border-radius: 9px; padding: 20px;"));
+        "background: palette(alternate-base); border: 1px solid palette(mid); border-radius: 9px; padding: 20px;"));
     review_layout->addWidget(review_summary);
     auto *dialog_status = make_flat_label(review_page, QString(),
         "lingtai_bootstrap_dialog_status");
@@ -1804,6 +1834,7 @@ NativeShell::~NativeShell() = default;
 void NativeShell::refresh_system_palette() {
     apply_system_palette();
     apply_titlebar_brand_palette(window_.get());
+    apply_project_setup_palette(bootstrap_dialog_);
     render_conversation();
     window_->update();
     for (auto *widget : window_->findChildren<QWidget *>()) {
