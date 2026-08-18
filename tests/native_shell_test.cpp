@@ -34,6 +34,7 @@
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLayout>
 #include <QtWidgets/QLineEdit>
+#include <QtWidgets/QListWidget>
 #include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QProgressBar>
 #include <QtWidgets/QPushButton>
@@ -4557,8 +4558,10 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
         *preset_page, "lingtai_setup_preset_heading");
     auto *catalog = required_child<QComboBox>(
         *preset_page, "lingtai_bootstrap_preset_chooser");
-    auto *vision = required_child<QLabel>(
-        *preset_page, "lingtai_setup_vision_badge");
+    auto *saved_presets = required_child<QListWidget>(
+        *preset_page, "lingtai_setup_saved_presets");
+    auto *preset_templates = required_child<QListWidget>(
+        *preset_page, "lingtai_setup_preset_templates");
     auto *agent_heading = required_child<QLabel>(
         *agents_page, "lingtai_setup_agents_heading");
     auto *review_heading = required_child<QLabel>(
@@ -4583,9 +4586,10 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
             && agent_heading->text() == QStringLiteral("Configure Agents")
             && review_heading->text() == QStringLiteral("Review project"),
         "setup must expose the accepted Preset, Agents, and Review pages");
-    require(catalog->accessibleName() == QStringLiteral("Preset templates")
-            && vision->text() == QStringLiteral("Vision"),
-        "Preset must stay catalog-driven and V1 may expose only the real Vision badge");
+    require(catalog->isHidden()
+            && saved_presets->verticalScrollBarPolicy() != Qt::ScrollBarAlwaysOff
+            && preset_templates->verticalScrollBarPolicy() != Qt::ScrollBarAlwaysOff,
+        "Preset page must expose separate scrollable Saved presets and Preset templates lists; the old dropdown is backend state only");
     require(continue_button->text() == QStringLiteral("Continue")
             && review_button->text() == QStringLiteral("Continue")
             && create_button->text() == QStringLiteral("Create project"),
