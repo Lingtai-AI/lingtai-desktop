@@ -684,17 +684,6 @@ foreach(journey IN LISTS NATIVE_SHELL_JOURNEYS)
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     endif()
 endforeach()
-add_test(NAME native_shell_behavior
-    COMMAND lingtai_native_shell_test
-        "${CMAKE_CURRENT_BINARY_DIR}/native-shell-no-write-fixture"
-        --journey=all)
-if(APPLE)
-    set_tests_properties(native_shell_behavior PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
-else()
-    set_tests_properties(native_shell_behavior PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-endif()
 
 add_executable(lingtai_native_shell_destinations_test
     tests/native_shell_destinations_test.cpp
@@ -819,7 +808,6 @@ set(LINGTAI_UI_TESTS
     native_shell_theme
     native_shell_composer
     native_shell_kanban
-    native_shell_behavior
     native_shell_destinations
     agent_roster_presentation
     native_shell_presets

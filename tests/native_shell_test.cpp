@@ -5535,7 +5535,8 @@ void run_native_shell_journey(
                 shell, project_root / "commit-28-dashboard-fixture");
             verify_compact_header_hierarchy(
                 shell, project_root / "commit-32-compact-header-fixture");
-            verify_responsive_header_priority(shell, project_root);
+            verify_responsive_header_priority(
+                shell, project_root / "commit-r4-responsive-header-fixture");
         });
         return;
     }
@@ -5654,7 +5655,8 @@ int main(int argc, char **argv) {
             lingtai::desktop::NativeShell shell;
             shell.show_offscreen();
             QCoreApplication::processEvents();
-            verify_resizable_sidebar(shell, project_root);
+            verify_resizable_sidebar(
+                shell, project_root / "commit-r1-resizable-sidebar-fixture");
             std::cout << "native shell behavior: OK\n";
             return 0;
         }
@@ -5662,7 +5664,8 @@ int main(int argc, char **argv) {
             lingtai::desktop::NativeShell shell;
             shell.show_offscreen();
             QCoreApplication::processEvents();
-            verify_responsive_header_priority(shell, project_root);
+            verify_responsive_header_priority(
+                shell, project_root / "commit-r4-responsive-header-fixture");
             std::cout << "native shell behavior: OK\n";
             return 0;
         }
