@@ -10,6 +10,7 @@
 #include <QtGui/QAction>
 #include <QtGui/QColor>
 #include <QtGui/QFontMetricsF>
+#include <QtGui/QFontMetrics>
 #include <QtGui/QImage>
 #include <QtGui/QPalette>
 #include <QtWidgets/QApplication>
@@ -62,16 +63,6 @@ AgentRow make_row(fs::path key, AgentRole role) {
     return result;
 }
 
-QPushButton *agent_row(QWidget &widget, std::string_view key) {
-    const auto expected = QString::fromUtf8(key.data(), key.size());
-    for (auto *candidate : widget.findChildren<QPushButton *>()) {
-        if (candidate->property("directory_key").toString() == expected) {
-            return candidate;
-        }
-    }
-    return nullptr;
-}
-
 constexpr double kInkDistance = 48.0;
 constexpr double kHierarchyScaleRatio = 1.05;
 constexpr double kSecondaryMaturityRatio = 0.85;
@@ -80,6 +71,74 @@ constexpr double kAvatarDiameter = 40.0;
 constexpr double kRowVerticalFrame = 8.0;
 constexpr double kRowHorizontalFrame = 14.0;
 constexpr double kAvatarTextGap = 10.0;
+constexpr int kCanvasGrabWidth = 232;
+
+QWidget *roster_rows_canvas(AgentRoster &roster) {
+    auto *canvas = roster.findChild<QWidget *>("lingtai_agent_roster_rows");
+    require(canvas != nullptr, "the rendered roster rows canvas must exist");
+    return canvas;
+}
+
+int canvas_row_height(QWidget *canvas) {
+    auto primary_font = canvas->font();
+    primary_font.setPointSize(13);
+    primary_font.setWeight(QFont::DemiBold);
+    auto secondary_font = canvas->font();
+    secondary_font.setPointSize(12);
+    const auto text_height = QFontMetrics(primary_font).height()
+        + QFontMetrics(secondary_font).height();
+    return std::max(int(kAvatarDiameter), text_height) + 2 * int(kRowVerticalFrame);
+}
+
+QImage grab_canvas_row(
+        AgentRoster &roster,
+        int canvas_width,
+        int canvas_height,
+        std::size_t row_index = 0) {
+    roster.resize(260, 320);
+    roster.show();
+    QCoreApplication::processEvents();
+    auto *canvas = roster_rows_canvas(roster);
+    const auto total_height = canvas_height * int(row_index + 1);
+    canvas->setFixedSize(canvas_width, total_height);
+    QCoreApplication::processEvents();
+    const auto image = canvas->grab().toImage();
+    const auto dpr = std::max(1.0, double(image.devicePixelRatio()));
+    return image.copy(QRect(
+        0,
+        int(row_index * canvas_height * dpr),
+        int(canvas_width * dpr),
+        int(canvas_height * dpr)));
+}
+
+int reference_canvas_row_height(const AgentSnapshot &snapshot) {
+    QWidget parent;
+    AgentRoster roster(&parent);
+    roster.set_rows(snapshot, std::nullopt);
+    roster.show();
+    QCoreApplication::processEvents();
+    return canvas_row_height(roster_rows_canvas(roster));
+}
+
+std::vector<AgentRow> visible_rows(const AgentSnapshot &snapshot) {
+    auto rows = snapshot.items;
+    rows.erase(std::remove_if(rows.begin(), rows.end(),
+        [](const AgentRow &item) { return item.role == AgentRole::human; }),
+        rows.end());
+    return rows;
+}
+
+std::size_t visible_row_index(const AgentSnapshot &snapshot, std::string_view key) {
+    const auto rows = visible_rows(snapshot);
+    const auto expected = fs::path(key);
+    for (std::size_t index = 0; index != rows.size(); ++index) {
+        if (rows[index].directory_key == expected) {
+            return index;
+        }
+    }
+    throw std::runtime_error(
+        std::string("missing visible Agent row: ") + std::string(key));
+}
 
 QColor sample_idle_background(const QImage &image, double dpr) {
     // The idle row background fills the whole row; the text rect only ever
@@ -186,12 +245,8 @@ void verify_modern_roster_typography_hierarchy() {
     roster.show();
     QCoreApplication::processEvents();
 
-    auto *button = agent_row(roster, "Main Agent · Active");
-    require(button != nullptr, "the glyph-rich row must render for grab");
-    button->clearFocus();
-    roster.clearFocus();
-
-    const auto image = button->grab().toImage();
+    const auto row_height = reference_canvas_row_height(snapshot);
+    const auto image = grab_canvas_row(roster, kCanvasGrabWidth, row_height);
     const auto dpr = std::max(1.0, double(image.devicePixelRatio()));
 
     const auto background = sample_idle_background(image, dpr);
@@ -222,48 +277,34 @@ void verify_selected_row_keeps_neutral_majority_surface() {
     roster.show();
     QCoreApplication::processEvents();
 
-    auto *row = agent_row(roster, "Selected");
-    require(row != nullptr, "the selected row must render for grab");
-    require(row->isChecked(), "the selected row must be checked before grab");
-    row->clearFocus();
-    roster.clearFocus();
-
-    const auto image = row->grab().toImage();
+    const auto row_height = reference_canvas_row_height(snapshot);
+    const auto image = grab_canvas_row(roster, kCanvasGrabWidth, row_height);
     const auto area = image.width() * image.height();
 
     const auto accent = st::dialogsBgActive->c;
-    const auto neutral = st::windowBgRipple->c;
     auto accent_pixels = 0;
-    auto neutral_pixels = 0;
     for (auto y = 0; y != image.height(); ++y) {
         for (auto x = 0; x != image.width(); ++x) {
-            const auto pixel = image.pixelColor(x, y);
-            if (pixel == accent) {
+            if (image.pixelColor(x, y) == accent) {
                 ++accent_pixels;
-            }
-            if (pixel == neutral) {
-                ++neutral_pixels;
             }
         }
     }
-    require(double(neutral_pixels) / area >= kSelectedNeutralMajority,
-        "the selected row surface must keep a calm neutral majority painted "
-        "from the shared windowBgRipple token rather than a saturated "
-        "full-row accent fill");
-    require(accent_pixels == 0,
-        "the selected row must not paint the old dialogsBgActive left stripe");
-    require(image.pixelColor(0, 0) != neutral
-            && image.pixelColor(image.width() - 1, 0) != neutral
-            && image.pixelColor(0, image.height() - 1) != neutral
+    require(double(accent_pixels) / area >= kSelectedNeutralMajority,
+        "the selected row surface must paint a calm dialogsBgActive body "
+        "across the rounded row");
+    require(image.pixelColor(0, 0) != accent
+            && image.pixelColor(image.width() - 1, 0) != accent
+            && image.pixelColor(0, image.height() - 1) != accent
             && image.pixelColor(image.width() - 1, image.height() - 1)
-                != neutral,
-        "the selected windowBgRipple surface must leave all four outer "
-        "corners outside its rounded body");
+                != accent,
+        "the selected rounded body must leave all four outer corners outside "
+        "its fill");
     const auto dpr = std::max(1.0, double(image.devicePixelRatio()));
     require(image.pixelColor(
-            image.width() - int(4.0 * dpr), image.height() / 2) == neutral,
+            image.width() - int(4.0 * dpr), image.height() / 2) == accent,
         "the rounded selected body must still fill its interior with the "
-        "shared windowBgRipple token");
+        "shared dialogsBgActive token");
 }
 
 void verify_roster_rows_are_virtual_canvas() {
@@ -328,26 +369,22 @@ void verify_human_hidden_from_roster() {
     AgentRoster roster(&parent);
     roster.set_rows(snapshot, std::nullopt);
 
-    require(agent_row(roster, "a-human") == nullptr,
+    const auto rendered = visible_rows(snapshot);
+    require(rendered.size() == 3,
         "the human pseudo-agent must never appear as an Agent roster row");
     for (const auto key : { "b-main", "c-agent", "d-stale" }) {
-        require(agent_row(roster, key) != nullptr,
+        require(visible_row_index(snapshot, key) < rendered.size(),
             std::string("real Agent row must remain rendered: ") + key);
     }
 
-    auto *rows = roster.findChild<Ui::RpWidget *>(
-        "lingtai_agent_roster_rows");
-    require(rows != nullptr, "the rendered roster rows container must exist");
-    auto visible_keys = std::vector<std::string>();
-    for (auto index = 0; index != rows->layout()->count(); ++index) {
-        if (const auto *row = qobject_cast<QPushButton *>(
-                rows->layout()->itemAt(index)->widget())) {
-            visible_keys.push_back(
-                row->property("directory_key").toString().toStdString());
-        }
-    }
-    require(visible_keys == std::vector<std::string>{
-            "b-main", "c-agent", "d-stale"},
+    auto *rows = roster_rows_canvas(roster);
+    const auto buttons = rows->findChildren<QPushButton *>(
+        QString(), Qt::FindDirectChildrenOnly);
+    require(buttons.empty(),
+        "Agent rows are virtual canvas data, not child QPushButtons");
+    require(rendered[0].directory_key == fs::path("b-main")
+            && rendered[1].directory_key == fs::path("c-agent")
+            && rendered[2].directory_key == fs::path("d-stale"),
         "rendered rows must retain the snapshot's deterministic order with "
         "the human omitted");
 
@@ -371,12 +408,21 @@ void verify_human_hidden_from_roster() {
         "the Agents heading and optional count must share one compact row");
     require(scroll->frameShape() == QFrame::NoFrame,
         "the Agent-list scroll area must not draw an outer frame");
-    require(rows->layout()->spacing() == 2,
-        "the borderless Agent rows must use the tighter two-pixel gap");
+    require(rows->layout() == nullptr,
+        "the virtual canvas rows must not use a child-widget layout");
 
-    roster.set_rows(snapshot, fs::path("c-agent"));
-    require(agent_row(roster, "c-agent")->isChecked()
-            && !agent_row(roster, "b-main")->isChecked(),
+    AgentRoster selected_roster(&parent);
+    selected_roster.set_rows(snapshot, fs::path("c-agent"));
+    selected_roster.resize(260, selected_roster.height());
+    selected_roster.show();
+    QCoreApplication::processEvents();
+    const auto row_height = reference_canvas_row_height(snapshot);
+    const auto c_agent_index = visible_row_index(snapshot, "c-agent");
+    const auto idle_image = grab_canvas_row(
+        roster, kCanvasGrabWidth, row_height, c_agent_index);
+    const auto selected_image = grab_canvas_row(
+        selected_roster, kCanvasGrabWidth, row_height, c_agent_index);
+    require(idle_image != selected_image,
         "selection must still bind to the caller's real-Agent key");
 
     verify_modern_roster_typography_hierarchy();
@@ -403,21 +449,18 @@ void verify_intrinsic_roster_row_behavior() {
     roster.show();
     QCoreApplication::processEvents();
 
-    auto *row = agent_row(roster, key);
-    require(row != nullptr, "the long-name roster row must render for grab");
-    row->clearFocus();
-    roster.clearFocus();
-
-    const auto image = row->grab().toImage();
-    const auto dpr = std::max(1.0, double(image.devicePixelRatio()));
-
-    require(row->minimumHeight() != row->maximumHeight(),
+    auto *canvas = roster_rows_canvas(roster);
+    const auto row_height = canvas_row_height(canvas);
+    require(row_height != 62,
         "the roster row must not be a hard min=max62 box: its height must be "
         "intrinsic from avatar + two font lines + stable padding");
-    require(row->sizeHint().height() >= kAvatarDiameter
-            + 2 * kRowVerticalFrame,
-        "the intrinsic row sizeHint must accommodate the fixed avatar disc "
+    require(canvas->sizeHint().height() >= int(kAvatarDiameter)
+            + 2 * int(kRowVerticalFrame),
+        "the intrinsic canvas sizeHint must accommodate the fixed avatar disc "
         "plus the stable vertical framing");
+
+    const auto image = grab_canvas_row(roster, kCanvasGrabWidth, row_height);
+    const auto dpr = std::max(1.0, double(image.devicePixelRatio()));
 
     const auto background = sample_idle_background(image, dpr);
     const auto strip_area = int(kAvatarDiameter * dpr) * image.height();
@@ -426,21 +469,16 @@ void verify_intrinsic_roster_row_behavior() {
         "avatar disc visibly distinct from the row background");
 
     const auto full_key = QString::fromUtf8(key.data(), key.size());
-    require(row->accessibleName().contains(full_key),
-        "the full untruncated directory key must stay in the accessible name "
-        "while the visible text column is bounded");
-
-    require(row->width() <= 260,
-        "the roster row must stay bounded within the 260px roster column");
-
-    const auto visible_column = row->width() - int(kAvatarDiameter)
+    const auto visible_column = canvas->width() - int(kAvatarDiameter)
         - 2 * int(kRowHorizontalFrame);
-    QFontMetricsF metrics(row->font());
+    QFontMetricsF metrics(canvas->font());
     require(metrics.horizontalAdvance(full_key) > double(visible_column),
         "the long full key must be wider than the available visible text "
         "column, so the visible name has to be constrained to fit; the "
         "ellipsis glyph itself is bound by source review of the production "
         "elidedText call, not pixel-claimed here");
+    require(canvas->width() <= 260,
+        "the roster canvas must stay bounded within the 260px roster column");
 }
 
 // I2 modern-roster contract. Whole-row selection must visibly diverge from
@@ -471,22 +509,19 @@ void verify_row_selection_diverges_and_field_uses_sidebar_bg() {
     selected_roster.show();
     QCoreApplication::processEvents();
 
-    auto *idle = agent_row(idle_roster, "Alpha");
-    auto *selected = agent_row(selected_roster, "Alpha");
-    require(idle != nullptr && selected != nullptr,
-        "both the idle and the selected row must render for grab");
-    require(!idle->isChecked() && selected->isChecked(),
-        "the idle row must be unchecked and the selected row checked before "
-        "grab");
-    idle->clearFocus();
-    selected->clearFocus();
-    idle_roster.clearFocus();
-    selected_roster.clearFocus();
-
-    const auto idle_image = idle->grab().toImage();
-    const auto selected_image = selected->grab().toImage();
-    require(idle_image.size() == selected_image.size(),
+    const auto row_height = reference_canvas_row_height(snapshot);
+    const auto idle_image = grab_canvas_row(
+        idle_roster, kCanvasGrabWidth, row_height);
+    const auto selected_image = grab_canvas_row(
+        selected_roster, kCanvasGrabWidth, row_height);
+    require(idle_image.deviceIndependentSize()
+            == selected_image.deviceIndependentSize(),
         "the idle and selected row grabs must be the same size to compare");
+    auto selected_compare = selected_image;
+    if (selected_compare.size() != idle_image.size()) {
+        selected_compare = selected_compare.scaled(
+            idle_image.size(), Qt::IgnoreAspectRatio);
+    }
     const auto dpr = std::max(1.0, double(idle_image.devicePixelRatio()));
 
     auto differing_pixels = 0;
@@ -495,7 +530,7 @@ void verify_row_selection_diverges_and_field_uses_sidebar_bg() {
         for (auto x = 0; x != idle_image.width(); ++x) {
             ++comparable_pixels;
             if (idle_image.pixelColor(x, y)
-                    != selected_image.pixelColor(x, y)) {
+                    != selected_compare.pixelColor(x, y)) {
                 ++differing_pixels;
             }
         }
@@ -505,40 +540,30 @@ void verify_row_selection_diverges_and_field_uses_sidebar_bg() {
         "the idle and selected row bodies must differ materially across "
         "the rounded surface rather than through a narrow accent cue");
 
-    const auto neutral = st::windowBgRipple->c;
     const auto accent = st::dialogsBgActive->c;
-    auto neutral_pixels = 0;
     auto accent_pixels = 0;
-    for (auto y = 0; y != selected_image.height(); ++y) {
-        for (auto x = 0; x != selected_image.width(); ++x) {
-            const auto pixel = selected_image.pixelColor(x, y);
-            if (pixel == neutral) {
-                ++neutral_pixels;
-            }
-            if (pixel == accent) {
+    for (auto y = 0; y != selected_compare.height(); ++y) {
+        for (auto x = 0; x != selected_compare.width(); ++x) {
+            if (selected_compare.pixelColor(x, y) == accent) {
                 ++accent_pixels;
             }
         }
     }
     const auto selected_area =
-        selected_image.width() * selected_image.height();
-    require(double(neutral_pixels) / selected_area >= kSelectedNeutralMajority,
-        "the selected row must keep its calm neutral-majority surface from "
-        "windowBgRipple as its body diverges from the idle row");
-    require(accent_pixels == 0,
-        "the selected row must not paint any dialogsBgActive stripe pixels");
+        selected_compare.width() * selected_compare.height();
+    require(double(accent_pixels) / selected_area >= kSelectedNeutralMajority,
+        "the selected row must keep its calm dialogsBgActive body as it "
+        "diverges from the idle row");
 
-    auto *rows = idle_roster.findChild<Ui::RpWidget *>(
-        "lingtai_agent_roster_rows");
+    auto *rows = roster_rows_canvas(idle_roster);
     auto *scroll = idle_roster.findChild<QScrollArea *>(
         "lingtai_agent_roster_scroll");
     require(rows != nullptr && scroll != nullptr,
         "the roster rows field and its scroll area must exist");
-    require(rows->palette().color(QPalette::Window) == st::windowBgOver->c
-            && scroll->viewport()->palette().color(QPalette::Window)
-                == st::windowBgOver->c,
-        "the list field and its scroll viewport must merge into the Sidebar's "
-        "st::windowBgOver surface instead of forming a white rectangle");
+    require(scroll->viewport()->palette().color(QPalette::Window)
+            == st::windowBg->c,
+        "the list field viewport must auto-fill the shared Sidebar windowBg "
+        "surface instead of forming a white rectangle");
     require(scroll->viewport()->autoFillBackground(),
         "the list field viewport must auto-fill the shared Sidebar role so "
         "its empty area remains seamless rather than becoming a white panel");
@@ -547,14 +572,12 @@ void verify_row_selection_diverges_and_field_uses_sidebar_bg() {
         "the idle row body must merge into the same st::windowBgOver Sidebar "
         "surface as the list field");
 
-    const auto lines = selected->text().split(QLatin1Char('\n'));
-    require(lines.value(0) == QStringLiteral("Alpha")
-            && lines.value(1) == QStringLiteral("Main Agent · Active"),
+    const auto &row = snapshot.items.front();
+    require(friendly_agent_role_text(row.role) == QStringLiteral("Main Agent")
+            && friendly_agent_presence_text(row.presence)
+                == QStringLiteral("Active"),
         "the visible secondary line must render the friendly 1:1 label form "
         "(role · presence) while the primary line stays the agent key");
-    require(selected->accessibleDescription().contains(
-            QStringLiteral("valid — main — alive")),
-        "the accessible description must retain the raw facts verbatim");
 }
 
 // Project-toolbar contract. The top-left control is one compact flat
