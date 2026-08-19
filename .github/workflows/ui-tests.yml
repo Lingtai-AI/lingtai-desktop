@@ -34,16 +34,16 @@ jobs:
 
       - name: Bootstrap dependencies
         env:
-          QT_ROOT: ${{ env.QT_ROOT_DIR }}/macos
+          QT_ROOT: ${{ env.QT_ROOT_DIR }}
         run: ./scripts/bootstrap-deps.sh
 
       - name: Configure
         env:
-          QT_ROOT: ${{ env.QT_ROOT_DIR }}/macos
+          QT_ROOT: ${{ env.QT_ROOT_DIR }}
         run: ./scripts/configure.sh
 
       - name: Build
-        run: ./scripts/build.sh
+        run: cmake --build build --parallel
 
       - name: Repository contract
         run: python3 -m unittest tests.test_repository_contract
