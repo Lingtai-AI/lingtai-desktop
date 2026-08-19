@@ -191,7 +191,8 @@ add_library(lingtai_desktop_native_shell STATIC
     src/native_window_background.mm
     src/project_bootstrap.cpp
     src/ui/agent_roster.cpp
-    src/ui/conversation_surface.cpp)
+    src/ui/conversation_surface.cpp
+    src/ui/slash_command_card.cpp)
 init_target(lingtai_desktop_native_shell)
 qt_add_resources(lingtai_desktop_native_shell "lingtai_startup_assets"
     PREFIX "/lingtai/startup"

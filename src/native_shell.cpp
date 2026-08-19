@@ -19,6 +19,10 @@
 #include "ui/palette_action_button.h"
 #include "ui/palette_icon_button.h"
 #include "ui/palette_surface.h"
+#include "ui/preset_row_delegate.h"
+#include "ui/roster_resize_handle.h"
+#include "ui/selected_agent_avatar.h"
+#include "ui/slash_command_card.h"
 
 #include "base/event_filter.h"
 #include "base/integration.h"
@@ -172,62 +176,13 @@ void apply_project_setup_palette(QWidget *root) {
     apply_preset_catalog_chrome(root);
 }
 
-constexpr auto kPresetSummaryRole = Qt::UserRole + 10;
-constexpr auto kPresetSectionRole = Qt::UserRole + 11;
-constexpr auto kPresetCapabilitiesRole = Qt::UserRole + 12;
-constexpr auto kPresetRowHeight = 52;
-constexpr auto kPresetSectionHeight = 28;
+// Preset catalog constants: see ui/preset_row_delegate.h
+// Search layout constants remain local.
 constexpr auto kPresetSearchPreferredWidth = 480;
 constexpr auto kPresetSearchMinWidth = 240;
 constexpr auto kPresetSearchMaxWidth = 520;
-constexpr auto kPresetSelectionRail = 3;
 
-struct PresetCatalogTokens {
-    QColor surface;
-    QColor header;
-    QColor section_band;
-    QColor section_text;
-    QColor divider;
-    QColor selected_row;
-    QColor selection_accent;
-    QColor border;
-    QColor tag_fill;
-    QColor value_text;
-};
-
-bool preset_catalog_is_dark(const QPalette &palette) {
-    if (st::windowBg->c.lightness() < 128) return true;
-    return palette.color(QPalette::Window).lightness() < 128;
-}
-
-PresetCatalogTokens preset_catalog_tokens(const QPalette &palette) {
-    if (preset_catalog_is_dark(palette)) {
-        return {
-            QColor(QStringLiteral("#181B1A")),
-            QColor(QStringLiteral("#202422")),
-            QColor(QStringLiteral("#222A26")),
-            QColor(QStringLiteral("#B8CBC2")),
-            QColor(255, 255, 255, 20),
-            QColor(QStringLiteral("#213A31")),
-            QColor(QStringLiteral("#78C9A7")),
-            QColor(255, 255, 255, 20),
-            QColor(QStringLiteral("#222A26")),
-            QColor(QStringLiteral("#E8EEEA")),
-        };
-    }
-    return {
-        QColor(QStringLiteral("#FFFFFF")),
-        QColor(QStringLiteral("#F1F3F2")),
-        QColor(QStringLiteral("#EDF3F0")),
-        QColor(QStringLiteral("#4D6259")),
-        QColor(0, 0, 0, 20),
-        QColor(QStringLiteral("#E7F4EF")),
-        QColor(QStringLiteral("#16785C")),
-        QColor(QStringLiteral("#DCE2DF")),
-        QColor(0, 0, 0, 8),
-        QColor(QStringLiteral("#1F2933")),
-    };
-}
+// PresetCatalogTokens, preset_catalog_tokens: see ui/preset_row_delegate.h
 
 void apply_one_preset_catalog_chrome(QTreeWidget *table, const QPalette &root_palette) {
     if (!table) return;
@@ -287,163 +242,9 @@ void apply_preset_catalog_chrome(QWidget *root) {
     }
 }
 
-bool is_preset_section_index(const QModelIndex &index) {
-    return index.isValid()
-        && index.siblingAtColumn(0).data(kPresetSectionRole).toBool();
-}
+// is_preset_section_index, preset_section_band_rect: see ui/preset_row_delegate.h
 
-QRect preset_section_band_rect(
-        const QStyleOptionViewItem &option, const QModelIndex &index) {
-    auto band = option.rect;
-    const auto *view = qobject_cast<const QAbstractItemView *>(option.widget);
-    if (!view || !index.model()) {
-        return band;
-    }
-    const auto last = index.model()->columnCount(index.parent()) - 1;
-    return view->visualRect(index.siblingAtColumn(0)).united(
-        view->visualRect(index.siblingAtColumn(last)));
-}
-
-class PresetRowDelegate final : public QStyledItemDelegate {
-public:
-    using QStyledItemDelegate::QStyledItemDelegate;
-
-    void paint(
-            QPainter *painter,
-            const QStyleOptionViewItem &option,
-            const QModelIndex &index) const override {
-        auto opt = option;
-        initStyleOption(&opt, index);
-        painter->save();
-        painter->setRenderHint(QPainter::Antialiasing, true);
-        if (is_preset_section_index(index)) {
-            if (index.column() != 0) {
-                painter->restore();
-                return;
-            }
-            const auto tokens = preset_catalog_tokens(opt.palette);
-            const auto band = preset_section_band_rect(opt, index);
-            painter->setClipRect(band);
-            painter->fillRect(band, tokens.section_band);
-            painter->setPen(tokens.divider);
-            painter->drawLine(band.topLeft(), band.topRight());
-            painter->drawLine(band.bottomLeft(), band.bottomRight());
-            auto section_font = opt.font;
-            section_font.setPointSize(10);
-            section_font.setWeight(QFont::DemiBold);
-            section_font.setLetterSpacing(QFont::PercentageSpacing, 118);
-            painter->setFont(section_font);
-            painter->setPen(tokens.section_text);
-            painter->drawText(
-                band.adjusted(12, 0, -12, 0),
-                Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
-                index.data(Qt::DisplayRole).toString().toUpper());
-            painter->restore();
-            return;
-        }
-        painter->setClipRect(opt.rect);
-        const auto tokens = preset_catalog_tokens(opt.palette);
-        const auto selected = opt.state.testFlag(QStyle::State_Selected);
-        if (selected) {
-            painter->fillRect(opt.rect, tokens.selected_row);
-            if (index.column() == 0) {
-                painter->fillRect(
-                    QRect(opt.rect.left(), opt.rect.top(),
-                        kPresetSelectionRail, opt.rect.height()),
-                    tokens.selection_accent);
-            }
-        }
-        const auto text_color = tokens.value_text;
-        const auto muted = tokens.section_text;
-        const auto inner = opt.rect.adjusted(12, 5, -10, -5);
-        if (index.column() == 0) {
-            const auto name = index.data(Qt::DisplayRole).toString();
-            const auto summary = index.data(kPresetSummaryRole).toString();
-            auto name_font = opt.font;
-            name_font.setPointSize(13);
-            name_font.setWeight(QFont::DemiBold);
-            painter->setFont(name_font);
-            painter->setPen(text_color);
-            const auto name_height = summary.isEmpty()
-                ? inner.height()
-                : inner.height() / 2;
-            const auto name_rect = QRect(
-                inner.left(), inner.top(), inner.width(), name_height);
-            painter->drawText(
-                name_rect, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
-                painter->fontMetrics().elidedText(
-                    name, Qt::ElideRight, name_rect.width()));
-            if (!summary.isEmpty()) {
-                auto summary_font = opt.font;
-                summary_font.setPointSize(10);
-                summary_font.setWeight(QFont::Normal);
-                painter->setFont(summary_font);
-                painter->setPen(muted);
-                const auto summary_rect = QRect(
-                    inner.left(), inner.top() + name_height,
-                    inner.width(), inner.height() - name_height);
-                painter->drawText(
-                    summary_rect,
-                    Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
-                    painter->fontMetrics().elidedText(
-                        summary, Qt::ElideRight, summary_rect.width()));
-            }
-        } else if (index.column() == 2) {
-            auto tags = index.siblingAtColumn(0).data(kPresetCapabilitiesRole)
-                .toStringList();
-            if (tags.isEmpty()) {
-                const auto capability = index.data(Qt::DisplayRole).toString();
-                if (!capability.isEmpty()) {
-                    tags = capability.split(QStringLiteral(", "),
-                        Qt::SkipEmptyParts);
-                }
-            }
-            auto tag_font = opt.font;
-            tag_font.setPointSize(10);
-            tag_font.setWeight(QFont::Medium);
-            painter->setFont(tag_font);
-            auto x = inner.left();
-            for (const auto &tag : tags) {
-                const auto chip_width =
-                    painter->fontMetrics().horizontalAdvance(tag) + 14;
-                const auto chip = QRect(
-                    x, inner.center().y() - 9, chip_width, 18);
-                painter->setPen(QPen(tokens.border, 1));
-                painter->setBrush(tokens.tag_fill);
-                painter->drawRoundedRect(chip.adjusted(0, 0, -1, -1), 6, 6);
-                painter->setPen(tokens.selection_accent);
-                painter->drawText(chip, Qt::AlignCenter, tag);
-                x += chip_width + 6;
-            }
-        } else {
-            auto provider_font = opt.font;
-            provider_font.setPointSize(12);
-            provider_font.setWeight(QFont::Normal);
-            painter->setFont(provider_font);
-            painter->setPen(muted);
-            painter->drawText(
-                inner, Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
-                painter->fontMetrics().elidedText(
-                    index.data(Qt::DisplayRole).toString(),
-                    Qt::ElideRight, inner.width()));
-        }
-        if (index.column() == 0) {
-            const auto line = preset_section_band_rect(opt, index);
-            painter->setPen(tokens.divider);
-            painter->drawLine(line.bottomLeft(), line.bottomRight());
-        }
-        painter->restore();
-    }
-
-    QSize sizeHint(
-            const QStyleOptionViewItem &,
-            const QModelIndex &index) const override {
-        if (is_preset_section_index(index)) {
-            return {120, kPresetSectionHeight};
-        }
-        return {120, kPresetRowHeight};
-    }
-};
+// PresetRowDelegate: see ui/preset_row_delegate.h
 
 QStringList preset_capability_tags(bool has_vision, bool has_tools) {
     QStringList tags;
@@ -495,42 +296,7 @@ QString preset_footer_rich(
     return html;
 }
 
-bool is_preset_section(const QTreeWidgetItem *item) {
-    return item && item->data(0, kPresetSectionRole).toBool();
-}
-
-QTreeWidgetItem *add_preset_section(QTreeWidget *table, const QString &title) {
-    auto *item = new QTreeWidgetItem(table);
-    item->setText(0, title);
-    item->setFlags(Qt::ItemIsEnabled);
-    for (auto column = 0; column != table->columnCount(); ++column) {
-        item->setData(column, kPresetSectionRole, true);
-    }
-    item->setFirstColumnSpanned(true);
-    return item;
-}
-
-void configure_preset_table(QTreeWidget *table) {
-    table->setRootIsDecorated(false);
-    table->setUniformRowHeights(false);
-    table->setIndentation(0);
-    table->setItemsExpandable(false);
-    table->setAnimated(false);
-    table->setItemDelegate(new PresetRowDelegate(table));
-    table->setSelectionMode(QAbstractItemView::SingleSelection);
-    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    table->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    table->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    table->setAutoFillBackground(true);
-    table->viewport()->setAutoFillBackground(true);
-    table->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
-    table->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    table->header()->setVisible(true);
-    table->header()->setStretchLastSection(true);
-    table->header()->setSectionResizeMode(0, QHeaderView::Stretch);
-    table->header()->setSectionResizeMode(1, QHeaderView::Stretch);
-    table->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
-}
+// is_preset_section, add_preset_section, configure_preset_table: see ui/preset_row_delegate.h
 
 void add_preset_catalog_row(
         QTreeWidget *table, const PresetCatalogRow &row, int index) {
@@ -548,21 +314,7 @@ void add_preset_catalog_row(
     item->setToolTip(1, row.provider_model);
 }
 
-QTreeWidgetItem *adjacent_preset_row(
-        QTreeWidget *table, int from, int step) {
-    if (!table || step == 0) {
-        return nullptr;
-    }
-    for (auto index = from + step;
-            index >= 0 && index < table->topLevelItemCount();
-            index += step) {
-        auto *item = table->topLevelItem(index);
-        if (!is_preset_section(item) && !item->isHidden()) {
-            return item;
-        }
-    }
-    return nullptr;
-}
+// adjacent_preset_row: see ui/preset_row_delegate.h
 
 void recompute_setup_layout(QWidget *root) {
     if (!root) return;
@@ -784,62 +536,7 @@ protected:
     }
 };
 
-// One LingTai-owned semantic drag handle for the roster column: a fixed 8px
-// strip between the roster and its one-pixel shadow that reports only the
-// pointer's current global x while the primary button is held, so the shell
-// can re-derive the runtime-only roster width ratio. It paints nothing and is
-// deliberately distinct from the passive `Ui::PlainShadow` that follows it.
-class RosterResizeHandle final : public QWidget {
-public:
-    using GlobalXCallback = std::function<void(int global_x)>;
-
-    explicit RosterResizeHandle(QWidget *parent, GlobalXCallback callback)
-    : QWidget(parent)
-    , callback_(std::move(callback)) {
-        setFixedWidth(kRosterResizeHandleWidth);
-        setCursor(Qt::SplitHCursor);
-        auto policy = sizePolicy();
-        policy.setVerticalPolicy(QSizePolicy::Expanding);
-        setSizePolicy(policy);
-    }
-
-protected:
-    void paintEvent(QPaintEvent *) override {
-        QPainter painter(this);
-        painter.fillRect(rect(), st::windowBg->c);
-    }
-
-    void mousePressEvent(QMouseEvent *event) override {
-        if (event->button() == Qt::LeftButton) {
-            dragging_ = true;
-            event->accept();
-            return;
-        }
-        QWidget::mousePressEvent(event);
-    }
-
-    void mouseMoveEvent(QMouseEvent *event) override {
-        if (dragging_) {
-            callback_(event->globalPosition().toPoint().x());
-            event->accept();
-            return;
-        }
-        QWidget::mouseMoveEvent(event);
-    }
-
-    void mouseReleaseEvent(QMouseEvent *event) override {
-        if (event->button() == Qt::LeftButton) {
-            dragging_ = false;
-            event->accept();
-            return;
-        }
-        QWidget::mouseReleaseEvent(event);
-    }
-
-private:
-    GlobalXCallback callback_;
-    bool dragging_ = false;
-};
+// RosterResizeHandle: see ui/roster_resize_handle.h
 
 // Compact selected-Agent page navigation: a plain text tab that is never a
 // filled rectangular slab, or a Kanban-style back link (`←  …`) when the
@@ -893,260 +590,9 @@ protected:
 
 // PaletteIconButton: see ui/palette_icon_button.h
 
-void paint_slash_glyph(
-        QPainter &painter,
-        const QRectF &box,
-        const QString &name,
-        const QColor &ink,
-        const QColor &well [[maybe_unused]]) {
-    painter.save();
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setPen(QPen(ink, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    painter.setBrush(Qt::NoBrush);
-    const auto c = box.center();
-    if (name == QLatin1String("agents")) {
-        painter.setBrush(ink);
-        painter.setPen(Qt::NoPen);
-        painter.drawEllipse(QRectF(c.x() - 6.5, c.y() - 6.2, 7.2, 7.2));
-        painter.drawEllipse(QRectF(c.x() - 0.2, c.y() - 6.2, 7.2, 7.2));
-        painter.drawChord(QRectF(c.x() - 8.0, c.y() + 0.6, 10.5, 9.5), 0, 180 * 16);
-        painter.drawChord(QRectF(c.x() - 2.0, c.y() + 0.6, 10.5, 9.5), 0, 180 * 16);
-    } else if (name == QLatin1String("presets")
-            || name == QLatin1String("setup")) {
-        for (auto i = 0; i < 3; ++i) {
-            const auto y = box.top() + 7.5 + i * 6.2;
-            painter.drawLine(QPointF(box.left() + 6, y), QPointF(box.right() - 6, y));
-            painter.setBrush(ink);
-            painter.drawEllipse(QPointF(box.left() + 9.5 + i * 5.0, y), 2.1, 2.1);
-            painter.setBrush(Qt::NoBrush);
-        }
-    } else if (name == QLatin1String("sleep")) {
-        QPainterPath moon;
-        moon.addEllipse(c, 6.4, 6.4);
-        QPainterPath hole;
-        hole.addEllipse(c + QPointF(3.2, -2.0), 5.5, 5.5);
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(ink);
-        painter.drawPath(moon.subtracted(hole));
-    } else if (name == QLatin1String("cpr")) {
-        QPainterPath bolt;
-        bolt.moveTo(c.x() + 1.2, box.top() + 6);
-        bolt.lineTo(c.x() - 3.8, c.y() + 0.4);
-        bolt.lineTo(c.x() + 0.2, c.y() + 0.4);
-        bolt.lineTo(c.x() - 1.4, box.bottom() - 6);
-        bolt.lineTo(c.x() + 3.8, c.y() - 0.2);
-        bolt.lineTo(c.x() - 0.2, c.y() - 0.2);
-        bolt.closeSubpath();
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(ink);
-        painter.drawPath(bolt);
-    } else if (name == QLatin1String("clear")) {
-        painter.drawRoundedRect(box.adjusted(6.5, 6.5, -6.5, -6.5), 2.5, 2.5);
-        painter.drawLine(c + QPointF(-3.2, -3.2), c + QPointF(3.2, 3.2));
-        painter.drawLine(c + QPointF(3.2, -3.2), c + QPointF(-3.2, 3.2));
-    } else if (name == QLatin1String("refresh")) {
-        QRectF arc(box.adjusted(7, 7, -7, -7));
-        painter.drawArc(arc, 40 * 16, 260 * 16);
-        QPainterPath head;
-        const auto tip = QPointF(arc.center().x() + 5.2, arc.top() + 1.5);
-        head.moveTo(tip);
-        head.lineTo(tip + QPointF(-4.4, 0.6));
-        head.lineTo(tip + QPointF(-0.4, 4.6));
-        painter.setBrush(ink);
-        painter.setPen(Qt::NoPen);
-        painter.drawPath(head);
-    } else if (name == QLatin1String("suspend")) {
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(ink);
-        painter.drawRoundedRect(QRectF(c.x() - 4.6, c.y() - 5.2, 3.2, 10.4), 1.2, 1.2);
-        painter.drawRoundedRect(QRectF(c.x() + 1.4, c.y() - 5.2, 3.2, 10.4), 1.2, 1.2);
-    } else if (name == QLatin1String("help")) {
-        painter.drawEllipse(box.adjusted(6, 6, -6, -6));
-        auto font = painter.font();
-        font.setPixelSize(11);
-        font.setWeight(QFont::DemiBold);
-        painter.setFont(font);
-        painter.drawText(box.adjusted(0, -1, 0, 0), Qt::AlignCenter, QStringLiteral("?"));
-    } else if (name == QLatin1String("quit")) {
-        painter.drawRoundedRect(box.adjusted(7.5, 6.5, -7.5, -6.5), 2.2, 2.2);
-        painter.drawLine(QPointF(box.right() - 7.5, c.y()), QPointF(box.right() - 2.8, c.y()));
-        painter.drawLine(QPointF(box.right() - 5.4, c.y() - 2.6), QPointF(box.right() - 2.8, c.y()));
-        painter.drawLine(QPointF(box.right() - 5.4, c.y() + 2.6), QPointF(box.right() - 2.8, c.y()));
-    } else {
-        painter.drawEllipse(box.adjusted(7, 7, -7, -7));
-        painter.drawText(box, Qt::AlignCenter, QStringLiteral("/"));
-    }
-    painter.restore();
-}
+// paint_slash_glyph: see ui/slash_command_card.cpp
 
-class SlashOfferDelegate final : public QStyledItemDelegate {
-public:
-    using QStyledItemDelegate::QStyledItemDelegate;
-
-    void paint(
-            QPainter *painter,
-            const QStyleOptionViewItem &option,
-            const QModelIndex &index) const override {
-        painter->save();
-        painter->setRenderHint(QPainter::Antialiasing, true);
-        const auto selected = option.state.testFlag(QStyle::State_Selected)
-            || option.state.testFlag(QStyle::State_MouseOver);
-        const auto name = index.data(Qt::UserRole).toString();
-        const auto blurb = index.data(Qt::UserRole + 1).toString();
-        const auto accent = st::defaultActiveButton.textBg->c;
-        const auto row = option.rect.adjusted(6, 2, -6, -2);
-        if (selected) {
-            auto wash = accent;
-            wash.setAlpha(28);
-            painter->setPen(Qt::NoPen);
-            painter->setBrush(wash);
-            painter->drawRoundedRect(row, 10, 10);
-            painter->setBrush(accent);
-            painter->drawRoundedRect(
-                QRect(row.left() + 3, row.top() + 10, 3, row.height() - 20),
-                1.5, 1.5);
-        }
-        const auto well = QRect(row.left() + 12, row.center().y() - 14, 28, 28);
-        auto well_fill = accent;
-        well_fill.setAlpha(selected ? 36 : 22);
-        painter->setPen(Qt::NoPen);
-        painter->setBrush(well_fill);
-        painter->drawRoundedRect(well, 8, 8);
-        paint_slash_glyph(*painter, well, name, accent, well_fill);
-
-        auto name_font = option.font;
-        name_font.setPointSize(13);
-        name_font.setWeight(QFont::DemiBold);
-        auto blurb_font = option.font;
-        blurb_font.setPointSize(11);
-        blurb_font.setWeight(QFont::Normal);
-        const auto text_left = well.right() + 12;
-        const auto text_width = row.right() - 14 - text_left;
-        painter->setFont(name_font);
-        painter->setPen(st::windowFg->c);
-        painter->drawText(
-            QRect(text_left, row.top() + 7, text_width, 18),
-            Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
-            QStringLiteral("/%1").arg(name));
-        painter->setFont(blurb_font);
-        painter->setPen(st::windowSubTextFg->c);
-        painter->drawText(
-            QRect(text_left, row.top() + 25, text_width, 16),
-            Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
-            blurb);
-        painter->restore();
-    }
-
-    QSize sizeHint(
-            const QStyleOptionViewItem &,
-            const QModelIndex &) const override {
-        return {320, 52};
-    }
-};
-
-constexpr auto kSlashCardShadow = 14;
-constexpr auto kSlashRowHeight = 52;
-
-class SlashCommandCard final : public QWidget {
-public:
-    explicit SlashCommandCard(QWidget *parent)
-    : QWidget(parent) {
-        setObjectName("lingtai_slash_command_card");
-        setAttribute(Qt::WA_TranslucentBackground);
-        setAttribute(Qt::WA_ShowWithoutActivating);
-        setFocusPolicy(Qt::NoFocus);
-        auto *layout = new QVBoxLayout(this);
-        layout->setContentsMargins(
-            kSlashCardShadow, 10, kSlashCardShadow, kSlashCardShadow + 4);
-        layout->setSpacing(0);
-        header_ = new QLabel(QStringLiteral("Commands"), this);
-        header_->setObjectName("lingtai_slash_command_header");
-        header_->setAttribute(Qt::WA_TransparentForMouseEvents);
-        auto header_font = header_->font();
-        header_font.setPointSize(10);
-        header_font.setWeight(QFont::DemiBold);
-        header_font.setCapitalization(QFont::AllUppercase);
-        header_->setFont(header_font);
-        header_->setContentsMargins(18, 10, 18, 6);
-        layout->addWidget(header_);
-        list_ = new QListWidget(this);
-        list_->setObjectName("lingtai_slash_command_popup");
-        list_->setAccessibleName(QStringLiteral("Slash commands"));
-        list_->setFocusPolicy(Qt::NoFocus);
-        list_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        list_->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-        list_->setSelectionMode(QAbstractItemView::SingleSelection);
-        list_->setMouseTracking(true);
-        list_->setFrameShape(QFrame::NoFrame);
-        list_->setItemDelegate(new SlashOfferDelegate(list_));
-        list_->setSpacing(0);
-        list_->setUniformItemSizes(true);
-        list_->setAutoFillBackground(false);
-        list_->viewport()->setAutoFillBackground(false);
-        list_->viewport()->setMouseTracking(true);
-        layout->addWidget(list_, 1);
-        hint_ = new QLabel(
-            QStringLiteral("↑↓ Navigate    ↵ Select    Esc Dismiss"), this);
-        hint_->setObjectName("lingtai_slash_command_hint");
-        hint_->setAttribute(Qt::WA_TransparentForMouseEvents);
-        auto hint_font = hint_->font();
-        hint_font.setPointSize(10);
-        hint_->setFont(hint_font);
-        hint_->setContentsMargins(18, 4, 18, 10);
-        layout->addWidget(hint_);
-        apply_palette();
-        hide();
-    }
-
-    [[nodiscard]] QListWidget *list() const { return list_; }
-
-    void apply_palette() {
-        auto palette = this->palette();
-        palette.setColor(QPalette::Window, st::windowBg->c);
-        palette.setColor(QPalette::Base, Qt::transparent);
-        palette.setColor(QPalette::Text, st::windowFg->c);
-        palette.setColor(QPalette::Highlight, Qt::transparent);
-        palette.setColor(QPalette::HighlightedText, st::windowFg->c);
-        setPalette(palette);
-        list_->setPalette(palette);
-        list_->setStyleSheet(QStringLiteral(
-            "QListWidget { background: transparent; border: none; outline: none; }"
-            "QListWidget::item { border: none; padding: 0; }"));
-        auto header_palette = header_->palette();
-        header_palette.setColor(QPalette::WindowText, st::windowSubTextFg->c);
-        header_->setPalette(header_palette);
-        auto hint_palette = hint_->palette();
-        hint_palette.setColor(QPalette::WindowText, st::windowSubTextFg->c);
-        hint_->setPalette(hint_palette);
-        update();
-        list_->viewport()->update();
-    }
-
-protected:
-    void paintEvent(QPaintEvent *) override {
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-        const auto card = rect().adjusted(
-            kSlashCardShadow, 6, -kSlashCardShadow, -(kSlashCardShadow - 2));
-        auto shadow = st::windowFg->c;
-        for (auto i = 5; i >= 1; --i) {
-            shadow.setAlpha(6 * (6 - i));
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(shadow);
-            painter.drawRoundedRect(card.adjusted(-i, i - 1, i, i + 1), 16, 16);
-        }
-        painter.setBrush(st::windowBg->c);
-        painter.setPen(QPen(QColor(st::defaultActiveButton.textBg->c.red(),
-            st::defaultActiveButton.textBg->c.green(),
-            st::defaultActiveButton.textBg->c.blue(), 40), 1));
-        painter.drawRoundedRect(card, 14, 14);
-    }
-
-private:
-    QListWidget *list_ = nullptr;
-    QLabel *header_ = nullptr;
-    QLabel *hint_ = nullptr;
-};
+// SlashOfferDelegate, SlashCommandCard: see ui/slash_command_card.h
 
 void apply_slash_popup_palette(QListWidget *popup) {
     if (!popup) return;
@@ -1236,45 +682,7 @@ void refresh_slash_command_popup(
     popup->show();
 }
 
-// The selected-Agent header reuses the Sidebar's initial-circle avatar
-// language on a neutral header surface. The owning title is also exposed as
-// its accessibility description, so the glyph never becomes an opaque icon.
-class SelectedAgentAvatar final : public QWidget {
-public:
-    explicit SelectedAgentAvatar(QWidget *parent)
-    : QWidget(parent) {
-        setFixedSize(38, 38);
-        setAccessibleName(QStringLiteral("Selected Agent avatar"));
-        setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-    }
-
-    void set_agent_name(QString name) {
-        if (name_ == name) return;
-        name_ = std::move(name);
-        setAccessibleDescription(name_);
-        update();
-    }
-
-protected:
-    void paintEvent(QPaintEvent *) override {
-        if (name_.isEmpty()) return;
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(st::dialogsNameFg);
-        painter.drawEllipse(QRectF(rect()).adjusted(1, 1, -1, -1));
-        auto font = this->font();
-        font.setPointSize(13);
-        font.setWeight(QFont::DemiBold);
-        painter.setFont(font);
-        painter.setPen(st::windowBg);
-        painter.drawText(
-            rect(), Qt::AlignCenter, name_.left(1).toUpper());
-    }
-
-private:
-    QString name_;
-};
+// SelectedAgentAvatar: see ui/selected_agent_avatar.h
 
 // One shared structural owner for the one retained read-only selected-Agent
 // source section (Presets). Each section directly owns its own semibold
@@ -1760,7 +1168,7 @@ NativeShell::NativeShell()
     // is held, so the shell re-derives the runtime-only roster width ratio. It
     // is distinct from the passive one-pixel shadow that immediately follows
     // it.
-    auto *resize_handle = new RosterResizeHandle(body, [this, body](int global_x) {
+    auto *resize_handle = new RosterResizeHandle(body, kRosterResizeHandleWidth, [this, body](int global_x) {
         const auto body_width = body->width();
         const auto usable = body_width - kRosterResizeHandleWidth
             - kRosterSeparatorWidth;

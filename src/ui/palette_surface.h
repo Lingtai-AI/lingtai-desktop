@@ -1,5 +1,7 @@
 #pragma once
 
+#include "base/basic_types.h"
+
 #include "ui/rp_widget.h"
 
 #include "styles/palette.h"
