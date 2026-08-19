@@ -350,14 +350,19 @@ Partial work already landed; treat as inputs to this plan, not completion:
 | `RuntimeOptions` + `resolve_runtime_options` | **Done** (`ui_test_mode`, `--ui-test`, env vars, activity timer guard) |
 | Phase 4 harness (`UiTestHarness.h`, empty fixture, `ui_test_harness`) | **Done** |
 | Phase 5–6 functional test + viewports (`ui_agent_detail_pages`) | **Done** |
+| Phases 7–10 visual utils + baseline update flow | **Done** |
+| Phases 11–12 first visual snapshots + `visual` labels | **Done** (2 snapshots, normal/light) |
+| Phase 13 `run-ui-tests.sh` | **Done** |
+| Phases 15–16 macOS GitHub Actions | **Done** (`.github/workflows/ui-tests.yml`; not yet green on remote) |
 | `AgentDetailView` extraction + delegation | Done |
 | Headless widget test `agent_detail_view_test` | Done (narrow contract, not full visual suite) |
 | Stable `lingtai_*` objectNames | Largely present; registry in `tests/ui/OBJECT_NAMES.md` + `object_names.h` |
-| CTest labels `unit` / `ui` / `visual` | **Done** (`unit` ×13, `ui` ×9; no `visual` tests yet) |
-| Phase 1 dirs + scripts (`run-ui-tests.sh`, `update-ui-baselines.sh`, `ci/run-ui-macos.sh`) | **Done** |
-| `VisualTestUtils` stub + baseline dir layout | **Done** (compare logic lands Milestone 4) |
-| macOS CI workflow | Not yet |
-| Full-window tests stable in automated mac environment | **Blocker to resolve** for mac CI (QRhi / window startup in headless runs) |
+| CTest labels `unit` / `ui` / `visual` | **Done** (`unit` ×13, `ui` ×10, `visual` ×1) |
+| Phase 1 dirs + scripts | **Done** |
+| Full `native_shell_behavior` suite in headless agent sandboxes | **Blocker** (QRhi / no display; use macOS + cocoa) |
+| CI workflow first green run on GitHub | **Blocker to verify** (Qt path, bootstrap, runner display) |
+| Phase 11 expansion (compact/wide/dark, ~10–20 snapshots) | Not yet |
+| Phase 14 failure video | Deferred (optional) |
 
 Next engineering priority for mac CI: make full `NativeShell` / `Ui::RpWindow`
 startup reliable under macOS test runners without changing production behavior
