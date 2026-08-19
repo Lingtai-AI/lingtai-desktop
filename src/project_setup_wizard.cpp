@@ -8,7 +8,7 @@ ProjectSetupWizard::ProjectSetupWizard(QWidget *parent)
 : QWidget(parent) {
     setObjectName("lingtai_project_setup_wizard");
     setAccessibleName(QStringLiteral("Set up LingTai project"));
-    setMinimumSize(840, 600);
+    setMinimumSize(0, 0);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setFocusPolicy(Qt::StrongFocus);
 }
