@@ -177,7 +177,14 @@ int main(int argc, char **argv) {
         return 2;
     }
     try {
-        const auto sandbox = std::filesystem::canonical(argv[1]);
+        std::error_code dir_error;
+        fs::create_directories(argv[1], dir_error);
+        if (dir_error) {
+            throw std::runtime_error(
+                "presets sandbox directory must be creatable: "
+                + dir_error.message());
+        }
+        const auto sandbox = fs::canonical(argv[1]);
         std::filesystem::current_path(sandbox);
         QApplication application(argc, argv);
         lingtai::desktop::NativeShell shell;
