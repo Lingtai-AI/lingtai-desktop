@@ -468,6 +468,35 @@ else()
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
+add_executable(lingtai_ui_agent_detail_pages_test
+    tests/ui/agent_detail_pages_test.cpp
+    src/crl_integration.cpp)
+init_target(lingtai_ui_agent_detail_pages_test)
+target_compile_options(lingtai_ui_agent_detail_pages_test PRIVATE
+    -Wall -Wextra -Werror -pedantic
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-unused-parameter>
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-deprecated-this-capture>
+    $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-unused-parameter>
+    $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-deprecated-this-capture>)
+target_include_directories(lingtai_ui_agent_detail_pages_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+target_compile_definitions(lingtai_ui_agent_detail_pages_test PRIVATE
+    LINGTAI_UI_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+target_link_libraries(lingtai_ui_agent_detail_pages_test PRIVATE
+    lingtai_desktop_native_shell
+    desktop-app::lib_ui
+    Qt6::Widgets Qt6::Gui Qt6::Core)
+add_test(NAME ui_agent_detail_pages
+    COMMAND lingtai_ui_agent_detail_pages_test)
+if(APPLE)
+    set_tests_properties(ui_agent_detail_pages PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
+else()
+    set_tests_properties(ui_agent_detail_pages PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
 add_executable(lingtai_kanban_model_test
     tests/kanban_model_test.cpp)
 init_target(lingtai_kanban_model_test)
@@ -722,7 +751,8 @@ set(LINGTAI_UI_TESTS
     native_shell_presets
     conversation_surface_typography
     agent_detail_view
-    ui_test_harness)
+    ui_test_harness
+    ui_agent_detail_pages)
 foreach(test_name IN LISTS LINGTAI_UI_TESTS)
     set_tests_properties(${test_name} PROPERTIES LABELS "ui")
 endforeach()
