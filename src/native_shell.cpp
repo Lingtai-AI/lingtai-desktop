@@ -16,6 +16,9 @@
 #include "project_setup_wizard.h"
 #include "setup_style.h"
 #include "slash_command.h"
+#include "ui/palette_action_button.h"
+#include "ui/palette_icon_button.h"
+#include "ui/palette_surface.h"
 
 #include "base/event_filter.h"
 #include "base/integration.h"
@@ -654,25 +657,7 @@ Widget *find_ui_child(QObject &root, const char *object_name) {
     return dynamic_cast<Widget *>(root.findChild<QObject *>(object_name));
 }
 
-// One LingTai-owned full-surface widget whose background is painted from the
-// shared lib_ui palette (never a raw white Qt surface): the right chat/content
-// pane fills `windowBg`, the same token the chat surface and top bar use.
-class PaletteSurface final : public Ui::RpWidget {
-public:
-    explicit PaletteSurface(QWidget *parent, style::color fill)
-    : Ui::RpWidget(parent)
-    , fill_(std::move(fill)) {
-    }
-
-protected:
-    void paintEvent(QPaintEvent *) override {
-        QPainter painter(this);
-        painter.fillRect(rect(), fill_);
-    }
-
-private:
-    style::color fill_;
-};
+// PaletteSurface: see ui/palette_surface.h
 
 // One Telegram-shaped Composer control envelope: attachment, field and Send
 // share this single rounded base and its one-pixel adaptive palette border.
@@ -904,80 +889,9 @@ protected:
 // and backgrounds from the same shared lib_ui light-button tokens the dialog
 // actions use, and the disabled state from the existing disabled text token,
 // so the three controls never fall back to the raw platform button style.
-class PaletteActionButton final : public QPushButton {
-public:
-    explicit PaletteActionButton(QWidget *parent, const QString &text)
-    : QPushButton(text, parent) {
-        setFixedHeight(26);
-        setCursor(Qt::PointingHandCursor);
-    }
+// PaletteActionButton: see ui/palette_action_button.h
 
-protected:
-    void paintEvent(QPaintEvent *) override {
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-        const auto radius = qMin(width(), height()) / 2;
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(!isEnabled()
-            ? st::defaultLightButton.textBg->c
-            : (isDown() || underMouse())
-                ? st::defaultLightButton.textBgOver->c
-                : st::defaultLightButton.textBg->c);
-        painter.drawRoundedRect(rect(), radius, radius);
-        auto font = this->font();
-        font.setPointSize(11);
-        painter.setFont(font);
-        painter.setPen(!isEnabled()
-            ? st::windowSubTextFg->c
-            : (isDown() || underMouse())
-                ? st::defaultLightButton.textFgOver->c
-                : st::defaultLightButton.textFg->c);
-        painter.drawText(rect(), Qt::AlignCenter, text());
-    }
-};
-
-// One compact palette-owned icon-only lifecycle secondary: the same light-pill
-// language as `PaletteActionButton`, but painted with only a small crescent
-// glyph and never a caption, so its accessible name stays the only label a
-// screen reader hears and the header keeps exactly one captioned action.
-class PaletteIconButton final : public QPushButton {
-public:
-    explicit PaletteIconButton(QWidget *parent)
-    : QPushButton(parent) {
-        setFixedSize(26, 26);
-        setCursor(Qt::PointingHandCursor);
-    }
-
-protected:
-    void paintEvent(QPaintEvent *) override {
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-        const auto radius = qMin(width(), height()) / 2;
-        const auto pill = !isEnabled()
-            ? st::defaultLightButton.textBg->c
-            : (isDown() || underMouse())
-                ? st::defaultLightButton.textBgOver->c
-                : st::defaultLightButton.textBg->c;
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(pill);
-        painter.drawRoundedRect(rect(), radius, radius);
-        const auto ink = !isEnabled()
-            ? st::windowSubTextFg->c
-            : (isDown() || underMouse())
-                ? st::defaultLightButton.textFgOver->c
-                : st::defaultLightButton.textFg->c;
-        // A small crescent moon: one full disc with an overlapping pill-colored
-        // disc carving the crescent, so the glyph never needs an icon font.
-        const auto size = 13.0;
-        const auto center = QPointF(width() / 2.0, height() / 2.0);
-        painter.setBrush(ink);
-        painter.drawEllipse(center, size / 2.0, size / 2.0);
-        painter.setBrush(pill);
-        painter.drawEllipse(
-            center + QPointF(size * 0.55, -size * 0.25),
-            size * 0.52, size * 0.52);
-    }
-};
+// PaletteIconButton: see ui/palette_icon_button.h
 
 void paint_slash_glyph(
         QPainter &painter,
