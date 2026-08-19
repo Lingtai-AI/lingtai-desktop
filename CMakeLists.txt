@@ -497,6 +497,16 @@ else()
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
+add_library(lingtai_ui_test_support STATIC
+    tests/ui/UiTestFonts.cpp)
+init_target(lingtai_ui_test_support)
+target_include_directories(lingtai_ui_test_support PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+target_compile_definitions(lingtai_ui_test_support PUBLIC
+    LINGTAI_UI_TEST_FONTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fonts")
+target_link_libraries(lingtai_ui_test_support PUBLIC
+    Qt6::Gui Qt6::Core)
+
 add_library(lingtai_visual_test_utils STATIC
     tests/visual/VisualTestUtils.cpp)
 init_target(lingtai_visual_test_utils)
@@ -507,7 +517,6 @@ target_link_libraries(lingtai_visual_test_utils PUBLIC
 
 add_executable(lingtai_agent_detail_visual_test
     tests/visual/agent_detail_visual_test.cpp
-    tests/ui/UiTestFonts.cpp
     src/crl_integration.cpp)
 init_target(lingtai_agent_detail_visual_test)
 target_compile_options(lingtai_agent_detail_visual_test PRIVATE
@@ -521,9 +530,9 @@ target_include_directories(lingtai_agent_detail_visual_test PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/tests")
 target_compile_definitions(lingtai_agent_detail_visual_test PRIVATE
     LINGTAI_UI_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
-    LINGTAI_UI_TEST_FONTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fonts"
     LINGTAI_VISUAL_BASELINE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/tests/visual/baselines")
 target_link_libraries(lingtai_agent_detail_visual_test PRIVATE
+    lingtai_ui_test_support
     lingtai_visual_test_utils
     lingtai_desktop_native_shell
     desktop-app::lib_ui
@@ -656,6 +665,7 @@ target_compile_options(lingtai_native_shell_test PRIVATE
     $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-deprecated-this-capture>
     $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-unused-parameter>)
 target_link_libraries(lingtai_native_shell_test PRIVATE
+    lingtai_ui_test_support
     lingtai_desktop_native_shell
     desktop-app::lib_ui)
 

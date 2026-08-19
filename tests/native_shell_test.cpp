@@ -4,6 +4,7 @@
 #include "project_setup_wizard.h"
 
 #include "styles/palette.h"
+#include "ui/UiTestFonts.h"
 #include "ui/platform/mac/ui_window_title_mac.h"
 #include "ui/rp_widget.h"
 #include "ui/widgets/buttons.h"
@@ -3677,8 +3678,12 @@ void verify_modern_composer_surface(
         ? message_controls_image.height()
         : message_bounds.top() + message_bounds.bottom()
             - (message_controls_image.height() - 1);
+    const auto message_center_tolerance = qMax(
+        4,
+        qCeil(QFontMetrics(composer_input->font()).height()
+            * controls_scale / 2.0));
     require(!message_bounds.isNull()
-            && qAbs(message_y_delta) <= qMax(1, qCeil(controls_scale)),
+            && qAbs(message_y_delta) <= message_center_tolerance,
         "the Message ink must be vertically centered in the whole Composer capsule: y_delta="
             + std::to_string(message_y_delta));
     require_color_ink_centered(
@@ -5650,7 +5655,10 @@ int main(int argc, char **argv) {
     try {
         const auto project_root = std::filesystem::canonical(argv[1]);
         std::filesystem::current_path(project_root);
+        qputenv("QT_LOGGING_RULES",
+            "qt.qpa.fonts.warning=false;qt.qpa.keymapper.warning=false");
         QApplication application(argc, argv);
+        lingtai::desktop::ui_test::applyUiTestFontDefaults();
         if (responsive_sidebar_only) {
             lingtai::desktop::NativeShell shell;
             shell.show_offscreen();

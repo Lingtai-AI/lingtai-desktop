@@ -19,4 +19,7 @@ if ! command -v brew >/dev/null; then
   exit 0
 fi
 
-brew install --cask font-open-sans
+export HOMEBREW_NO_AUTO_UPDATE=1
+if ! brew install --cask font-open-sans; then
+  echo "install-ui-test-fonts: brew install failed; relying on bundled test fonts" >&2
+fi

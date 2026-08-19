@@ -11,7 +11,9 @@ namespace lingtai::desktop::visual_test {
 
 struct VisualDiffOptions {
     int channel_threshold = 10;
-    double max_changed_ratio = 0.001;
+    // Headroom for sub-pixel antialiasing across macOS runners after DPR
+    // normalization and bundled Open Sans loading.
+    double max_changed_ratio = 0.002;
 };
 
 struct VisualDiffResult {

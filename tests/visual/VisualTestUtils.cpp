@@ -139,9 +139,9 @@ VisualDiffResult compareSnapshot(
     result.passed = result.changed_ratio <= options.max_changed_ratio;
     result.message = result.passed
         ? QStringLiteral("within threshold")
-        : QStringLiteral("changed ratio %.4f exceeds %.4f")
-              .arg(result.changed_ratio)
-              .arg(options.max_changed_ratio);
+        : QStringLiteral("changed ratio %1 exceeds %2")
+              .arg(result.changed_ratio, 0, 'f', 4)
+              .arg(options.max_changed_ratio, 0, 'f', 4);
     return result;
 }
 

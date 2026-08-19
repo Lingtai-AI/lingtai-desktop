@@ -18,6 +18,10 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-cocoa}"
 fi
 
+cd "$ROOT"
+echo "==> repository contract"
+python3 -m unittest tests.test_repository_contract
+
 cd "$BUILD_DIR"
 
 echo "==> unit tests"
