@@ -675,6 +675,61 @@ void verify_plain_state_resize_journey() {
     verify_plain_state_contract(surface, 1400, "after resize");
 }
 
+void verify_reflow_after_hidden_resize() {
+    ConversationSurface surface;
+    surface.resize(1200, 400);
+    surface.show();
+    QCoreApplication::processEvents();
+    surface.set_conversation(QStringLiteral("Alpha"), {{
+        .id = "out-hidden-resize",
+        .outgoing = true,
+        .timestamp = "2026-08-18T12:00:00Z",
+        .text = "A reasonably long human note that must reflow after /kanban.",
+    }});
+    surface.document()->documentLayout()->documentSize();
+    QCoreApplication::processEvents();
+    auto frames = surface.document()->rootFrame()->childFrames();
+    if (frames.size() != 1) {
+        throw std::runtime_error(
+            "the hidden-resize fixture must render exactly one Human frame");
+    }
+    const auto wide_left = frames.front()->begin().currentBlock()
+        .blockFormat().leftMargin();
+    const auto wide_viewport = surface.viewport()->width();
+
+    surface.hide();
+    QCoreApplication::processEvents();
+    surface.resize(720, 400);
+    QCoreApplication::processEvents();
+    surface.show();
+    QCoreApplication::processEvents();
+    surface.document()->documentLayout()->documentSize();
+    QCoreApplication::processEvents();
+
+    frames = surface.document()->rootFrame()->childFrames();
+    if (frames.size() != 1) {
+        throw std::runtime_error(
+            "the hidden-resize fixture must keep one Human frame after show");
+    }
+    const auto left = frames.front()->begin().currentBlock()
+        .blockFormat().leftMargin();
+    const auto viewport_width = surface.viewport()->width();
+    if (wide_viewport - viewport_width < 80) {
+        throw std::runtime_error(
+            "the hidden-resize fixture must actually shrink the viewport");
+    }
+    if (wide_left - left < 40) {
+        throw std::runtime_error(
+            "showing the conversation after a hidden resize must reflow Human "
+            "bubbles to the current viewport, not keep the previous inner "
+            "margin that overflows the right edge");
+    }
+    if (left + 12 > viewport_width) {
+        throw std::runtime_error(
+            "Human bubble inner margin must stay inside the current viewport");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Empty-state RED contract (map unit "empty"): the no-message conversation
 // (zero rows) must render the content surface's centered empty state: a small
@@ -1645,31 +1700,19 @@ void verify_history_window_only() {
 // message-timestamp frame property (QTextFormat::UserProperty + 2), and no
 // full "2026-08-07T18:48:52" string survives in the exposed document. Between
 // the two day boundaries the document inserts exactly one centered root block
-// day separator (2026/08/07 positioned before the first day-one message and
-// 2026/08/08 before the first day-two message), the three message frames stay
-// as the only direct child frames of the root in chronological order, and a
-// same-day message adds no duplicate separator. Fails on the exact base:
-// rebuild_document renders the full raw ISO inside every incoming header and
-// creates no centered day-separator root blocks at all.
+// day separator (August 7, 2026 positioned before the first day-one message
+// and August 8, 2026 before the first day-two message), the three message
+// frames stay as the only direct child frames of the root in chronological
+// order, and a same-day message adds no duplicate separator.
 // ---------------------------------------------------------------------------
-std::vector<QTextBlock> root_blocks(const QTextDocument &document) {
-    std::vector<QTextBlock> blocks;
-    for (auto item = document.rootFrame()->begin(); !item.atEnd(); ++item) {
-        const auto block = item.currentBlock();
-        if (block.isValid()) {
-            blocks.push_back(block);
-        }
-    }
-    return blocks;
-}
-
-std::vector<QTextBlock> centered_root_blocks(
-        const QTextDocument &document,
-        const QString &text) {
-    std::vector<QTextBlock> matches;
-    for (const auto &block : root_blocks(document)) {
-        if (block.text().trimmed() == text) {
-            matches.push_back(block);
+std::vector<QTextFrame *> day_separator_frames(
+        const QList<QTextFrame *> &frames,
+        const QString &label) {
+    std::vector<QTextFrame *> matches;
+    for (auto *frame : frames) {
+        if (frame->frameFormat().property(QTextFormat::UserProperty + 6)
+                .toString() == label) {
+            matches.push_back(frame);
         }
     }
     return matches;
@@ -1756,33 +1799,18 @@ void verify_time_separators_only() {
             "time 19:05, but it is '" + outgoing_time.toStdString() + "'");
     }
 
-    // Exactly one centered root block day separator per day boundary: one
-    // 2026/08/07 before the first day-one message and one 2026/08/08 before
-    // the first day-two message, each centered in the reading column.
-    const auto sep_day_one = centered_root_blocks(
-        document, QStringLiteral("2026/08/07"));
-    const auto sep_day_two = centered_root_blocks(
-        document, QStringLiteral("2026/08/08"));
+    // Exactly one day divider per day boundary, carried on the first message
+    // frame of that day.
+    const auto sep_day_one = day_separator_frames(
+        frames, QStringLiteral("August 7, 2026"));
+    const auto sep_day_two = day_separator_frames(
+        frames, QStringLiteral("August 8, 2026"));
     if (sep_day_one.size() != 1 || sep_day_two.size() != 1) {
         throw std::runtime_error(
-            "the time-separators document must insert exactly one centered "
-            "root block per day boundary, but it has "
-            + std::to_string(sep_day_one.size()) + " 2026/08/07 and "
-            + std::to_string(sep_day_two.size()) + " 2026/08/08");
-    }
-    for (const auto &block : sep_day_one) {
-        if (!block.blockFormat().alignment().testFlag(Qt::AlignCenter)) {
-            throw std::runtime_error(
-                "the day separator must be a centered root block, but "
-                "2026/08/07 is not centered");
-        }
-    }
-    for (const auto &block : sep_day_two) {
-        if (!block.blockFormat().alignment().testFlag(Qt::AlignCenter)) {
-            throw std::runtime_error(
-                "the day separator must be a centered root block, but "
-                "2026/08/08 is not centered");
-        }
+            "the time-separators document must insert exactly one day divider "
+            "per day boundary, but it has "
+            + std::to_string(sep_day_one.size()) + " August 7, 2026 and "
+            + std::to_string(sep_day_two.size()) + " August 8, 2026");
     }
 
     // Exactly three direct child message frames remain, in chronological
@@ -1800,25 +1828,15 @@ void verify_time_separators_only() {
             "all three message frames must render their bodies in the "
             "time-separators document");
     }
+    if (sep_day_one.front() != day_one_in || sep_day_two.front() != day_two_in) {
+        throw std::runtime_error(
+            "each day divider must ride on the first message frame of that day");
+    }
     if (!(day_one_in->firstPosition() < day_one_out->firstPosition()
             && day_one_out->firstPosition() < day_two_in->firstPosition())) {
         throw std::runtime_error(
             "the three message frames must stay in chronological order: "
             "day-one-first, then day-one-second, then day-two-first");
-    }
-
-    // The 2026/08/07 separator sits before the first day-one message, and the
-    // 2026/08/08 separator sits before the first day-two message but after the
-    // last day-one message.
-    const auto sep_one_pos = sep_day_one.front().position();
-    const auto sep_two_pos = sep_day_two.front().position();
-    if (!(sep_one_pos < day_one_in->firstPosition()
-            && sep_two_pos > day_one_out->lastPosition()
-            && sep_two_pos < day_two_in->firstPosition())) {
-        throw std::runtime_error(
-            "the 2026/08/07 separator must precede the first day-one message "
-            "and the 2026/08/08 separator must sit between the day-one messages "
-            "and the first day-two message");
     }
 
 }
@@ -2184,9 +2202,17 @@ int run_typography_test(int argc, char **argv) {
             std::cout << "conversation surface light canvas: OK\n";
             return 0;
         }
+        if (argc > 1
+                && QString::fromLocal8Bit(argv[1])
+                    == QStringLiteral("--hidden-resize-only")) {
+            verify_reflow_after_hidden_resize();
+            std::cout << "conversation surface hidden resize reflow: OK\n";
+            return 0;
+        }
         ConversationSurface surface;
         surface.resize(640, 480);
         verify_typography(surface, QStringLiteral("Telegram Bot"));
+        verify_reflow_after_hidden_resize();
         verify_responsive_width();
         verify_content_geometry();
         verify_turn_rhythm();

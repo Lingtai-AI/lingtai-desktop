@@ -2,11 +2,19 @@
 
 #include "native_window_background.h"
 #include "agent_preset_summary.h"
+#include "agent_prompt_actions.h"
 #include "agent_sleep.h"
 #include "direct_conversation_history.h"
 #include "direct_mail_publisher.h"
 #include "preset_catalog_presentation.h"
 #include "preset_editor_page.h"
+#include "agent_presets_page.h"
+#include "agent_config_page.h"
+#include "codex_credentials_strip.h"
+#include "credentials_page.h"
+#include "kanban_page.h"
+#include "project_setup_wizard.h"
+#include "setup_style.h"
 #include "slash_command.h"
 
 #include "base/event_filter.h"
@@ -27,7 +35,6 @@
 #include "ui/widgets/shadow.h"
 
 #include <QtCore/QCoreApplication>
-#include <QtCore/QFileInfo>
 #include <QtCore/QDir>
 #include <QtCore/QLineF>
 #include <QtCore/QPoint>
@@ -39,8 +46,10 @@
 #include <QtGui/QFont>
 #include <QtGui/QFontMetrics>
 #include <QtGui/QGuiApplication>
+#include <QtGui/QKeyEvent>
 #include <QtGui/QMouseEvent>
 #include <QtCore/QEvent>
+#include <QtGui/QFontMetrics>
 #include <QtGui/QPainter>
 #include <QtGui/QPainterPath>
 #include <QtGui/QPen>
@@ -50,14 +59,12 @@
 #include <QtWidgets/QAbstractItemView>
 #include <QtWidgets/QBoxLayout>
 #include <QtWidgets/QComboBox>
-#include <QtWidgets/QDialog>
 #include <QtWidgets/QFileDialog>
 #include <QtWidgets/QHeaderView>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLayout>
 #include <QtWidgets/QLineEdit>
 #include <QtWidgets/QListWidget>
-#include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QScrollBar>
@@ -73,6 +80,7 @@
 
 #include <algorithm>
 #include <array>
+#include <memory>
 #include <utility>
 
 namespace lingtai::desktop {
@@ -140,11 +148,11 @@ Ui::FlatLabel *make_flat_label(
     return label;
 }
 
-void apply_preset_catalog_chrome(QDialog *dialog);
+void apply_preset_catalog_chrome(QWidget *root);
 
-void apply_project_setup_palette(QDialog *dialog) {
-    if (!dialog) return;
-    auto palette = dialog->palette();
+void apply_project_setup_palette(QWidget *root) {
+    if (!root) return;
+    auto palette = root->palette();
     const auto dark = st::windowBg->c.lightness() < 128;
     palette.setColor(QPalette::Window,
         dark ? QColor(QStringLiteral("#181B1A"))
@@ -156,31 +164,9 @@ void apply_project_setup_palette(QDialog *dialog) {
         : QColor(QStringLiteral("#FFFFFF")));
     palette.setColor(QPalette::AlternateBase, st::windowBgOver->c);
     palette.setColor(QPalette::ButtonText, st::windowFg->c);
-    dialog->setPalette(palette);
-    dialog->setAutoFillBackground(true);
-    apply_preset_catalog_chrome(dialog);
-}
-
-QLabel *make_setup_label(
-        QWidget *parent,
-        const QString &text,
-        const char *object_name,
-        int point_size,
-        QFont::Weight weight = QFont::Normal) {
-    auto *label = new QLabel(text, parent);
-    label->setObjectName(object_name);
-    label->setTextFormat(Qt::PlainText);
-    label->setAccessibleName(text);
-    label->setWordWrap(true);
-    auto policy = label->sizePolicy();
-    policy.setHeightForWidth(true);
-    policy.setVerticalPolicy(QSizePolicy::Fixed);
-    label->setSizePolicy(policy);
-    auto font = label->font();
-    font.setPointSize(point_size);
-    font.setWeight(weight);
-    label->setFont(font);
-    return label;
+    root->setPalette(palette);
+    root->setAutoFillBackground(false);
+    apply_preset_catalog_chrome(root);
 }
 
 constexpr auto kPresetSummaryRole = Qt::UserRole + 10;
@@ -203,9 +189,11 @@ struct PresetCatalogTokens {
     QColor selection_accent;
     QColor border;
     QColor tag_fill;
+    QColor value_text;
 };
 
 bool preset_catalog_is_dark(const QPalette &palette) {
+    if (st::windowBg->c.lightness() < 128) return true;
     return palette.color(QPalette::Window).lightness() < 128;
 }
 
@@ -220,7 +208,8 @@ PresetCatalogTokens preset_catalog_tokens(const QPalette &palette) {
             QColor(QStringLiteral("#213A31")),
             QColor(QStringLiteral("#78C9A7")),
             QColor(255, 255, 255, 20),
-            QColor(255, 255, 255, 12),
+            QColor(QStringLiteral("#222A26")),
+            QColor(QStringLiteral("#E8EEEA")),
         };
     }
     return {
@@ -233,15 +222,13 @@ PresetCatalogTokens preset_catalog_tokens(const QPalette &palette) {
         QColor(QStringLiteral("#16785C")),
         QColor(QStringLiteral("#DCE2DF")),
         QColor(0, 0, 0, 8),
+        QColor(QStringLiteral("#1F2933")),
     };
 }
 
-void apply_preset_catalog_chrome(QDialog *dialog) {
-    if (!dialog) return;
-    auto *table = dialog->findChild<QTreeWidget *>(
-        "lingtai_setup_preset_catalog");
+void apply_one_preset_catalog_chrome(QTreeWidget *table, const QPalette &root_palette) {
     if (!table) return;
-    const auto tokens = preset_catalog_tokens(dialog->palette());
+    const auto tokens = preset_catalog_tokens(root_palette);
     auto palette = table->palette();
     palette.setColor(QPalette::Base, tokens.surface);
     palette.setColor(QPalette::AlternateBase, tokens.surface);
@@ -278,13 +265,22 @@ void apply_preset_catalog_chrome(QDialog *dialog) {
             tokens.selected_row.name(QColor::HexRgb).toUpper(),
             tokens.header.name(QColor::HexRgb).toUpper(),
             tokens.section_text.name(QColor::HexRgb).toUpper()));
-    if (auto *search = dialog->findChild<QLineEdit *>(
+}
+
+void apply_preset_catalog_chrome(QWidget *root) {
+    if (!root) return;
+    for (auto *table : root->findChildren<QTreeWidget *>()) {
+        const auto name = table->objectName();
+        if (name != QStringLiteral("lingtai_setup_preset_catalog")
+                && name != QStringLiteral(
+                    "lingtai_selected_agent_preset_summary")) {
+            continue;
+        }
+        apply_one_preset_catalog_chrome(table, root->palette());
+    }
+    if (auto *search = root->findChild<QLineEdit *>(
             "lingtai_setup_preset_search")) {
-        search->setStyleSheet(QStringLiteral(
-            "QLineEdit#lingtai_setup_preset_search { min-height: 34px; "
-            "padding: 0 12px; border: 1px solid %1; border-radius: 8px; "
-            "background: %2; color: palette(text); }")
-            .arg(border, tokens.surface.name(QColor::HexRgb).toUpper()));
+        apply_setup_line_edit(search, setup_tokens(root->palette()));
     }
 }
 
@@ -354,7 +350,7 @@ public:
                     tokens.selection_accent);
             }
         }
-        const auto text_color = opt.palette.color(QPalette::WindowText);
+        const auto text_color = tokens.value_text;
         const auto muted = tokens.section_text;
         const auto inner = opt.rect.adjusted(12, 5, -10, -5);
         if (index.column() == 0) {
@@ -412,7 +408,7 @@ public:
                 painter->setPen(QPen(tokens.border, 1));
                 painter->setBrush(tokens.tag_fill);
                 painter->drawRoundedRect(chip.adjusted(0, 0, -1, -1), 6, 6);
-                painter->setPen(muted);
+                painter->setPen(tokens.selection_accent);
                 painter->drawText(chip, Qt::AlignCenter, tag);
                 x += chip_width + 6;
             }
@@ -478,16 +474,20 @@ QString preset_footer_rich(
         const QString &name,
         const QString &provider_model,
         const QStringList &tags,
-        const QColor &accent) {
+        const QColor &accent,
+        const QColor &muted) {
     const auto rest = preset_footer_plain({}, provider_model, tags);
     if (name.isEmpty()) {
-        return rest.toHtmlEscaped();
+        if (rest.isEmpty()) return {};
+        return QStringLiteral("<span style=\"color:%1\">%2</span>")
+            .arg(muted.name(QColor::HexRgb), rest.toHtmlEscaped());
     }
     auto html = QStringLiteral(
         "<span style=\"color:%1;font-weight:600\">%2</span>")
         .arg(accent.name(QColor::HexRgb), name.toHtmlEscaped());
     if (!rest.isEmpty()) {
-        html += QStringLiteral(" · ") + rest.toHtmlEscaped();
+        html += QStringLiteral(" · <span style=\"color:%1\">%2</span>")
+            .arg(muted.name(QColor::HexRgb), rest.toHtmlEscaped());
     }
     return html;
 }
@@ -507,6 +507,44 @@ QTreeWidgetItem *add_preset_section(QTreeWidget *table, const QString &title) {
     return item;
 }
 
+void configure_preset_table(QTreeWidget *table) {
+    table->setRootIsDecorated(false);
+    table->setUniformRowHeights(false);
+    table->setIndentation(0);
+    table->setItemsExpandable(false);
+    table->setAnimated(false);
+    table->setItemDelegate(new PresetRowDelegate(table));
+    table->setSelectionMode(QAbstractItemView::SingleSelection);
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    table->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    table->setAutoFillBackground(true);
+    table->viewport()->setAutoFillBackground(true);
+    table->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    table->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    table->header()->setVisible(true);
+    table->header()->setStretchLastSection(true);
+    table->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    table->header()->setSectionResizeMode(1, QHeaderView::Stretch);
+    table->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+}
+
+void add_preset_catalog_row(
+        QTreeWidget *table, const PresetCatalogRow &row, int index) {
+    const auto name = QString::fromStdString(row.entry.name);
+    const auto tags = preset_capability_tags(row.has_vision, row.has_tools);
+    auto *item = new QTreeWidgetItem(table);
+    item->setData(0, Qt::UserRole, index);
+    item->setData(0, kPresetSummaryRole, row.summary);
+    item->setData(0, kPresetCapabilitiesRole, tags);
+    item->setData(0, Qt::UserRole + 8, QString::fromStdString(row.entry.path));
+    item->setText(0, name);
+    item->setText(1, row.provider_model);
+    item->setText(2, tags.join(QStringLiteral(", ")));
+    item->setToolTip(0, row.summary);
+    item->setToolTip(1, row.provider_model);
+}
+
 QTreeWidgetItem *adjacent_preset_row(
         QTreeWidget *table, int from, int step) {
     if (!table || step == 0) {
@@ -523,21 +561,13 @@ QTreeWidgetItem *adjacent_preset_row(
     return nullptr;
 }
 
-QWidget *make_setup_gap(QWidget *parent, int reference_height) {
-    auto *gap = new QWidget(parent);
-    gap->setProperty("lingtai_setup_gap", reference_height);
-    gap->setFixedHeight(reference_height);
-    gap->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-    return gap;
-}
-
-void recompute_setup_layout(QDialog *dialog) {
-    if (!dialog) return;
-    const auto size = dialog->size();
+void recompute_setup_layout(QWidget *root) {
+    if (!root) return;
+    const auto size = root->size();
     const auto t_w = std::clamp(size.width() / 920.0, 0.85, 1.25);
     const auto t_h = std::clamp(size.height() / 840.0, 0.85, 1.25);
     const auto margin = qRound(32 * t_w);
-    if (auto *steps = dialog->findChild<QWidget *>("lingtai_setup_steps")) {
+    if (auto *steps = root->findChild<QWidget *>("lingtai_setup_steps")) {
         steps->setFixedHeight(48);
         if (auto *layout = qobject_cast<QHBoxLayout *>(steps->layout())) {
             layout->setContentsMargins(margin, qRound(8 * t_h), margin, 0);
@@ -549,16 +579,23 @@ void recompute_setup_layout(QDialog *dialog) {
             }
         }
     }
-    if (auto *body = dialog->findChild<QWidget *>("lingtai_setup_body")) {
+    if (auto *body = root->findChild<QWidget *>("lingtai_setup_body")) {
         if (auto *layout = body->layout()) {
             const auto pad = qRound(32 * t_w);
             layout->setContentsMargins(
                 pad, qRound(4 * t_h), pad, qRound(16 * t_h));
         }
     }
-    if (auto *search = dialog->findChild<QLineEdit *>(
+    if (auto *search = root->findChild<QLineEdit *>(
             "lingtai_setup_preset_search")) {
-        const auto available = std::max(0, dialog->width() - 2 * margin);
+        const auto available = std::max(0, root->width() - 2 * margin);
+        search->setFixedWidth(std::clamp(
+            available, kPresetSearchMinWidth, kPresetSearchPreferredWidth));
+        search->setMaximumWidth(kPresetSearchMaxWidth);
+    }
+    if (auto *search = root->findChild<QLineEdit *>(
+            "lingtai_setup_agents_search")) {
+        const auto available = std::max(0, root->width() - 2 * margin);
         search->setFixedWidth(std::clamp(
             available, kPresetSearchMinWidth, kPresetSearchPreferredWidth));
         search->setMaximumWidth(kPresetSearchMaxWidth);
@@ -577,24 +614,34 @@ void update_setup_step_indicator(QWidget *steps, int active_index) {
         "lingtai_setup_step_badge_agents",
         "lingtai_setup_step_badge_review",
     };
+    const auto tokens = setup_tokens(steps->palette());
+    const auto accent = setup_color_css(tokens.selection_accent);
     for (auto index = 0; index != 3; ++index) {
         const auto active = index == active_index;
+        const auto complete = index < active_index;
         if (auto *badge = steps->findChild<QLabel *>(badges[index])) {
-            badge->setStyleSheet(active
+            badge->setText(complete
+                ? QStringLiteral("✓")
+                : QString::number(index + 1));
+            badge->setStyleSheet(active || complete
                 ? QStringLiteral(
-                    "background: #16785C; color: white; border-radius: 11px;")
+                    "background: %1; color: white; border-radius: 11px;")
+                    .arg(accent)
                 : QStringLiteral(
                     "background: transparent; color: #8a8f98; "
                     "border: 1px solid palette(mid); border-radius: 11px;"));
         }
         if (auto *label = steps->findChild<QLabel *>(names[index])) {
-            label->setStyleSheet(active
-                ? QStringLiteral("color: #16785C;")
+            label->setStyleSheet(active || complete
+                ? QStringLiteral("color: %1;").arg(accent)
                 : QStringLiteral("color: #8a8f98;"));
             auto font = label->font();
             font.setWeight(active ? QFont::DemiBold : QFont::Normal);
             label->setFont(font);
         }
+    }
+    if (auto *index_label = steps->findChild<QLabel *>("lingtai_setup_step_index")) {
+        index_label->setText(QStringLiteral("%1 of 3").arg(active_index + 1));
     }
 }
 
@@ -809,29 +856,41 @@ private:
     bool dragging_ = false;
 };
 
-// The one compact selected-Agent page navigation control: a plain text tab
-// that is never a filled rectangular slab. Every state paints only its caption
-// glyphs on the transparent shell backdrop, and the selected page adds just
-// one short `dialogsBgActive` accent underline along its bottom edge.
+// Compact selected-Agent page navigation: a plain text tab that is never a
+// filled rectangular slab, or a Kanban-style back link (`←  …`) when the
+// caption starts with an arrow. Tabs paint caption glyphs on the transparent
+// shell backdrop, with a short `dialogsBgActive` underline on the selected
+// page. Back links use primary ink, left alignment, and no underline so they
+// read as a way back from `/presets`.
 class PageNavButton final : public QPushButton {
 public:
     explicit PageNavButton(QWidget *parent, const QString &text)
     : QPushButton(text, parent) {
         setCheckable(true);
         setFixedHeight(28);
+        setCursor(Qt::PointingHandCursor);
         auto font = this->font();
         font.setPointSize(13);
         font.setWeight(QFont::Normal);
         setFont(font);
+        if (text.startsWith(QStringLiteral("←"))) {
+            setMinimumWidth(QFontMetrics(font).horizontalAdvance(text) + 12);
+        }
     }
 
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter painter(this);
         painter.setFont(font());
-        painter.setPen(isChecked() ? st::dialogsTextFgService : st::windowSubTextFg);
-        painter.drawText(rect(), Qt::AlignCenter, text());
-        if (isChecked()) {
+        const auto back_link = text().startsWith(QStringLiteral("←"));
+        painter.setPen(back_link || isChecked()
+            ? st::dialogsNameFg->c
+            : st::windowSubTextFg->c);
+        painter.drawText(
+            rect().adjusted(back_link ? 2 : 0, 0, 0, 0),
+            (back_link ? Qt::AlignLeft : Qt::AlignCenter) | Qt::AlignVCenter,
+            text());
+        if (isChecked() && !back_link) {
             const auto underline_width = qMin(width(), 24);
             painter.fillRect(
                 (width() - underline_width) / 2, height() - 2,
@@ -920,6 +979,349 @@ protected:
     }
 };
 
+void paint_slash_glyph(
+        QPainter &painter,
+        const QRectF &box,
+        const QString &name,
+        const QColor &ink,
+        const QColor &well [[maybe_unused]]) {
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(QPen(ink, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+    const auto c = box.center();
+    if (name == QLatin1String("agents")) {
+        painter.setBrush(ink);
+        painter.setPen(Qt::NoPen);
+        painter.drawEllipse(QRectF(c.x() - 6.5, c.y() - 6.2, 7.2, 7.2));
+        painter.drawEllipse(QRectF(c.x() - 0.2, c.y() - 6.2, 7.2, 7.2));
+        painter.drawChord(QRectF(c.x() - 8.0, c.y() + 0.6, 10.5, 9.5), 0, 180 * 16);
+        painter.drawChord(QRectF(c.x() - 2.0, c.y() + 0.6, 10.5, 9.5), 0, 180 * 16);
+    } else if (name == QLatin1String("presets")
+            || name == QLatin1String("setup")) {
+        for (auto i = 0; i < 3; ++i) {
+            const auto y = box.top() + 7.5 + i * 6.2;
+            painter.drawLine(QPointF(box.left() + 6, y), QPointF(box.right() - 6, y));
+            painter.setBrush(ink);
+            painter.drawEllipse(QPointF(box.left() + 9.5 + i * 5.0, y), 2.1, 2.1);
+            painter.setBrush(Qt::NoBrush);
+        }
+    } else if (name == QLatin1String("sleep")) {
+        QPainterPath moon;
+        moon.addEllipse(c, 6.4, 6.4);
+        QPainterPath hole;
+        hole.addEllipse(c + QPointF(3.2, -2.0), 5.5, 5.5);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(ink);
+        painter.drawPath(moon.subtracted(hole));
+    } else if (name == QLatin1String("cpr")) {
+        QPainterPath bolt;
+        bolt.moveTo(c.x() + 1.2, box.top() + 6);
+        bolt.lineTo(c.x() - 3.8, c.y() + 0.4);
+        bolt.lineTo(c.x() + 0.2, c.y() + 0.4);
+        bolt.lineTo(c.x() - 1.4, box.bottom() - 6);
+        bolt.lineTo(c.x() + 3.8, c.y() - 0.2);
+        bolt.lineTo(c.x() - 0.2, c.y() - 0.2);
+        bolt.closeSubpath();
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(ink);
+        painter.drawPath(bolt);
+    } else if (name == QLatin1String("clear")) {
+        painter.drawRoundedRect(box.adjusted(6.5, 6.5, -6.5, -6.5), 2.5, 2.5);
+        painter.drawLine(c + QPointF(-3.2, -3.2), c + QPointF(3.2, 3.2));
+        painter.drawLine(c + QPointF(3.2, -3.2), c + QPointF(-3.2, 3.2));
+    } else if (name == QLatin1String("refresh")) {
+        QRectF arc(box.adjusted(7, 7, -7, -7));
+        painter.drawArc(arc, 40 * 16, 260 * 16);
+        QPainterPath head;
+        const auto tip = QPointF(arc.center().x() + 5.2, arc.top() + 1.5);
+        head.moveTo(tip);
+        head.lineTo(tip + QPointF(-4.4, 0.6));
+        head.lineTo(tip + QPointF(-0.4, 4.6));
+        painter.setBrush(ink);
+        painter.setPen(Qt::NoPen);
+        painter.drawPath(head);
+    } else if (name == QLatin1String("suspend")) {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(ink);
+        painter.drawRoundedRect(QRectF(c.x() - 4.6, c.y() - 5.2, 3.2, 10.4), 1.2, 1.2);
+        painter.drawRoundedRect(QRectF(c.x() + 1.4, c.y() - 5.2, 3.2, 10.4), 1.2, 1.2);
+    } else if (name == QLatin1String("help")) {
+        painter.drawEllipse(box.adjusted(6, 6, -6, -6));
+        auto font = painter.font();
+        font.setPixelSize(11);
+        font.setWeight(QFont::DemiBold);
+        painter.setFont(font);
+        painter.drawText(box.adjusted(0, -1, 0, 0), Qt::AlignCenter, QStringLiteral("?"));
+    } else if (name == QLatin1String("quit")) {
+        painter.drawRoundedRect(box.adjusted(7.5, 6.5, -7.5, -6.5), 2.2, 2.2);
+        painter.drawLine(QPointF(box.right() - 7.5, c.y()), QPointF(box.right() - 2.8, c.y()));
+        painter.drawLine(QPointF(box.right() - 5.4, c.y() - 2.6), QPointF(box.right() - 2.8, c.y()));
+        painter.drawLine(QPointF(box.right() - 5.4, c.y() + 2.6), QPointF(box.right() - 2.8, c.y()));
+    } else {
+        painter.drawEllipse(box.adjusted(7, 7, -7, -7));
+        painter.drawText(box, Qt::AlignCenter, QStringLiteral("/"));
+    }
+    painter.restore();
+}
+
+class SlashOfferDelegate final : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    void paint(
+            QPainter *painter,
+            const QStyleOptionViewItem &option,
+            const QModelIndex &index) const override {
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing, true);
+        const auto selected = option.state.testFlag(QStyle::State_Selected)
+            || option.state.testFlag(QStyle::State_MouseOver);
+        const auto name = index.data(Qt::UserRole).toString();
+        const auto blurb = index.data(Qt::UserRole + 1).toString();
+        const auto accent = st::defaultActiveButton.textBg->c;
+        const auto row = option.rect.adjusted(6, 2, -6, -2);
+        if (selected) {
+            auto wash = accent;
+            wash.setAlpha(28);
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(wash);
+            painter->drawRoundedRect(row, 10, 10);
+            painter->setBrush(accent);
+            painter->drawRoundedRect(
+                QRect(row.left() + 3, row.top() + 10, 3, row.height() - 20),
+                1.5, 1.5);
+        }
+        const auto well = QRect(row.left() + 12, row.center().y() - 14, 28, 28);
+        auto well_fill = accent;
+        well_fill.setAlpha(selected ? 36 : 22);
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(well_fill);
+        painter->drawRoundedRect(well, 8, 8);
+        paint_slash_glyph(*painter, well, name, accent, well_fill);
+
+        auto name_font = option.font;
+        name_font.setPointSize(13);
+        name_font.setWeight(QFont::DemiBold);
+        auto blurb_font = option.font;
+        blurb_font.setPointSize(11);
+        blurb_font.setWeight(QFont::Normal);
+        const auto text_left = well.right() + 12;
+        const auto text_width = row.right() - 14 - text_left;
+        painter->setFont(name_font);
+        painter->setPen(st::windowFg->c);
+        painter->drawText(
+            QRect(text_left, row.top() + 7, text_width, 18),
+            Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
+            QStringLiteral("/%1").arg(name));
+        painter->setFont(blurb_font);
+        painter->setPen(st::windowSubTextFg->c);
+        painter->drawText(
+            QRect(text_left, row.top() + 25, text_width, 16),
+            Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
+            blurb);
+        painter->restore();
+    }
+
+    QSize sizeHint(
+            const QStyleOptionViewItem &,
+            const QModelIndex &) const override {
+        return {320, 52};
+    }
+};
+
+constexpr auto kSlashCardShadow = 14;
+constexpr auto kSlashRowHeight = 52;
+
+class SlashCommandCard final : public QWidget {
+public:
+    explicit SlashCommandCard(QWidget *parent)
+    : QWidget(parent) {
+        setObjectName("lingtai_slash_command_card");
+        setAttribute(Qt::WA_TranslucentBackground);
+        setAttribute(Qt::WA_ShowWithoutActivating);
+        setFocusPolicy(Qt::NoFocus);
+        auto *layout = new QVBoxLayout(this);
+        layout->setContentsMargins(
+            kSlashCardShadow, 10, kSlashCardShadow, kSlashCardShadow + 4);
+        layout->setSpacing(0);
+        header_ = new QLabel(QStringLiteral("Commands"), this);
+        header_->setObjectName("lingtai_slash_command_header");
+        header_->setAttribute(Qt::WA_TransparentForMouseEvents);
+        auto header_font = header_->font();
+        header_font.setPointSize(10);
+        header_font.setWeight(QFont::DemiBold);
+        header_font.setCapitalization(QFont::AllUppercase);
+        header_->setFont(header_font);
+        header_->setContentsMargins(18, 10, 18, 6);
+        layout->addWidget(header_);
+        list_ = new QListWidget(this);
+        list_->setObjectName("lingtai_slash_command_popup");
+        list_->setAccessibleName(QStringLiteral("Slash commands"));
+        list_->setFocusPolicy(Qt::NoFocus);
+        list_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        list_->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        list_->setSelectionMode(QAbstractItemView::SingleSelection);
+        list_->setMouseTracking(true);
+        list_->setFrameShape(QFrame::NoFrame);
+        list_->setItemDelegate(new SlashOfferDelegate(list_));
+        list_->setSpacing(0);
+        list_->setUniformItemSizes(true);
+        list_->setAutoFillBackground(false);
+        list_->viewport()->setAutoFillBackground(false);
+        list_->viewport()->setMouseTracking(true);
+        layout->addWidget(list_, 1);
+        hint_ = new QLabel(
+            QStringLiteral("↑↓ Navigate    ↵ Select    Esc Dismiss"), this);
+        hint_->setObjectName("lingtai_slash_command_hint");
+        hint_->setAttribute(Qt::WA_TransparentForMouseEvents);
+        auto hint_font = hint_->font();
+        hint_font.setPointSize(10);
+        hint_->setFont(hint_font);
+        hint_->setContentsMargins(18, 4, 18, 10);
+        layout->addWidget(hint_);
+        apply_palette();
+        hide();
+    }
+
+    [[nodiscard]] QListWidget *list() const { return list_; }
+
+    void apply_palette() {
+        auto palette = this->palette();
+        palette.setColor(QPalette::Window, st::windowBg->c);
+        palette.setColor(QPalette::Base, Qt::transparent);
+        palette.setColor(QPalette::Text, st::windowFg->c);
+        palette.setColor(QPalette::Highlight, Qt::transparent);
+        palette.setColor(QPalette::HighlightedText, st::windowFg->c);
+        setPalette(palette);
+        list_->setPalette(palette);
+        list_->setStyleSheet(QStringLiteral(
+            "QListWidget { background: transparent; border: none; outline: none; }"
+            "QListWidget::item { border: none; padding: 0; }"));
+        auto header_palette = header_->palette();
+        header_palette.setColor(QPalette::WindowText, st::windowSubTextFg->c);
+        header_->setPalette(header_palette);
+        auto hint_palette = hint_->palette();
+        hint_palette.setColor(QPalette::WindowText, st::windowSubTextFg->c);
+        hint_->setPalette(hint_palette);
+        update();
+        list_->viewport()->update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const auto card = rect().adjusted(
+            kSlashCardShadow, 6, -kSlashCardShadow, -(kSlashCardShadow - 2));
+        auto shadow = st::windowFg->c;
+        for (auto i = 5; i >= 1; --i) {
+            shadow.setAlpha(6 * (6 - i));
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(shadow);
+            painter.drawRoundedRect(card.adjusted(-i, i - 1, i, i + 1), 16, 16);
+        }
+        painter.setBrush(st::windowBg->c);
+        painter.setPen(QPen(QColor(st::defaultActiveButton.textBg->c.red(),
+            st::defaultActiveButton.textBg->c.green(),
+            st::defaultActiveButton.textBg->c.blue(), 40), 1));
+        painter.drawRoundedRect(card, 14, 14);
+    }
+
+private:
+    QListWidget *list_ = nullptr;
+    QLabel *header_ = nullptr;
+    QLabel *hint_ = nullptr;
+};
+
+void apply_slash_popup_palette(QListWidget *popup) {
+    if (!popup) return;
+    auto *parent = popup->parentWidget();
+    if (parent
+            && parent->objectName()
+                == QStringLiteral("lingtai_slash_command_card")) {
+        if (auto *card = static_cast<SlashCommandCard *>(parent)) {
+            card->apply_palette();
+        }
+    }
+}
+
+void hide_slash_command_popup(QWidget *window) {
+    if (auto *popup = window->findChild<QListWidget *>(
+            "lingtai_slash_command_popup")) {
+        if (auto *card = popup->parentWidget()) {
+            card->hide();
+        } else {
+            popup->hide();
+        }
+    }
+}
+
+void apply_slash_popup_choice(
+        Ui::InputField *input, QListWidget *popup) {
+    if (!input || !popup) return;
+    const auto *item = popup->currentItem();
+    if (!item) return;
+    const auto name = item->data(Qt::UserRole).toString();
+    if (auto *card = popup->parentWidget()) {
+        card->hide();
+    } else {
+        popup->hide();
+    }
+    input->setText(QStringLiteral("/") + name);
+    input->setFocus();
+}
+
+void position_slash_command_popup(
+        QListWidget *popup, Ui::InputField *input) {
+    auto *card = popup ? popup->parentWidget() : nullptr;
+    if (!popup || !input || !card || !card->parentWidget()) return;
+    const auto origin = input->mapTo(card->parentWidget(), QPoint(0, 0));
+    const auto width = std::clamp(input->width() + 2 * kSlashCardShadow, 340, 460);
+    const auto rows = std::min(popup->count(), 8);
+    const auto height = 44 + rows * kSlashRowHeight + 28 + kSlashCardShadow;
+    card->setFixedSize(width, height);
+    auto top = origin.y() - card->height() + 10;
+    if (top < 4) {
+        top = origin.y() + input->height() - 4;
+    }
+    const auto left = origin.x() - kSlashCardShadow;
+    card->move(std::max(8, left), top);
+    card->raise();
+}
+
+void refresh_slash_command_popup(
+        QWidget *window, Ui::InputField *input) {
+    auto *popup = window->findChild<QListWidget *>(
+        "lingtai_slash_command_popup");
+    if (!popup || !input) return;
+    const auto matches = matching_slash_commands(
+        input->getLastText().toStdString());
+    auto *card = popup->parentWidget();
+    if (matches.empty()) {
+        if (card) card->hide();
+        else popup->hide();
+        return;
+    }
+    popup->clear();
+    for (const auto &offer : matches) {
+        auto *item = new QListWidgetItem();
+        item->setData(Qt::UserRole, QString::fromUtf8(offer.name));
+        item->setData(Qt::UserRole + 1, QString::fromUtf8(offer.description));
+        item->setText(QStringLiteral("/%1  %2")
+            .arg(QString::fromUtf8(offer.name),
+                QString::fromUtf8(offer.description)));
+        popup->addItem(item);
+    }
+    popup->setCurrentRow(0);
+    position_slash_command_popup(popup, input);
+    if (card) {
+        card->show();
+        card->raise();
+    }
+    popup->show();
+}
+
 // The selected-Agent header reuses the Sidebar's initial-circle avatar
 // language on a neutral header surface. The owning title is also exposed as
 // its accessibility description, so the glyph never becomes an opaque icon.
@@ -970,11 +1372,11 @@ private:
 struct DashboardSection {
     Ui::RpWidget *owner = nullptr;
     QLabel *heading = nullptr;
-    QPlainTextEdit *surface = nullptr;
+    QTreeWidget *surface = nullptr;
     QLabel *state = nullptr;
 };
 
-constexpr auto kDashboardSectionSurfaceHeight = 140;
+constexpr auto kDashboardSectionSurfaceHeight = 300;
 
 DashboardSection add_dashboard_section(
         Ui::RpWidget *detail,
@@ -988,6 +1390,8 @@ DashboardSection add_dashboard_section(
     auto *owner = new Ui::RpWidget(detail);
     owner->setObjectName(base + QStringLiteral("_section"));
     owner->setAccessibleName(heading_text);
+    owner->setMinimumWidth(0);
+    owner->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
     auto *layout = new QVBoxLayout(owner);
     layout->setContentsMargins(0, 8, 0, 8);
     layout->setSpacing(6);
@@ -996,20 +1400,29 @@ DashboardSection add_dashboard_section(
         (base + QStringLiteral("_heading")).toUtf8().constData(), 12,
         QFont::DemiBold);
     layout->addWidget(heading);
-    auto *surface = new QPlainTextEdit(owner);
+    auto *surface = new QTreeWidget(owner);
     surface->setObjectName(base);
     surface->setAccessibleName(surface_accessible_name);
     surface->setAccessibleDescription(surface_accessible_description);
-    surface->setReadOnly(true);
-    surface->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+    surface->setColumnCount(3);
+    surface->setHeaderLabels({QStringLiteral("Preset"),
+        QStringLiteral("Provider · Model"), QStringLiteral("Capabilities")});
+    configure_preset_table(surface);
+    surface->setMinimumWidth(0);
+    surface->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
     surface->setMinimumHeight(kDashboardSectionSurfaceHeight);
-    layout->addWidget(surface);
+    layout->addWidget(surface, 1);
     auto *state = make_label(
         owner, QString(), (base + QStringLiteral("_state")).toUtf8().constData(),
         10);
     state->setAccessibleName(surface_accessible_name + QStringLiteral(" state"));
     layout->addWidget(state);
-    detail_layout->addWidget(owner);
+    auto *separator = new Ui::PlainShadow(owner);
+    separator->setObjectName(
+        (base + QStringLiteral("_separator")).toUtf8().constData());
+    separator->setFixedHeight(1);
+    layout->addWidget(separator);
+    detail_layout->addWidget(owner, 1);
     return {owner, heading, surface, state};
 }
 
@@ -1414,7 +1827,7 @@ NativeShell::NativeShell()
     shell_layout->addWidget(startup_route, 1);
 
     // The persistent left 260px project/Agent list column: project identity
-    // header, compact Open/New Project actions, and the scrollable Agent
+    // header, compact Open Project action, and the scrollable Agent
     // rows. The shell wires the owner's row clicks and its action buttons.
     agent_roster_ = new AgentRoster(body);
     agent_roster_->set_row_click_handler([this](const fs::path &key) {
@@ -1424,12 +1837,6 @@ NativeShell::NativeShell()
             "lingtai_open_project_button")) {
         QObject::connect(open_button, &QPushButton::clicked, [this] {
             request_open_project();
-        });
-    }
-    if (auto *new_button = agent_roster_->findChild<QPushButton *>(
-            "lingtai_new_project_button")) {
-        QObject::connect(new_button, &QPushButton::clicked, [this] {
-            request_new_project();
         });
     }
     shell_layout->addWidget(agent_roster_);
@@ -1559,6 +1966,10 @@ NativeShell::NativeShell()
     empty_layout->addWidget(empty_detail);
     empty_layout->addStretch(2);
 
+    setup_route_ = new ProjectSetupWizard(content);
+    setup_route_->hide();
+    content_layout->insertWidget(content_layout->indexOf(empty_route_), setup_route_, 1);
+
     project_route_ = new Ui::RpWidget(content);
     project_route_->setObjectName("lingtai_project_route");
     project_route_->setAccessibleName(QStringLiteral("Project"));
@@ -1608,6 +2019,8 @@ NativeShell::NativeShell()
     auto *detail = new Ui::RpWidget(detail_scroll);
     detail->setObjectName("lingtai_agent_detail");
     detail->setAccessibleName(QStringLiteral("Selected Agent detail"));
+    detail->setMinimumWidth(0);
+    detail->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     detail_scroll->setWidget(detail);
     auto *detail_layout = new QVBoxLayout(detail);
     detail_layout->setContentsMargins(0, 0, 0, 0);
@@ -1626,6 +2039,7 @@ NativeShell::NativeShell()
     auto *top_bar = new QWidget(detail);
     top_bar->setObjectName("lingtai_chat_top_bar");
     top_bar->setAccessibleName(QStringLiteral("Selected Agent"));
+    top_bar->setMinimumWidth(0);
     top_bar->setFixedHeight(54);
     auto *top_bar_layout = new QHBoxLayout(top_bar);
     top_bar_layout->setContentsMargins(12, 8, 12, 8);
@@ -1708,6 +2122,7 @@ NativeShell::NativeShell()
     // exactly, only the button is ever absent.
     start_row->setMinimumHeight(start_row->sizeHint().height());
     start_button->setVisible(false);
+    start_row->hide();
     top_bar_layout->addWidget(start_row);
 
     // The one Step-5 action on the exact selected Agent: reproduces only the
@@ -1742,6 +2157,7 @@ NativeShell::NativeShell()
     sleep_status->setMaximumHeight(12);
     sleep_status->setWordWrap(false);
     sleep_row_layout->addWidget(sleep_status);
+    sleep_row->hide();
     top_bar_layout->addWidget(sleep_row);
     detail_layout->addWidget(top_bar);
     // Retained once for the whole shell lifetime so the responsive fit measure
@@ -1750,36 +2166,40 @@ NativeShell::NativeShell()
     chat_top_bar_ = top_bar;
     selected_agent_key_ = detail_key;
 
-    // One compact secondary page navigation: the chat is the default selected
-    // Agent surface, and Presets owns one page so only one content surface
-    // shows at a time.
+    // Conversation is the only visible selected-Agent page tab. Presets
+    // remains a slash destination (`/presets`) behind a hidden nav button so
+    // the chat chrome no longer shows a Presets tab. On `/presets` the
+    // Conversation control becomes a Kanban-style `←  Conversation` back link.
     auto *pages_nav = new PaletteSurface(detail, st::windowBg);
     pages_nav->setObjectName("lingtai_agent_pages_nav");
     pages_nav->setAccessibleName(QStringLiteral("Selected Agent pages"));
     auto *pages_nav_layout = new QHBoxLayout(pages_nav);
-    pages_nav_layout->setContentsMargins(0, 0, 0, 0);
+    pages_nav_layout->setContentsMargins(12, 8, 12, 4);
     pages_nav_layout->setSpacing(4);
     const auto nav_specs = std::array<std::pair<const char *, const char *>, 2>{{
-        std::pair{"lingtai_agent_page_nav_conversation", "Conversation"},
+        std::pair{"lingtai_agent_page_nav_conversation", "←  Conversation"},
         std::pair{"lingtai_agent_page_nav_presets", "Presets"},
     }};
     for (auto index = std::size_t{0}; index != nav_specs.size(); ++index) {
         const auto &[object_name, text] = nav_specs[index];
+        const auto page = static_cast<AgentDetailPage>(index);
         auto *button = new PageNavButton(
             pages_nav, QString::fromUtf8(text));
         button->setObjectName(object_name);
-        button->setAccessibleName(QString::fromUtf8(text));
-        const auto page = static_cast<AgentDetailPage>(index);
+        button->setAccessibleName(
+            page == AgentDetailPage::conversation
+                ? QStringLiteral("Conversation")
+                : QString::fromUtf8(text));
         QObject::connect(button, &QPushButton::clicked, [this, page] {
             show_detail_page(page);
         });
-        // Content-driven leading navigation: the two buttons keep their own
-        // size, and the one trailing stretch absorbs the remaining width so
-        // the nav is never two equal full-pane slabs.
-        pages_nav_layout->addWidget(button, 0);
+        if (page == AgentDetailPage::presets) {
+            button->hide();
+        } else {
+            pages_nav_layout->addWidget(button, 0);
+        }
         page_nav_buttons_.push_back(button);
     }
-    // The flexible trailing room that makes the page nav content-driven.
     pages_nav_layout->addStretch(1);
     detail_layout->addWidget(pages_nav);
 
@@ -1798,7 +2218,8 @@ NativeShell::NativeShell()
         "The current direct conversation with the selected Agent, shown "
         "read-only as plain text."));
     conversation->setMinimumHeight(180);
-    conversation->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    conversation->setMinimumWidth(0);
+    conversation->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
     // The surface's own paintEvent owns the visible backdrop and bubbles; its
     // Base/Window palette roles stay transparent so the surface renders the
     // shell's palette background rather than a widget-level white base.
@@ -1871,6 +2292,16 @@ NativeShell::NativeShell()
     });
     composer_action_row->addWidget(send_button, 0, Qt::AlignVCenter);
     composer_layout->addWidget(composer_controls);
+    auto *slash_card = new SlashCommandCard(window_->body().get());
+    auto *slash_popup = slash_card->list();
+    QObject::connect(slash_popup, &QListWidget::itemClicked,
+        [composer_input, slash_popup](QListWidgetItem *) {
+            apply_slash_popup_choice(composer_input, slash_popup);
+        });
+    QObject::connect(slash_popup, &QListWidget::itemEntered,
+        [slash_popup](QListWidgetItem *item) {
+            slash_popup->setCurrentItem(item);
+        });
     // The send status is owned by the lane itself, immediately below the
     // action row -- never a separate detail row.
     auto *composer_status = make_label(
@@ -1889,9 +2320,54 @@ NativeShell::NativeShell()
     composer_surface->addWidget(composer);
     detail_layout->addLayout(composer_surface);
     composer_input->submits()
-        | rpl::on_next([this] {
+        | rpl::on_next([this, composer_input] {
+            if (auto *popup = window_->findChild<QListWidget *>(
+                    "lingtai_slash_command_popup");
+                    popup && popup->isVisible() && popup->currentItem()) {
+                apply_slash_popup_choice(composer_input, popup);
+                return;
+            }
             handle_send_message();
         }, submits_lifetime_);
+    composer_input->changes()
+        | rpl::on_next([this, composer_input] {
+            const auto text = composer_input->getLastText();
+            composer_input->setPlaceholder(rpl::single(
+                text.isEmpty() ? QStringLiteral("Message…") : QString()));
+            refresh_slash_command_popup(window_.get(), composer_input);
+        }, submits_lifetime_);
+    base::install_event_filter(
+        composer_input->rawTextEdit(),
+        composer_input->rawTextEdit(),
+        [this, composer_input](not_null<QEvent *> event) {
+            if (event->type() != QEvent::KeyPress) {
+                return base::EventFilterResult::Continue;
+            }
+            auto *popup = window_->findChild<QListWidget *>(
+                "lingtai_slash_command_popup");
+            if (!popup || !popup->isVisible()) {
+                return base::EventFilterResult::Continue;
+            }
+            const auto *key = static_cast<QKeyEvent *>(event.get());
+            if (key->key() == Qt::Key_Up) {
+                popup->setCurrentRow(std::max(0, popup->currentRow() - 1));
+                return base::EventFilterResult::Cancel;
+            }
+            if (key->key() == Qt::Key_Down) {
+                popup->setCurrentRow(
+                    std::min(popup->count() - 1, popup->currentRow() + 1));
+                return base::EventFilterResult::Cancel;
+            }
+            if (key->key() == Qt::Key_Escape) {
+                popup->hide();
+                return base::EventFilterResult::Cancel;
+            }
+            if (key->key() == Qt::Key_Tab) {
+                apply_slash_popup_choice(composer_input, popup);
+                return base::EventFilterResult::Cancel;
+            }
+            return base::EventFilterResult::Continue;
+        });
 
     // The one retained bounded read-only selected-Agent source section is
     // presented through the same local structural framing: one semibold
@@ -1899,22 +2375,47 @@ NativeShell::NativeShell()
     // plain-shadow separator. It remains a distinct source and authority and
     // is never merged with the mailbox conversation; it moves behind the
     // compact secondary page host so it never stacks under the chat surface.
-    auto *pages_host = new Ui::RpWidget(detail);
+    auto *pages_host = new PaletteSurface(detail, st::windowBg);
     pages_host->setObjectName("lingtai_agent_pages_host");
     pages_host->setAccessibleName(
         QStringLiteral("Selected Agent secondary pages"));
+    pages_host->setMinimumWidth(0);
+    pages_host->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
     auto *pages_host_layout = new QVBoxLayout(pages_host);
     pages_host_layout->setContentsMargins(0, 0, 0, 0);
     pages_host_layout->setSpacing(8);
     secondary_pages_.push_back(add_dashboard_section(
         pages_host, pages_host_layout, "preset_summary",
         QStringLiteral("Presets"),
-        QStringLiteral("Selected Agent Presets summary"),
-        QStringLiteral("The selected Agent's own kernel-resolved preset policy "
-            "and active effective configuration, shown read-only as plain "
-            "text.")).owner);
+        QStringLiteral("Selected Agent Presets"),
+        QStringLiteral("The selected Agent's allowed presets, shown with the "
+            "same catalog as project setup.")).owner);
+    apply_preset_catalog_chrome(pages_host);
     pages_host->hide();
-    detail_layout->addWidget(pages_host);
+    detail_layout->addWidget(pages_host, 1);
+
+    kanban_page_ = new KanbanPage(pages_host);
+    kanban_page_->setMinimumWidth(0);
+    kanban_page_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
+    pages_host_layout->addWidget(kanban_page_, 1);
+    QObject::connect(kanban_page_, &KanbanPage::agent_selected,
+        [this](const QString &key) {
+            handle_kanban_agent_selected(
+                std::filesystem::path(key.toStdString()));
+        });
+    QObject::connect(kanban_page_, &KanbanPage::presets_requested, [this] {
+        show_detail_page(AgentDetailPage::presets);
+    });
+    QObject::connect(kanban_page_, &KanbanPage::back_requested, [this] {
+        show_detail_page(AgentDetailPage::conversation);
+    });
+    QObject::connect(kanban_page_, &KanbanPage::reload_requested, [this] {
+        if (selection_state_.active_project()) {
+            agents_ = project_agents(*selection_state_.active_project());
+        }
+        render_kanban();
+    });
+    secondary_pages_.push_back(kanban_page_);
 
     auto *manifest_identity = make_label(
         detail, QString(), "lingtai_selected_agent_manifest_identity", 11);
@@ -1988,39 +2489,34 @@ NativeShell::NativeShell()
             render_agent_sleep_status();
             render_agent_start_status();
         }
+        // Kanban is a full disk snapshot (token ledgers, sqlite, daemon runs)
+        // plus a widget-tree rebuild. The 1s conversation timer must not
+        // refresh it: Reload and entering /kanban already do. Live refresh
+        // here stalls scrolling on large agents.
     });
     activity_timer_->start();
 
     bootstrap_runner_ = std::make_unique<ProjectBootstrapRunner>();
 
-    // New-folder setup is one workspace-sized, three-page route. It reuses the
-    // canonical headless preset discovery and spawn owner below; the pages own
-    // only the human decisions that must be reviewed before that side effect.
-    bootstrap_dialog_ = new QDialog(window_.get());
-    bootstrap_dialog_->setObjectName("lingtai_project_setup_wizard");
-    bootstrap_dialog_->setWindowTitle(QStringLiteral("LingTai"));
-    bootstrap_dialog_->setAccessibleName(QStringLiteral("Set up LingTai project"));
-    bootstrap_dialog_->setMinimumSize(840, 720);
-    bootstrap_dialog_->resize(920, 840);
-    bootstrap_dialog_->setSizeGripEnabled(true);
-    apply_project_setup_palette(bootstrap_dialog_);
-    bootstrap_dialog_->setStyleSheet(QStringLiteral(
-        "QDialog { background: palette(window); } "
+    // New-folder setup is one workspace-sized route inside the main content
+    // pane. It reuses the canonical headless preset discovery and spawn owner
+    // below; the pages own only the human decisions reviewed before spawn.
+    apply_project_setup_palette(setup_route_);
+    setup_route_->setStyleSheet(QStringLiteral(
+        "QWidget#lingtai_project_setup_wizard { background: transparent; } "
         "QPushButton { border-radius: 6px; padding: 0 16px; } "
         "QPushButton#lingtai_setup_preset_continue, "
         "QPushButton#lingtai_setup_edit_preset_save, "
         "QPushButton#lingtai_setup_agents_continue, "
         "QPushButton#lingtai_bootstrap_create_start { "
-        "min-height: 34px; background: #16785C; color: white; border: none; font-weight: 600; } "
-        "QLineEdit#lingtai_setup_preset_search { min-height: 34px; padding: 0 12px; border: 1px solid #DCE2DF; "
-        "border-radius: 8px; background: #FFFFFF; color: palette(text); }"));
-    auto *wizard_layout = new QVBoxLayout(bootstrap_dialog_);
+        "min-height: 34px; background: #16785C; color: white; border: none; font-weight: 600; }"));
+    auto *wizard_layout = new QVBoxLayout(setup_route_);
     wizard_layout->setContentsMargins(0, 0, 0, 0);
     wizard_layout->setSpacing(0);
 
     // The native window title already says LingTai. Own the flow with one
     // horizontal Preset / Agents / Review sequence, not a second brand.
-    auto *steps = new QWidget(bootstrap_dialog_);
+    auto *steps = new QWidget(setup_route_);
     steps->setObjectName("lingtai_setup_steps");
     steps->setFixedHeight(48);
     auto *steps_layout = new QHBoxLayout(steps);
@@ -2038,10 +2534,12 @@ NativeShell::NativeShell()
         badge->setAlignment(Qt::AlignCenter);
         badge->setFixedSize(22, 22);
         badge->setStyleSheet(QStringLiteral(
-            "background: #16785C; color: white; border-radius: 11px;"));
+            "background: %1; color: white; border-radius: 11px;")
+            .arg(setup_color_css(setup_tokens(step->palette()).selection_accent)));
         auto *label = make_setup_label(step, text, name, 12, QFont::DemiBold);
         label->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-        label->setStyleSheet(QStringLiteral("color: #16785C;"));
+        label->setStyleSheet(QStringLiteral("color: %1;")
+            .arg(setup_color_css(setup_tokens(step->palette()).selection_accent)));
         layout->addWidget(badge);
         layout->addWidget(label);
         steps_layout->addWidget(step);
@@ -2062,54 +2560,41 @@ NativeShell::NativeShell()
     make_step(QStringLiteral("3"), QStringLiteral("Review"),
         "lingtai_setup_step_review", "lingtai_setup_step_badge_review");
     steps_layout->addStretch();
+    auto *step_index = make_setup_label(steps, QStringLiteral("1 of 3"),
+        "lingtai_setup_step_index", 12);
+    step_index->setStyleSheet(QStringLiteral("color: #8a8f98;"));
+    steps_layout->addWidget(step_index);
     wizard_layout->addWidget(steps);
 
-    auto *right = new QWidget(bootstrap_dialog_);
+    auto *right = new QWidget(setup_route_);
     right->setObjectName("lingtai_setup_body");
     auto *right_layout = new QVBoxLayout(right);
     right_layout->setContentsMargins(32, 4, 32, 16);
     right_layout->setSpacing(0);
     auto *pages = new QStackedWidget(right);
     pages->setObjectName("lingtai_setup_pages");
-    pages->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    pages->setMinimumWidth(0);
+    pages->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
 
     const auto make_heading = [](QWidget *page, QVBoxLayout *layout,
             const QString &title, const QString &subtitle, const char *name) {
         auto *heading = make_setup_label(page, title, name, 20, QFont::DemiBold);
         heading->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+        heading->setStyleSheet(QStringLiteral("color: palette(window-text);"));
         layout->addWidget(heading);
         layout->addSpacing(6);
         auto *note = make_setup_label(page, subtitle, "lingtai_setup_page_note", 13);
         note->setWordWrap(true);
         note->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+        note->setStyleSheet(QStringLiteral("color: palette(mid);"));
         layout->addWidget(note);
         layout->addSpacing(8);
     };
 
-    const auto configure_preset_table = [](QTreeWidget *table) {
-        table->setRootIsDecorated(false);
-        table->setUniformRowHeights(false);
-        table->setIndentation(0);
-        table->setItemsExpandable(false);
-        table->setAnimated(false);
-        table->setItemDelegate(new PresetRowDelegate(table));
-        table->setSelectionMode(QAbstractItemView::SingleSelection);
-        table->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        table->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-        table->setAutoFillBackground(true);
-        table->viewport()->setAutoFillBackground(true);
-        table->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
-        table->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-        table->header()->setVisible(true);
-        table->header()->setStretchLastSection(true);
-        table->header()->setSectionResizeMode(0, QHeaderView::Stretch);
-        table->header()->setSectionResizeMode(1, QHeaderView::Stretch);
-        table->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
-    };
-
     auto *preset_page = new QWidget(pages);
     preset_page->setObjectName("lingtai_setup_preset_page");
-    preset_page->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    preset_page->setMinimumWidth(0);
+    preset_page->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
     auto *preset_layout = new QVBoxLayout(preset_page);
     preset_layout->setContentsMargins(0, 0, 0, 0);
     preset_layout->setSpacing(10);
@@ -2134,11 +2619,13 @@ NativeShell::NativeShell()
     preset_catalog->setHeaderLabels({ QStringLiteral("Preset"),
         QStringLiteral("Provider / model"), QStringLiteral("Capabilities") });
     configure_preset_table(preset_catalog);
-    preset_catalog->setMinimumHeight(340);
+    preset_catalog->setMinimumHeight(300);
     add_preset_section(preset_catalog, QStringLiteral("Saved presets"));
     add_preset_section(preset_catalog, QStringLiteral("Preset templates"));
     preset_layout->addWidget(preset_catalog, 1);
-    apply_preset_catalog_chrome(bootstrap_dialog_);
+
+    auto *codex_strip = new CodexCredentialsStrip(preset_page);
+    preset_layout->addWidget(codex_strip, 0);
 
     // The existing spawn owner still consumes one canonical selected preset.
     // Keep that state in a hidden chooser; browsing belongs to the one catalog
@@ -2151,7 +2638,8 @@ NativeShell::NativeShell()
     auto *preset_actions = new QHBoxLayout;
     auto *preset_back = new QPushButton(QStringLiteral("Back"), preset_page);
     preset_back->setObjectName("lingtai_setup_preset_back");
-    preset_back->setEnabled(false);
+    preset_back->setCursor(Qt::PointingHandCursor);
+    preset_back->setEnabled(true);
     auto *preset_footer_summary = make_setup_label(preset_page, QString(),
         "lingtai_setup_preset_footer_summary", 12);
     preset_footer_summary->setTextFormat(Qt::RichText);
@@ -2165,88 +2653,40 @@ NativeShell::NativeShell()
     preset_actions->addWidget(preset_footer_summary, 1);
     preset_actions->addWidget(preset_continue);
     preset_layout->addLayout(preset_actions, 0);
+    apply_preset_catalog_chrome(setup_route_);
     pages->addWidget(preset_page);
 
     auto *edit_preset_page = new PresetEditorPage(pages);
     pages->addWidget(edit_preset_page);
 
-    auto *agents_page = new QWidget(pages);
-    agents_page->setObjectName("lingtai_setup_agents_page");
-    auto *agents_layout = new QVBoxLayout(agents_page);
-    agents_layout->setContentsMargins(0, 0, 0, 0);
-    make_heading(agents_page, agents_layout, QStringLiteral("Configure Agents"),
-        QStringLiteral("Start with one orchestrator. You can add specialists after the project opens."),
-        "lingtai_setup_agents_heading");
-    auto *destination_input = new Ui::InputField(agents_page, st::defaultInputField,
-        Ui::InputField::Mode::SingleLine, rpl::single(QStringLiteral("Project folder")));
-    destination_input->setObjectName("lingtai_bootstrap_destination_input");
-    destination_input->setAccessibleName(QStringLiteral("Project folder"));
-    agents_layout->addWidget(destination_input);
-    auto *browse_row = new QHBoxLayout;
-    browse_row->addStretch();
-    auto *browse_button = new QPushButton(QStringLiteral("Browse…"), agents_page);
-    browse_button->setObjectName("lingtai_bootstrap_destination_browse");
-    browse_button->setAccessibleName(QStringLiteral("Browse destination folder"));
-    browse_row->addWidget(browse_button);
-    agents_layout->addLayout(browse_row);
-    agents_layout->addWidget(make_setup_gap(agents_page, 12));
-    auto *agent_card = make_label(agents_page,
-        QStringLiteral("Orchestrator Agent\nName: project folder\nDefault + allowed preset: selected template\nRecipe: Default"),
-        "lingtai_setup_agent_card", 13);
-    agent_card->setWordWrap(true);
-    agent_card->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-    agent_card->setStyleSheet(QStringLiteral(
-        "background: palette(alternate-base); border: 1px solid palette(mid); border-radius: 9px; padding: 18px;"));
-    agents_layout->addWidget(agent_card);
-    agents_layout->addStretch();
-    auto *agents_actions = new QHBoxLayout;
-    auto *agents_back = new QPushButton(QStringLiteral("Back"), agents_page);
-    agents_back->setObjectName("lingtai_setup_agents_back");
-    auto *agents_continue = new QPushButton(QStringLiteral("Continue"), agents_page);
-    agents_continue->setObjectName("lingtai_setup_agents_continue");
-    agents_continue->setStyleSheet(QStringLiteral(
-        "background: #16785C; color: white; border: none; font-weight: 600;"));
-    agents_actions->addWidget(agents_back);
-    agents_actions->addStretch();
-    agents_actions->addWidget(agents_continue);
-    agents_layout->addLayout(agents_actions);
+    auto *agents_page = new AgentPresetsPage(pages);
     pages->addWidget(agents_page);
 
-    auto *review_page = new QWidget(pages);
-    review_page->setObjectName("lingtai_setup_review_page");
-    auto *review_layout = new QVBoxLayout(review_page);
-    review_layout->setContentsMargins(0, 0, 0, 0);
-    make_heading(review_page, review_layout, QStringLiteral("Review project"),
-        QStringLiteral("Confirm the destination and authorization before LingTai writes anything."),
-        "lingtai_setup_review_heading");
-    auto *review_summary = make_label(review_page, QString(),
-        "lingtai_setup_review_summary", 13);
-    review_summary->setWordWrap(true);
-    review_summary->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-    review_summary->setStyleSheet(QStringLiteral(
-        "background: palette(alternate-base); border: 1px solid palette(mid); border-radius: 9px; padding: 20px;"));
-    review_layout->addWidget(review_summary);
+    auto *review_page = new AgentConfigPage(pages);
     auto *dialog_status = make_flat_label(review_page, QString(),
         "lingtai_bootstrap_dialog_status");
     dialog_status->setAccessibleName(QStringLiteral("Project setup status"));
-    review_layout->addWidget(make_setup_gap(review_page, 12));
-    review_layout->addWidget(dialog_status);
-    review_layout->addStretch();
-    auto *review_actions = new QHBoxLayout;
-    auto *review_back = new QPushButton(QStringLiteral("Back"), review_page);
-    review_back->setObjectName("lingtai_setup_review_back");
-    auto *cancel_button = new QPushButton(QStringLiteral("Cancel"), review_page);
-    cancel_button->setObjectName("lingtai_bootstrap_cancel");
-    auto *create_button = new QPushButton(QStringLiteral("Create project"), review_page);
-    create_button->setObjectName("lingtai_bootstrap_create_start");
-    create_button->setStyleSheet(QStringLiteral(
-        "background: #16785C; color: white; border: none; font-weight: 600;"));
-    review_actions->addWidget(review_back);
-    review_actions->addStretch();
-    review_actions->addWidget(cancel_button);
-    review_actions->addWidget(create_button);
-    review_layout->addLayout(review_actions);
+    review_page->install_dialog_status(dialog_status);
     pages->addWidget(review_page);
+
+    auto *credentials_page = new CredentialsPage(pages);
+    pages->addWidget(credentials_page);
+
+    auto *destination_input = new Ui::InputField(setup_route_,
+        st::defaultInputField, Ui::InputField::Mode::SingleLine,
+        rpl::single(QStringLiteral("Project folder")));
+    destination_input->setObjectName("lingtai_bootstrap_destination_input");
+    destination_input->setAccessibleName(QStringLiteral("Project folder"));
+    destination_input->hide();
+    auto *browse_button = new QPushButton(QStringLiteral("Browse…"),
+        setup_route_);
+    browse_button->setObjectName("lingtai_bootstrap_destination_browse");
+    browse_button->setAccessibleName(QStringLiteral("Browse destination folder"));
+    browse_button->hide();
+    auto *cancel_button = new QPushButton(QStringLiteral("Cancel"),
+        setup_route_);
+    cancel_button->setObjectName("lingtai_bootstrap_cancel");
+    cancel_button->hide();
     right_layout->addWidget(pages, 1);
     wizard_layout->addWidget(right, 1);
 
@@ -2286,9 +2726,8 @@ NativeShell::NativeShell()
             close_section();
         });
 
-    const auto update_review = [preset_chooser, destination_input,
-            preset_footer_summary, preset_continue, review_summary, agent_card,
-            dialog = bootstrap_dialog_] {
+    const auto update_review = [preset_chooser, preset_footer_summary,
+            preset_continue, dialog = setup_route_] {
         const auto preset = preset_chooser->currentText().trimmed();
         const auto summary = preset_chooser->currentData(Qt::UserRole).toString();
         const auto provider = preset_chooser->currentData(Qt::UserRole + 2).toString();
@@ -2303,30 +2742,14 @@ NativeShell::NativeShell()
         const auto tags = preset_capability_tags(has_vision, has_tools);
         const auto tokens = preset_catalog_tokens(dialog->palette());
         preset_footer_summary->setText(
-            preset_footer_rich(preset, provider_model, tags, tokens.selection_accent));
+            preset_footer_rich(preset, provider_model, tags,
+                tokens.selection_accent, tokens.section_text));
         preset_footer_summary->setAccessibleName(
             preset_footer_plain(preset, provider_model, tags));
         preset_continue->setText(is_template
             ? QStringLiteral("Configure preset")
             : QStringLiteral("Use preset"));
         preset_continue->setEnabled(!preset.isEmpty());
-        const auto destination = destination_input->getLastText().trimmed();
-        const auto folder = QFileInfo(destination).fileName();
-        const auto capability = tags.isEmpty()
-            ? QStringLiteral("—")
-            : tags.join(QStringLiteral(", "));
-        agent_card->setText(QStringLiteral(
-            "Orchestrator Agent\nName: %1\nDefault preset: %2\nAllowed presets: %2\nCapabilities: %3\nRecipe: adaptive")
-            .arg(folder.isEmpty() ? QStringLiteral("project folder") : folder,
-                preset.isEmpty() ? QStringLiteral("Choose on Preset") : preset,
-                capability));
-        review_summary->setText(QStringLiteral(
-            "Destination\n%1\n\nOrchestrator\n%2\n\nDefault + allowed preset\n%3\n\nProvider / model\n%4\n\nCapabilities\n%5\n\nRecipe\nadaptive")
-            .arg(destination.isEmpty() ? QStringLiteral("Not chosen") : destination,
-                folder.isEmpty() ? QStringLiteral("project folder") : folder,
-                preset.isEmpty() ? QStringLiteral("Not chosen") : preset,
-                provider_model.isEmpty() ? QStringLiteral("Not chosen") : provider_model,
-                capability));
     };
     const auto refresh_preset_selection = [update_review, sync_catalog_selection](
             QTreeWidgetItem *item) {
@@ -2355,11 +2778,23 @@ NativeShell::NativeShell()
             }
             refresh_preset_selection(current);
         });
-    const auto go_to_page = [pages, steps = steps](int index) {
+    const auto go_to_page = [pages, steps = steps, credentials_page](int index) {
         pages->setCurrentIndex(index);
-        const auto step = index <= 1 ? 0 : index - 1;
+        const auto credentials = pages->indexOf(credentials_page);
+        const auto step = index <= 1 || index == credentials ? 0 : index - 1;
         update_setup_step_indicator(steps, step);
-        steps->setVisible(index != 1);
+        steps->setVisible(index != 1 && index != credentials);
+    };
+    auto credentials_return = std::make_shared<int>(0);
+    const auto open_credentials = [pages, credentials_page, credentials_return,
+            go_to_page, edit_preset_page] {
+        *credentials_return = pages->currentIndex();
+        if (*credentials_return == pages->indexOf(credentials_page)) return;
+        credentials_page->reload();
+        credentials_page->set_back_label(*credentials_return == pages->indexOf(edit_preset_page)
+            ? QStringLiteral("← Edit preset")
+            : QStringLiteral("← Presets"));
+        go_to_page(pages->indexOf(credentials_page));
     };
     const auto open_preset_editor = [edit_preset_page, preset_chooser, go_to_page,
             this] {
@@ -2389,6 +2824,9 @@ NativeShell::NativeShell()
         }
         go_to_page(1);
     };
+    QObject::connect(preset_back, &QPushButton::clicked, [this] {
+        handle_cancel_bootstrap();
+    });
     QObject::connect(preset_chooser, &QComboBox::currentTextChanged,
         [update_review](const QString &) { update_review(); });
     QObject::connect(preset_continue, &QPushButton::clicked,
@@ -2396,7 +2834,8 @@ NativeShell::NativeShell()
     QObject::connect(edit_preset_page, &PresetEditorPage::cancelled,
         [go_to_page] { go_to_page(0); });
     QObject::connect(edit_preset_page, &PresetEditorPage::saved,
-        [preset_chooser, go_to_page, update_review](const QString &saved_name) {
+        [preset_chooser, agents_page, go_to_page, update_review](
+                const QString &saved_name) {
             const auto index = preset_chooser->currentIndex();
             if (index >= 0 && !saved_name.isEmpty()) {
                 preset_chooser->setItemText(index, saved_name);
@@ -2408,16 +2847,21 @@ NativeShell::NativeShell()
                     Qt::UserRole + 7);
             }
             update_review();
+            agents_page->load_from_chooser(preset_chooser, saved_name);
             go_to_page(2);
         });
-    QObject::connect(agents_back, &QPushButton::clicked,
+    QObject::connect(agents_page, &AgentPresetsPage::back_requested,
         [go_to_page] { go_to_page(1); });
-    QObject::connect(agents_continue, &QPushButton::clicked,
-        [go_to_page, update_review] {
-            update_review();
+    QObject::connect(agents_page, &AgentPresetsPage::continue_requested,
+        [preset_chooser, agents_page, review_page, go_to_page] {
+            const auto name = agents_page->default_name();
+            if (name.isEmpty()) return;
+            const auto index = preset_chooser->findText(name);
+            if (index >= 0) preset_chooser->setCurrentIndex(index);
+            review_page->load(name, agents_page->allowed_count());
             go_to_page(3);
         });
-    QObject::connect(review_back, &QPushButton::clicked,
+    QObject::connect(review_page, &AgentConfigPage::back_requested,
         [go_to_page] { go_to_page(2); });
     QObject::connect(browse_button, &QPushButton::clicked, [this] {
         handle_browse_destination();
@@ -2425,29 +2869,42 @@ NativeShell::NativeShell()
     QObject::connect(cancel_button, &QPushButton::clicked, [this] {
         handle_cancel_bootstrap();
     });
-    QObject::connect(create_button, &QPushButton::clicked, [this] {
+    QObject::connect(review_page, &AgentConfigPage::create_requested, [this] {
         handle_create_and_start();
     });
-    QObject::connect(bootstrap_dialog_, &QDialog::rejected, [this] {
+    QObject::connect(codex_strip, &CodexCredentialsStrip::manage_requested,
+        open_credentials);
+    QObject::connect(edit_preset_page, &PresetEditorPage::credentials_requested,
+        open_credentials);
+    QObject::connect(credentials_page, &CredentialsPage::back_requested,
+        [go_to_page, credentials_return, codex_strip, edit_preset_page] {
+            go_to_page(*credentials_return);
+            codex_strip->refresh();
+            edit_preset_page->refresh_credentials();
+        });
+    QObject::connect(credentials_page, &CredentialsPage::accounts_changed,
+        codex_strip, &CodexCredentialsStrip::refresh);
+    QObject::connect(setup_route_, &ProjectSetupWizard::rejected, [this] {
         handle_cancel_bootstrap();
     });
+    recompute_setup_layout(setup_route_);
+    base::install_event_filter(
+        setup_route_,
+        setup_route_,
+        [route = setup_route_](not_null<QEvent *> event) {
+            if (event->type() == QEvent::Resize) {
+                recompute_setup_layout(route);
+            }
+            return base::EventFilterResult::Continue;
+        });
+    setup_route_->hide();
+
+    pages->setCurrentIndex(0);
     destination_input->submits()
         | rpl::on_next([go_to_page, update_review] {
             update_review();
             go_to_page(3);
         }, submits_lifetime_);
-    pages->setCurrentIndex(0);
-    recompute_setup_layout(bootstrap_dialog_);
-    base::install_event_filter(
-        bootstrap_dialog_,
-        bootstrap_dialog_,
-        [dialog = bootstrap_dialog_](not_null<QEvent *> event) {
-            if (event->type() == QEvent::Resize) {
-                recompute_setup_layout(dialog);
-            }
-            return base::EventFilterResult::Continue;
-        });
-    bootstrap_dialog_->hide();
 
     // The one Telegram-derived mode recompute: Telegram's
     // `SessionController` re-derives OneColumn vs Normal on every chats
@@ -2513,7 +2970,13 @@ NativeShell::~NativeShell() = default;
 void NativeShell::refresh_system_palette() {
     apply_system_palette();
     apply_titlebar_brand_palette(window_.get());
-    apply_project_setup_palette(bootstrap_dialog_);
+    apply_project_setup_palette(setup_route_);
+    apply_preset_catalog_chrome(window_.get());
+    if (auto *popup = window_->findChild<QListWidget *>(
+            "lingtai_slash_command_popup")) {
+        apply_slash_popup_palette(popup);
+    }
+    if (kanban_page_) kanban_page_->apply_chrome();
     render_conversation();
     window_->update();
     for (auto *widget : window_->findChildren<QWidget *>()) {
@@ -2566,10 +3029,6 @@ void NativeShell::set_tui_executable(fs::path executable) {
 }
 
 void NativeShell::set_bootstrap_actions_enabled(bool enabled) {
-    if (auto *new_button = window_->findChild<QPushButton *>(
-            "lingtai_new_project_button")) {
-        new_button->setEnabled(enabled);
-    }
     if (auto *open_button = window_->findChild<QPushButton *>(
             "lingtai_open_project_button")) {
         open_button->setEnabled(enabled);
@@ -2589,11 +3048,15 @@ void NativeShell::request_new_project() {
     if (tui_executable_.empty()) {
         set_bootstrap_status(QStringLiteral(
             "New Project is unavailable: no TUI executable is configured."));
+        refresh_route();
+        recompute_layout(window_->body()->width());
         return;
     }
     bootstrap_pending_ = true;
     set_bootstrap_actions_enabled(false);
     set_bootstrap_status(QStringLiteral("Discovering presets…"));
+    refresh_route();
+    recompute_layout(window_->body()->width());
     bootstrap_runner_->run_presets(tui_executable_, [this](
             PresetDiscoveryResult result) {
         handle_presets_finished(std::move(result));
@@ -2622,15 +3085,17 @@ void NativeShell::handle_presets_finished(PresetDiscoveryResult result) {
                 "Preset discovery returned output that could not be used.");
         }
         set_bootstrap_status(failure);
+        refresh_route();
+        recompute_layout(window_->body()->width());
         return;
     }
     // The flow stays pending while the dialog is open so duplicate New
     // Project / Open Project activation is impossible throughout the whole
     // explicit bootstrap, not only during the two subprocess phases.
-    show_bootstrap_dialog(result.presets);
+    show_setup_wizard(result.presets);
 }
 
-void NativeShell::show_bootstrap_dialog(
+void NativeShell::show_setup_wizard(
         const std::vector<PresetEntry> &presets) {
     auto *chooser = window_->findChild<QComboBox *>(
         "lingtai_bootstrap_preset_chooser");
@@ -2642,20 +3107,6 @@ void NativeShell::show_bootstrap_dialog(
     catalog->clear();
 
     const auto rows = build_preset_catalog_rows(presets);
-    const auto add_preset_row = [](QTreeWidget *table,
-            const PresetCatalogRow &row, int index) {
-        const auto name = QString::fromStdString(row.entry.name);
-        const auto tags = preset_capability_tags(row.has_vision, row.has_tools);
-        auto *item = new QTreeWidgetItem(table);
-        item->setData(0, Qt::UserRole, index);
-        item->setData(0, kPresetSummaryRole, row.summary);
-        item->setData(0, kPresetCapabilitiesRole, tags);
-        item->setText(0, name);
-        item->setText(1, row.provider_model);
-        item->setText(2, tags.join(QStringLiteral(", ")));
-        item->setToolTip(0, row.summary);
-        item->setToolTip(1, row.provider_model);
-    };
 
     add_preset_section(catalog, QStringLiteral("Saved presets"));
     auto added_templates_header = false;
@@ -2677,7 +3128,7 @@ void NativeShell::show_bootstrap_dialog(
             add_preset_section(catalog, QStringLiteral("Preset templates"));
             added_templates_header = true;
         }
-        add_preset_row(catalog, row, index);
+        add_preset_catalog_row(catalog, row, index);
     }
     if (!added_templates_header) {
         add_preset_section(catalog, QStringLiteral("Preset templates"));
@@ -2699,6 +3150,10 @@ void NativeShell::show_bootstrap_dialog(
     if (auto *pages = window_->findChild<QStackedWidget *>("lingtai_setup_pages")) {
         pages->setCurrentIndex(0);
     }
+    if (auto *codex_strip = window_->findChild<CodexCredentialsStrip *>(
+            "lingtai_setup_codex_credentials_strip")) {
+        codex_strip->refresh();
+    }
     if (auto *steps = window_->findChild<QWidget *>("lingtai_setup_steps")) {
         update_setup_step_indicator(steps, 0);
         steps->show();
@@ -2715,19 +3170,35 @@ void NativeShell::show_bootstrap_dialog(
             : (model.isEmpty() ? provider
                 : provider + QStringLiteral(" · ") + model);
         const auto tags = preset_capability_tags(has_vision, has_tools);
-        const auto tokens = preset_catalog_tokens(bootstrap_dialog_->palette());
+        const auto tokens = preset_catalog_tokens(setup_route_->palette());
         summary->setText(
-            preset_footer_rich(name, provider_model, tags, tokens.selection_accent));
+            preset_footer_rich(name, provider_model, tags,
+                tokens.selection_accent, tokens.section_text));
         summary->setAccessibleName(
             preset_footer_plain(name, provider_model, tags));
     }
-    bootstrap_dialog_->show();
-    bootstrap_dialog_->raise();
+    setup_route_visible_ = true;
+    setup_route_->show();
+    setup_route_->setFocus();
+    refresh_route();
+    recompute_layout(window_->body()->width());
+    recompute_setup_layout(setup_route_);
+}
+
+void NativeShell::hide_setup_wizard() {
+    setup_route_visible_ = false;
+    if (setup_route_) setup_route_->hide();
+}
+
+bool NativeShell::in_project_setup() const {
+    return setup_route_visible_
+        || bootstrap_pending_
+        || (bootstrap_status_surface_ && bootstrap_status_surface_->isVisible());
 }
 
 void NativeShell::handle_browse_destination() {
     const auto selected = QFileDialog::getExistingDirectory(
-        bootstrap_dialog_,
+        window_.get(),
         QStringLiteral("Choose destination folder"),
         QDir::homePath(),
         QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
@@ -2739,7 +3210,7 @@ void NativeShell::handle_browse_destination() {
 }
 
 void NativeShell::handle_create_and_start() {
-    if (!bootstrap_dialog_ || !bootstrap_dialog_->isVisible()
+    if (!setup_route_ || !setup_route_visible_
         || bootstrap_runner_->is_pending()) {
         return;
     }
@@ -2763,35 +3234,47 @@ void NativeShell::handle_create_and_start() {
         return;
     }
     dialog_status->setText(QString());
-    bootstrap_dialog_->hide();
+    hide_setup_wizard();
+    refresh_route();
+    recompute_layout(window_->body()->width());
     set_bootstrap_status(QStringLiteral(
         "Creating project and starting Agent…"));
+    auto agent_name = std::string();
+    auto language = std::string();
+    if (auto *config = window_->findChild<AgentConfigPage *>(
+            "lingtai_setup_review_page")) {
+        agent_name = config->agent_name().toStdString();
+        language = config->language().toStdString();
+    }
     bootstrap_runner_->run_spawn(tui_executable_,
         fs::path(destination.toStdU16String()),
         preset.toStdString(),
         [this](SpawnOutcome outcome) {
             handle_spawn_finished(std::move(outcome));
-        });
+        },
+        agent_name,
+        language);
 }
 
 void NativeShell::handle_cancel_bootstrap() {
-    if (!bootstrap_dialog_) return;
-    // A user dismissal of the New Project dialog -- the explicit Cancel
-    // button, the standard window close control, or Escape -- is always a
-    // no-spawn cancellation. It must not run while a discovery/spawn
-    // subprocess is pending, and `reject()` hides the dialog before emitting
-    // `rejected`, so the old isVisible() guard would have blocked this real
-    // path. Programmatic hides at spawn/finish never emit `rejected`.
+    if (!setup_route_) return;
+    // A user dismissal of the New Project flow -- Cancel, Escape, or
+    // reject() -- is always a no-spawn cancellation. It must not run while a
+    // discovery/spawn subprocess is pending.
     if (bootstrap_runner_ && bootstrap_runner_->is_pending()) return;
     bootstrap_pending_ = false;
-    bootstrap_dialog_->hide();
+    hide_setup_wizard();
+    refresh_route();
+    recompute_layout(window_->body()->width());
     set_bootstrap_status(QString());
     set_bootstrap_actions_enabled(true);
 }
 
 void NativeShell::handle_spawn_finished(SpawnOutcome outcome) {
     bootstrap_pending_ = false;
-    bootstrap_dialog_->hide();
+    hide_setup_wizard();
+    refresh_route();
+    recompute_layout(window_->body()->width());
     set_bootstrap_actions_enabled(true);
     if (outcome.kind != SpawnOutcomeKind::launched
         || outcome.project_dir.empty()) {
@@ -3209,7 +3692,9 @@ void NativeShell::reset_composer() {
     if (auto *input = static_cast<Ui::InputField *>(
             window_->findChild<QObject *>("lingtai_composer_input"))) {
         input->clear();
+        input->setPlaceholder(rpl::single(QStringLiteral("Message…")));
     }
+    hide_slash_command_popup(window_.get());
     if (auto *status = window_->findChild<QLabel *>("lingtai_composer_status")) {
         status->clear();
     }
@@ -3223,19 +3708,20 @@ void NativeShell::reset_composer() {
 // exactly as read, so an absent/stale/unavailable current observation never
 // keeps a prior target's projection visible.
 void NativeShell::render_agent_preset_summary() {
-    auto *surface = window_->findChild<QPlainTextEdit *>(
+    auto *catalog = window_->findChild<QTreeWidget *>(
         "lingtai_selected_agent_preset_summary");
     auto *state = window_->findChild<QLabel *>(
         "lingtai_selected_agent_preset_summary_state");
-    if (!surface || !state) return;
-    const auto show = [&](const QString &text, const QString &compact) {
-        if (surface->toPlainText() != text) surface->setPlainText(text);
+    if (!catalog || !state) return;
+    const auto set_state = [&](const QString &compact) {
         if (state->text() != compact) state->setText(compact);
     };
 
     if (!selection_state_.active_project()
         || !selection_state_.selected_agent_directory_key()) {
-        show(QStringLiteral("Select an Agent to see its Presets."), QString());
+        if (catalog->topLevelItemCount() != 0) catalog->clear();
+        catalog->setProperty("lingtai_preset_signature", QString());
+        set_state(QString());
         return;
     }
 
@@ -3243,34 +3729,110 @@ void NativeShell::render_agent_preset_summary() {
         *selection_state_.active_project(),
         *selection_state_.selected_agent_directory_key());
 
+    QString compact;
+    auto refs = std::vector<std::string>();
     switch (summary.source) {
     case AgentPresetSummarySource::not_yet_published:
-        show(QStringLiteral(
-                "No resolved preset summary has been published yet."),
-            QStringLiteral("Not yet published"));
-        return;
+        compact = QStringLiteral("Not yet published");
+        break;
     case AgentPresetSummarySource::unavailable:
-        show(QStringLiteral("Preset summary is unavailable."),
-            QStringLiteral("Unavailable"));
-        return;
+        compact = QStringLiteral("Unavailable");
+        break;
     case AgentPresetSummarySource::resolved:
+        compact = QStringLiteral("Resolved");
+        for (const auto &ref : summary.allowed) refs.push_back(ref.ref);
+        break;
     case AgentPresetSummarySource::stale:
+        compact = QStringLiteral("Stale");
+        for (const auto &ref : summary.allowed) refs.push_back(ref.ref);
         break;
     }
 
-    auto lines = QStringList();
-    lines << QStringLiteral("Provider: %1")
-        .arg(value_text(summary.effective.provider));
-    lines << QStringLiteral("Model: %1").arg(value_text(summary.effective.model));
-    lines << QStringLiteral("Default: %1").arg(value_text(summary.default_ref));
-    lines << QStringLiteral("Allowed:");
-    for (const auto &ref : summary.allowed) {
-        lines << QStringLiteral("  • %1").arg(QString::fromStdString(ref.ref));
+    auto signature = compact + QLatin1Char('\n');
+    for (const auto &ref : refs) {
+        signature += QString::fromStdString(ref) + QLatin1Char('\n');
     }
+    if (summary.active_ref) {
+        signature += QStringLiteral("active:")
+            + QString::fromStdString(*summary.active_ref);
+    }
+    if (catalog->property("lingtai_preset_signature").toString() == signature) {
+        set_state(compact);
+        return;
+    }
+    catalog->setProperty("lingtai_preset_signature", signature);
+    catalog->clear();
+    set_state(compact);
 
-    show(lines.join(QStringLiteral("\n")),
-        summary.source == AgentPresetSummarySource::stale
-            ? QStringLiteral("Stale") : QStringLiteral("Resolved"));
+    const auto rows = build_preset_catalog_rows_from_refs(refs);
+    QTreeWidgetItem *active_item = nullptr;
+    for (auto index = 0; index != static_cast<int>(rows.size()); ++index) {
+        add_preset_catalog_row(catalog, rows[static_cast<std::size_t>(index)],
+            index);
+        auto *item = catalog->topLevelItem(catalog->topLevelItemCount() - 1);
+        if (summary.active_ref
+                && rows[static_cast<std::size_t>(index)].entry.path
+                    == *summary.active_ref) {
+            active_item = item;
+        }
+    }
+    if (active_item) {
+        catalog->setCurrentItem(active_item);
+    } else if (catalog->topLevelItemCount() > 0) {
+        catalog->setCurrentItem(catalog->topLevelItem(0));
+    }
+}
+
+void NativeShell::render_kanban() {
+    if (!kanban_page_ || current_detail_page_ != AgentDetailPage::kanban) {
+        return;
+    }
+    auto *outer = window_->findChild<QScrollArea *>(
+        "lingtai_agent_detail_scroll");
+    const auto outer_pos = outer && outer->verticalScrollBar()
+        ? outer->verticalScrollBar()->value() : 0;
+    if (!selection_state_.active_project()) {
+        kanban_page_->set_board({}, std::nullopt);
+        return;
+    }
+    kanban_page_->set_board(
+        read_kanban_board(*selection_state_.active_project(), agents_),
+        selection_state_.selected_agent_directory_key());
+    if (outer && outer->verticalScrollBar()) {
+        outer->verticalScrollBar()->setValue(outer_pos);
+    }
+}
+
+void NativeShell::handle_kanban_agent_selected(const fs::path &directory_key) {
+    auto *error = window_->findChild<QLabel *>("lingtai_agent_selection_error");
+    const auto *item = selectable_item(agents_, directory_key);
+    if (!item) {
+        if (error) {
+            error->setText(QStringLiteral(
+                "This roster item cannot be selected."));
+            error->show();
+        }
+        return;
+    }
+    const auto result = selection_state_.select_agent(item->directory_key);
+    if (result != AgentSelectionResult::selected
+        || !selection_state_.active_project()) {
+        if (error) {
+            error->setText(QStringLiteral("Agent selection was rejected."));
+            error->show();
+        }
+        return;
+    }
+    reset_composer();
+    bump_lifecycle_generation();
+    pending_sleep_observation_.reset();
+    pending_start_observation_.reset();
+    render_roster();
+    show_detail_page(AgentDetailPage::kanban);
+    if (error) {
+        error->clear();
+        error->hide();
+    }
 }
 
 // Classifies the raw composer text before ordinary trim/send handling. Every
@@ -3284,12 +3846,16 @@ void NativeShell::handle_send_message() {
         window_->findChild<QObject *>("lingtai_composer_input"));
     auto *status = window_->findChild<QLabel *>("lingtai_composer_status");
     if (!input || !status) return;
+    hide_slash_command_popup(window_.get());
     const auto raw_text = input->getLastText();
     if (const auto command = parse_slash_command(raw_text.toStdString())) {
         input->clear();
         if (command->name == "suspend" || command->name == "clear"
             || command->name == "refresh") {
             handle_lifecycle_command(command->name, command->args);
+            return;
+        }
+        if (handle_prompt_command(command->name, command->args)) {
             return;
         }
         if (!command->args.empty()) {
@@ -3300,6 +3866,21 @@ void NativeShell::handle_send_message() {
         if (command->name == "presets") {
             status->clear();
             show_detail_page(AgentDetailPage::presets);
+            return;
+        }
+        if (command->name == "setup") {
+            status->clear();
+            if (selection_state_.active_project()) {
+                request_new_project_at(
+                    selection_state_.active_project()->root());
+            } else {
+                request_new_project();
+            }
+            return;
+        }
+        if (command->name == "kanban") {
+            status->clear();
+            show_detail_page(AgentDetailPage::kanban);
             return;
         }
         if (command->name == "agents") {
@@ -3324,8 +3905,9 @@ void NativeShell::handle_send_message() {
         }
         if (command->name == "help") {
             status->setText(QStringLiteral(
-                "Available commands: /agents, /presets, /sleep, /cpr, /clear, "
-                "/refresh, /suspend, /help, /quit."));
+                "Available commands: /agents, /presets, /setup, /kanban, "
+                "/sleep, /cpr, /clear, /refresh, /suspend, /btw, /insights, "
+                "/goal, /export, /molt, /help, /quit."));
             return;
         }
         if (command->name == "quit") {
@@ -3408,6 +3990,79 @@ void NativeShell::handle_agent_selection(const fs::path &directory_key) {
         error->clear();
         error->hide();
     }
+}
+
+bool NativeShell::handle_prompt_command(
+        const std::string &name, const std::string &args) {
+    auto *status = window_->findChild<QLabel *>("lingtai_composer_status");
+    if (!status) return false;
+    const auto known = name == "btw" || name == "insights" || name == "goal"
+        || name == "export" || name == "molt";
+    if (!known) return false;
+    if (name == "btw" && args.empty()) {
+        status->setText(QStringLiteral("Usage: /btw <question>"));
+        return true;
+    }
+    if (name == "export" && !args.empty() && args != "recipe") {
+        status->setText(QStringLiteral(
+            "[system] Usage: /export — or — /export recipe"));
+        return true;
+    }
+    if (!selection_state_.active_project()
+        || !selection_state_.selected_agent_directory_key()) {
+        if (name == "goal") {
+            status->setText(QStringLiteral(
+                "No current agent is selected; cannot send a goal request."));
+        } else if (name == "export") {
+            status->setText(QStringLiteral(
+                "[system] No orchestrator running — start an agent first."));
+        } else {
+            status->setText(QStringLiteral(
+                "Command not available in this Desktop build."));
+        }
+        return true;
+    }
+    const auto &attachment = *selection_state_.active_project();
+    const auto key = *selection_state_.selected_agent_directory_key();
+    const auto *item = selectable_item(agents_, key);
+    if (!item || item->presence != AgentPresenceKind::alive) {
+        status->setText(QStringLiteral(
+            "Agent is not running. Try /refresh first."));
+        return true;
+    }
+    if (name == "btw") {
+        static_cast<void>(write_agent_inquiry(attachment, key, "human", args));
+        status->setText(QStringLiteral("Inquiry sent: %1")
+            .arg(QString::fromStdString(args)));
+        return true;
+    }
+    if (name == "insights") {
+        static_cast<void>(write_insight_inquiry(attachment, key));
+        status->setText(QStringLiteral("Requesting insight..."));
+        return true;
+    }
+    if (name == "molt") {
+        static_cast<void>(write_molt_prompt(attachment, key));
+        status->setText(QStringLiteral("Molt command sent."));
+        return true;
+    }
+    if (name == "export") {
+        static_cast<void>(write_export_recipe_prompt(attachment, key));
+        status->setText(QStringLiteral(
+            "[system] Asked the orchestrator to start the recipe export flow."));
+        return true;
+    }
+    const auto goal = write_agent_goal_request(attachment, key, args);
+    if (!goal.ok) {
+        status->setText(QStringLiteral(
+            "Failed to send goal request notification: write failed"));
+        return true;
+    }
+    status->setText(QStringLiteral(
+        "Goal request notification sent (%1). The agent will read the goal "
+        "manual and guide goal creation.")
+        .arg(QString::fromStdString(goal.event_id)));
+    return true;
 }
 
 // The one selected-Agent lifecycle owner for `/suspend`, `/clear`, and
@@ -3505,10 +4160,13 @@ void NativeShell::bump_lifecycle_generation() noexcept {
 // chat in OneColumn.
 void NativeShell::recompute_layout(int body_width) {
     const auto project_active = selection_state_.active_project().has_value();
-    if (startup_route_) startup_route_->setVisible(!project_active);
+    const auto setup_active = in_project_setup();
+    if (startup_route_) {
+        startup_route_->setVisible(!project_active && !setup_active);
+    }
     if (auto *brand = window_->findChild<QLabel *>("lingtai_titlebar_brand")) {
         auto *titlebar = brand->parentWidget();
-        if (!project_active && titlebar) {
+        if (!project_active && !setup_active && titlebar) {
             brand->move((titlebar->width() - brand->width()) / 2, 0);
         } else {
             const auto traffic_anchor = NativeTrafficLightAnchor(window_.get());
@@ -3516,6 +4174,14 @@ void NativeShell::recompute_layout(int body_width) {
             brand->move(traffic_anchor.x(), 0);
         }
         brand->raise();
+    }
+    if (setup_active) {
+        agent_roster_->setVisible(false);
+        roster_resize_handle_->setVisible(false);
+        separator_->setVisible(false);
+        content_->setVisible(true);
+        recompute_setup_layout(setup_route_);
+        return;
     }
     if (!project_active) {
         agent_roster_->setVisible(false);
@@ -3546,6 +4212,7 @@ void NativeShell::recompute_layout(int body_width) {
             - kRosterResizeHandleWidth - kRosterSeparatorWidth;
         update_composer_width(detail_width);
         update_top_bar_fit(detail_width);
+        fit_kanban_page(detail_width);
         return;
     }
     const auto detail_active =
@@ -3560,6 +4227,7 @@ void NativeShell::recompute_layout(int body_width) {
     detail_back_button_->setVisible(detail_active);
     update_composer_width(body_width);
     update_top_bar_fit(body_width);
+    fit_kanban_page(body_width);
 }
 
 // The one responsive chat-top-bar measure, re-entered on every recompute (and
@@ -3662,6 +4330,37 @@ void NativeShell::update_composer_width(int detail_width) {
     composer_->setMinimumWidth(0);
     composer_->setMaximumWidth(QWIDGETSIZE_MAX);
     composer_->layout()->setContentsMargins(outer, 10, outer, 8);
+    if (auto *input = static_cast<Ui::InputField *>(
+            window_->findChild<QObject *>("lingtai_composer_input"))) {
+        if (auto *popup = window_->findChild<QListWidget *>(
+                "lingtai_slash_command_popup");
+                popup && popup->isVisible()) {
+            position_slash_command_popup(popup, input);
+        }
+    }
+}
+
+void NativeShell::fit_kanban_page(int detail_width) {
+    auto *scroll = window_->findChild<QScrollArea *>(
+        "lingtai_agent_detail_scroll");
+    auto width = detail_width;
+    auto height = 0;
+    if (scroll && scroll->viewport()) {
+        if (scroll->viewport()->width() > 0) {
+            width = scroll->viewport()->width();
+        }
+        height = scroll->viewport()->height();
+    }
+    if (!kanban_page_) return;
+    kanban_page_->setMinimumWidth(0);
+    kanban_page_->setMinimumHeight(0);
+    if (current_detail_page_ == AgentDetailPage::kanban) {
+        kanban_page_->setMaximumWidth(std::max(1, width));
+        kanban_page_->setMaximumHeight(std::max(1, height));
+    } else {
+        kanban_page_->setMaximumWidth(QWIDGETSIZE_MAX);
+        kanban_page_->setMaximumHeight(QWIDGETSIZE_MAX);
+    }
 }
 
 // Telegram's OneColumn history-back path: the narrow detail returns to the
@@ -3699,20 +4398,27 @@ void NativeShell::show_detail_page(AgentDetailPage page) {
         "lingtai_selected_agent_conversation_state");
     auto *pages_host = window_->findChild<Ui::RpWidget *>(
         "lingtai_agent_pages_host");
+    auto *pages_nav = window_->findChild<Ui::RpWidget *>(
+        "lingtai_agent_pages_nav");
     if (!conversation_heading || !conversation || !composer || !composer_status
         || !conversation_state || !pages_host) {
         return;
     }
+    const auto previous_page = current_detail_page_;
+    current_detail_page_ = page;
     const auto on_conversation = page == AgentDetailPage::conversation;
-    // The one visible Conversation affordance is the nav item; the duplicate
-    // heading is retained only as a hidden object/implementation anchor and is
-    // never revealed beside the selected nav control.
     conversation_heading->setVisible(false);
     conversation->setVisible(on_conversation);
     composer->setVisible(on_conversation);
     composer_status->setVisible(on_conversation);
     conversation_state->setVisible(on_conversation);
     pages_host->setVisible(!on_conversation);
+    if (pages_nav) {
+        pages_nav->setVisible(page == AgentDetailPage::presets);
+    }
+    if (chat_top_bar_) {
+        chat_top_bar_->setVisible(page == AgentDetailPage::conversation);
+    }
     for (auto index = std::size_t{0}; index != secondary_pages_.size();
             ++index) {
         secondary_pages_[index]->setVisible(
@@ -3722,6 +4428,24 @@ void NativeShell::show_detail_page(AgentDetailPage page) {
             ++index) {
         page_nav_buttons_[index]->setChecked(
             page == static_cast<AgentDetailPage>(index));
+        if (static_cast<AgentDetailPage>(index) == AgentDetailPage::presets) {
+            page_nav_buttons_[index]->hide();
+        }
+    }
+    if (page == AgentDetailPage::kanban) {
+        render_kanban();
+        if (kanban_page_) kanban_page_->setFocus(Qt::OtherFocusReason);
+    }
+    if (page == AgentDetailPage::presets) {
+        render_agent_preset_summary();
+    }
+    const auto width = content_ && content_->width() > 0
+        ? content_->width()
+        : (window_ ? window_->body()->width() : 0);
+    fit_kanban_page(width);
+    if (previous_page != page && window_ && window_->body()
+            && selection_state_.active_project()) {
+        recompute_layout(window_->body()->width());
     }
 }
 // whatever `agents_` currently holds. Also reached through `render_roster()`
@@ -3742,6 +4466,10 @@ void NativeShell::render_agent_sleep_status() {
         : nullptr;
     const auto eligible = item && agent_sleep_eligible(*item);
     button->setEnabled(eligible);
+    if (auto *row = window_->findChild<QWidget *>(
+            "lingtai_selected_agent_sleep_row")) {
+        row->setVisible(false);
+    }
     status->setText(eligible
         ? QString()
         : QStringLiteral("Select a live Agent that is not already asleep."));
@@ -3876,8 +4604,12 @@ void NativeShell::render_agent_start_status() {
               *selection_state_.selected_agent_directory_key())
         : nullptr;
     const auto eligible = item && agent_start_eligible(*item);
-    button->setVisible(eligible);
+    button->setVisible(false);
     button->setEnabled(eligible);
+    if (auto *row = window_->findChild<QWidget *>(
+            "lingtai_selected_agent_start_row")) {
+        row->setVisible(false);
+    }
 }
 
 // The human's explicit click is the local product action. Rerun the sole
@@ -3987,20 +4719,16 @@ ProjectOpenOutcome NativeShell::show_open_error(
 }
 
 void NativeShell::refresh_route() {
-    // Both are stored pointers the constructor always sets before
-    // refresh_route() can run, so neither branch here is ever reachable.
     const auto project_active = selection_state_.active_project().has_value();
-    if (startup_route_) startup_route_->setVisible(!project_active);
-    empty_route_->setVisible(!project_active);
-    project_route_->setVisible(project_active);
-    // The welcome branding only belongs to the no-project state: with a
-    // project open the right pane is one chat-first surface.
+    const auto setup_active = in_project_setup();
+    empty_route_->setVisible(!project_active && !setup_active);
+    project_route_->setVisible(project_active && !setup_active);
     if (auto *title = window_->findChild<QLabel *>("lingtai_product_title")) {
-        title->setVisible(!project_active);
+        title->setVisible(!project_active && !setup_active);
     }
     if (auto *purpose = window_->findChild<QLabel *>(
             "lingtai_product_purpose")) {
-        purpose->setVisible(!project_active);
+        purpose->setVisible(!project_active && !setup_active);
     }
 }
 

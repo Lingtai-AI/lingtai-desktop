@@ -557,11 +557,10 @@ void verify_row_selection_diverges_and_field_uses_sidebar_bg() {
         "the accessible description must retain the raw facts verbatim");
 }
 
-// Project-toolbar contract. The top-left controls are one compact flat row:
-// a text-led `LingTai` selector whose chevron is painted as a small icon, plus
-// one icon-only New Project action. Neither control may fall back to the
-// platform's beveled/default QPushButton frame. The selector menu still owns
-// the current path and the existing Open/New Project action identities.
+// Project-toolbar contract. The top-left control is one compact flat
+// `LingTai` selector whose chevron is painted as a small icon. It must not
+// fall back to the platform's beveled/default QPushButton frame. The selector
+// menu owns the current path and the existing Open Project action identity.
 void verify_compact_project_selector_and_menu() {
     QWidget parent;
     AgentRoster roster(&parent);
@@ -570,23 +569,17 @@ void verify_compact_project_selector_and_menu() {
 
     auto *selector = roster.findChild<QPushButton *>(
         "lingtai_project_selector");
-    auto *plus = roster.findChild<QPushButton *>(
-        "lingtai_new_project_button");
     require(selector != nullptr,
         "the project toolbar must expose its LingTai selector");
-    require(plus != nullptr,
-        "the project toolbar must expose its New Project icon action");
+    require(roster.findChild<QPushButton *>("lingtai_new_project_button")
+            == nullptr,
+        "the project toolbar must not expose a separate New Project control");
     require(selector->text() == QStringLiteral("LingTai"),
         "the selector label must be plain `LingTai`; its small chevron is an "
         "adjacent painted icon, not a wide text glyph");
-    require(plus->text().isEmpty(),
-        "the New Project control must be icon-only, not a text `+` button");
-    require(selector->isFlat() && plus->isFlat(),
-        "both project toolbar controls must suppress the platform's default "
+    require(selector->isFlat(),
+        "the project selector must suppress the platform's default "
         "beveled button frame");
-    require(plus->maximumWidth() <= 32
-            && plus->height() == selector->height(),
-        "the icon-only plus must stay compact and align with the selector");
     require(selector->accessibleName().contains(QStringLiteral("LingTai")),
         "the compact selector must keep a LingTai project accessible "
         "identity");
@@ -597,7 +590,6 @@ void verify_compact_project_selector_and_menu() {
     const auto current_path = root->text();
 
     auto *open_entry = static_cast<QAction *>(nullptr);
-    auto *new_entry = static_cast<QAction *>(nullptr);
     auto path_entry_seen = false;
     selector->click();
     QCoreApplication::processEvents();
@@ -608,16 +600,18 @@ void verify_compact_project_selector_and_menu() {
                 open_entry = action;
             } else if (action->objectName()
                     == QStringLiteral("lingtai_new_project_button")) {
-                new_entry = action;
+                require(false,
+                    "the selector menu must not expose a separate New Project "
+                    "entry");
             }
             if (action->text() == current_path) {
                 path_entry_seen = true;
             }
         }
     }
-    require(open_entry != nullptr && new_entry != nullptr,
-        "the selector menu must expose Open and New Project entries that keep "
-        "the existing object identities");
+    require(open_entry != nullptr,
+        "the selector menu must expose Open Project with the existing object "
+        "identity");
     require(path_entry_seen,
         "the selector menu must surface the current project path");
 }

@@ -19,6 +19,7 @@ void expect(bool condition, std::string_view message) {
 }
 
 #if LINGTAI_HAS_SLASH_COMMAND
+using lingtai::desktop::matching_slash_commands;
 using lingtai::desktop::parse_slash_command;
 
 void expect_command(std::string_view raw, std::string_view name,
@@ -50,6 +51,35 @@ int main() {
         "leading whitespace keeps slash text out of the command path");
     expect(!parse_slash_command("hello"), "ordinary text is not consumed");
     expect(!parse_slash_command(""), "empty text is not a command");
+
+    const auto all = matching_slash_commands("/");
+    expect(!all.empty(), "a bare slash offers the Desktop command catalog");
+    auto found_sleep = false;
+    for (const auto &offer : all) {
+        if (std::string_view(offer.name) == "sleep") found_sleep = true;
+    }
+    expect(found_sleep, "the catalog must include /sleep");
+    auto found_btw = false;
+    auto found_molt = false;
+    for (const auto &offer : all) {
+        if (std::string_view(offer.name) == "btw") found_btw = true;
+        if (std::string_view(offer.name) == "molt") found_molt = true;
+    }
+    expect(found_btw && found_molt,
+        "the catalog must include the in-conversation TUI commands");
+    auto found_setup = false;
+    for (const auto &offer : all) {
+        if (std::string_view(offer.name) == "setup") found_setup = true;
+    }
+    expect(found_setup, "the catalog must include /setup for the workspace wizard");
+    const auto prefix = matching_slash_commands("/s");
+    expect(prefix.size() >= 2, "/s must match sleep and suspend");
+    expect(matching_slash_commands("/sleep").empty(),
+        "an exact unique name dismisses the popup catalog");
+    expect(matching_slash_commands("/sleep now").empty(),
+        "arguments suppress the popup catalog");
+    expect(matching_slash_commands("hello").empty(),
+        "ordinary text offers no slash commands");
 #endif
 
     if (failures != 0) return 1;

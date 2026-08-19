@@ -11,6 +11,7 @@
 class QKeyEvent;
 class QPaintEvent;
 class QResizeEvent;
+class QShowEvent;
 
 namespace lingtai::desktop {
 
@@ -44,10 +45,14 @@ protected:
     // Recomputes the content-driven message widths and reflows the document
     // when the quantized layout width meaningfully changes.
     void resizeEvent(QResizeEvent *event) override;
+    // Hidden pages skip layout; becoming visible again must reflow even when
+    // Qt does not send a resize because sizeHint kept the stale width.
+    void showEvent(QShowEvent *event) override;
     // Ctrl+U at the top reveals the next older page of the cached history.
     void keyPressEvent(QKeyEvent *event) override;
 
 private:
+    void reflow_to_viewport();
     void rebuild_document();
     void rebuild_empty_state();
     void reveal_older();

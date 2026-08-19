@@ -3,11 +3,15 @@
 #include "ui/widgets/rp_window.h"
 
 #include <QtCore/QCoreApplication>
+#include <QtCore/QPointF>
 #include <QtCore/QString>
+#include <QtGui/QMouseEvent>
+#include <QtWidgets/QAbstractItemView>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QLabel>
-#include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QPushButton>
+#include <QtWidgets/QTreeWidget>
+#include <QtWidgets/QTreeWidgetItem>
 
 #include <filesystem>
 #include <fstream>
@@ -44,30 +48,47 @@ void write_file(const fs::path &path, std::string_view bytes) {
     require(stream.good(), "fixture file must be written: " + path.string());
 }
 
-QPushButton *agent_row(QWidget &window, std::string_view key) {
-    const auto expected = QString::fromUtf8(key.data(), key.size());
-    for (auto *row : window.findChildren<QPushButton *>()) {
-        if (row->property("directory_key").toString() == expected) return row;
-    }
-    throw std::runtime_error("missing Agent row: " + std::string(key));
-}
-
-void click_agent(QWidget &window, std::string_view key) {
-    agent_row(window, key)->click();
+void click_agent_canvas_row(QWidget &window, int index) {
+    auto *canvas = required_child<QWidget>(
+        window, "lingtai_agent_roster_rows");
+    const auto point = QPointF(20.0, 24.0 + static_cast<double>(index) * 64.0);
+    auto press = QMouseEvent(
+        QEvent::MouseButtonPress,
+        point,
+        point,
+        Qt::LeftButton,
+        Qt::LeftButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(canvas, &press);
+    auto release = QMouseEvent(
+        QEvent::MouseButtonRelease,
+        point,
+        point,
+        Qt::LeftButton,
+        Qt::LeftButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(canvas, &release);
     QCoreApplication::processEvents();
 }
 
-// The Repair4 dedicated Presets presentation contract: a real NativeShell
-// with one selected Agent, opening the Presets page, showing exactly the
-// minimal Provider/Model/Default/Allowed surface with ordered refs and the
-// Resolved state, proving the removed active-ref/badge/context/capability/
-// generated/source text is absent, and proving the six generic
-// identity/status/facts widgets stay hidden on the Presets page.
+QStringList catalog_preset_names(QTreeWidget *catalog) {
+    auto names = QStringList();
+    for (auto index = 0; index != catalog->topLevelItemCount(); ++index) {
+        auto *item = catalog->topLevelItem(index);
+        if (item->data(0, Qt::UserRole).isValid()) {
+            names << item->text(0);
+        }
+    }
+    return names;
+}
+
+// `/presets` reuses the setup catalog table and lists only this Agent's
+// allowed presets, in published order.
 void verify_presets_simplified_surface(
         lingtai::desktop::NativeShell &shell,
         const fs::path &sandbox) {
     auto &window = shell.window();
-    auto *surface = required_child<QPlainTextEdit>(
+    auto *catalog = required_child<QTreeWidget>(
         window, "lingtai_selected_agent_preset_summary");
     auto *state = required_child<QLabel>(
         window, "lingtai_selected_agent_preset_summary_state");
@@ -108,37 +129,22 @@ void verify_presets_simplified_surface(
     require(outcome.disposition == ProjectOpenDisposition::opened,
         "the Presets fixture project must open");
 
-    click_agent(window, "agent-a");
-    const auto expected_minimal = QStringLiteral(
-        "Provider: codex\n"
-        "Model: gpt-5.6-sol\n"
-        "Default: ~/.lingtai-tui/presets/saved/codex.json\n"
-        "Allowed:\n"
-        "  • ~/.lingtai-tui/presets/saved/deepseek_flash.json\n"
-        "  • ~/.lingtai-tui/presets/saved/codex.json\n"
-        "  • ~/.lingtai-tui/presets/saved/zhipu-1.json");
-    require(surface->toPlainText() == expected_minimal,
-        "selecting Agent A must render exactly the minimal "
-        "Provider/Model/Default/Allowed surface");
+    click_agent_canvas_row(window, 0);
+    require(catalog_preset_names(catalog)
+            == QStringList({
+                QStringLiteral("deepseek_flash"),
+                QStringLiteral("codex"),
+                QStringLiteral("zhipu-1")}),
+        "selecting Agent A must list only its allowed presets, in published "
+        "order, using the setup catalog table");
     require(state->text() == QStringLiteral("Resolved"),
         "a supported complete v1 artifact must show the Resolved state "
         "label");
-
-    const auto text = surface->toPlainText();
-    for (const QString &absent : {
-            QStringLiteral("Active:"),
-            QStringLiteral("Active effective"),
-            QStringLiteral("Context limit:"),
-            QStringLiteral("Capabilities:"),
-            QStringLiteral("Source: kernel"),
-            QStringLiteral("generated 2026-08-13T19:53:34Z") }) {
-        require(!text.contains(absent),
-            "the Presets surface must not render removed active-ref/badge/"
-            "context/capability/source-provenance text");
-    }
-    require(!text.contains(QStringLiteral("[Active"))
-            && !text.contains(QStringLiteral("[Default")),
-        "the Presets surface must not render per-ref active/default badges");
+    require(catalog->editTriggers() == QAbstractItemView::NoEditTriggers,
+        "the allowed-preset catalog must stay read-only");
+    require(catalog->currentItem() != nullptr
+            && catalog->currentItem()->text(0) == QStringLiteral("codex"),
+        "the catalog must land on the Agent's active preset");
 
     // The six generic identity/status/facts widgets are owned by their
     // non-Presets destination and must not be visible on the Presets page.

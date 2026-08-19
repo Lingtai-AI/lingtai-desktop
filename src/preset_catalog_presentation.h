@@ -24,4 +24,10 @@ struct PresetCatalogRow {
 [[nodiscard]] std::vector<PresetCatalogRow> build_preset_catalog_rows(
     const std::vector<PresetEntry> &presets);
 
+// One catalog row per allowed ref, in published order. Reads the JSON when
+// the path exists; otherwise the row still lists the file stem so `/presets`
+// can show the agent's allow-list without the global library.
+[[nodiscard]] std::vector<PresetCatalogRow> build_preset_catalog_rows_from_refs(
+    const std::vector<std::string> &refs);
+
 } // namespace lingtai::desktop

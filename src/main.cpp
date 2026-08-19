@@ -5,13 +5,25 @@
 #include <QtCore/QTimer>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QFileDialog>
+#include <QtGui/QFont>
 
 #include <filesystem>
 #include <iostream>
 #include <string_view>
 
 int main(int argc, char **argv) {
+    // QT_LOGGING_RULES is semicolon-separated. A newline makes Qt treat both
+    // lines as one malformed rule, so the Open Sans / keymapper warnings
+    // still print.
+    qputenv("QT_LOGGING_RULES",
+        "qt.qpa.fonts.warning=false;qt.qpa.keymapper.warning=false");
     QApplication app(argc, argv);
+    QFont::insertSubstitutions(QStringLiteral("Open Sans"), {
+        QStringLiteral(".AppleSystemUIFont"),
+        QStringLiteral("Helvetica Neue"),
+        QStringLiteral("Helvetica"),
+        QStringLiteral("Arial"),
+    });
     const auto smoke_mode = argc == 2
         && std::string_view(argv[1]) == "--smoke";
     const auto offscreen_mode = smoke_mode || (argc == 2

@@ -1,9 +1,12 @@
 #include "preset_editor_page.h"
 
-#include <QtCore/QFileInfo>
+#include "setup_style.h"
+
+#include <QtCore/QHash>
 #include <QtCore/QSignalBlocker>
 #include <QtCore/QVector>
 #include <QtGui/QFont>
+#include <QtGui/QWheelEvent>
 #include <QtWidgets/QButtonGroup>
 #include <QtWidgets/QCheckBox>
 #include <QtWidgets/QComboBox>
@@ -12,10 +15,10 @@
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLineEdit>
-#include <QtWidgets/QMenu>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QSizePolicy>
+#include <QtWidgets/QStyleFactory>
 #include <QtWidgets/QVBoxLayout>
 #include <functional>
 
@@ -23,8 +26,14 @@ namespace lingtai::desktop {
 namespace {
 
 const auto kJade = QStringLiteral("#16785C");
-const auto kBorder = QStringLiteral("#DCE2DF");
-const auto kMuted = QStringLiteral("#6B7280");
+
+QString value_css(const QWidget *widget) {
+    return setup_color_css(setup_tokens(widget->palette()).value_text);
+}
+
+QString muted_css(const QWidget *widget) {
+    return setup_color_css(setup_tokens(widget->palette()).muted_text);
+}
 
 QLabel *make_label(QWidget *parent, const QString &text, const char *name,
         int point, QFont::Weight weight = QFont::Normal, const QString &color = {}) {
@@ -44,9 +53,7 @@ QLineEdit *make_field(QWidget *parent, const char *name) {
     auto *field = new QLineEdit(parent);
     field->setObjectName(name);
     field->setFixedHeight(34);
-    field->setStyleSheet(QStringLiteral(
-        "QLineEdit { border: 1px solid %1; border-radius: 8px; padding: 0 10px; "
-        "background: #FFFFFF; }").arg(kBorder));
+    apply_setup_line_edit(field, setup_tokens(parent->palette()));
     return field;
 }
 
@@ -57,7 +64,7 @@ QWidget *make_field_block(QWidget *parent, const QString &caption,
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(6);
     auto *label = make_label(block, caption, "lingtai_setup_edit_preset_field_label",
-        12, QFont::DemiBold);
+        12, QFont::DemiBold, value_css(block));
     layout->addWidget(label);
     layout->addWidget(field);
     if (stretch > 0) {
@@ -69,8 +76,56 @@ QWidget *make_field_block(QWidget *parent, const QString &caption,
 QFrame *make_rule(QWidget *parent) {
     auto *rule = new QFrame(parent);
     rule->setFrameShape(QFrame::HLine);
-    rule->setStyleSheet(QStringLiteral("color: %1;").arg(kBorder));
+    rule->setStyleSheet(QStringLiteral("color: %1;")
+        .arg(setup_color_css(setup_tokens(parent->palette()).border)));
     return rule;
+}
+
+class DropdownCombo final : public QComboBox {
+public:
+    using QComboBox::QComboBox;
+
+protected:
+    void wheelEvent(QWheelEvent *event) override {
+        event->ignore();
+    }
+};
+
+void style_combo(QComboBox *combo) {
+    combo->setFixedHeight(34);
+    combo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    combo->setFocusPolicy(Qt::ClickFocus);
+    combo->setAttribute(Qt::WA_MacShowFocusRect, false);
+    combo->setMaxVisibleItems(12);
+    if (auto *fusion = QStyleFactory::create(QStringLiteral("Fusion"))) {
+        combo->setStyle(fusion);
+    }
+    // Do not set min-height in the stylesheet: Qt treats it as content
+    // height, so a 34px widget plus a 1px border clips the bottom edge.
+    combo->setStyleSheet(setup_combo_css(setup_tokens(combo->palette())));
+}
+
+QString provider_label(const QString &id) {
+    static const auto labels = QHash<QString, QString>{
+        {QStringLiteral("minimax"), QStringLiteral("MiniMax")},
+        {QStringLiteral("zhipu"), QStringLiteral("Zhipu")},
+        {QStringLiteral("mimo"), QStringLiteral("MiMo")},
+        {QStringLiteral("deepseek"), QStringLiteral("DeepSeek")},
+        {QStringLiteral("gemini"), QStringLiteral("Gemini")},
+        {QStringLiteral("kimi"), QStringLiteral("Kimi")},
+        {QStringLiteral("grok"), QStringLiteral("Grok")},
+        {QStringLiteral("nvidia"), QStringLiteral("NVIDIA")},
+        {QStringLiteral("openrouter"), QStringLiteral("OpenRouter")},
+        {QStringLiteral("codex"), QStringLiteral("Codex")},
+        {QStringLiteral("codex-pool"), QStringLiteral("Codex pool")},
+        {QStringLiteral("codex_pool"), QStringLiteral("Codex pool")},
+        {QStringLiteral("claude-code"), QStringLiteral("Claude Code")},
+        {QStringLiteral("claude_code"), QStringLiteral("Claude Code")},
+        {QStringLiteral("claude-agent-sdk"), QStringLiteral("Claude Code")},
+        {QStringLiteral("claude_agent_sdk"), QStringLiteral("Claude Code")},
+        {QStringLiteral("custom"), QStringLiteral("Custom")},
+    };
+    return labels.value(id, id);
 }
 
 struct CapabilityCopy {
@@ -129,12 +184,8 @@ public:
             button->setCheckable(true);
             button->setFixedHeight(32);
             button->setCursor(Qt::PointingHandCursor);
-            button->setStyleSheet(QStringLiteral(
-                "QPushButton { border: 1px solid %1; border-radius: 6px; "
-                "padding: 0 12px; background: #FFFFFF; color: #111827; }"
-                "QPushButton:checked { background: %2; color: white; border: none; "
-                "font-weight: 600; }")
-                .arg(kBorder, kJade));
+            apply_setup_fusion(button);
+            button->setStyleSheet(setup_choice_button_css(setup_tokens(palette())));
             group_->addButton(button, index);
             layout_->addWidget(button);
             buttons_.push_back(button);
@@ -173,6 +224,10 @@ private:
 PresetEditorPage::PresetEditorPage(QWidget *parent)
 : QWidget(parent) {
     setObjectName("lingtai_setup_edit_preset_page");
+    setAutoFillBackground(false);
+    setAttribute(Qt::WA_StyledBackground, false);
+    setMinimumWidth(0);
+    setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
     auto *root = new QVBoxLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
@@ -181,38 +236,54 @@ PresetEditorPage::PresetEditorPage(QWidget *parent)
     scroll->setObjectName("lingtai_setup_edit_preset_scroll");
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setFrameShadow(QFrame::Plain);
     scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroll->setAutoFillBackground(false);
+    scroll->viewport()->setAutoFillBackground(false);
+    scroll->setAttribute(Qt::WA_StyledBackground, false);
+    scroll->viewport()->setAttribute(Qt::WA_StyledBackground, false);
+    scroll->setStyleSheet(QStringLiteral(
+        "QScrollArea { background: transparent; border: none; }"
+        "QScrollArea > QWidget { background: transparent; }"));
+    scroll->viewport()->setStyleSheet(QStringLiteral(
+        "background: transparent; border: none;"));
     auto *body = new QWidget(scroll);
+    body->setAutoFillBackground(false);
+    body->setAttribute(Qt::WA_StyledBackground, false);
     auto *layout = new QVBoxLayout(body);
     layout->setContentsMargins(0, 0, 8, 16);
     layout->setSpacing(14);
 
+    const auto tokens = setup_tokens(palette());
     auto *back = new QPushButton(QStringLiteral("← Presets"), body);
     back->setObjectName("lingtai_setup_edit_preset_back");
     back->setFlat(true);
     back->setCursor(Qt::PointingHandCursor);
     back->setStyleSheet(QStringLiteral(
-        "QPushButton { color: %1; border: none; text-align: left; padding: 0; "
-        "font-weight: 600; }").arg(kJade));
+        "QPushButton { color: %1; border: none; background: transparent; "
+        "text-align: left; padding: 0; font-weight: 600; }")
+        .arg(setup_color_css(tokens.selection_accent)));
     back->setFixedHeight(24);
     layout->addWidget(back, 0, Qt::AlignLeft);
     connect(back, &QPushButton::clicked, this, &PresetEditorPage::cancelled);
 
     layout->addWidget(make_label(body, QStringLiteral("Edit preset"),
-        "lingtai_setup_edit_preset_heading", 22, QFont::DemiBold));
+        "lingtai_setup_edit_preset_heading", 22, QFont::DemiBold,
+        value_css(body)));
     auto *subtitle = make_label(body,
         QStringLiteral("Configure identity, model, connection, and capabilities."),
         "lingtai_setup_edit_preset_subtitle", 13, QFont::Normal,
-        kMuted);
+        muted_css(body));
     subtitle->setWordWrap(true);
     layout->addWidget(subtitle);
 
     layout->addWidget(make_label(body, QStringLiteral("Identity"),
-        "lingtai_setup_edit_preset_section_identity", 16, QFont::DemiBold));
+        "lingtai_setup_edit_preset_section_identity", 16, QFont::DemiBold,
+        value_css(body)));
     layout->addWidget(make_label(body,
         QStringLiteral("Define the preset's name, summary, and tier."),
         "lingtai_setup_edit_preset_identity_note", 12, QFont::Normal,
-        kMuted));
+        muted_css(body)));
     name_ = make_field(body, "lingtai_setup_edit_preset_name");
     summary_ = make_field(body, "lingtai_setup_edit_preset_summary");
     auto *identity_row = new QHBoxLayout;
@@ -240,22 +311,19 @@ PresetEditorPage::PresetEditorPage(QWidget *parent)
 
     layout->addWidget(make_rule(body));
     layout->addWidget(make_label(body, QStringLiteral("Model & connection"),
-        "lingtai_setup_edit_preset_section_llm", 16, QFont::DemiBold));
+        "lingtai_setup_edit_preset_section_llm", 16, QFont::DemiBold,
+        value_css(body)));
     layout->addWidget(make_label(body,
         QStringLiteral("Choose the model, tune performance, and configure connection."),
         "lingtai_setup_edit_preset_llm_note", 12, QFont::Normal,
-        kMuted));
+        muted_css(body)));
 
-    const auto combo_style = QStringLiteral(
-        "QComboBox { border: 1px solid %1; border-radius: 8px; padding: 0 10px; "
-        "min-height: 34px; background: #FFFFFF; }").arg(kBorder);
-    provider_ = new QComboBox(body);
+    provider_ = new DropdownCombo(body);
     provider_->setObjectName("lingtai_setup_edit_preset_provider");
-    provider_->setStyleSheet(combo_style);
-    model_combo_ = new QComboBox(body);
+    style_combo(provider_);
+    model_combo_ = new DropdownCombo(body);
     model_combo_->setObjectName("lingtai_setup_edit_preset_model");
-    model_combo_->setEditable(true);
-    model_combo_->setStyleSheet(combo_style);
+    style_combo(model_combo_);
     model_edit_ = make_field(body, "lingtai_setup_edit_preset_model_edit");
     auto *provider_row = new QHBoxLayout;
     provider_row->setSpacing(12);
@@ -314,10 +382,17 @@ PresetEditorPage::PresetEditorPage(QWidget *parent)
         "lingtai_setup_edit_preset_credential", 13);
     manage_ = new QPushButton(QStringLiteral("Manage"), body);
     manage_->setObjectName("lingtai_setup_edit_preset_manage");
-    manage_->setFixedHeight(30);
+    manage_->setCursor(Qt::PointingHandCursor);
+    manage_->setFocusPolicy(Qt::NoFocus);
+    manage_->setFixedHeight(34);
+    apply_setup_fusion(manage_);
     manage_->setStyleSheet(QStringLiteral(
-        "QPushButton { border: 1px solid %1; border-radius: 6px; padding: 0 12px; "
-        "background: #FFFFFF; }").arg(kBorder));
+        "QPushButton { color: %1; background: %2; border: 1px solid %1; "
+        "border-radius: 8px; padding: 0 14px; font-weight: 600; } "
+        "QPushButton:hover { background: %3; }")
+        .arg(kJade,
+            setup_color_css(tokens.control_fill),
+            setup_color_css(tokens.selected_row)));
     auto *credential_inner = new QWidget(body);
     auto *credential_layout = new QHBoxLayout(credential_inner);
     credential_layout->setContentsMargins(0, 0, 0, 0);
@@ -333,11 +408,12 @@ PresetEditorPage::PresetEditorPage(QWidget *parent)
 
     layout->addWidget(make_rule(body));
     layout->addWidget(make_label(body, QStringLiteral("Capabilities"),
-        "lingtai_setup_edit_preset_section_capabilities", 16, QFont::DemiBold));
+        "lingtai_setup_edit_preset_section_capabilities", 16, QFont::DemiBold,
+        value_css(body)));
     layout->addWidget(make_label(body,
         QStringLiteral("Every capability the kernel can grant is always included."),
         "lingtai_setup_edit_preset_capabilities_note", 12, QFont::Normal,
-        kMuted));
+        muted_css(body)));
     auto *grid = new QGridLayout;
     grid->setHorizontalSpacing(24);
     grid->setVerticalSpacing(10);
@@ -365,10 +441,11 @@ PresetEditorPage::PresetEditorPage(QWidget *parent)
         copy_layout->setContentsMargins(0, 0, 0, 0);
         copy_layout->setSpacing(1);
         copy_layout->addWidget(make_label(copy, QLatin1String(cap.title),
-            "lingtai_setup_edit_preset_cap_title", 13, QFont::DemiBold));
+            "lingtai_setup_edit_preset_cap_title", 13, QFont::DemiBold,
+            value_css(copy)));
         auto *desc = make_label(copy, QLatin1String(cap.description),
             "lingtai_setup_edit_preset_cap_desc", 11, QFont::Normal,
-            kMuted);
+            muted_css(copy));
         desc->setWordWrap(true);
         copy_layout->addWidget(desc);
         item_layout->addWidget(toggle, 0, Qt::AlignTop);
@@ -381,7 +458,7 @@ PresetEditorPage::PresetEditorPage(QWidget *parent)
     auto *guidance = make_label(body,
         QStringLiteral("Advanced capability settings can be edited in init.json."),
         "lingtai_setup_edit_preset_capabilities_guidance", 11, QFont::Normal,
-        kMuted);
+        muted_css(body));
     guidance->setWordWrap(true);
     layout->addWidget(guidance);
     layout->addStretch();
@@ -390,9 +467,11 @@ PresetEditorPage::PresetEditorPage(QWidget *parent)
 
     auto *footer = new QWidget(this);
     footer->setObjectName("lingtai_setup_edit_preset_footer");
+    footer->setAutoFillBackground(false);
+    footer->setAttribute(Qt::WA_StyledBackground, false);
     footer->setStyleSheet(QStringLiteral(
-        "QWidget#lingtai_setup_edit_preset_footer { background: #FFFFFF; "
-        "border-top: 1px solid %1; }").arg(kBorder));
+        "QWidget#lingtai_setup_edit_preset_footer { background: transparent; "
+        "border-top: 1px solid %1; }").arg(setup_color_css(tokens.border)));
     auto *footer_layout = new QVBoxLayout(footer);
     footer_layout->setContentsMargins(0, 10, 0, 0);
     footer_layout->setSpacing(8);
@@ -405,9 +484,7 @@ PresetEditorPage::PresetEditorPage(QWidget *parent)
     auto *cancel = new QPushButton(QStringLiteral("Cancel"), footer);
     cancel->setObjectName("lingtai_setup_edit_preset_cancel");
     cancel->setFixedHeight(34);
-    cancel->setStyleSheet(QStringLiteral(
-        "QPushButton { background: #FFFFFF; border: 1px solid %1; border-radius: 6px; "
-        "padding: 0 16px; }").arg(kBorder));
+    apply_setup_secondary_button(cancel, tokens);
     save_ = new QPushButton(QStringLiteral("Save preset"), footer);
     save_->setObjectName("lingtai_setup_edit_preset_save");
     save_->setFixedHeight(34);
@@ -423,14 +500,16 @@ PresetEditorPage::PresetEditorPage(QWidget *parent)
     connect(cancel, &QPushButton::clicked, this, &PresetEditorPage::cancelled);
     connect(save_, &QPushButton::clicked, this, &PresetEditorPage::on_save);
     connect(manage_, &QPushButton::clicked, this, &PresetEditorPage::on_manage_credential);
-    connect(provider_, &QComboBox::currentTextChanged, this, [this](const QString &text) {
-        if (rebuilding_) return;
-        model_.set_provider(text);
+    connect(provider_, &QComboBox::activated, this, [this](int index) {
+        if (rebuilding_ || index < 0) return;
+        const auto id = provider_->itemData(index).toString();
+        if (id.isEmpty() || id == model_.provider()) return;
+        model_.set_provider(id);
         rebuild_from_model();
     });
-    connect(model_combo_, &QComboBox::currentTextChanged, this, [this](const QString &text) {
-        if (rebuilding_) return;
-        model_.set_model(text.trimmed());
+    connect(model_combo_, &QComboBox::activated, this, [this](int index) {
+        if (rebuilding_ || index < 0) return;
+        model_.set_model(model_combo_->itemText(index).trimmed());
         sync_conditional_rows();
     });
     connect(model_edit_, &QLineEdit::editingFinished, this, [this] {
@@ -485,6 +564,10 @@ void PresetEditorPage::load(const PresetEditorLoadRequest &request) {
     rebuild_from_model();
 }
 
+void PresetEditorPage::refresh_credentials() {
+    rebuild_from_model();
+}
+
 void PresetEditorPage::pull_text_fields() {
     model_.set_name(name_->text().trimmed());
     model_.set_summary(summary_->text().trimmed());
@@ -512,8 +595,15 @@ void PresetEditorPage::rebuild_from_model() {
     losses_->setText(model_.extra(QStringLiteral("loses")));
 
     provider_->clear();
-    provider_->addItems(model_.provider_options());
-    provider_->setCurrentText(model_.provider());
+    for (const auto &id : model_.provider_options()) {
+        provider_->addItem(provider_label(id), id);
+    }
+    auto provider_index = provider_->findData(model_.provider());
+    if (provider_index < 0 && !model_.provider().isEmpty()) {
+        provider_->addItem(provider_label(model_.provider()), model_.provider());
+        provider_index = provider_->findData(model_.provider());
+    }
+    if (provider_index >= 0) provider_->setCurrentIndex(provider_index);
 
     const auto picker = model_.model_has_picker();
     model_combo_->setVisible(picker);
@@ -581,7 +671,7 @@ void PresetEditorPage::rebuild_from_model() {
         credential_status_->setText(
             QStringLiteral("Credentials are managed outside this API-key field."));
         credential_status_->setStyleSheet(QStringLiteral("color: %1;")
-            .arg(kMuted));
+            .arg(muted_css(this)));
     }
     rebuilding_ = false;
     sync_conditional_rows();
@@ -597,34 +687,12 @@ void PresetEditorPage::sync_conditional_rows() {
         || model_.is_codex_pool_provider()
         || model_.is_claude_cli_provider();
     credential_row_->setVisible(oauth);
-    manage_->setVisible(model_.is_codex_provider());
+    manage_->setVisible(model_.is_codex_provider() || model_.is_codex_pool_provider());
     api_key_row_->setVisible(model_.uses_api_key_field());
 }
 
 void PresetEditorPage::on_manage_credential() {
-    if (!model_.is_codex_provider()) return;
-    auto accounts = model_.codex_accounts();
-    if (accounts.isEmpty()) {
-        error_->setText(QStringLiteral(
-            "Codex login required — sign in from LingTai TUI first."));
-        error_->show();
-        return;
-    }
-    QMenu menu(this);
-    for (const auto &account : accounts) {
-        auto label = account.email.isEmpty() ? account.label : account.email;
-        if (label.isEmpty()) {
-            label = account.legacy ? QStringLiteral("default account")
-                : QFileInfo(account.path).completeBaseName();
-        }
-        if (!account.valid) label += QStringLiteral(" (invalid)");
-        auto *action = menu.addAction(label);
-        action->setData(account.ref);
-    }
-    const auto *chosen = menu.exec(manage_->mapToGlobal(QPoint(0, manage_->height())));
-    if (!chosen) return;
-    model_.set_codex_auth_ref(chosen->data().toString());
-    rebuild_from_model();
+    emit credentials_requested();
 }
 
 void PresetEditorPage::on_save() {

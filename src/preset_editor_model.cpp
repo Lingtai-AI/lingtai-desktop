@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <map>
+#include <optional>
 
 namespace lingtai::desktop {
 namespace {
@@ -132,6 +133,53 @@ const std::map<QString, QVector<PresetRegionOption>> &provider_regions() {
         }},
     };
     return regions;
+}
+
+const std::map<QString, QString> &provider_default_model() {
+    static const auto models = std::map<QString, QString>{
+        {QStringLiteral("gemini"), QStringLiteral("gemini-3-flash-preview")},
+        {QStringLiteral("kimi"), QStringLiteral("kimi-for-coding")},
+        {QStringLiteral("openrouter"), QStringLiteral("z-ai/glm-5.1")},
+        {QStringLiteral("claude-code"), QStringLiteral("opus")},
+        {QStringLiteral("claude_code"), QStringLiteral("opus")},
+        {QStringLiteral("claude-agent-sdk"), QStringLiteral("opus")},
+        {QStringLiteral("claude_agent_sdk"), QStringLiteral("opus")},
+        {QStringLiteral("nvidia"), QStringLiteral("meta/llama-3.3-70b-instruct")},
+    };
+    return models;
+}
+
+const std::map<QString, QString> &provider_fixed_base_url() {
+    static const auto urls = std::map<QString, QString>{
+        {QStringLiteral("nvidia"),
+            QStringLiteral("https://integrate.api.nvidia.com/v1")},
+        {QStringLiteral("codex"),
+            QStringLiteral("https://chatgpt.com/backend-api/codex")},
+        {QStringLiteral("codex_oauth"),
+            QStringLiteral("https://chatgpt.com/backend-api/codex")},
+        {QStringLiteral("codex-pool"),
+            QStringLiteral("https://chatgpt.com/backend-api/codex")},
+        {QStringLiteral("codex_pool"),
+            QStringLiteral("https://chatgpt.com/backend-api/codex")},
+        {QStringLiteral("gemini"), {}},
+        {QStringLiteral("openrouter"), {}},
+        {QStringLiteral("custom"), {}},
+        {QStringLiteral("claude-code"), {}},
+        {QStringLiteral("claude_code"), {}},
+        {QStringLiteral("claude-agent-sdk"), {}},
+        {QStringLiteral("claude_agent_sdk"), {}},
+    };
+    return urls;
+}
+
+std::optional<QString> default_base_url_for(const QString &provider) {
+    const auto regions = provider_regions().find(provider);
+    if (regions != provider_regions().end() && !regions->second.isEmpty()) {
+        return regions->second.front().url;
+    }
+    const auto found = provider_fixed_base_url().find(provider);
+    if (found != provider_fixed_base_url().end()) return found->second;
+    return std::nullopt;
 }
 
 const std::map<QString, QString> &provider_default_env() {
@@ -838,11 +886,15 @@ bool PresetEditorModel::responses_transport_visible() const {
 }
 
 QStringList PresetEditorModel::provider_options() const {
+    // TUI BuiltinPresets order. The TUI cycle omits kimi/gemini/codex-pool/
+    // claude because ←/→ is tedious; a dropdown can offer the full set.
     auto options = QStringList{
         QStringLiteral("minimax"), QStringLiteral("zhipu"),
         QStringLiteral("mimo"), QStringLiteral("deepseek"),
+        QStringLiteral("gemini"), QStringLiteral("kimi"),
         QStringLiteral("grok"), QStringLiteral("nvidia"),
         QStringLiteral("openrouter"), QStringLiteral("codex"),
+        QStringLiteral("codex-pool"), QStringLiteral("claude-code"),
         QStringLiteral("custom"),
     };
     const auto current = provider();
@@ -963,11 +1015,16 @@ void PresetEditorModel::apply_provider_defaults(
         if (!models->second.contains(model())) {
             set_model(models->second.front());
         }
+    } else {
+        const auto fallback = provider_default_model().find(new_provider);
+        if (fallback != provider_default_model().end()) {
+            set_model(fallback->second);
+        }
+    }
+    if (const auto url = default_base_url_for(new_provider)) {
+        set_llm_string(QStringLiteral("base_url"), *url);
     }
     const auto regions = provider_regions().find(new_provider);
-    if (regions != provider_regions().end() && !regions->second.isEmpty()) {
-        set_llm_string(QStringLiteral("base_url"), regions->second.front().url);
-    }
     const auto env = provider_default_env().find(new_provider);
     if (env != provider_default_env().end()) {
         auto want = env->second;

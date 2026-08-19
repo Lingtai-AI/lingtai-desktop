@@ -56,6 +56,8 @@ class NativeShellProcessTest(unittest.TestCase):
         self.assertIn("empty=visible", marker_lines[0])
         self.assertIn("offscreen=true", marker_lines[0])
         self.assertIn("shown=true", marker_lines[0])
+        self.assertNotIn("malformed logging rule", result.stdout)
+        self.assertNotIn("Open Sans", result.stdout)
 
     def test_normal_mode_remains_open(self) -> None:
         process = subprocess.Popen(

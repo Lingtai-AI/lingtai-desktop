@@ -21,12 +21,14 @@ public:
     explicit PresetEditorPage(QWidget *parent = nullptr);
 
     void load(const PresetEditorLoadRequest &request);
+    void refresh_credentials();
     [[nodiscard]] PresetEditorModel &model() noexcept { return model_; }
     [[nodiscard]] const PresetEditorModel &model() const noexcept { return model_; }
 
 signals:
     void cancelled();
     void saved(const QString &preset_name);
+    void credentials_requested();
 
 private:
     void rebuild_from_model();

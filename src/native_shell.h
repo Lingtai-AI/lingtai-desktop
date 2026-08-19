@@ -5,6 +5,7 @@
 #include "agent_projection.h"
 #include "agent_sleep.h"
 #include "project_bootstrap.h"
+#include "project_setup_wizard.h"
 #include "ui/agent_roster.h"
 #include "workspace_selection.h"
 
@@ -30,7 +31,6 @@
 #include <string>
 #include <vector>
 
-class QDialog;
 class QLabel;
 class QPushButton;
 class QTimer;
@@ -44,6 +44,8 @@ class RpWindow;
 
 namespace lingtai::desktop {
 
+class KanbanPage;
+
 enum class ProjectOpenDisposition {
     opened,
     failed,
@@ -54,13 +56,13 @@ struct ProjectOpenOutcome {
     ProjectPathFailure failure = ProjectPathFailure::none;
 };
 
-// The one compact secondary page treatment for the selected Agent: the chat
-// (conversation) is the default surface, and the one retained read-only
-// source (Presets) owns one page behind a small nav row so only one content
+// Conversation is the default selected-Agent surface. Presets and Kanban are
+// slash destinations behind the same secondary page host, so only one content
 // surface shows at a time.
 enum class AgentDetailPage {
     conversation,
     presets,
+    kanban,
 };
 
 // C5-owned native composition. C1's WorkspaceSelectionState remains the only
@@ -114,7 +116,9 @@ private:
     void handle_browse_destination();
     void set_bootstrap_actions_enabled(bool enabled);
     void set_bootstrap_status(const QString &text);
-    void show_bootstrap_dialog(const std::vector<PresetEntry> &presets);
+    void show_setup_wizard(const std::vector<PresetEntry> &presets);
+    void hide_setup_wizard();
+    [[nodiscard]] bool in_project_setup() const;
     void refresh_route();
     void render_roster();
     void render_conversation();
@@ -122,6 +126,8 @@ private:
     // the host appearance changes, then refreshes palette-backed descendants.
     void refresh_system_palette();
     void render_agent_preset_summary();
+    void render_kanban();
+    void handle_kanban_agent_selected(const std::filesystem::path &directory_key);
     void reset_composer();
     void handle_send_message();
     void handle_agent_selection(const std::filesystem::path &directory_key);
@@ -131,6 +137,12 @@ private:
     void handle_lifecycle_command(const std::string &name,
         const std::string &args);
     void handle_lifecycle_finished(AgentCommandResult result);
+    // TUI `/btw`, `/insights`, `/goal`, `/export`, and `/molt`: stay on the
+    // conversation and write the same `.inquiry` / `.prompt` /
+    // `.notification/system.json` signals. Returns true when the name is
+    // one of those commands.
+    bool handle_prompt_command(const std::string &name,
+        const std::string &args);
     [[nodiscard]] std::string lifecycle_generation() const noexcept;
     void bump_lifecycle_generation() noexcept;
     void render_agent_sleep_status();
@@ -157,6 +169,7 @@ private:
     // width just derived by `recompute_layout`: near-full at the narrow
     // minimum, a visibly narrower symmetric-centered lane at wide detail.
     void update_composer_width(int detail_width);
+    void fit_kanban_page(int detail_width);
     // Switches the selected-Agent detail to exactly one page: the chat
     // (conversation) by default, or the one retained read-only source
     // (Presets), so only one content surface dominates at a time.
@@ -242,9 +255,10 @@ private:
     // The one async owner of the headless `presets`/`spawn` subprocess calls.
     // Owned by the shell; no PID, lock, retry, or rollback machinery.
     std::unique_ptr<ProjectBootstrapRunner> bootstrap_runner_;
-    // The one small Desktop-owned New Project dialog, built once in the
+    // The one in-window New Project setup route, built once in the
     // constructor and hidden until a successful preset discovery.
-    QDialog *bootstrap_dialog_ = nullptr;
+    ProjectSetupWizard *setup_route_ = nullptr;
+    bool setup_route_visible_ = false;
     Ui::RpWidget *bootstrap_status_surface_ = nullptr;
     // Owns the vendored composer input's Enter-to-send subscription for the
     // whole shell lifetime. The button click uses the button's own lifetime.
@@ -268,7 +282,9 @@ private:
     // secondary section owners that the nav reveals are captured in the
     // same construction order so `show_detail_page` can show exactly one.
     std::vector<QPushButton *> page_nav_buttons_;
-    std::vector<Ui::RpWidget *> secondary_pages_;
+    std::vector<QWidget *> secondary_pages_;
+    AgentDetailPage current_detail_page_ = AgentDetailPage::conversation;
+    KanbanPage *kanban_page_ = nullptr;
 };
 
 } // namespace lingtai::desktop

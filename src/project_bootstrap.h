@@ -65,11 +65,13 @@ public:
     void run_presets(
         const std::filesystem::path &executable,
         PresetDone done);
-    void run_spawn(
+        void run_spawn(
         const std::filesystem::path &executable,
         const std::filesystem::path &destination,
         const std::string &preset_name,
-        SpawnDone done);
+        SpawnDone done,
+        const std::string &agent_name = {},
+        const std::string &language = {});
 
     [[nodiscard]] bool is_pending() const noexcept;
 

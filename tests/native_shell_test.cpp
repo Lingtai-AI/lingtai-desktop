@@ -1,5 +1,6 @@
 #include "native_shell.h"
 #include "preset_editor_model.h"
+#include "project_setup_wizard.h"
 
 #include "styles/palette.h"
 #include "ui/platform/mac/ui_window_title_mac.h"
@@ -11,6 +12,7 @@
 #include "ui/widgets/shadow.h"
 
 #include <QtCore/QCoreApplication>
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QString>
 #include <QtCore/QThread>
 #include <QtGui/QColor>
@@ -25,26 +27,28 @@
 #include <QtGui/QTextBlock>
 #include <QtGui/QTextCursor>
 #include <QtGui/QTextDocument>
-#include <QtGui/QTextFormat>
+#include <QtGui/QTextFrame>
 #include <QtGui/QTextLayout>
 #include <QtGui/QWindow>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QCheckBox>
+#include <QtWidgets/QAbstractItemView>
 #include <QtWidgets/QComboBox>
-#include <QtWidgets/QDialog>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLayout>
 #include <QtWidgets/QLineEdit>
 #include <QtWidgets/QListWidget>
-#include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QProgressBar>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QScrollBar>
 #include <QtWidgets/QSpacerItem>
+#include <QtWidgets/QSpinBox>
 #include <QtWidgets/QStackedWidget>
 #include <QtWidgets/QTextEdit>
+#include <QtWidgets/QTreeWidget>
+#include <QtWidgets/QTreeWidgetItem>
 #include <QtWidgets/QHeaderView>
 #include <QtWidgets/QTreeWidget>
 
@@ -112,6 +116,21 @@ Widget *required_ui_child(QWidget &root, const char *object_name) {
         required_child<QObject>(root, object_name));
     require(result != nullptr, std::string("missing child: ") + object_name);
     return result;
+}
+
+void require_within_detail_viewport(
+        QWidget &window, QWidget &page, const char *what) {
+    auto *scroll = required_child<QScrollArea>(
+        window, "lingtai_agent_detail_scroll");
+    require(page.isVisible(), std::string(what) + ": page must be visible");
+    require(page.width() <= scroll->viewport()->width() + 1,
+        std::string(what) + ": width must fit the detail viewport");
+    const auto viewport_right = scroll->viewport()->mapTo(
+        &window, QPoint(scroll->viewport()->width(), 0)).x();
+    const auto page_right = page.mapTo(
+        &window, QPoint(page.width(), 0)).x();
+    require(viewport_right - page_right >= 0,
+        std::string(what) + ": right edge must stay inside the viewport");
 }
 
 std::vector<std::string> project_tree(
@@ -284,10 +303,10 @@ void click_agent(QWidget &window, std::string_view key) {
     QCoreApplication::processEvents();
 }
 
-void click_first_agent_canvas_row(QWidget &window) {
+void click_agent_canvas_row(QWidget &window, int index) {
     auto *canvas = required_child<QWidget>(
         window, "lingtai_agent_roster_rows");
-    const auto point = QPointF(20.0, 24.0);
+    const auto point = QPointF(20.0, 24.0 + static_cast<double>(index) * 64.0);
     auto press = QMouseEvent(
         QEvent::MouseButtonPress,
         point,
@@ -305,6 +324,10 @@ void click_first_agent_canvas_row(QWidget &window) {
         Qt::NoModifier);
     QApplication::sendEvent(canvas, &release);
     QCoreApplication::processEvents();
+}
+
+void click_first_agent_canvas_row(QWidget &window) {
+    click_agent_canvas_row(window, 0);
 }
 
 void verify_dark_application_palette_inheritance(const fs::path &sandbox) {
@@ -1615,10 +1638,10 @@ void verify_start_agent_action(
         "a live selected Agent must show no Start action at all");
 
     click_agent(window, "agent-success");
-    require(button->isVisible() && button->isEnabled()
+    require(!button->isVisible() && button->isEnabled()
             && status->text().isEmpty(),
-        "a stale/missing-heartbeat selected Agent must offer a fresh, "
-        "enabled Start action");
+        "Start Agent stays out of the header; a stale Agent still enables "
+        "the hidden Start owner for /cpr");
 
     const auto click_start = std::chrono::steady_clock::now();
     button->click();
@@ -1697,15 +1720,15 @@ void verify_start_agent_action(
     // process: agent-switch's own fixture keeps running in the background
     // the whole time.
     click_agent(window, "agent-switch");
-    require(button->isVisible() && button->isEnabled(),
-        "agent-switch must start fresh and eligible");
+    require(!button->isVisible() && button->isEnabled(),
+        "agent-switch must start fresh and eligible without a header Start action");
     button->click();
     QCoreApplication::processEvents();
     require(status->text() == QStringLiteral("Starting Agent..."),
         "agent-switch's own click must show its own pending wording");
 
     click_agent(window, "agent-timeout");
-    require(button->isVisible() && button->isEnabled()
+    require(!button->isVisible() && button->isEnabled()
             && status->text().isEmpty(),
         "switching away from a pending launch must show a fresh, cleared "
         "status for the newly selected Agent, never the abandoned launch's "
@@ -1741,7 +1764,7 @@ void verify_start_agent_action(
     // The concise ten-second no-heartbeat failure: agent-timeout's own
     // fixture runtime records its argv but never writes a heartbeat.
     click_agent(window, "agent-timeout");
-    require(button->isVisible() && button->isEnabled()
+    require(!button->isVisible() && button->isEnabled()
             && status->text().isEmpty(),
         "agent-timeout must remain a fresh, eligible, untouched selection");
     button->click();
@@ -1774,7 +1797,7 @@ void verify_start_agent_action(
                 .arg(path_text(fs::canonical(timeout_dir))),
         "a no-heartbeat launch must reach the concise ten-second failure "
         "with the exact Agent log path, never claiming success");
-    require(button->isVisible() && button->isEnabled(),
+    require(!button->isVisible() && button->isEnabled(),
         "the ten-second failure must allow an explicit retry");
 
     // The failure wording must likewise survive further idle ticks.
@@ -1804,19 +1827,31 @@ void verify_agent_preset_summary_panel(
     auto &window = shell.window();
     auto *heading = required_child<QLabel>(
         window, "lingtai_selected_agent_preset_summary_heading");
-    auto *surface = required_child<QPlainTextEdit>(
+    auto *catalog = required_child<QTreeWidget>(
         window, "lingtai_selected_agent_preset_summary");
     auto *state = required_child<QLabel>(
         window, "lingtai_selected_agent_preset_summary_state");
 
-    require(surface->isReadOnly(), "the Presets surface must be read-only");
-    require(!surface->accessibleName().isEmpty()
+    require(catalog->editTriggers() == QAbstractItemView::NoEditTriggers,
+        "the Presets catalog must be read-only");
+    require(!catalog->accessibleName().isEmpty()
             && !heading->accessibleName().isEmpty()
             && !state->accessibleName().isEmpty(),
         "the Presets surface must be accessible");
-    require(surface->objectName() != required_child<QTextEdit>(
+    require(catalog->objectName() != required_child<QTextEdit>(
                 window, "lingtai_selected_agent_conversation")->objectName(),
         "Presets must be a distinct surface from the conversation");
+
+    const auto catalog_names = [&] {
+        auto names = QStringList();
+        for (auto index = 0; index != catalog->topLevelItemCount(); ++index) {
+            auto *item = catalog->topLevelItem(index);
+            if (item->data(0, Qt::UserRole).isValid()) {
+                names << item->text(0);
+            }
+        }
+        return names;
+    };
 
     const auto project = sandbox / "project";
     write_file(project / ".lingtai/human/.agent.json",
@@ -1856,34 +1891,24 @@ void verify_agent_preset_summary_panel(
     write_file(artifact_a, resolved_v1);
 
     static_cast<void>(shell.open_project(project, std::nullopt));
-    require(!surface->toPlainText().contains(QStringLiteral("codex.json")),
-        "no Agent is selected yet, so no Presets text may render");
+    require(catalog_names().isEmpty(),
+        "no Agent is selected yet, so no Presets rows may render");
 
     click_agent(window, "telegram-bot");
-    const auto expected_v1 = QStringLiteral(
-        "Active:  ~/.lingtai-tui/presets/saved/codex.json\n"
-        "Default: ~/.lingtai-tui/presets/saved/codex.json\n"
-        "Allowed:\n"
-        "  • ~/.lingtai-tui/presets/saved/deepseek_flash.json\n"
-        "  • [Active, Default] ~/.lingtai-tui/presets/saved/codex.json\n"
-        "  • ~/.lingtai-tui/presets/saved/zhipu-1.json\n"
-        "\n"
-        "Active effective\n"
-        "  Provider: codex\n"
-        "  Model: gpt-5.6-sol\n"
-        "  Context limit: 250000\n"
-        "  Capabilities: avatar, shell, web\n"
-        "\n"
-        "Source: kernel · generated 2026-08-13T19:53:34Z");
-    require(surface->toPlainText() == expected_v1,
-        "selecting Agent A must render its exact ordered allowed refs, "
-        "independent active/default badges, active-effective fields, and "
-        "kernel provenance");
+    require(catalog_names() == QStringList({
+            QStringLiteral("deepseek_flash"),
+            QStringLiteral("codex"),
+            QStringLiteral("zhipu-1")}),
+        "selecting Agent A must list only its allowed presets in published "
+        "order");
     require(state->text() == QStringLiteral("Resolved"),
         "a supported complete v1 artifact must show the Resolved state "
         "label");
+    require(catalog->currentItem() != nullptr
+            && catalog->currentItem()->text(0) == QStringLiteral("codex"),
+        "the catalog must land on the Agent's active preset");
 
-    // A changed artifact must become visible through the real one-second
+    // A changed allow-list must become visible through the real one-second
     // timer with no reselection.
     const auto resolved_v2 = std::string_view(R"JSON({
       "schema": "lingtai.manifest.resolved/v1",
@@ -1899,7 +1924,6 @@ void verify_agent_preset_summary_panel(
         "active": "~/.lingtai-tui/presets/saved/codex.json",
         "default": "~/.lingtai-tui/presets/saved/codex.json",
         "allowed": [
-          "~/.lingtai-tui/presets/saved/deepseek_flash.json",
           "~/.lingtai-tui/presets/saved/codex.json",
           "~/.lingtai-tui/presets/saved/zhipu-1.json"
         ]
@@ -1909,22 +1933,22 @@ void verify_agent_preset_summary_panel(
     {
         const auto deadline =
             std::chrono::steady_clock::now() + std::chrono::seconds(3);
-        while (!surface->toPlainText().contains(
-                    QStringLiteral("2026-08-13T20:10:00Z"))
+        while (catalog_names() != QStringList({
+                    QStringLiteral("codex"), QStringLiteral("zhipu-1")})
                 && std::chrono::steady_clock::now() < deadline) {
             QThread::msleep(50);
             QCoreApplication::processEvents();
         }
-        require(surface->toPlainText().contains(
-                    QStringLiteral("2026-08-13T20:10:00Z")),
-            "a changed artifact must refresh through the real one-second "
+        require(catalog_names() == QStringList({
+                    QStringLiteral("codex"), QStringLiteral("zhipu-1")}),
+            "a changed allow-list must refresh through the real one-second "
             "timer");
     }
 
     // Selecting B, which has no published artifact, must never show A's
     // summary and must show the Not yet published state.
     click_agent(window, "issue-643");
-    require(!surface->toPlainText().contains(QStringLiteral("codex.json")),
+    require(catalog_names().isEmpty(),
         "selecting a different Agent must never retain the previous "
         "selection's Presets content");
     require(state->text() == QStringLiteral("Not yet published"),
@@ -1979,21 +2003,14 @@ void verify_first_project_bootstrap(
         lingtai::desktop::NativeShell &shell,
         const fs::path &sandbox) {
     auto &window = shell.window();
-    auto *new_project_button = required_child<QPushButton>(
-        window, "lingtai_new_project_button");
-    require(new_project_button->isVisible(),
-        "no-project state must expose a visible New Project action");
-    require(new_project_button->text() == QStringLiteral("New Project\u2026"),
-        "new project affordance text changed");
-    require(new_project_button->accessibleName() == "New Project",
-        "new project affordance needs a static accessible name");
     auto *open_button = required_child<QPushButton>(
         window, "lingtai_open_project_button");
-    require(open_button->isVisible(),
-        "no-project state must keep the Open Project action visible");
+    require(window.findChild<QPushButton *>("lingtai_new_project_button")
+            == nullptr,
+        "no-project state must not expose a separate New Project control");
     auto *status = required_ui_child<Ui::FlatLabel>(
         window, "lingtai_bootstrap_status");
-    auto *wizard = required_child<QDialog>(
+    auto *wizard = required_child<lingtai::desktop::ProjectSetupWizard>(
         window, "lingtai_project_setup_wizard");
     auto *destination_input = required_ui_child<Ui::InputField>(
         window, "lingtai_bootstrap_destination_input");
@@ -2012,8 +2029,8 @@ void verify_first_project_bootstrap(
     required_child<QPushButton>(window, "lingtai_bootstrap_cancel");
     required_child<QPushButton>(window, "lingtai_bootstrap_destination_browse");
     require(create_start->accessibleName().isEmpty()
-            || create_start->text() == QStringLiteral("Create project"),
-        "the committing wizard action must remain Create project");
+            || create_start->text() == QStringLiteral("Create orchestrator"),
+        "the committing wizard action must remain Create orchestrator");
 
     const auto argv_record = sandbox / "tui-argv.txt";
     fs::create_directories(sandbox);
@@ -2031,15 +2048,21 @@ printf '%s' "{\"status\":\"ready\",\"project_dir\":\"$2\",\"agent_name\":\"agent
 exit 0)");
     shell.set_tui_executable(success_tui);
 
-    // Evidence 1: no-project window exposes New Project; clicking it runs the
-    // exact separate argv `presets` and keeps the UI responsive/pending.
+    // Evidence 1: choosing an empty folder through the Open Project path runs
+    // the exact separate argv `presets` and keeps the UI responsive/pending.
     auto open_requests = std::size_t{0};
-    shell.set_open_project_request_handler([&] { ++open_requests; });
-    new_project_button->click();
+    const auto start_bootstrap_at = [&](const fs::path &folder) {
+        shell.set_open_project_request_handler([&] {
+            ++open_requests;
+            shell.request_new_project_at(folder);
+        });
+        open_button->click();
+    };
+    start_bootstrap_at(destination);
     require(status->accessibilityName() == QStringLiteral("Discovering presets…"),
         "a pending discovery must show one truthful phase status");
-    require(!new_project_button->isEnabled() && !open_button->isEnabled(),
-        "duplicate New Project and Open Project must be disabled while pending");
+    require(!open_button->isEnabled(),
+        "Open Project must be disabled while bootstrap is pending");
     QCoreApplication::processEvents();
     const auto presets_deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(3);
@@ -2048,14 +2071,14 @@ exit 0)");
         QThread::msleep(20);
     }
     require(read_file(argv_record) == fixture_tui_argv({"presets"}),
-        "clicking New Project must run the exact separate argv `presets`");
+        "choosing an empty folder must run the exact separate argv `presets`");
     open_button->click();
-    require(open_requests == 0,
-        "Open Project must not fire while New Project is pending");
+    require(open_requests == 1,
+        "Open Project must not fire again while bootstrap is pending");
 
-    // Evidence 2: valid preset JSON populates the dialog; dismissing it via
-    // the real QDialog rejected path (standard window close control / Escape)
-    // must be the same no-spawn cancellation and must re-enable actions.
+    // Evidence 2: valid preset JSON populates the in-window setup route;
+    // dismissing it via reject() (Escape / Cancel) must be the same no-spawn
+    // cancellation and must re-enable actions.
     const auto dialog_deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(3);
     while (!wizard->isVisible()
@@ -2071,17 +2094,16 @@ exit 0)");
         "the preset chooser must list saved presets before templates");
     wizard->reject();
     QCoreApplication::processEvents();
-    require(!wizard->isVisible() && new_project_button->isEnabled()
-            && open_button->isEnabled(),
-        "dismissing the wizard via reject() must close it and re-enable both "
-        "actions");
+    require(!wizard->isVisible() && open_button->isEnabled(),
+        "dismissing the wizard via reject() must close it and re-enable Open "
+        "Project");
     require(read_file(argv_record) == fixture_tui_argv({"presets"}),
         "dismissing the dialog must perform no spawn at all");
 
     // Evidence 3: a destination plus the selected non-first preset and
-    // Create & Start produces the exact separate spawn argv, with duplicate
-    // New/Open actions staying disabled while pending.
-    new_project_button->click();
+    // Create & Start produces the exact separate spawn argv, with Open Project
+    // staying disabled while pending.
+    start_bootstrap_at(destination);
     QCoreApplication::processEvents();
     while (!wizard->isVisible()
             && std::chrono::steady_clock::now() < dialog_deadline) {
@@ -2107,8 +2129,8 @@ exit 0)");
     require(status->accessibilityName() == QStringLiteral(
                 "Creating project and starting Agent…"),
         "a pending spawn must show one truthful phase status");
-    require(!new_project_button->isEnabled() && !open_button->isEnabled(),
-        "duplicate New/Open actions must stay disabled while spawn is pending");
+    require(!open_button->isEnabled(),
+        "Open Project must stay disabled while spawn is pending");
     QCoreApplication::processEvents();
     const auto spawn_argv = std::vector<std::string>{
         "spawn", path_text(destination).toStdString(),
@@ -2164,7 +2186,7 @@ printf '%s\n' '}' >&2
 exit 7)");
     shell.set_tui_executable(fail_tui);
     const auto attached_root = fs::canonical(destination);
-    new_project_button->click();
+    start_bootstrap_at(sandbox / "partial-destination");
     QCoreApplication::processEvents();
     const auto fail_dialog_deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(3);
@@ -2202,8 +2224,8 @@ exit 7)");
     require(shell.selection_state().active_project()
             && shell.selection_state().active_project()->root() == attached_root,
         "a spawn failure must leave the currently attached project unchanged");
-    require(new_project_button->isEnabled() && open_button->isEnabled(),
-        "a spawn failure must re-enable both actions");
+    require(open_button->isEnabled(),
+        "a spawn failure must re-enable Open Project");
     require(!wizard->isVisible(),
         "a failed spawn must close the New Project wizard");
     require(fs::exists(fail_argv_record)
@@ -2223,7 +2245,7 @@ exit 7)");
 exit 0)",
         R"(exit 9)");
     shell.set_tui_executable(malformed_tui);
-    new_project_button->click();
+    start_bootstrap_at(sandbox / "malformed-destination");
     QCoreApplication::processEvents();
     const auto malformed_deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(3);
@@ -2244,10 +2266,9 @@ exit 0)",
     require(status->accessibilityName().contains(
                 QStringLiteral("could not be used")),
         "malformed preset output must fail closed with one concise failure");
-    require(!wizard->isVisible() && new_project_button->isEnabled()
-            && open_button->isEnabled(),
+    require(!wizard->isVisible() && open_button->isEnabled(),
         "a malformed preset list must never show the wizard and must "
-        "re-enable actions");
+        "re-enable Open Project");
     require(read_file(malformed_argv_record) == fixture_tui_argv({"presets"}),
         "a malformed preset list must never reach spawn");
 
@@ -2528,12 +2549,14 @@ void verify_persistent_roster_shell(
         window, "lingtai_desktop_content");
     auto *open_button = required_child<QPushButton>(
         window, "lingtai_open_project_button");
-    auto *new_button = required_child<QPushButton>(
-        window, "lingtai_new_project_button");
+    require(window.findChild<QPushButton *>("lingtai_new_project_button")
+            == nullptr,
+        "compact project actions must not expose a separate New Project control");
 
-    // Compact project actions must be reachable even before any project opens.
-    require(open_button->isVisible() && new_button->isVisible(),
-        "compact project actions must be reachable in the left column");
+    // Open Project remains reachable through the selector menu even before any
+    // project opens.
+    require(open_button != nullptr,
+        "compact Open Project action must remain wired in the left column");
 
     const auto project = sandbox / "project";
     write_file(project / ".lingtai/alpha/.agent.json", R"({"admin":{}})");
@@ -2719,41 +2742,29 @@ void verify_compact_header_hierarchy(
         "the secondary line must read friendly Status · role, matching the "
         "Sidebar semantics without raw fact labels");
 
-    // Exactly one primary action: the header owns one primary-action anchor
-    // and, in wide mode, exactly one visible action button carries a caption.
+    // Header chrome no longer carries Start Agent or Request sleep; those
+    // lifecycle actions remain available through `/cpr` and `/sleep`.
     auto *primary = required_child<QPushButton>(
         window, "lingtai_selected_agent_start_agent");
     require(header_child_of(primary),
-        "the one primary action must live inside the selected-Agent header");
-    auto primary_in_header = 0;
-    for (auto *button : top_bar->findChildren<QPushButton *>()) {
-        if (button->objectName()
-                == QStringLiteral("lingtai_selected_agent_start_agent")) {
-            ++primary_in_header;
-        }
-    }
-    require(primary_in_header == 1,
-        "the compact header must expose exactly one primary action");
-    require(primary->isVisible() && primary->isEnabled(),
-        "the one primary action must be visible and enabled for an "
-        "eligible selected Agent");
+        "the Start owner must still live inside the selected-Agent header");
+    require(!primary->isVisible(),
+        "Start Agent must not appear in the selected-Agent header");
     auto visible_caption_actions = 0;
     for (auto *button : top_bar->findChildren<QPushButton *>()) {
         if (button->isVisible() && !button->text().isEmpty()) {
             ++visible_caption_actions;
         }
     }
-    require(visible_caption_actions == 1 && primary->isVisible()
-            && !primary->text().isEmpty(),
-        "the compact header must show exactly one caption-carrying action "
-        "button: the one primary action, never a second full-caption action");
+    require(visible_caption_actions == 0,
+        "the compact header must show no caption-carrying action buttons");
 
-    // Lifecycle secondaries: subtle compact buttons/icons, never a second
-    // full-caption text button.
     auto *sleep = required_child<QPushButton>(
         window, "lingtai_selected_agent_request_sleep");
     require(header_child_of(sleep),
         "the lifecycle secondary must live inside the selected-Agent header");
+    require(!sleep->isVisible(),
+        "Request sleep must not appear in the selected-Agent header");
     require(sleep->text().isEmpty(),
         "the lifecycle secondary must be a subtle compact icon button, "
         "never a second full-caption action");
@@ -2772,7 +2783,7 @@ struct DashboardSectionShape {
     Ui::RpWidget *owner = nullptr;
     QLayout *layout = nullptr;
     QLabel *heading = nullptr;
-    QPlainTextEdit *surface = nullptr;
+    QTreeWidget *surface = nullptr;
     QLabel *state = nullptr;
     Ui::PlainShadow *separator = nullptr;
 };
@@ -2791,7 +2802,7 @@ DashboardSectionShape dashboard_section(QWidget &window, const char *kind) {
     result.heading = required_child<QLabel>(
         *result.owner,
         (base + QStringLiteral("_heading")).toUtf8().constData());
-    result.surface = required_child<QPlainTextEdit>(
+    result.surface = required_child<QTreeWidget>(
         *result.owner, base.toUtf8().constData());
     result.state = required_child<QLabel>(
         *result.owner, (base + QStringLiteral("_state")).toUtf8().constData());
@@ -2823,7 +2834,7 @@ void verify_selected_agent_dashboard_layout(
         "surface, state, and separator");
     require(section->heading->font().weight() == QFont::DemiBold,
         "the Presets dashboard heading must stay semibold");
-    require(section->surface->isReadOnly(),
+    require(section->surface->editTriggers() == QAbstractItemView::NoEditTriggers,
         "the Presets dashboard surface must stay read-only");
     require(!section->heading->accessibleName().isEmpty()
             && !section->surface->accessibleName().isEmpty()
@@ -2867,15 +2878,15 @@ void verify_selected_agent_dashboard_layout(
     click_agent(window, "agent-aa");
     QCoreApplication::processEvents();
     require(!start_button->isVisible(),
-        "a heartbeat-live selected Agent must show no Start action at all");
+        "Start Agent must stay out of the selected-Agent header");
     const auto live_region_height = start_row->height();
     const auto live_anchor = manifest_identity->geometry().top();
     const auto live_sleep_top = sleep_row->geometry().top();
 
     click_agent(window, "agent-bb");
     QCoreApplication::processEvents();
-    require(start_button->isVisible() && start_button->isEnabled(),
-        "a start-eligible stale selected Agent must offer the Start action");
+    require(!start_button->isVisible() && start_button->isEnabled(),
+        "a start-eligible stale Agent still enables the hidden Start owner");
     require(start_row->height() == live_region_height,
         "the Start action region must keep stable geometry when the Start "
         "button appears or disappears");
@@ -2948,14 +2959,10 @@ void verify_removed_activity_and_task_card_destinations(
         "its stable identity");
 }
 
-// The tabs unit contract: Conversation and Presets are plain text tabs — the
-// selected tab paints only its caption glyphs on the shell backdrop plus one
-// subtle accent underline along its bottom edge, and is never a filled
-// rectangular slab. Real rendered pixels in the shared content coordinate
-// space prove it: the selected tab's interior must read the exact adjacent
-// backdrop (the tab is transparent there) with no pixel of the `windowBgOver`
-// slab token anywhere in it, and the accent must sit only on its bottom row
-// and follow the selection.
+// The chat-first detail no longer shows a Presets tab. Conversation remains
+// the default surface; `/presets` still reveals the read-only Presets page
+// and the Conversation control as the way back. The remaining Conversation
+// affordance is a plain text tab — never a filled rectangular slab.
 void verify_plain_underline_page_tabs(
         lingtai::desktop::NativeShell &shell,
         const fs::path &sandbox) {
@@ -2979,85 +2986,52 @@ void verify_plain_underline_page_tabs(
     QCoreApplication::processEvents();
 
     auto *pages_nav = presets_nav->parentWidget();
+    require(!presets_nav->isVisible(),
+        "the Presets tab must not appear on the selected-Agent detail");
+    require(!pages_nav->isVisible(),
+        "the chat-first detail must not show a page-tab strip");
+
+    presets_nav->click();
+    QCoreApplication::processEvents();
+    require(pages_nav->isVisible() && conversation_nav->isVisible()
+            && !presets_nav->isVisible(),
+        "opening Presets through the slash destination must keep Conversation "
+        "as the visible way back, never a Presets tab");
+    require(conversation_nav->text() == QStringLiteral("←  Conversation"),
+        "/presets must use ← Conversation as the way back, matching /kanban");
+    auto *top_bar = required_child<QWidget>(window, "lingtai_chat_top_bar");
+    require(!top_bar->isVisible(),
+        "/presets must hide the chat top bar so ← Conversation sits at the top");
     require(conversation_nav->font().pointSize() == 13
-            && presets_nav->font().pointSize() == 13,
-        "Conversation and Presets must share the 13pt main-window navigation rung");
-    require(pages_nav->height() == 28
-            && conversation_nav->height() == 28
-            && presets_nav->height() == 28,
-        "the larger plain-text tab strip must own one exact 28px line box");
+            && conversation_nav->height() == 28,
+        "the Conversation back-tab must keep the 13pt / 28px navigation rung");
 
     const auto slab = st::windowBgOver->c;
-    const auto accent = st::dialogsBgActive->c;
     const auto image = pages_nav->grab().toImage();
-    // The grab backing is physical device pixels, but every coordinate below
-    // is a logical pages_nav point: scale by the image's devicePixelRatio
-    // (Retina) once so each pixelColor sample lands on the physical pixel.
     const auto dpr = image.devicePixelRatio();
     const auto at = [&](const QImage &target, const QPoint &logical) {
         return target.pixelColor(QPoint(qRound(logical.x() * dpr),
                                         qRound(logical.y() * dpr)));
     };
-    // The page-nav row's trailing stretch is guaranteed unpainted, so it is
-    // the real shell backdrop the transparent tabs sit on, in the same shared
-    // coordinate space as every tab sample below.
-    const auto backdrop = [&] {
-        return at(image, QPoint(presets_nav->geometry().right() + 8,
-                                presets_nav->geometry().center().y()));
-    }();
-    require(backdrop == st::windowBg->c,
-        "the page-nav row must sit directly on the shell backdrop token");
-    const auto interior = [&](const QImage &target, QPushButton *button) {
-        // Sample the quiet upper-right corner, not the caption's center column:
-        // the larger 13pt glyph ink legitimately reaches the old y=3 center
-        // probe while the tab surface itself remains transparent.
-        return at(target, button->mapTo(
-            pages_nav, QPoint(button->width() - 3, 2)));
-    };
-    const auto bottom = [&](const QImage &target, QPushButton *button) {
-        return at(target, button->mapTo(
-            pages_nav, QPoint(button->width() / 2, button->height() - 1)));
-    };
-    const auto slab_is_bounded = [&](const QImage &target, QPushButton *button) {
-        auto count = 0;
-        for (auto y = 0; y < button->height() - 2; ++y) {
-            for (auto x = 0; x < button->width(); ++x) {
-                if (at(target, button->mapTo(pages_nav, QPoint(x, y)))
-                        == slab) {
-                    ++count;
-                }
+    auto slab_count = 0;
+    for (auto y = 0; y < conversation_nav->height() - 2; ++y) {
+        for (auto x = 0; x < conversation_nav->width(); ++x) {
+            if (at(image, conversation_nav->mapTo(pages_nav, QPoint(x, y)))
+                    == slab) {
+                ++slab_count;
             }
         }
-        // A few antialiased caption pixels may numerically equal windowBgOver;
-        // a real filled slab would occupy almost the entire button interior.
-        return count * 10 < button->width() * (button->height() - 2);
-    };
-    require(slab_is_bounded(image, conversation_nav),
-        "the selected Conversation tab must never be a filled rectangular slab");
-    require(interior(image, conversation_nav) == backdrop,
-        "the selected Conversation tab must stay plain text on the backdrop");
-    require(bottom(image, conversation_nav) == accent,
-        "the selected tab must carry only the subtle underline accent");
-    require(slab_is_bounded(image, presets_nav),
-        "the unselected Presets tab must stay plain text too");
-    require(bottom(image, presets_nav) != accent,
-        "the underline accent must belong only to the selected tab");
+    }
+    require(slab_count * 10
+            < conversation_nav->width() * (conversation_nav->height() - 2),
+        "the Conversation back-tab must never be a filled rectangular slab");
 
-    require(conversation_nav->font().weight() == QFont::Normal
-            && presets_nav->font().weight() == QFont::Normal,
-        "both page captions must use regular weight before selection moves");
-    presets_nav->click();
+    conversation_nav->click();
     QCoreApplication::processEvents();
-    const auto after = pages_nav->grab().toImage();
-    require(conversation_nav->font().weight() == QFont::Normal
-            && presets_nav->font().weight() == QFont::Normal,
-        "both page captions must keep regular weight after selection moves; "
-        "color and underline alone mark selection");
-    require(bottom(after, presets_nav) == accent
-            && bottom(after, conversation_nav) != accent,
-        "the underline accent must follow the selection");
-    require(slab_is_bounded(after, presets_nav),
-        "the newly selected tab must stay slab-free");
+    require(!pages_nav->isVisible(),
+        "returning to Conversation must hide the page-tab strip again");
+    require(top_bar->isVisible(),
+        "returning to Conversation must restore the chat top bar");
 
     std::error_code cleanup_error;
     fs::remove_all(sandbox, cleanup_error);
@@ -3171,10 +3145,8 @@ void verify_telegram_theme_reset(
         window, "lingtai_agent_page_nav_conversation");
     auto *presets_nav = required_child<QPushButton>(
         window, "lingtai_agent_page_nav_presets");
-    require(pages_nav->isVisible() && conversation_nav->isVisible()
-            && presets_nav->isVisible(),
-        "the compact secondary page navigation must be reachable in the "
-        "selected-Agent detail");
+    require(!pages_nav->isVisible() && !presets_nav->isVisible(),
+        "the chat-first detail must not show page tabs; Presets is slash-only");
     presets_nav->click();
     QCoreApplication::processEvents();
     require(preset_owner->isVisible()
@@ -3618,6 +3590,24 @@ void verify_modern_composer_surface(
                 == std::optional<fs::path>("alpha"),
         "the modern-composer fixture Agent must be selectable");
 
+    composer_input->setEnabled(true);
+    composer_input->setText(QStringLiteral("/"));
+    QCoreApplication::processEvents();
+    auto *slash_popup = required_child<QListWidget>(
+        window, "lingtai_slash_command_popup");
+    require(slash_popup->isVisible() && slash_popup->count() >= 8,
+        "typing a leading slash must open the slash-command popup");
+    composer_input->setText(QStringLiteral("hello"));
+    QCoreApplication::processEvents();
+    require(!slash_popup->isVisible(),
+        "ordinary composer text must dismiss the slash-command popup");
+    require(composer_input->accessibilityName().isEmpty(),
+        "typed composer text must hide the Message… placeholder");
+    composer_input->clear();
+    QCoreApplication::processEvents();
+    require(composer_input->accessibilityName() == QStringLiteral("Message…"),
+        "clearing the composer must restore the Message… placeholder");
+
     require(attachment_button->parent() == controls
             && composer_input->parent() == controls
             && send_button->parent() == controls,
@@ -3909,14 +3899,12 @@ void verify_responsive_header_priority(
     require(presentation_name->isVisible() && detail_key->isVisible(),
         "a wide actual header must show the presentation name and the "
         "secondary key together");
-    require(start_button->isVisible() && start_button->isEnabled(),
-        "the stale target must show the applicable Start primary control");
-    require(sleep_button->isVisible(),
-        "Request sleep must remain visible in the wide header");
+    require(!start_button->isVisible() && !sleep_button->isVisible(),
+        "Start Agent and Request sleep must stay out of the selected-Agent header");
     require(!back_button->isVisible(),
         "Back must stay hidden in wide two-column mode");
     require_disjoint(
-        {presentation_name, detail_key, start_button, sleep_button});
+        {presentation_name, detail_key});
 
     // The validated 640x520 narrow render must already prioritize the primary
     // identity and controls before the long directory-key metadata can wrap or
@@ -3941,10 +3929,8 @@ void verify_responsive_header_priority(
         "a constrained actual header must keep the presentation name");
     require(back_button->isVisible(),
         "a constrained OneColumn actual detail header must keep Back");
-    require(start_button->isVisible() && start_button->isEnabled(),
-        "a constrained actual header must keep the Start primary control");
-    require(sleep_button->isVisible(),
-        "a constrained actual header must keep Request sleep");
+    require(!start_button->isVisible() && !sleep_button->isVisible(),
+        "a constrained actual header must keep Start Agent and Request sleep hidden");
     require(!detail_key->isVisible(),
         "a constrained actual header must hide the secondary key first, "
         "before any primary control or the presentation name");
@@ -3959,11 +3945,11 @@ void verify_responsive_header_priority(
     QCoreApplication::processEvents();
     require(presentation_name->isVisible() && detail_key->isVisible(),
         "returning to wide must restore the secondary key");
-    require(start_button->isVisible() && sleep_button->isVisible()
+    require(!start_button->isVisible() && !sleep_button->isVisible()
             && !back_button->isVisible(),
-        "returning to wide must restore the same wide primary control set");
+        "returning to wide must restore the same wide control set");
     require_disjoint(
-        {presentation_name, detail_key, start_button, sleep_button});
+        {presentation_name, detail_key});
 
     // Wide selected-Agent workspace hierarchy: the content surface, the
     // active project route, and the Agent pages nav are the durable
@@ -3982,8 +3968,8 @@ void verify_responsive_header_priority(
     require(!conversation_heading->isVisible(),
         "the Agent detail page must show exactly one Conversation "
         "affordance, hiding the duplicate selected-Agent heading");
-    require(conversation_nav->isVisible(),
-        "the Conversation page nav must remain the visible affordance");
+    require(!agent_pages_nav->isVisible() && !presets_nav->isVisible(),
+        "the chat-first detail must not show page tabs");
     require(project_route->geometry().top() == 0,
         "the active project route must begin at the content origin so "
         "hidden empty-route branding cannot leave a shared spacer above "
@@ -3993,47 +3979,24 @@ void verify_responsive_header_priority(
         agent_pages_nav->layout());
     require(pages_nav_layout != nullptr,
         "the Agent pages nav must own a horizontal layout");
-    require(pages_nav_layout->count() >= 3,
-        "the Agent pages nav must hold the two buttons and trailing room");
-    require(pages_nav_layout->itemAt(0)->widget() == conversation_nav
-            && pages_nav_layout->itemAt(1)->widget() == presets_nav,
-        "the two page buttons must lead the Agent pages nav");
-    require(pages_nav_layout->stretch(0) == 0
-            && pages_nav_layout->stretch(1) == 0,
-        "the two page buttons must not stretch");
-    auto *trailing_room = pages_nav_layout->itemAt(2)->spacerItem();
-    require(trailing_room != nullptr && pages_nav_layout->stretch(2) > 0,
+    require(pages_nav_layout->count() >= 2,
+        "the Agent pages nav must hold the Conversation control and trailing room");
+    require(pages_nav_layout->itemAt(0)->widget() == conversation_nav,
+        "the Conversation control must lead the Agent pages nav");
+    require(pages_nav_layout->stretch(0) == 0,
+        "the Conversation control must not stretch");
+    auto *trailing_room = pages_nav_layout->itemAt(1)->spacerItem();
+    require(trailing_room != nullptr && pages_nav_layout->stretch(1) > 0,
         "the Agent pages nav must trail a positive-stretch spacer");
 
-    // (A) The checked Conversation page affordance must paint its active
-    // state through real semantic palette accents: some
-    // `st::dialogsTextFgService` accent text over at most a bounded minority
-    // of `st::dialogsBgActive` surface -- never a full-slab solid background.
+    // (A) Conversation is the default surface, so the page-tab strip stays
+    // hidden on the chat. Clicking the retained Conversation control keeps
+    // that contract.
     required_child<QPushButton>(window, "lingtai_agent_page_nav_conversation")
         ->click();
     QCoreApplication::processEvents();
-    const auto conversation_nav_image = conversation_nav->grab().toImage();
-    auto accent_pixels = 0;
-    auto active_pixels = 0;
-    for (auto y = 0; y != conversation_nav_image.height(); ++y) {
-        for (auto x = 0; x != conversation_nav_image.width(); ++x) {
-            if (conversation_nav_image.pixelColor(x, y)
-                    == st::dialogsTextFgService->c) {
-                ++accent_pixels;
-            } else if (conversation_nav_image.pixelColor(x, y)
-                    == st::dialogsBgActive->c) {
-                ++active_pixels;
-            }
-        }
-    }
-    require(accent_pixels > 0,
-        "the checked Conversation page affordance must paint real "
-        "st::dialogsTextFgService accent pixels, not a blank grab");
-    require(active_pixels * 4 < conversation_nav_image.width()
-                * conversation_nav_image.height(),
-        "the checked Conversation page must keep st::dialogsBgActive to a "
-        "bounded minority (<25%) of its surface, never the full-slab "
-        "background");
+    require(!agent_pages_nav->isVisible() && !presets_nav->isVisible(),
+        "Conversation is the default surface, so the page-tab strip stays hidden");
 
     // (B) The Start/Sleep status read-outs belong inside their own action
     // rows, never as separate full-width detail siblings.
@@ -4105,6 +4068,335 @@ void verify_responsive_header_priority(
     std::error_code cleanup_error;
     fs::remove_all(sandbox, cleanup_error);
     require(!cleanup_error, "responsive-header fixtures must be removed");
+}
+
+void verify_kanban_page(
+        lingtai::desktop::NativeShell &shell,
+        const fs::path &sandbox) {
+    auto &window = shell.window();
+    auto *input = required_ui_child<Ui::InputField>(
+        window, "lingtai_composer_input");
+    auto *conversation = required_child<QTextEdit>(
+        window, "lingtai_selected_agent_conversation");
+    auto *composer = required_child<Ui::RpWidget>(window, "lingtai_composer");
+    auto *conversation_nav = required_child<QPushButton>(
+        window, "lingtai_agent_page_nav_conversation");
+    auto *presets_nav = required_child<QPushButton>(
+        window, "lingtai_agent_page_nav_presets");
+    auto *kanban_page = required_child<QWidget>(window, "lingtai_kanban_page");
+
+    const auto project = sandbox / "project";
+    const auto alpha = project / ".lingtai/alpha";
+    write_file(project / ".lingtai/human/.agent.json",
+        R"({"agent_id":"20260101-000000-h001","agent_name":"Ted",)"
+        R"("address":"human","state":"active"})");
+    write_file(alpha / ".agent.json",
+        R"({"admin":{},"agent_id":"20260712-191609-a001",)"
+        R"("agent_name":"alpha","nickname":"Alpha",)"
+        R"("address":"alpha","state":"active","language":"en"})");
+    write_file(alpha / "init.json",
+        R"({"model":"claude-opus","provider":"anthropic","mcp":{"fs":{}}})");
+    write_file(alpha / ".status.json",
+        R"({"tokens":{"context":{"window_size":200000,"system_tokens":1000,)"
+        R"("tools_tokens":500,"history_tokens":2500,"total_tokens":4000,)"
+        R"("usage_pct":2.0}}})");
+    write_file(alpha / "logs/token_ledger.jsonl",
+        "{\"ts\":\"2026-08-18T12:00:00Z\",\"input\":100,\"output\":40,"
+        "\"thinking\":10,\"cached\":20,\"model\":\"claude-opus\","
+        "\"endpoint\":\"https://api.anthropic.com/v1\"}\n");
+    write_file(alpha / "daemons/run-1/daemon.json",
+        R"({"state":"running","backend":"claude-p",)"
+        R"("cli_tokens":{"input":10,"output":5,"thinking":1,"cached":2,"calls":1}})");
+    write_file(project / ".lingtai/beta/.agent.json",
+        R"({"admin":{},"agent_id":"20260712-191609-b001",)"
+        R"("agent_name":"beta","address":"beta","state":"idle"})");
+    write_file(project / ".lingtai/human/mailbox/sent/20260818T120000-aa01/message.json",
+        conversation_envelope("human", "alpha", "",
+            "A long human note that must stay inside the chat after a kanban resize.",
+            "sent_at", "2026-08-18T12:00:00Z"));
+
+    window.resize(1200, 800);
+    QCoreApplication::processEvents();
+    const auto outcome = shell.open_project(project, std::nullopt);
+    require(outcome.disposition == ProjectOpenDisposition::opened,
+        "the kanban fixture project must open");
+    click_first_agent_canvas_row(window);
+    require(shell.selection_state().selected_agent_directory_key()
+            == std::optional<fs::path>("alpha"),
+        "the kanban fixture must select the first Agent");
+    require(input->isEnabled(),
+        "a selected Agent must enable the composer before /kanban");
+
+    input->setText(QStringLiteral("/kanban"));
+    input->setFocus();
+    QCoreApplication::processEvents();
+    auto enter = QKeyEvent(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(input->rawTextEdit(), &enter);
+    QCoreApplication::processEvents();
+
+    require(input->getLastText().isEmpty(),
+        "/kanban must clear the composer after local submission");
+    require(kanban_page->isVisible(),
+        "/kanban must reveal the agent properties page");
+    auto *kanban_name = required_child<QLabel>(window, "lingtai_kanban_name");
+    const auto *kanban_name_before_tick = kanban_name;
+    QElapsedTimer idle;
+    idle.start();
+    while (idle.elapsed() < 1200) {
+        QCoreApplication::processEvents();
+        QThread::msleep(50);
+    }
+    require(required_child<QLabel>(window, "lingtai_kanban_name")
+                == kanban_name_before_tick,
+        "the 1s snapshot timer must not rebuild the kanban widget tree, "
+        "because that stalls scrolling on large token ledgers");
+    require(!conversation->isVisible() && !composer->isVisible(),
+        "/kanban must hide the conversation and composer");
+    auto *back = required_child<QPushButton>(window, "lingtai_kanban_back");
+    require(back->isVisible() && !conversation_nav->isVisible()
+            && !presets_nav->isVisible(),
+        "/kanban must use ← Agents as the way back, never a Kanban tab");
+
+    require(required_child<QLabel>(window, "lingtai_kanban_name")
+                ->text() == QStringLiteral("Alpha"),
+        "the properties header must title the selected agent");
+    auto *identity = required_child<QWidget>(
+        window, "lingtai_kanban_section_identity");
+    require(required_child<QLabel>(*identity, "lingtai_kanban_meta")
+                ->text().contains(QStringLiteral("alpha")),
+        "the header must fill identity address");
+    auto *tokens_stat = required_child<QWidget>(
+        window, "lingtai_kanban_stat_tokens");
+    require(tokens_stat->findChild<QLabel *>("lingtai_kanban_stat_value")
+                ->text() == QStringLiteral("150"),
+        "the metric strip must show selected-agent token spend");
+    auto *network_stat = required_child<QWidget>(
+        window, "lingtai_kanban_metric_network");
+    require(network_stat->findChild<QLabel *>("lingtai_kanban_stat_value")
+                ->text().contains(QStringLiteral("3")),
+        "the metric strip must count network members");
+    auto *token_block = required_child<QWidget>(
+        window, "lingtai_kanban_section_tokens");
+    auto saw_input = false;
+    for (auto *label : token_block->findChildren<QLabel *>()) {
+        if (label->text() == QStringLiteral("100")) saw_input = true;
+    }
+    require(saw_input, "token usage must fill selected-agent input totals");
+    require(required_child<QWidget>(window, "lingtai_kanban_section_daemons")
+                ->findChild<QLabel *>("lingtai_kanban_daemons_value")
+                ->text().contains(QStringLiteral("running: 1")),
+        "the network sidebar must list daemon counts");
+
+    auto *left_column = required_child<QWidget>(window, "lingtai_kanban_left");
+    auto *right_column = required_child<QWidget>(window, "lingtai_kanban_right");
+    auto *summary_scroll = required_child<QScrollArea>(
+        window, "lingtai_kanban_summary_scroll");
+    const auto viewport_right = summary_scroll->viewport()->mapTo(
+        &window, QPoint(summary_scroll->viewport()->width(), 0)).x();
+    const auto column_right = right_column->mapTo(
+        &window, QPoint(right_column->width(), 0)).x();
+    require(viewport_right - column_right >= 16,
+        "network facts must keep a gutter from the overlay scrollbar");
+    window.resize(520, 800);
+    QCoreApplication::processEvents();
+    require(right_column->isVisible() && left_column->isVisible()
+            && right_column->y() > left_column->y(),
+        "a narrow window must stack network under the agent facts, never clip them");
+    window.resize(1200, 800);
+    QCoreApplication::processEvents();
+
+    required_child<QPushButton>(window, "lingtai_kanban_open_detail")->click();
+    QCoreApplication::processEvents();
+    auto *hero = required_child<QWidget>(window, "lingtai_kanban_hero");
+    require(!hero->isVisible(),
+        "context detail must hide the summary hero, matching TUI Ctrl+D");
+    require(required_child<QLabel>(window, "lingtai_kanban_inspector_title")
+                ->text() == QStringLiteral("Agent Detail"),
+        "context detail must title the page Agent Detail");
+    require(required_child<QPushButton>(window, "lingtai_kanban_detail_back")
+                ->isVisible(),
+        "context detail must offer ← Back to summary");
+    const auto section_mentions = [](QWidget &root, const QString &needle) {
+        for (auto *label : root.findChildren<QLabel *>()) {
+            if (label->text().contains(needle)) return true;
+        }
+        return false;
+    };
+    auto *info = required_child<QWidget>(window, "lingtai_kanban_section_info");
+    require(section_mentions(*info, QStringLiteral("Alpha"))
+            && section_mentions(*info, QStringLiteral("alpha")),
+        "Agent Detail must list identity name and address");
+    auto *providers = required_child<QWidget>(
+        window, "lingtai_kanban_section_providers");
+    require(section_mentions(*providers, QStringLiteral("anthropic")),
+        "Open context detail must fill the main-agent provider breakdown");
+    require(section_mentions(*providers, QStringLiteral("100.0%")),
+        "provider rows must show a spend share, matching TUI");
+    require(section_mentions(*providers, QStringLiteral("miss")),
+        "main-agent provider rows must include cache miss");
+    auto *detail_scroll = required_child<QScrollArea>(
+        window, "lingtai_kanban_detail_scroll");
+    window.resize(900, 800);
+    QCoreApplication::processEvents();
+    const auto detail_viewport_right = detail_scroll->viewport()->mapTo(
+        &window, QPoint(detail_scroll->viewport()->width(), 0)).x();
+    for (auto *label : providers->findChildren<QLabel *>()) {
+        if (!label->isVisible() || label->width() <= 0) continue;
+        const auto right = label->mapTo(
+            &window, QPoint(label->width(), 0)).x();
+        require(detail_viewport_right - right >= 8,
+            "Agent Detail provider facts must stay inside the viewport, "
+            "clear of the overlay scrollbar");
+    }
+    for (auto *bar : providers->findChildren<QWidget *>(
+            "lingtai_kanban_provider_share")) {
+        const auto right = bar->mapTo(&window, QPoint(bar->width(), 0)).x();
+        require(detail_viewport_right - right >= 8,
+            "provider share bars must not run under the overlay scrollbar");
+    }
+    auto *daemon_providers = required_child<QWidget>(
+        window, "lingtai_kanban_section_daemon_providers");
+    require(section_mentions(*daemon_providers, QStringLiteral("claude-p")),
+        "Agent Detail must break daemon token usage out by backend");
+    auto *totals = required_child<QWidget>(window, "lingtai_kanban_section_totals");
+    require(section_mentions(*totals, QStringLiteral("168")),
+        "combined totals must add main-agent spend to daemon spend");
+    auto *session = required_child<QWidget>(
+        window, "lingtai_kanban_section_session_current");
+    require(section_mentions(*session, QStringLiteral("api_calls")),
+        "Agent Detail must show current session API stats");
+    auto *recent = required_child<QWidget>(window, "lingtai_kanban_section_recent");
+    require(section_mentions(*recent, QStringLiteral("claude-opus")),
+        "context detail must list recent main-agent activity");
+    auto *mcp = required_child<QWidget>(window, "lingtai_kanban_section_mcp");
+    require(section_mentions(*mcp, QStringLiteral("fs")),
+        "Open context detail must list MCP servers");
+    auto *daemons = required_child<QWidget>(
+        window, "lingtai_kanban_detail_daemons");
+    require(section_mentions(*daemons, QStringLiteral("1")),
+        "context detail must always list daemon running/total counts");
+
+    required_child<QPushButton>(window, "lingtai_kanban_detail_back")->click();
+    QCoreApplication::processEvents();
+    require(hero->isVisible(),
+        "← Back to summary must restore the properties hero");
+
+    auto ctrl_d = QKeyEvent(QEvent::KeyPress, Qt::Key_D, Qt::ControlModifier);
+    QApplication::sendEvent(kanban_page, &ctrl_d);
+    QCoreApplication::processEvents();
+    require(!hero->isVisible()
+            && required_child<QLabel>(window, "lingtai_kanban_inspector_title")
+                   ->isVisible(),
+        "Ctrl+D must open context detail from the properties summary");
+    auto escape = QKeyEvent(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(kanban_page, &escape);
+    QCoreApplication::processEvents();
+    require(hero->isVisible(),
+        "Esc on context detail must return to the properties summary");
+
+    window.resize(800, 800);
+    QCoreApplication::processEvents();
+    back->click();
+    QCoreApplication::processEvents();
+    require(conversation->isVisible() && composer->isVisible()
+            && !kanban_page->isVisible(),
+        "← Agents must restore the chat from the properties page");
+    auto *chat_scroll = required_child<QScrollArea>(
+        window, "lingtai_agent_detail_scroll");
+    const auto chat_viewport_right = chat_scroll->viewport()->mapTo(
+        &window, QPoint(chat_scroll->viewport()->width(), 0)).x();
+    const auto conversation_right = conversation->mapTo(
+        &window, QPoint(conversation->width(), 0)).x();
+    require(chat_viewport_right - conversation_right >= 0,
+        "the conversation surface must not overflow the detail viewport "
+        "after resizing on /kanban and going back");
+    require(conversation->width() <= chat_scroll->viewport()->width() + 1,
+        (QStringLiteral("the restored chat must not be wider than the detail "
+            "viewport after resizing on /kanban (chat=%1 viewport=%2)")
+            .arg(conversation->width())
+            .arg(chat_scroll->viewport()->width())
+            .toStdString()).c_str());
+    require(std::abs(conversation->width()
+            - conversation->parentWidget()->width()) <= 2,
+        "the restored chat must span the detail column, not keep a stale "
+        "kanban width");
+    require(conversation->toPlainText().contains(
+            QStringLiteral("A long human note that must stay inside the chat")),
+        "the restored chat must still show the selected-Agent conversation");
+    auto outgoing_left = 0.0;
+    auto outgoing_right = 0.0;
+    auto saw_outgoing = false;
+    for (auto *frame : conversation->document()->rootFrame()->childFrames()) {
+        if (!frame->frameFormat()
+                .property(QTextFormat::UserProperty + 5).toBool()) {
+            continue;
+        }
+        auto block = frame->begin().currentBlock();
+        if (!block.isValid()) continue;
+        outgoing_left = block.blockFormat().leftMargin();
+        outgoing_right = block.blockFormat().rightMargin();
+        saw_outgoing = true;
+        break;
+    }
+    require(saw_outgoing,
+        "the restored chat must keep the Human bubble after /kanban");
+    require(outgoing_left + outgoing_right
+            <= double(conversation->viewport()->width()) + 1.0,
+        "Human bubble margins must fit the current viewport after a kanban "
+        "resize, never the previous wider pane");
+
+    auto *top_bar = required_child<QWidget>(window, "lingtai_chat_top_bar");
+    require_within_detail_viewport(window, *top_bar,
+        "the chat top bar after resizing on /kanban and going back");
+    require_within_detail_viewport(window, *composer,
+        "the composer after resizing on /kanban and going back");
+
+    const auto submit_slash = [&](const QString &command) {
+        input->setText(command);
+        input->setFocus();
+        QCoreApplication::processEvents();
+        auto enter = QKeyEvent(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QApplication::sendEvent(input->rawTextEdit(), &enter);
+        QCoreApplication::processEvents();
+    };
+
+    window.resize(1200, 800);
+    QCoreApplication::processEvents();
+    window.resize(800, 800);
+    QCoreApplication::processEvents();
+    submit_slash(QStringLiteral("/kanban"));
+    require(kanban_page->isVisible() && !conversation->isVisible(),
+        "resizing the chat then /kanban must show Agent properties");
+    require_within_detail_viewport(window, *kanban_page,
+        "kanban after a conversation resize");
+
+    back->click();
+    QCoreApplication::processEvents();
+    require(conversation->isVisible() && composer->isVisible(),
+        "← Agents must restore the composer before /presets");
+    submit_slash(QStringLiteral("/presets"));
+    auto *presets = required_child<QWidget>(
+        window, "lingtai_selected_agent_preset_summary_section");
+    require(presets->isVisible() && !conversation->isVisible(),
+        "/presets must hide the conversation like /kanban does");
+    require_within_detail_viewport(window, *presets,
+        "presets after opening from a resized chat");
+    window.resize(1200, 800);
+    QCoreApplication::processEvents();
+    window.resize(800, 800);
+    QCoreApplication::processEvents();
+    require_within_detail_viewport(window, *presets,
+        "presets after a resize while that page is showing");
+    conversation_nav->click();
+    QCoreApplication::processEvents();
+    require(conversation->isVisible(),
+        "Conversation must restore the chat from /presets");
+    require_within_detail_viewport(window, *conversation,
+        "conversation after resizing on /presets and going back");
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "kanban fixtures must be removed");
 }
 
 // The U1/U2 composer-command contract: every leading-slash command in this
@@ -4186,11 +4478,26 @@ void verify_conversation_slash_interception(
     const auto outcome = shell.open_project(project, std::nullopt);
     require(outcome.disposition == ProjectOpenDisposition::opened,
         "the slash-interception fixture project must open");
-    click_agent(window, "alpha");
+    click_agent_canvas_row(window, 0);
     require(shell.selection_state().selected_agent_directory_key()
                 == std::optional<fs::path>("alpha")
             && input->isEnabled() && send_button->isEnabled(),
         "a selected valid Agent must enable the composer before slash input");
+
+    input->setText(QStringLiteral("/"));
+    QCoreApplication::processEvents();
+    auto *slash_popup = required_child<QListWidget>(
+        window, "lingtai_slash_command_popup");
+    require(slash_popup->isVisible() && slash_popup->count() >= 8,
+        "typing a leading slash must open the slash-command popup");
+    input->setText(QStringLiteral("hello"));
+    QCoreApplication::processEvents();
+    require(!slash_popup->isVisible(),
+        "ordinary composer text must dismiss the slash-command popup");
+    require(input->accessibilityName().isEmpty(),
+        "typed composer text must hide the Message… placeholder");
+    input->clear();
+    QCoreApplication::processEvents();
 
     submit_command(QStringLiteral("/presets"));
     require(input->getLastText().isEmpty(),
@@ -4199,12 +4506,35 @@ void verify_conversation_slash_interception(
         "raw /presets must stay local and create no human outbox leaf");
     require(presets_nav->isChecked() && !conversation_nav->isChecked(),
         "raw /presets must check the existing Presets page");
+    require(conversation_nav->isVisible() && !presets_nav->isVisible(),
+        "raw /presets must reveal Conversation as the way back, never a Presets tab");
 
-    // Presets intentionally hides the composer. Return through the existing
-    // page button, then use `/agents` from a real narrow selected-detail state
-    // so the roster and focus transition are observable.
+    // `/setup` is the new-workspace wizard (preset catalog, editor, agent
+    // review), not the `/presets` allow-list catalog.
     conversation_nav->click();
     QCoreApplication::processEvents();
+    require(conversation_nav->isChecked() && input->isVisible(),
+        "Conversation must restore the composer before /setup");
+    submit_command(QStringLiteral("/setup"));
+    require(input->getLastText().isEmpty(),
+        "raw /setup must clear the composer after local submission");
+    require(outbox_leaf_count() == 0,
+        "raw /setup must stay local and create no human outbox leaf");
+    require(!presets_nav->isChecked(),
+        "raw /setup must not open the allowed-preset catalog");
+    auto *wizard = required_child<lingtai::desktop::ProjectSetupWizard>(
+        window, "lingtai_project_setup_wizard");
+    auto *bootstrap_status = required_ui_child<Ui::FlatLabel>(
+        window, "lingtai_bootstrap_status");
+    require(wizard->isVisible()
+            || !bootstrap_status->accessibilityName().isEmpty(),
+        "raw /setup must start the new-workspace setup wizard, or report "
+        "why that wizard cannot run");
+    if (wizard->isVisible()) {
+        wizard->reject();
+        QCoreApplication::processEvents();
+    }
+
     require(conversation_nav->isChecked() && input->isVisible(),
         "the existing Conversation page must restore the real composer");
     submit_command(QStringLiteral("/agents"));
@@ -4215,11 +4545,12 @@ void verify_conversation_slash_interception(
     require(!shell.selection_state().selected_agent_directory_key()
             && sidebar->isVisible() && !content->isVisible(),
         "raw /agents must return a narrow selected detail to the existing roster");
-    require(window.focusWidget() == agent_row(window, "alpha"),
-        "raw /agents must return focus to a usable existing Agent row");
+    require(required_child<QWidget>(window, "lingtai_agent_roster_rows")
+                ->isVisible(),
+        "raw /agents must return focus to a usable existing Agent roster");
 
     // Re-enter the same valid route for the command-status checks.
-    click_agent(window, "alpha");
+    click_agent_canvas_row(window, 0);
     require(input->isEnabled() && send_button->isEnabled(),
         "reselecting the valid Agent must re-enable the composer");
     submit_command(QStringLiteral("/sleep"));
@@ -4248,6 +4579,51 @@ void verify_conversation_slash_interception(
             && !fs::exists(target / "logs/agent.log"),
         "raw empty-form /cpr on live alpha must launch nothing");
 
+    submit_command(QStringLiteral("/btw"));
+    require(status->text() == QStringLiteral("Usage: /btw <question>"),
+        "raw /btw without a question must show the TUI usage line");
+    require(!fs::exists(target / ".inquiry"),
+        "raw /btw without a question must write no inquiry");
+    submit_command(QStringLiteral("/btw side question"));
+    require(read_file(target / ".inquiry") == "human\nside question",
+        "raw /btw must write the TUI .inquiry human source and question");
+    require(status->text() == QStringLiteral("Inquiry sent: side question"),
+        "raw /btw must report the TUI inquiry-sent status");
+    submit_command(QStringLiteral("/insights"));
+    require(read_file(target / ".inquiry") == "human\nside question",
+        "a pending inquiry must remain a one-at-a-time no-op");
+    require(status->text() == QStringLiteral("Requesting insight..."),
+        "raw /insights must still report the TUI insight-sent status");
+    std::error_code inquiry_error;
+    fs::remove(target / ".inquiry", inquiry_error);
+    submit_command(QStringLiteral("/insights"));
+    require(read_file(target / ".inquiry").rfind("insight\n", 0) == 0,
+        "raw /insights must write the TUI insight inquiry after the slot clears");
+    submit_command(QStringLiteral("/molt"));
+    require(read_file(target / ".prompt")
+            == "[system] molt immediately",
+        "raw /molt must write the TUI English mandatory molt prompt");
+    require(status->text() == QStringLiteral("Molt command sent."),
+        "raw /molt must report the TUI molt-sent status");
+    submit_command(QStringLiteral("/export other"));
+    require(status->text()
+            == QStringLiteral("[system] Usage: /export — or — /export recipe"),
+        "raw /export with an unknown argument must show the TUI usage line");
+    submit_command(QStringLiteral("/export recipe"));
+    require(read_file(target / ".prompt").find("lingtai-recipe")
+            != std::string::npos,
+        "raw /export recipe must write the TUI recipe-export prompt");
+    require(status->text() == QStringLiteral(
+            "[system] Asked the orchestrator to start the recipe export flow."),
+        "raw /export must report the TUI recipe-sent status");
+    submit_command(QStringLiteral("/goal finish the linked PR"));
+    require(read_file(target / ".notification/system.json")
+            .find("finish the linked PR") != std::string::npos,
+        "raw /goal must append the human request to system.json");
+    require(status->text().startsWith(
+            QStringLiteral("Goal request notification sent (")),
+        "raw /goal must report the TUI goal-sent status");
+
     submit_command(QStringLiteral("/help"));
     require(input->getLastText().isEmpty(),
         "raw /help must clear the composer after local submission");
@@ -4257,8 +4633,9 @@ void verify_conversation_slash_interception(
     require(!help.isEmpty() && help.size() <= 512,
         "raw /help must expose one bounded nonempty local response");
     for (const auto *command : {
-             "/agents", "/presets", "/sleep", "/cpr", "/clear", "/refresh",
-             "/suspend", "/help", "/quit"}) {
+             "/agents", "/presets", "/setup", "/kanban", "/sleep", "/cpr",
+             "/clear", "/refresh", "/suspend", "/btw", "/insights", "/goal",
+             "/export", "/molt", "/help", "/quit"}) {
         require(help.contains(QString::fromLatin1(command)),
             std::string("raw /help must expose the available command ")
                 + command);
@@ -4357,8 +4734,11 @@ void verify_conversation_slash_interception(
 
     // Stale-result isolation: the alpha command finishes only after the
     // roster has moved away to beta, so its success/failure must never
-    // surface under beta.
-    click_agent(window, "beta");
+    // surface under beta. Widen first so the canvas roster can receive a
+    // real click while the detail stays open.
+    window.resize(1200, 800);
+    QCoreApplication::processEvents();
+    click_agent_canvas_row(window, 1);
     require(shell.selection_state().selected_agent_directory_key()
                 == std::optional<fs::path>("beta"),
         "beta must be selected while the alpha control command is pending");
@@ -4370,11 +4750,11 @@ void verify_conversation_slash_interception(
 
     // Away-and-back isolation: returning to alpha while the next command is
     // still pending must also discard the stale completion.
-    click_agent(window, "alpha");
+    click_agent_canvas_row(window, 0);
     remove_control_done();
     submit_command(QStringLiteral("/refresh codex-preset"));
-    click_agent(window, "beta");
-    click_agent(window, "alpha");
+    click_agent_canvas_row(window, 1);
+    click_agent_canvas_row(window, 0);
     require(shell.selection_state().selected_agent_directory_key()
                 == std::optional<fs::path>("alpha"),
         "the away-and-back re-selection must leave alpha selected");
@@ -4397,11 +4777,17 @@ void verify_conversation_slash_interception(
         "the journey must have invoked the fake control executable exactly "
         "three times with identical exact separate argv");
 
-    click_agent(window, "beta");
+    click_agent_canvas_row(window, 1);
     require(shell.selection_state().selected_agent_directory_key()
                 == std::optional<fs::path>("beta")
             && input->isEnabled() && send_button->isEnabled(),
         "the stale beta fixture must be selected before CPR command checks");
+    submit_command(QStringLiteral("/btw hello from beta"));
+    require(status->text()
+            == QStringLiteral("Agent is not running. Try /refresh first."),
+        "raw /btw on a not-running Agent must match the TUI not-running status");
+    require(!fs::exists(beta / ".inquiry"),
+        "raw /btw on a not-running Agent must write no inquiry");
     const auto unavailable = QStringLiteral(
         "Command not available in this Desktop build.");
     for (const auto &command : {
@@ -4605,14 +4991,32 @@ void verify_preset_editor_model(const fs::path &sandbox) {
     model.set_api_compat(QStringLiteral("openai"));
     require(model.wire_api_visible() && !model.service_tier_visible(),
         "custom OpenAI shows wire_api and hides Codex service tier");
+    require(model.base_url().isEmpty(),
+        "switching away from Codex clears a URL that provider does not use");
     model.set_wire_api(QStringLiteral("responses"));
     require(model.responses_transport_visible(),
         "Responses transport appears only for custom OpenAI responses");
+    model.set_provider(QStringLiteral("deepseek"));
+    require(model.base_url() == QStringLiteral("https://api.deepseek.com")
+            && model.model() == QStringLiteral("deepseek-v4-pro"),
+        "DeepSeek adopts its first region URL and default model");
+    model.set_provider(QStringLiteral("codex"));
+    require(model.base_url()
+                == QStringLiteral("https://chatgpt.com/backend-api/codex")
+            && model.model() == QStringLiteral("gpt-5.6-sol"),
+        "Codex restores the ChatGPT backend URL instead of keeping DeepSeek's");
+    const auto providers = model.provider_options();
+    require(providers.contains(QStringLiteral("gemini"))
+            && providers.contains(QStringLiteral("kimi"))
+            && providers.contains(QStringLiteral("codex-pool"))
+            && providers.contains(QStringLiteral("claude-code")),
+        "provider picker includes every TUI builtin, not only the cycle subset");
 }
 
 void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) {
     auto &window = shell.window();
-    auto *wizard = required_child<QDialog>(window, "lingtai_project_setup_wizard");
+    auto *wizard = required_child<lingtai::desktop::ProjectSetupWizard>(
+        window, "lingtai_project_setup_wizard");
     auto *steps = required_child<QWidget>(
         *wizard, "lingtai_setup_steps");
     auto *preset_page = required_child<QWidget>(
@@ -4633,14 +5037,38 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
         *preset_page, "lingtai_setup_preset_search");
     auto *preset_footer = required_child<QLabel>(
         *preset_page, "lingtai_setup_preset_footer_summary");
+    auto *codex_strip = required_child<QWidget>(
+        *preset_page, "lingtai_setup_codex_credentials_strip");
+    auto *credentials_page = required_child<QWidget>(
+        *wizard, "lingtai_setup_credentials_page");
     auto *edit_heading = required_child<QLabel>(
         *edit_page, "lingtai_setup_edit_preset_heading");
     auto *agent_heading = required_child<QLabel>(
         *agents_page, "lingtai_setup_agents_heading");
+    auto *agents_search = required_child<QLineEdit>(
+        *agents_page, "lingtai_setup_agents_search");
+    if (st::windowBg->c.lightness() < 128) {
+        require(!agents_search->styleSheet().contains(QStringLiteral("#FFFFFF"))
+                && agents_search->styleSheet().contains(QStringLiteral("#202422")),
+            "dark-mode Configure agent presets search must not be a white hole");
+        for (auto *chip : agents_page->findChildren<QLabel *>(
+                "lingtai_setup_agents_row_caps")) {
+            if (chip->text() != QStringLiteral("Vision")
+                    && chip->text() != QStringLiteral("Tools")) {
+                continue;
+            }
+            require(!chip->styleSheet().contains(QStringLiteral("#FFFFFF"))
+                    && !chip->styleSheet().contains(QStringLiteral("#E7F4EF"))
+                    && chip->styleSheet().contains(QStringLiteral("#222A26")),
+                "dark-mode Vision/Tools chips must use the muted band, not a white rectangle");
+        }
+    }
     auto *review_heading = required_child<QLabel>(
         *review_page, "lingtai_setup_review_heading");
     auto *continue_button = required_child<QPushButton>(
         *wizard, "lingtai_setup_preset_continue");
+    auto *preset_back = required_child<QPushButton>(
+        *wizard, "lingtai_setup_preset_back");
     auto *save_preset = required_child<QPushButton>(
         *wizard, "lingtai_setup_edit_preset_save");
     auto *edit_back = required_child<QPushButton>(
@@ -4652,8 +5080,11 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
     auto *create_button = required_child<QPushButton>(
         *wizard, "lingtai_bootstrap_create_start");
 
-    require(wizard->minimumWidth() >= 840 && wizard->minimumHeight() >= 600,
-        "new-folder setup must be a full workspace-sized route, not the old small form");
+    require(wizard->minimumWidth() >= 840 && wizard->minimumHeight() >= 600
+            && wizard->parentWidget()
+            && wizard->parentWidget()->objectName()
+                == QStringLiteral("lingtai_desktop_content"),
+        "new-folder setup must be a full workspace-sized route in the main window, not a separate dialog");
     require(dynamic_cast<QVBoxLayout *>(wizard->layout()) != nullptr
             && steps->height() <= 140,
         "Preset / Agents / Review flow must be one horizontal owner above the page, matching Ted's reference");
@@ -4664,9 +5095,9 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
     require(preset_heading->text()
             == QStringLiteral("Choose how your orchestrator runs")
             && edit_heading->text() == QStringLiteral("Edit preset")
-            && agent_heading->text() == QStringLiteral("Configure Agents")
-            && review_heading->text() == QStringLiteral("Review project"),
-        "setup must expose the accepted Preset, Edit preset, Agents, and Review pages");
+            && agent_heading->text() == QStringLiteral("Configure agent presets")
+            && review_heading->text() == QStringLiteral("Configure your agent"),
+        "setup must expose the accepted Preset, Edit preset, agent-presets, and agent-config pages");
     require(catalog->isHidden()
             && preset_page->findChildren<QTreeWidget *>().size() == 1
             && preset_catalog->columnCount() == 3
@@ -4687,10 +5118,15 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
                 Qt::ItemIsSelectable)
             && preset_catalog->topLevelItem(0)->isFirstColumnSpanned(),
         "the catalog must introduce saved presets and templates with non-selectable section rows");
-    require(preset_catalog->minimumHeight() >= 340
+    require(preset_catalog->minimumHeight() >= 300
             && wizard->findChild<QWidget *>("lingtai_setup_preset_detail") == nullptr
             && wizard->findChild<QLabel *>("lingtai_setup_step_progress") == nullptr,
         "preset selection must keep one catalog and a compact footer, not a boxed inspector or 1 of 3 chrome");
+    require(codex_strip != nullptr
+            && codex_strip->minimumHeight() >= 52,
+        "preset page must expose a Codex credentials strip above the footer");
+    require(credentials_page != nullptr,
+        "credentials page must live behind the preset catalog stack");
     require(preset_catalog->palette().color(QPalette::Base)
                 == QColor(wizard->palette().color(QPalette::Window).lightness() < 128
                     ? QStringLiteral("#181B1A")
@@ -4701,25 +5137,112 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
                 || preset_catalog->styleSheet().contains(QStringLiteral("#202422"))),
         "preset catalog chrome must use the supplied light/dark surface, header, and selection tokens");
     require(continue_button->text() == QStringLiteral("Use preset")
+            && preset_back->isEnabled()
+            && preset_back->text() == QStringLiteral("Back")
             && save_preset->text() == QStringLiteral("Save preset")
             && edit_back->text() == QStringLiteral("← Presets")
             && edit_cancel->text() == QStringLiteral("Cancel")
             && review_button->text() == QStringLiteral("Continue")
-            && create_button->text() == QStringLiteral("Create project"),
-        "the preset page uses one contextual Use/Configure action; Edit preset saves; later pages keep Continue / Create project");
+            && create_button->text() == QStringLiteral("Create orchestrator"),
+        "the first setup step exposes an enabled Back to the homepage; Use/Configure is contextual; Edit preset saves; later pages keep Continue / Create orchestrator");
     require(preset_catalog->sizePolicy().verticalPolicy() == QSizePolicy::Expanding,
         "the preset catalog must stretch with the wizard; file33 is the reference size, not a fixed cap");
+    wizard->setParent(nullptr);
     wizard->setAttribute(Qt::WA_DontShowOnScreen, true);
-    wizard->show();
     wizard->resize(920, 840);
+    wizard->show();
+    QCoreApplication::processEvents();
+    const auto click_widget = [](QWidget *widget) {
+        const auto center = widget->rect().center();
+        const auto global = widget->mapToGlobal(center);
+        QMouseEvent press(QEvent::MouseButtonPress, center, global, Qt::LeftButton,
+            Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease, center, global, Qt::LeftButton,
+            Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(widget, &press);
+        QCoreApplication::sendEvent(widget, &release);
+    };
+    require(codex_strip->isVisible(),
+        "Codex credentials strip must be visible once the wizard is shown");
+    auto *pages = required_child<QStackedWidget>(
+        *wizard, "lingtai_setup_pages");
+    auto *manage = required_child<QPushButton>(
+        *codex_strip, "lingtai_setup_codex_credentials_action");
+    manage->click();
+    QCoreApplication::processEvents();
+    require(pages->currentWidget() == credentials_page
+            && required_child<QLabel>(*credentials_page,
+                "lingtai_setup_credentials_heading")->text()
+                == QStringLiteral("Credentials")
+            && required_child<QWidget>(*credentials_page,
+                "lingtai_setup_credentials_hero") != nullptr,
+        "Codex credentials Manage must open the credentials page");
+    required_child<QPushButton>(*credentials_page,
+        "lingtai_setup_credentials_back")->click();
+    QCoreApplication::processEvents();
+    require(pages->currentWidget() == preset_page,
+        "credentials back must return to preset catalog selection");
+    click_widget(codex_strip);
+    QCoreApplication::processEvents();
+    require(pages->currentWidget() == credentials_page
+            && required_child<QLabel>(*credentials_page,
+                "lingtai_setup_credentials_heading")->text()
+                == QStringLiteral("Credentials"),
+        "clicking the Codex credentials strip must open the credentials page");
+    required_child<QPushButton>(*credentials_page,
+        "lingtai_setup_credentials_back")->click();
+    QCoreApplication::processEvents();
+    require(pages->currentWidget() == preset_page,
+        "credentials back must return to preset catalog selection");
+    wizard->resize(1100, 840);
+    QCoreApplication::processEvents();
+    pages->setCurrentWidget(credentials_page);
+    QCoreApplication::processEvents();
+    wizard->resize(840, 840);
+    QCoreApplication::processEvents();
+    pages->setCurrentWidget(preset_page);
+    QCoreApplication::processEvents();
+    require(preset_page->width() <= pages->width() + 1
+            && preset_catalog->width() <= pages->width() + 1,
+        "returning to the preset catalog after a hidden resize must keep the "
+        "page inside the setup stack, never the previous wider pane");
+    auto *edit_manage = required_child<QPushButton>(
+        *edit_page, "lingtai_setup_edit_preset_manage");
+    require(edit_manage->cursor().shape() == Qt::PointingHandCursor
+            && edit_manage->styleSheet().contains(QStringLiteral("#16785C")),
+        "Edit preset Manage must be a jade action button, not a text label");
+    auto *edit_name = required_child<QLineEdit>(
+        *edit_page, "lingtai_setup_edit_preset_name");
+    if (st::windowBg->c.lightness() < 128) {
+        require(edit_back->styleSheet().contains(QStringLiteral("#78C9A7"))
+                && !edit_name->styleSheet().contains(QStringLiteral("#FFFFFF"))
+                && edit_name->styleSheet().contains(QStringLiteral("#202422")),
+            "dark-mode Edit preset must keep ← Presets readable and fields off the white hole fill");
+    } else {
+        require(edit_back->styleSheet().contains(QStringLiteral("#16785C")),
+            "light-mode Edit preset back link stays jade");
+    }
+    pages->setCurrentWidget(edit_page);
+    QCoreApplication::processEvents();
+    edit_manage->click();
+    QCoreApplication::processEvents();
+    require(pages->currentWidget() == credentials_page,
+        "Edit preset Manage must open the credentials page");
+    required_child<QPushButton>(*credentials_page,
+        "lingtai_setup_credentials_back")->click();
+    QCoreApplication::processEvents();
+    require(pages->currentWidget() == edit_page,
+        "credentials back from Edit preset must return to the editor");
+    pages->setCurrentWidget(preset_page);
     QCoreApplication::processEvents();
     const auto below = [](QWidget *upper, QWidget *lower, QWidget *root) {
         return upper->mapTo(root, QPoint(0, upper->height())).y()
             <= lower->mapTo(root, QPoint(0, 0)).y();
     };
-    require(below(preset_catalog, preset_footer, wizard)
-            && below(preset_catalog, continue_button, wizard),
-        "preset catalog and compact footer must stack without overlapping");
+    require(below(preset_catalog, codex_strip, wizard)
+            && below(codex_strip, preset_footer, wizard)
+            && below(codex_strip, continue_button, wizard),
+        "preset catalog, Codex strip, and compact footer must stack without overlapping");
     require(preset_search->width() <= 520 && preset_search->width() >= 240
             && preset_search->width() < wizard->width() / 2 + 80,
         "search stays left-aligned at a preferred width instead of stretching across the window");
@@ -4732,11 +5255,10 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
     wizard->resize(1100, 1040);
     QCoreApplication::processEvents();
     require(preset_catalog->height() > compact_catalog
-            && below(preset_catalog, preset_footer, wizard)
-            && below(preset_catalog, continue_button, wizard),
+            && below(preset_catalog, codex_strip, wizard)
+            && below(codex_strip, preset_footer, wizard)
+            && below(codex_strip, continue_button, wizard),
         "extra wizard height must go into the preset catalog without introducing overlap");
-    auto *pages = required_child<QStackedWidget>(
-        *wizard, "lingtai_setup_pages");
     auto *email_cap = required_child<QCheckBox>(
         *edit_page, "lingtai_setup_edit_preset_cap_email");
     require(email_cap->isChecked() && !email_cap->isEnabled(),
@@ -4744,8 +5266,34 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
     require(pages->indexOf(preset_page) == 0
             && pages->indexOf(edit_page) == 1
             && pages->indexOf(agents_page) == 2
-            && pages->indexOf(review_page) == 3,
-        "Edit preset must be the page after catalog selection, before Agents");
+            && pages->indexOf(review_page) == 3
+            && pages->indexOf(credentials_page) == 4,
+        "Edit preset must be the page after catalog selection, before Agents; credentials is a subpage");
+    required_child<QLineEdit>(*agents_page, "lingtai_setup_agents_search");
+    required_child<QLineEdit>(*review_page, "lingtai_setup_review_agent_name");
+    required_child<QLineEdit>(*review_page, "lingtai_setup_review_folder_name");
+    auto *language = required_child<QComboBox>(
+        *review_page, "lingtai_setup_review_language");
+    auto *context_limit = required_child<QSpinBox>(
+        *review_page, "lingtai_setup_review_context_limit");
+    auto *karma = required_child<QCheckBox>(
+        *review_page, "lingtai_setup_review_karma");
+    auto *nirvana = required_child<QCheckBox>(
+        *review_page, "lingtai_setup_review_nirvana");
+    auto *soul_flow = required_child<QCheckBox>(
+        *review_page, "lingtai_setup_review_soul_flow");
+    require(language->itemData(0).toString() == QStringLiteral("en")
+            && context_limit->value() == 300000
+            && wizard->findChild<QLabel *>("lingtai_setup_agent_card") == nullptr
+            && wizard->findChild<QLabel *>("lingtai_setup_review_summary") == nullptr
+            && wizard->findChild<QLabel *>("lingtai_setup_step_index") != nullptr,
+        "agent-presets and agent-config replace the old folder-card review, with TUI-parity fields");
+    require(karma->isChecked() && !nirvana->isChecked() && !soul_flow->isChecked(),
+        "authority defaults match the TUI: Karma on, Nirvana and Soul flow off");
+    preset_back->click();
+    QCoreApplication::processEvents();
+    require(!wizard->isVisible(),
+        "Back on the first setup step must leave setup and return to the homepage");
     wizard->hide();
     for (auto *label : preset_page->findChildren<QLabel *>()) {
         const auto text = label->text();
@@ -4778,17 +5326,19 @@ int main(int argc, char **argv) {
         && std::string_view(argv[2]) == "--floating-composer-only";
     const auto project_setup_only = argc == 3
         && std::string_view(argv[2]) == "--project-setup-only";
+    const auto kanban_only = argc == 3
+        && std::string_view(argv[2]) == "--kanban-only";
     if (argc != 2 && !responsive_sidebar_only && !responsive_header_only
             && !modern_composer_only && !slash_interception_only
             && !compact_header_only && !two_surface_only
             && !plain_underline_only && !floating_composer_only
-            && !project_setup_only) {
+            && !project_setup_only && !kanban_only) {
         std::cerr << "usage: native_shell_test PROJECT_ROOT "
                      "[--responsive-sidebar-only|--responsive-header-only|"
                      "--modern-composer-only|--slash-interception-only|"
                      "--compact-header-only|--two-surface-only|"
                      "--plain-underline-only|--floating-composer-only|"
-                     "--project-setup-only]\n";
+                     "--project-setup-only|--kanban-only]\n";
         return 2;
     }
     try {
@@ -4874,6 +5424,15 @@ int main(int argc, char **argv) {
             std::cout << "native shell behavior: OK\n";
             return 0;
         }
+        if (kanban_only) {
+            lingtai::desktop::NativeShell shell;
+            shell.show_offscreen();
+            QCoreApplication::processEvents();
+            verify_kanban_page(
+                shell, project_root / "kanban-page-fixture");
+            std::cout << "native shell behavior: OK\n";
+            return 0;
+        }
         const auto original_palette = QApplication::palette();
         verify_dark_application_palette_inheritance(
             project_root / "commit-8-palette-fixture");
@@ -4916,6 +5475,8 @@ int main(int argc, char **argv) {
             shell, project_root / "commit-tab-plain-underline-fixture");
         verify_floating_composer_surface(
             shell, project_root / "commit-fc-floating-composer-fixture");
+        verify_kanban_page(
+            shell, project_root / "kanban-page-fixture");
         std::cout << "native shell behavior: OK\n";
         return 0;
     } catch (const std::exception &error) {

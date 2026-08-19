@@ -178,6 +178,16 @@ add_library(lingtai_desktop_native_shell STATIC
     src/preset_catalog_presentation.cpp
     src/preset_editor_model.cpp
     src/preset_editor_page.cpp
+    src/agent_presets_page.cpp
+    src/agent_config_page.cpp
+    src/setup_toggle.cpp
+    src/setup_style.cpp
+    src/credentials_model.cpp
+    src/credentials_page.cpp
+    src/codex_credentials_strip.cpp
+    src/codex_oauth.cpp
+    src/project_setup_wizard.cpp
+    src/kanban_page.cpp
     src/native_window_background.mm
     src/project_bootstrap.cpp
     src/ui/agent_roster.cpp
@@ -200,10 +210,12 @@ target_link_libraries(lingtai_desktop_native_shell
     PUBLIC lingtai_desktop_core
     PRIVATE desktop-app::lib_ui
         Qt6::Core
+        Qt6::Network
         lingtai_desktop_agent_projection lingtai_desktop_conversation
         lingtai_desktop_mail_publisher lingtai_desktop_agent_sleep
-        lingtai_desktop_agent_launch
-        lingtai_desktop_agent_preset_summary)
+        lingtai_desktop_agent_launch lingtai_desktop_agent_prompt_actions
+        lingtai_desktop_agent_preset_summary
+        lingtai_desktop_kanban)
 
 # Internal POSIX descriptor/no-follow primitives. No Qt, no project model, and
 # deliberately no link edge of its own: it is the shared safety mechanism every
@@ -297,6 +309,18 @@ target_link_libraries(lingtai_desktop_agent_preset_summary
     PUBLIC lingtai_desktop_core
     PRIVATE Qt6::Core lingtai_desktop_posix_primitives)
 
+add_library(lingtai_desktop_kanban STATIC
+    src/kanban_model.cpp)
+init_target(lingtai_desktop_kanban)
+target_include_directories(lingtai_desktop_kanban PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(lingtai_desktop_kanban PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_desktop_kanban
+    PUBLIC lingtai_desktop_core lingtai_desktop_agent_projection
+        lingtai_desktop_agent_preset_summary
+    PRIVATE Qt6::Core lingtai_desktop_posix_primitives "-lsqlite3")
+
 # The one Request sleep leaf owner: it turns an already-accepted project
 # attachment and an exact selected Agent key into one local `.sleep` marker
 # write, plus a best-effort target-side `sleep_received` observation of the
@@ -310,6 +334,20 @@ target_include_directories(lingtai_desktop_agent_sleep PUBLIC
 target_compile_options(lingtai_desktop_agent_sleep PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_desktop_agent_sleep
+    PUBLIC lingtai_desktop_core
+    PRIVATE Qt6::Core lingtai_desktop_posix_primitives)
+
+# The one in-conversation prompt/inquiry/goal owner: TUI `/btw`, `/insights`,
+# `/molt`, `/export`, and `/goal` write `.prompt`, `.inquiry`, or one
+# `goal.request` system notification without opening another page.
+add_library(lingtai_desktop_agent_prompt_actions STATIC
+    src/agent_prompt_actions.cpp)
+init_target(lingtai_desktop_agent_prompt_actions)
+target_include_directories(lingtai_desktop_agent_prompt_actions PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(lingtai_desktop_agent_prompt_actions PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_desktop_agent_prompt_actions
     PUBLIC lingtai_desktop_core
     PRIVATE Qt6::Core lingtai_desktop_posix_primitives)
 
@@ -373,6 +411,13 @@ target_compile_options(lingtai_agent_preset_summary_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_agent_preset_summary_test PRIVATE
     lingtai_desktop_agent_preset_summary)
+add_executable(lingtai_kanban_model_test
+    tests/kanban_model_test.cpp)
+init_target(lingtai_kanban_model_test)
+target_compile_options(lingtai_kanban_model_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_kanban_model_test PRIVATE
+    lingtai_desktop_kanban)
 add_executable(lingtai_agent_sleep_test
     tests/agent_sleep_test.cpp)
 init_target(lingtai_agent_sleep_test)
@@ -380,6 +425,14 @@ target_compile_options(lingtai_agent_sleep_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_agent_sleep_test PRIVATE
     lingtai_desktop_agent_sleep)
+add_executable(lingtai_agent_prompt_actions_test
+    tests/agent_prompt_actions_test.cpp)
+init_target(lingtai_agent_prompt_actions_test)
+target_compile_options(lingtai_agent_prompt_actions_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_agent_prompt_actions_test PRIVATE
+    lingtai_desktop_agent_prompt_actions
+    Qt6::Core)
 add_executable(lingtai_posix_descriptor_primitives_test
     tests/posix_descriptor_primitives_test.cpp)
 init_target(lingtai_posix_descriptor_primitives_test)
@@ -433,9 +486,15 @@ add_test(NAME direct_mail_publisher
 add_test(NAME agent_preset_summary
     COMMAND lingtai_agent_preset_summary_test
         "${CMAKE_CURRENT_BINARY_DIR}/agent-preset-summary-fixture")
+add_test(NAME kanban_model
+    COMMAND lingtai_kanban_model_test
+        "${CMAKE_CURRENT_BINARY_DIR}/kanban-model-fixture")
 add_test(NAME agent_sleep
     COMMAND lingtai_agent_sleep_test
         "${CMAKE_CURRENT_BINARY_DIR}/agent-sleep-fixture")
+add_test(NAME agent_prompt_actions
+    COMMAND lingtai_agent_prompt_actions_test
+        "${CMAKE_CURRENT_BINARY_DIR}/agent-prompt-actions-fixture")
 add_test(NAME posix_descriptor_primitives
     COMMAND lingtai_posix_descriptor_primitives_test
         "${CMAKE_CURRENT_BINARY_DIR}/posix-descriptor-primitives-fixture")

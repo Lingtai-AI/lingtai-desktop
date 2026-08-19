@@ -2,6 +2,7 @@
 
 #include <QtCore/QDir>
 #include <QtCore/QFile>
+#include <QtCore/QFileInfo>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
@@ -131,6 +132,39 @@ std::vector<PresetCatalogRow> build_preset_catalog_rows(
             }
             return left.entry.name < right.entry.name;
         });
+    return rows;
+}
+
+std::vector<PresetCatalogRow> build_preset_catalog_rows_from_refs(
+        const std::vector<std::string> &refs) {
+    auto entries = std::vector<PresetEntry>();
+    entries.reserve(refs.size());
+    for (const auto &ref : refs) {
+        PresetEntry entry;
+        entry.path = ref;
+        const auto text = QString::fromStdString(ref);
+        const auto expanded = expand_home_path(ref);
+        entry.name = QFileInfo(expanded).completeBaseName().toStdString();
+        if (entry.name.empty()) {
+            entry.name = ref;
+        }
+        entry.source = text.contains(QLatin1String("/templates/"))
+            ? "template" : "saved";
+        entries.push_back(std::move(entry));
+    }
+    auto rows = std::vector<PresetCatalogRow>();
+    rows.reserve(entries.size());
+    for (const auto &entry : entries) {
+        PresetCatalogRow row{entry, {}, {}, {}, {}, false, false, false};
+        row.is_template = QString::fromStdString(entry.source)
+            .compare(QStringLiteral("template"), Qt::CaseInsensitive) == 0;
+        apply_manifest_facts(row);
+        row.provider_model = format_provider_model(row.provider, row.model);
+        if (row.provider_model.isEmpty()) {
+            row.provider_model = row.summary;
+        }
+        rows.push_back(std::move(row));
+    }
     return rows;
 }
 

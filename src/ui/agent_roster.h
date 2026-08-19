@@ -25,7 +25,7 @@ namespace lingtai::desktop {
 class AgentRowsCanvas;
 
 // The persistent responsive left project/Agent list column. It owns the
-// project identity header, the compact Open/New Project actions, and the
+// project identity header, the compact Open Project action, and the
 // scrollable Agent rows; the selected-content pane lives outside this owner.
 // Rows are a fixed 62px with 10px/8px framing and show one primary name line
 // plus one compact manifest/role/presence state line. The list surface and
@@ -71,7 +71,6 @@ private:
     QLabel *roster_heading_ = nullptr;
     QLabel *roster_state_ = nullptr;
     QPushButton *project_selector_ = nullptr;
-    QPushButton *new_project_button_ = nullptr;
     QString project_display_name_ = QStringLiteral("LingTai");
     QScrollArea *scroll_ = nullptr;
     AgentRowsCanvas *canvas_ = nullptr;

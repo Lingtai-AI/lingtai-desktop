@@ -184,17 +184,28 @@ void ProjectBootstrapRunner::run_spawn(
         const std::filesystem::path &executable,
         const std::filesystem::path &destination,
         const std::string &preset_name,
-        SpawnDone done) {
+        SpawnDone done,
+        const std::string &agent_name,
+        const std::string &language) {
     if (pending_) return;
     spawn_mode_ = true;
     preset_done_ = {};
     spawn_done_ = std::move(done);
-    start(path_text(executable), {
+    auto arguments = QStringList{
         QStringLiteral("spawn"),
         path_text(destination),
         QStringLiteral("--preset"),
         QString::fromStdString(preset_name),
-    });
+    };
+    if (!agent_name.empty() && agent_name != preset_name) {
+        arguments << QStringLiteral("--agent-name")
+            << QString::fromStdString(agent_name);
+    }
+    if (!language.empty() && language != "en") {
+        arguments << QStringLiteral("--language")
+            << QString::fromStdString(language);
+    }
+    start(path_text(executable), arguments);
 }
 
 void ProjectBootstrapRunner::start(

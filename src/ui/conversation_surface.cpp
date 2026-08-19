@@ -3,7 +3,9 @@
 #include "base/basic_types.h"
 #include "styles/palette.h"
 
+#include <QtCore/QDate>
 #include <QtCore/QDateTime>
+#include <QtCore/QLocale>
 #include <QtCore/QRegularExpression>
 #include <QtCore/QUrl>
 #include <QtCore/QVariant>
@@ -17,6 +19,7 @@
 #include <QtGui/QPalette>
 #include <QtGui/QPixmap>
 #include <QtGui/QResizeEvent>
+#include <QtGui/QShowEvent>
 #include <QtGui/QTextBlock>
 #include <QtGui/QTextBlockFormat>
 #include <QtGui/QTextCharFormat>
@@ -80,10 +83,13 @@ constexpr auto kEmptyStateAvatarLetterSize = 14;
 // inline note above the first revealed message rather than a tall separator.
 constexpr auto kBannerTopMargin = 6;
 constexpr auto kBannerBottomMargin = 8;
-// The day separator's vertical breathing room around the single centered muted
-// yyyy/MM/dd line, kept small so it reads as a quiet divider between days.
-constexpr auto kDayTopMargin = 6;
-constexpr auto kDayBottomMargin = 8;
+// The day separator's vertical breathing room around the centered label and its
+// horizontal rules, kept generous so the divider reads between message groups.
+constexpr auto kDayTopMargin = 18;
+constexpr auto kDayBottomMargin = 14;
+// The day divider label rides on the first message frame of each calendar day;
+// paintEvent draws the centered rules in the gap above that frame.
+constexpr auto kDaySeparatorProperty = QTextFormat::UserProperty + 6;
 constexpr auto kParagraphBottomMargin = 13;
 constexpr auto kListBottomMargin = 3;
 constexpr auto kCodeBlockProperty = QTextFormat::UserProperty + 4;
@@ -211,12 +217,13 @@ QTextCharFormat message_metadata_format() {
 
 // The renderer-only presentation of one message's stored timestamp: the raw
 // ISO string is parsed with Qt's ISO parser and shown in the local wall clock
-// as HH:mm for the message header/time and yyyy/MM/dd for the day separator.
+// as HH:mm for the message header/time and a calendar day for the day divider.
 // An invalid or empty raw value yields empty strings so the raw input is never
 // shown verbatim.
 struct PresentationTime {
     QString time;
     QString day;
+    QDate date;
 };
 
 bool within_same_agent_interval(
@@ -246,19 +253,126 @@ PresentationTime present_timestamp(const std::string &raw) {
     return {
         local.toString(QStringLiteral("HH:mm")),
         local.toString(QStringLiteral("yyyy/MM/dd")),
+        local.date(),
     };
 }
 
-// The centered day-separator tone: the same muted secondary gray as message
-// meta, one pixel smaller so it reads as a quiet divider between days.
-QTextCharFormat day_format() {
-    auto format = QTextCharFormat();
-    format.setForeground(st::msgServiceFg);
-    auto font = format.font();
-    font.setPixelSize(11);
-    font.setWeight(QFont::Normal);
-    format.setFont(font);
-    return format;
+// The centered day divider label: Today / Yesterday for the local calendar,
+// otherwise a long-form month-day-year like Slack and other chat apps.
+QString format_day_label(const QDate &date) {
+    if (!date.isValid()) {
+        return {};
+    }
+    const auto today = QDate::currentDate();
+    if (date == today) {
+        return QStringLiteral("Today");
+    }
+    if (date == today.addDays(-1)) {
+        return QStringLiteral("Yesterday");
+    }
+    return QLocale(QLocale::English, QLocale::UnitedStates)
+        .toString(date, QStringLiteral("MMMM d, yyyy"));
+}
+
+QFont day_separator_font() {
+    auto font = QApplication::font();
+    font.setPixelSize(13);
+    font.setWeight(QFont::DemiBold);
+    return font;
+}
+
+void paint_day_separator_in_gap(
+        QPainter &painter,
+        qreal gap_top,
+        qreal gap_bottom,
+        const QString &label,
+        int viewport_width,
+        int v_offset,
+        const QRectF &clip) {
+    if (label.isEmpty() || gap_bottom <= gap_top) {
+        return;
+    }
+    const auto gutter = reading_column_margins(viewport_width);
+    const auto column_left = qreal(gutter);
+    const auto column_right = qreal(viewport_width - gutter);
+    const auto center_y = (gap_top + gap_bottom) / 2.0 - v_offset;
+    const auto font = day_separator_font();
+    const QFontMetricsF metrics(font);
+    const auto text_width = metrics.horizontalAdvance(label);
+    const auto text_height = metrics.height();
+    const auto pad_h = 10.0;
+    const auto center_x = (column_left + column_right) / 2.0;
+    const auto text_left = center_x - text_width / 2.0;
+    const auto text_right = center_x + text_width / 2.0;
+    const auto text_bg = QRectF(
+        text_left - pad_h,
+        center_y - text_height / 2.0 - 2.0,
+        text_width + 2.0 * pad_h,
+        text_height + 4.0);
+    const auto paint_rect = QRectF(
+        column_left, center_y - text_height / 2.0 - 4.0,
+        column_right - column_left, text_height + 8.0);
+    if (!paint_rect.intersects(clip)) {
+        return;
+    }
+
+    const auto line_color = secondary_reading_color();
+    const auto bg = st::windowBg->c;
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, false);
+    QPen pen(line_color);
+    pen.setWidthF(1.0);
+    painter.setPen(pen);
+    painter.drawLine(
+        QPointF(column_left, center_y),
+        QPointF(text_left - pad_h, center_y));
+    painter.drawLine(
+        QPointF(text_right + pad_h, center_y),
+        QPointF(column_right, center_y));
+    painter.fillRect(text_bg, bg);
+    painter.setPen(line_color);
+    painter.setFont(font);
+    painter.drawText(text_bg, Qt::AlignCenter, label);
+    painter.restore();
+}
+
+void paint_day_separators(
+        QPainter &painter,
+        const QPaintEvent *event,
+        const QTextDocument *document,
+        const QAbstractTextDocumentLayout *document_layout,
+        int viewport_width,
+        int v_offset) {
+    const auto clip = QRectF(event->rect());
+    auto previous_bottom = 0.0;
+    for (auto it = document->rootFrame()->begin(); !it.atEnd(); ++it) {
+        if (it.currentFrame()) {
+            continue;
+        }
+        const auto block = it.currentBlock();
+        if (!block.isValid()) {
+            continue;
+        }
+        previous_bottom = qMax(
+            previous_bottom,
+            document_layout->blockBoundingRect(block).bottom());
+    }
+    for (auto *frame : document->rootFrame()->childFrames()) {
+        const auto label = frame->frameFormat()
+            .property(kDaySeparatorProperty).toString();
+        const auto frame_rect = document_layout->frameBoundingRect(frame);
+        if (!label.isEmpty()) {
+            paint_day_separator_in_gap(
+                painter,
+                previous_bottom,
+                frame_rect.top(),
+                label,
+                viewport_width,
+                v_offset,
+                clip);
+        }
+        previous_bottom = frame_rect.bottom();
+    }
 }
 
 QTextCharFormat body_format(bool outgoing) {
@@ -572,6 +686,7 @@ ConversationSurface::ConversationSurface(QWidget *parent)
 : QTextEdit(parent) {
     setReadOnly(true);
     setUndoRedoEnabled(false);
+    setMinimumWidth(0);
     // The chat backdrop and bubbles are painted in paintEvent, so the Qt
     // viewport must not paint its own solid background on top of them.
     auto transparent_palette = palette();
@@ -600,6 +715,7 @@ void ConversationSurface::set_plain_state(const QString &text) {
     } else {
         clear_plain_state_anchor(document());
     }
+    last_layout_width_ = int(viewport()->width() / 8) * 8;
 }
 
 bool ConversationSurface::same_content(
@@ -640,6 +756,7 @@ void ConversationSurface::set_conversation(
     } else {
         rebuild_document();
     }
+    last_layout_width_ = int(viewport()->width() / 8) * 8;
 }
 
 void ConversationSurface::rebuild_document() {
@@ -724,24 +841,6 @@ void ConversationSurface::rebuild_document() {
         const auto present = present_timestamp(message.timestamp);
         const auto day_changed = !present.day.isEmpty()
             && present.day != previous_day;
-        // Before the first message of a changed nonempty day, one centered
-        // muted yyyy/MM/dd line leads the stream as a plain root document
-        // QTextBlock (never a child message frame), inserted at the document
-        // end ahead of this message's sibling frame.
-        if (day_changed) {
-            auto day_cursor = QTextCursor(document);
-            day_cursor.movePosition(QTextCursor::End);
-            auto day_block_format = QTextBlockFormat();
-            day_block_format.setAlignment(Qt::AlignCenter);
-            const auto gutter = reading_column_margins(viewport_width);
-            day_block_format.setLeftMargin(gutter);
-            day_block_format.setRightMargin(gutter);
-            day_block_format.setTopMargin(kDayTopMargin);
-            day_block_format.setBottomMargin(kDayBottomMargin);
-            day_cursor.setBlockFormat(day_block_format);
-            day_cursor.insertText(present.day, day_format());
-            previous_day = present.day;
-        }
         // A visible Agent group starts at the lazy-window boundary, after a
         // Human row/day boundary, or when the preceding Agent message is more
         // than five minutes away. Only a proven short chronological interval
@@ -807,6 +906,15 @@ void ConversationSurface::rebuild_document() {
         // bubble, or omit it when the presented HH:mm is empty.
         if (outgoing) {
             frame_format.setProperty(kMessageTimestampProperty, present.time);
+        }
+        // The first message frame of each calendar day carries the divider
+        // label on its frame metadata and extra top margin so paintEvent can
+        // draw the centered rules in the gap above it, between message groups.
+        if (day_changed) {
+            frame_format.setTopMargin(kDayTopMargin + kDayBottomMargin);
+            frame_format.setProperty(
+                kDaySeparatorProperty, format_day_label(present.date));
+            previous_day = present.day;
         }
         auto *frame = cursor.insertFrame(frame_format);
         cursor = frame->firstCursorPosition();
@@ -1148,19 +1256,34 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
     // copy, and accessibility behavior; the widget's transparent Base keeps
     // the custom backdrop and bubbles visible underneath.
     QTextEdit::paintEvent(event);
+
+    QPainter overlay(surface_viewport);
+    overlay.setClipRect(event->rect());
+    paint_day_separators(
+        overlay,
+        event,
+        document(),
+        document_layout,
+        surface_viewport->width(),
+        v_offset);
+    overlay.end();
 }
 
-void ConversationSurface::resizeEvent(QResizeEvent *event) {
-    QTextEdit::resizeEvent(event);
+void ConversationSurface::reflow_to_viewport() {
+    const auto viewport_width = viewport()->width();
+    if (viewport_width < 16) {
+        last_layout_width_ = -1;
+        return;
+    }
     if (!last_plain_state_.isEmpty()) {
         apply_plain_state_formatting(
-            document(), viewport()->width(), viewport()->height());
+            document(), viewport_width, viewport()->height());
     }
     // Quantize the viewport/layout width so a live resize only reflows when
     // the bound meaningfully changes. This follows the full layout width, not
     // just the capped message width: on a very wide pane the centered reading
     // column's outer gutters keep moving after the message cap stops.
-    const auto width = int(viewport()->width() / 8) * 8;
+    const auto width = int(viewport_width / 8) * 8;
     if (width == last_layout_width_) {
         return;
     }
@@ -1175,6 +1298,21 @@ void ConversationSurface::resizeEvent(QResizeEvent *event) {
         // never pages older rows in, so the current history offset is kept.
         rebuild_document();
     }
+}
+
+void ConversationSurface::resizeEvent(QResizeEvent *event) {
+    QTextEdit::resizeEvent(event);
+    reflow_to_viewport();
+}
+
+void ConversationSurface::showEvent(QShowEvent *event) {
+    QTextEdit::showEvent(event);
+    if (last_messages_.empty() && last_plain_state_.isEmpty()
+            && !empty_state_active_) {
+        return;
+    }
+    last_layout_width_ = -1;
+    reflow_to_viewport();
 }
 
 void ConversationSurface::keyPressEvent(QKeyEvent *event) {

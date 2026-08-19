@@ -153,7 +153,11 @@ its code.
 
 - The composer is one vendored single-line `InputField` plus an explicit
   `Send` `RoundButton`, enabled only when a direct route resolves for the
-  current selection.
+  current selection. The `Message…` placeholder hides as soon as the field
+  has any text. Typing a leading `/` (with no following space) opens a
+  focus-free slash-command popup of Desktop commands; an exact unique name
+  or ordinary text dismisses it. Arrow keys move the highlight, Tab/Enter
+  insert the selected command, and Escape closes the popup.
 - After raw slash classification returns no command, ordinary send re-resolves
   the route fresh (never a stale captured target), trims the text, rejects
   whitespace-only input without writing, and calls `send_direct_mail`.
@@ -170,12 +174,11 @@ its code.
 ## Dashboard sections
 
 - Exactly one selected-Agent page shows at a time: Conversation (default) or
-  Presets, via the two-button nav row. The nav is content-driven: the two
-  buttons lead at the leading edge at their own width and a positive-stretch
-  spacer absorbs the remaining width, so they never become two equal full-pane
-  slabs. The duplicate `lingtai_selected_agent_conversation_heading` is
-  retained only as a hidden object/implementation anchor, so the Conversation
-  nav item owns the user affordance.
+  Presets. The Presets tab is not shown; `/presets` still opens that page and
+  reveals the Conversation control as the way back. The chat-first detail
+  hides the page-tab strip entirely. The duplicate
+  `lingtai_selected_agent_conversation_heading` is retained only as a hidden
+  object/implementation anchor.
 - Presets (`read_agent_preset_summary`): reads the kernel-published
   `system/manifest.resolved.json` v1 envelope and shows only the minimal
   Provider, Model, Default, and ordered Allowed refs, with `Resolved`/`Not
@@ -187,6 +190,7 @@ its code.
 - Empty-form exact case-sensitive `/sleep` clears the composer status and calls
   only the existing selected-Agent Request sleep handler, reusing its
   `request_agent_sleep` owner, eligibility, observation, and status surface.
+  The Request sleep moon control is not shown in the selected-Agent header.
 - Eligibility at invocation time: valid manifest, main/agent role, `alive`
   presence, and a known `.agent.json.state` other than `asleep`/`suspended`.
 - The shared handler reruns `project_agents` once, captures a log baseline,
@@ -203,9 +207,10 @@ its code.
 - Empty-form exact case-sensitive `/cpr` clears the composer status and calls
   only the existing selected-Agent Start handler, reusing its `start_agent`
   owner, eligibility, observation, and status surface.
-- The Start action is hidden (not merely disabled) for a heartbeat-live
-  selection and shown only when a valid main/agent row has exactly a stale or
-  missing heartbeat. If the shared handler's fresh re-read instead finds the
+- The Start action is not shown in the selected-Agent header. Empty-form
+  `/cpr` is the product affordance; the hidden Start owner still enables
+  for a valid main/agent row with a stale or missing heartbeat so slash
+  dispatch can reuse it. If the shared handler's fresh re-read instead finds the
   selected row heartbeat-live, it reports exactly `Agent is already online.`;
   missing, nonselected, and other ineligible cases keep their existing behavior.
 - The shared handler reruns `project_agents` once, then starts
