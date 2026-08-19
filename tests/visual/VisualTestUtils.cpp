@@ -10,6 +10,8 @@
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QWidget>
 
+#include <cmath>
+
 namespace lingtai::desktop::visual_test {
 namespace {
 
@@ -20,6 +22,20 @@ bool env_truthy(const char *name) {
 }
 
 } // namespace
+
+QImage normalizeToLogicalPixels(const QImage &device_image, qreal dpr) {
+    if (dpr <= 1.0) {
+        return device_image;
+    }
+    QImage logical = device_image.scaled(
+        QSize(
+            qRound(static_cast<qreal>(device_image.width()) / dpr),
+            qRound(static_cast<qreal>(device_image.height()) / dpr)),
+        Qt::IgnoreAspectRatio,
+        Qt::SmoothTransformation);
+    logical.setDevicePixelRatio(1.0);
+    return logical;
+}
 
 bool updateBaselinesEnabled() {
     return env_truthy("UPDATE_UI_BASELINES");
@@ -45,7 +61,8 @@ QString baselinePath(
 QImage grabWidgetSnapshot(QWidget &widget) {
     widget.repaint();
     QApplication::processEvents();
-    return widget.grab().toImage();
+    return normalizeToLogicalPixels(
+        widget.grab().toImage(), widget.devicePixelRatioF());
 }
 
 bool saveImage(const QImage &image, const QString &path) {

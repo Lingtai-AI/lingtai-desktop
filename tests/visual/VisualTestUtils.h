@@ -33,6 +33,10 @@ struct VisualDiffResult {
     const QString &theme,
     const QString &snapshot_name);
 
+[[nodiscard]] QImage normalizeToLogicalPixels(
+    const QImage &device_image,
+    qreal device_pixel_ratio);
+
 [[nodiscard]] QImage grabWidgetSnapshot(QWidget &widget);
 
 [[nodiscard]] bool saveImage(const QImage &image, const QString &path);
