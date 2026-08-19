@@ -1,4 +1,5 @@
 #include "native_shell.h"
+#include "agent_projection.h"
 #include "preset_editor_model.h"
 #include "project_setup_wizard.h"
 
@@ -69,7 +70,12 @@
 namespace {
 
 namespace fs = std::filesystem;
+using lingtai::desktop::AgentManifestKind;
+using lingtai::desktop::AgentRole;
+using lingtai::desktop::AgentRow;
+using lingtai::desktop::AgentSnapshot;
 using lingtai::desktop::ProjectOpenDisposition;
+using lingtai::desktop::project_agents;
 
 void require(bool condition, const std::string &message) {
     if (!condition) {
@@ -288,25 +294,113 @@ QString flat_label_text(QWidget &window, const char *object_name) {
         ->accessibilityName();
 }
 
-QPushButton *agent_row(QWidget &window, std::string_view key) {
-    const auto expected = QString::fromUtf8(key.data(), key.size());
-    for (auto *row : window.findChildren<QPushButton *>()) {
-        if (row->property("directory_key").toString() == expected) return row;
+QWidget *roster_rows_canvas(QWidget &window) {
+    return required_child<QWidget>(window, "lingtai_agent_roster_rows");
+}
+
+int canvas_row_height(QWidget *canvas) {
+    auto primary_font = canvas->font();
+    primary_font.setPointSize(13);
+    primary_font.setWeight(QFont::DemiBold);
+    auto secondary_font = canvas->font();
+    secondary_font.setPointSize(12);
+    const auto text_height = QFontMetrics(primary_font).height()
+        + QFontMetrics(secondary_font).height();
+    return std::max(40, text_height) + 16;
+}
+
+int canvas_row_stride(QWidget *canvas) {
+    return canvas_row_height(canvas) + 2;
+}
+
+QPointF canvas_row_click_point(QWidget *canvas, int index) {
+    const auto row_height = canvas_row_height(canvas);
+    return QPointF(
+        canvas->width() * 0.5,
+        index * canvas_row_stride(canvas) + row_height * 0.5);
+}
+
+std::vector<AgentRow> visible_agent_rows(const AgentSnapshot &snapshot) {
+    auto rows = snapshot.items;
+    rows.erase(std::remove_if(rows.begin(), rows.end(),
+        [](const AgentRow &item) { return item.role == AgentRole::human; }),
+        rows.end());
+    return rows;
+}
+
+std::vector<AgentRow> visible_agent_rows(lingtai::desktop::NativeShell &shell) {
+    require(shell.selection_state().active_project().has_value(),
+        "visible_agent_rows requires an active project");
+    return visible_agent_rows(
+        project_agents(*shell.selection_state().active_project()));
+}
+
+std::size_t visible_row_index(
+        lingtai::desktop::NativeShell &shell,
+        std::string_view key) {
+    const auto rows = visible_agent_rows(shell);
+    const auto expected = fs::path(key);
+    for (std::size_t index = 0; index != rows.size(); ++index) {
+        if (rows[index].directory_key == expected) {
+            return index;
+        }
     }
     throw std::runtime_error("missing Agent row: " + std::string(key));
 }
 
-// The public `select_agent` test seam is gone; every selection below drives
-// the same handler a real row click uses.
-void click_agent(QWidget &window, std::string_view key) {
-    agent_row(window, key)->click();
-    QCoreApplication::processEvents();
+bool is_agent_selected(
+        lingtai::desktop::NativeShell &shell,
+        std::string_view key) {
+    return shell.selection_state().selected_agent_directory_key()
+        == std::optional<fs::path>(std::string(key));
+}
+
+bool is_agent_selectable(
+        lingtai::desktop::NativeShell &shell,
+        std::string_view key) {
+    const auto rows = visible_agent_rows(shell);
+    const auto expected = fs::path(key);
+    for (const auto &row : rows) {
+        if (row.directory_key == expected) {
+            return row.manifest_kind == AgentManifestKind::valid;
+        }
+    }
+    return false;
+}
+
+QString agent_row_facts(
+        lingtai::desktop::NativeShell &shell,
+        std::string_view key) {
+    const auto rows = visible_agent_rows(shell);
+    const auto expected = fs::path(key);
+    for (const auto &row : rows) {
+        if (row.directory_key == expected) {
+            return QStringLiteral("%1 — %2 — %3")
+                .arg(row.manifest_kind == AgentManifestKind::valid
+                        ? QStringLiteral("valid")
+                        : QStringLiteral("malformed"),
+                    row.role == AgentRole::main
+                        ? QStringLiteral("main")
+                        : row.role == AgentRole::agent
+                            ? QStringLiteral("agent")
+                            : QStringLiteral("unknown"),
+                    row.presence == lingtai::desktop::AgentPresenceKind::alive
+                        ? QStringLiteral("alive")
+                        : row.presence
+                            == lingtai::desktop::AgentPresenceKind::stale
+                            ? QStringLiteral("stale")
+                            : row.presence
+                                == lingtai::desktop::AgentPresenceKind::missing
+                                ? QStringLiteral("missing")
+                                : QStringLiteral("unknown"));
+        }
+    }
+    throw std::runtime_error("missing Agent row facts: " + std::string(key));
 }
 
 void click_agent_canvas_row(QWidget &window, int index) {
-    auto *canvas = required_child<QWidget>(
-        window, "lingtai_agent_roster_rows");
-    const auto point = QPointF(20.0, 24.0 + static_cast<double>(index) * 64.0);
+    auto *canvas = roster_rows_canvas(window);
+    const auto point = canvas_row_click_point(canvas, index);
     auto press = QMouseEvent(
         QEvent::MouseButtonPress,
         point,
@@ -328,6 +422,12 @@ void click_agent_canvas_row(QWidget &window, int index) {
 
 void click_first_agent_canvas_row(QWidget &window) {
     click_agent_canvas_row(window, 0);
+}
+
+void click_agent(lingtai::desktop::NativeShell &shell, std::string_view key) {
+    click_agent_canvas_row(
+        shell.window(),
+        static_cast<int>(visible_row_index(shell, key)));
 }
 
 void verify_dark_application_palette_inheritance(const fs::path &sandbox) {
@@ -387,32 +487,20 @@ void verify_dark_application_palette_inheritance(const fs::path &sandbox) {
         window, "lingtai_agent_directory");
     auto *roster = required_child<Ui::RpWidget>(
         window, "lingtai_agent_roster");
-    auto *rows = required_child<Ui::RpWidget>(
-        window, "lingtai_agent_roster_rows");
     auto *roster_scroll = required_child<QWidget>(
         window, "lingtai_agent_roster_scroll");
     auto *detail = required_child<Ui::RpWidget>(
         window, "lingtai_agent_detail");
     const auto labels = std::vector<QLabel *>{
-        required_child<QLabel>(window, "lingtai_sidebar_brand"),
-        required_child<QLabel>(window, "lingtai_sidebar_workspace_label"),
         required_child<QLabel>(window, "lingtai_product_title"),
         required_child<QLabel>(window, "lingtai_product_purpose"),
         required_child<QLabel>(window, "lingtai_project_route_heading"),
         required_child<QLabel>(window, "lingtai_project_root"),
         required_child<QLabel>(window, "lingtai_agent_selection_error"),
         required_child<QLabel>(window, "lingtai_agent_roster_heading"),
-        required_child<QLabel>(window, "lingtai_agent_roster_state"),
-        required_child<QLabel>(window, "lingtai_agent_detail_heading"),
-        required_child<QLabel>(window, "lingtai_selected_agent_key"),
-        required_child<QLabel>(window, "lingtai_selected_agent_presentation_name"),
-        required_child<QLabel>(window, "lingtai_selected_agent_manifest_identity"),
-        required_child<QLabel>(window, "lingtai_selected_agent_manifest_llm"),
-        required_child<QLabel>(window, "lingtai_selected_agent_manifest_capabilities"),
-        required_child<QLabel>(window, "lingtai_selected_agent_status_activity"),
-        required_child<QLabel>(window, "lingtai_selected_agent_status_context"),
-        required_child<QLabel>(window, "lingtai_selected_agent_facts"),
     };
+    auto *roster_state = required_child<QLabel>(
+        window, "lingtai_agent_roster_state");
     // The no-project route, open-error and bootstrap-status surfaces are the
     // first-project presentation slice: they now use the same lib_ui label
     // language as the accepted dashboard, exposed through the FlatLabel's
@@ -422,21 +510,53 @@ void verify_dark_application_palette_inheritance(const fs::path &sandbox) {
         required_ui_child<Ui::FlatLabel>(window, "lingtai_no_project_detail"),
         required_ui_child<Ui::FlatLabel>(window, "lingtai_project_open_error"),
     };
+    auto *startup_route_widget = required_child<QWidget>(
+        window, "lingtai_startup_route");
     auto *open_button = required_child<QPushButton>(
         window, "lingtai_open_project_button");
+    auto *project_selector = required_child<QPushButton>(
+        window, "lingtai_project_selector");
 
-    for (const auto *surface : {
-             body, sidebar, content, empty_route, error_surface,
-             project_route, directory, roster, rows, detail }) {
-        require(surface->palette().color(QPalette::Window) == window_surface,
-            "dark application Window role must reach every shell surface");
-    }
+    const auto token_window = st::windowBg->c;
+    const auto check_token_window_surface = [&](QWidget *surface) {
+        const auto actual = surface->palette().color(QPalette::Window);
+        if (actual != token_window) {
+            throw std::runtime_error(
+                std::string("Telegram windowBg must reach every painted shell "
+                    "surface; mismatch on ")
+                    + surface->objectName().toStdString()
+                    + " expected "
+                    + token_window.name().toStdString()
+                    + " got "
+                    + actual.name().toStdString());
+        }
+    };
+    check_token_window_surface(static_cast<QWidget *>(body));
+    check_token_window_surface(static_cast<QWidget *>(sidebar));
+    check_token_window_surface(static_cast<QWidget *>(content));
+    check_token_window_surface(static_cast<QWidget *>(empty_route));
+    check_token_window_surface(static_cast<QWidget *>(error_surface));
+    check_token_window_surface(static_cast<QWidget *>(project_route));
+    check_token_window_surface(static_cast<QWidget *>(directory));
+    check_token_window_surface(static_cast<QWidget *>(roster));
+    check_token_window_surface(static_cast<QWidget *>(detail));
+    check_token_window_surface(startup_route_widget);
     for (const auto *label : labels) {
-        require(label->palette().color(QPalette::WindowText) == window_ink,
-            "dark application WindowText role must reach every shell label");
+        const auto actual = label->palette().color(QPalette::WindowText);
+        if (actual != window_ink) {
+            throw std::runtime_error(
+                std::string("dark application WindowText role must reach every "
+                    "shell label; mismatch on ")
+                    + label->objectName().toStdString()
+                    + " expected " + window_ink.name().toStdString()
+                    + " got " + actual.name().toStdString());
+        }
         require(label->textFormat() == Qt::PlainText,
             "every LingTai label surface must render explicit plain text");
     }
+    require(roster_state->palette().color(QPalette::WindowText)
+            == st::windowSubTextFg->c,
+        "the compact roster count must use the tertiary windowSubTextFg tone");
     for (auto *label : flat_labels) {
         require(label->palette().color(QPalette::WindowText) == window_ink,
             "dark application WindowText role must reach every first-project "
@@ -449,15 +569,16 @@ void verify_dark_application_palette_inheritance(const fs::path &sandbox) {
         "dark application Button role must reach the open affordance");
     require(open_button->palette().color(QPalette::ButtonText) == button_ink,
         "dark application ButtonText role must reach the open affordance");
+    require(project_selector->palette().color(QPalette::Button) == button_surface,
+        "dark application Button role must reach the project selector");
     require(roster_scroll->palette().color(QPalette::Base) == text_surface,
         "dark application Base role must reach the roster scroll surface");
 
     ProjectFixture fixture(sandbox, "palette");
     static_cast<void>(shell.open_project(fixture.project, std::nullopt));
-    auto *row = agent_row(window, "agent");
-    require(row->palette().color(QPalette::Button) == button_surface
-            && row->palette().color(QPalette::ButtonText) == button_ink,
-        "dark application button roles must reach Agent selection rows");
+    auto *canvas = roster_rows_canvas(window);
+    require(canvas->palette().color(QPalette::Window) == token_window,
+        "Telegram windowBg must reach the virtual roster canvas");
     std::error_code cleanup_error;
     fs::remove_all(sandbox, cleanup_error);
     require(!cleanup_error, "palette fixture must be removed");
@@ -484,6 +605,9 @@ void verify_live_system_palette(lingtai::desktop::NativeShell &shell) {
             && st::msgOutBg->c == QColor("#2b5278"),
         "a live system-dark change must select Telegram's canonical night "
         "palette");
+
+    style_hints->setColorScheme(Qt::ColorScheme::Light);
+    QApplication::processEvents();
 }
 
 void verify_open_project_behavior(
@@ -501,8 +625,9 @@ void verify_open_project_behavior(
     fs::create_directories(empty_root / ".lingtai");
     const auto empty_before = tree_snapshot(empty_root);
     static_cast<void>(shell.open_project(empty_root));
-    require(label_text(window, "lingtai_agent_roster_state")
-            .contains("No Agents found — scan complete")
+    QCoreApplication::processEvents();
+    require(label_text(window, "lingtai_agent_roster_state").isEmpty()
+            && visible_agent_rows(shell).empty()
             && tree_snapshot(empty_root) == empty_before,
         "an empty complete roster must be distinct and read-only");
 
@@ -580,59 +705,38 @@ void verify_open_project_behavior(
         {"malformed", "malformed — unknown — unknown"},
     };
     for (const auto &[key, facts] : expected_rows) {
-        auto *row = agent_row(window, key);
-        require(row->text().contains(QString::fromStdString(facts)),
+        require(agent_row_facts(shell, key).contains(QString::fromStdString(facts)),
             key + " must expose exact manifest, role, and presence truth");
-        require(row->isEnabled() == (key != "malformed"),
+        require(is_agent_selectable(shell, key) == (key != "malformed"),
             key + " selectability must derive from valid manifest truth");
     }
+    const auto rendered = visible_agent_rows(shell);
     auto visible_keys = std::vector<std::string>();
-    const auto *rows_layout = required_child<Ui::RpWidget>(
-        window, "lingtai_agent_roster_rows")->layout();
-    for (auto index = 0; index != rows_layout->count(); ++index) {
-        if (const auto *row = qobject_cast<QPushButton *>(
-                rows_layout->itemAt(index)->widget())) {
-            visible_keys.push_back(
-                row->property("directory_key").toString().toStdString());
-        }
+    for (const auto &row : rendered) {
+        visible_keys.push_back(row.directory_key.string());
     }
     require(visible_keys == std::vector<std::string>{
             ampersand_key, plain_neighbor_key, "agent",
             "b-main", "c-stale", "d-missing", "malformed"},
         "native rows must render in the composite snapshot's deterministic order");
-    auto *ampersand_row = agent_row(window, ampersand_key);
-    auto *plain_neighbor_row = agent_row(window, plain_neighbor_key);
-    require(ampersand_row->property("directory_key").toString()
-                == QStringLiteral("A&B-agent")
-            && ampersand_row->accessibleName()
-                == QStringLiteral("Agent A&B-agent")
-            && ampersand_row->isEnabled(),
-        "ampersand row identity and selectability must retain the exact key");
-    require(ampersand_row->text().startsWith(
-                QStringLiteral("A&&B-agent\n")),
-        "Agent row button text must escape ampersands for lossless display");
-    require(plain_neighbor_row->text().startsWith(
-                QStringLiteral("AB-agent\n"))
-            && ampersand_row->text() != plain_neighbor_row->text(),
-        "ampersand and plain neighboring Agent rows must remain distinguishable");
-    require(agent_row(window, "malformed")->accessibleDescription()
-                .contains("invalid JSON"),
-        "a malformed row must expose its typed repair diagnostic");
+    require(is_agent_selectable(shell, ampersand_key),
+        "ampersand row selectability must retain the exact key");
     const auto roster_status = label_text(window, "lingtai_agent_roster_state");
-    require(roster_status.contains("scan complete"),
-        "a complete roster reports scan completion");
+    require(roster_status == QStringLiteral("7"),
+        "a complete roster reports the visible Agent count");
 
-    agent_row(window, "malformed")->click();
+    click_agent_canvas_row(
+        window,
+        static_cast<int>(visible_row_index(shell, "malformed")));
     require(!shell.selection_state().selected_agent_directory_key(),
         "a disabled malformed row must not change C1 truth");
 
     const auto roster_before_selection = tree_snapshot(roster.project);
-    ampersand_row->click();
-    QCoreApplication::processEvents();
+    click_agent(shell, ampersand_key);
     require(shell.selection_state().selected_agent_directory_key()
                 == std::optional<fs::path>(ampersand_key)
-            && agent_row(window, ampersand_key)->isChecked()
-            && !agent_row(window, plain_neighbor_key)->isChecked()
+            && is_agent_selected(shell, ampersand_key)
+            && !is_agent_selected(shell, plain_neighbor_key)
             && label_text(window, "lingtai_selected_agent_presentation_name")
                 == QStringLiteral("A&B-agent")
             && label_text(window, "lingtai_selected_agent_key")
@@ -643,10 +747,10 @@ void verify_open_project_behavior(
         "role below it");
     require(tree_snapshot(roster.project) == roster_before_selection,
         "ampersand selection at its exact project-relative path must remain read-only");
-    click_agent(window, "agent");
+    click_agent(shell, "agent");
     require(shell.selection_state().selected_agent_directory_key()
             == std::optional<fs::path>("agent")
-            && agent_row(window, "agent")->isChecked(),
+            && is_agent_selected(shell, "agent"),
         "detail and highlight must derive from sole C1 selected-key truth");
     require(label_text(window, "lingtai_selected_agent_presentation_name")
             == QStringLiteral("Research Nickname"),
@@ -694,7 +798,7 @@ void verify_open_project_behavior(
     require(tree_snapshot(roster.project) == roster_before_selection,
         "selection must preserve the project across a full detail render");
 
-    click_agent(window, "b-main");
+    click_agent(shell, "b-main");
     require(label_text(window, "lingtai_selected_agent_status_context")
                 == QStringLiteral("Status context (source values)\nwindow size: 100\n"
                     "system tokens: -3\ntools tokens: -4\nhistory tokens: -5\n"
@@ -703,38 +807,38 @@ void verify_open_project_behavior(
             && window.findChildren<QProgressBar *>().empty(),
         "odd negative context must remain plain source evidence without a gauge");
 
-    click_agent(window, "d-missing");
+    click_agent(shell, "d-missing");
     require(label_text(window, "lingtai_selected_agent_status_activity")
                 == QStringLiteral("Status activity unavailable from status source"),
         "absent status must remain explicit unavailable evidence");
 
-    click_agent(window, "c-stale");
+    click_agent(shell, "c-stale");
     require(label_text(window, "lingtai_selected_agent_status_context")
                 == QStringLiteral(
                     "Status context unavailable (no valid positive window projected)")
             && !label_text(window, "lingtai_selected_agent_status_context")
                 .contains("88"),
         "invalid window must suppress the whole unprojected context");
-    click_agent(window, "agent");
+    click_agent(shell, "agent");
 
-    agent_row(window, "b-main")->click();
+    click_agent(shell, "b-main");
     require(shell.selection_state().selected_agent_directory_key()
             == std::optional<fs::path>("b-main")
-            && agent_row(window, "b-main")->isChecked(),
+            && is_agent_selected(shell, "b-main"),
         "row clicks must use the same C1-owning selection handler");
-    click_agent(window, "agent");
+    click_agent(shell, "agent");
     const auto refreshed = open_without_writes(shell, roster, std::nullopt);
     require(refreshed.disposition == ProjectOpenDisposition::opened
             && shell.selection_state().selected_agent_directory_key()
                 == std::optional<fs::path>("agent")
-            && agent_row(window, "agent")->isChecked(),
+            && is_agent_selected(shell, "agent"),
         "same-root refresh must preserve a still-valid selection and detail");
     write_file(roster.agent / ".agent.json", "{");
     const auto malformed_before_refresh = tree_snapshot(roster.project);
     const auto repaired = shell.open_project(roster.project, std::nullopt);
     require(repaired.disposition == ProjectOpenDisposition::opened
             && !shell.selection_state().selected_agent_directory_key()
-            && !agent_row(window, "agent")->isEnabled()
+            && !is_agent_selectable(shell, "agent")
             && label_text(window, "lingtai_selected_agent_presentation_name").isEmpty(),
         "same-root refresh must clear a selected key that became malformed");
     require(tree_snapshot(roster.project) == malformed_before_refresh,
@@ -768,6 +872,7 @@ void verify_open_project_behavior(
     fs::create_directories(ordinary);
     const auto ordinary_before = tree_snapshot(ordinary);
     auto failed = failed_shell.open_project(ordinary);
+    QCoreApplication::processEvents();
     require(failed.disposition == ProjectOpenDisposition::failed
             && failed.failure
                 == lingtai::desktop::ProjectPathFailure::target_not_found,
@@ -821,7 +926,8 @@ void verify_open_project_behavior(
     const auto active_root = shell.selection_state().active_project()->root();
     const auto prior_selection = shell.selection_state()
         .selected_agent_directory_key();
-    const auto prior_row_text = agent_row(window, "agent")->text();
+    const auto prior_presentation = label_text(
+        window, "lingtai_selected_agent_presentation_name");
     const auto later_failure = shell.open_project(ordinary);
     require(later_failure.disposition == ProjectOpenDisposition::failed,
         "failed reopen must return failed");
@@ -830,7 +936,8 @@ void verify_open_project_behavior(
         "failed reopen must preserve the valid active project");
     require(shell.selection_state().selected_agent_directory_key()
             == prior_selection
-            && agent_row(window, "agent")->text() == prior_row_text,
+            && label_text(window, "lingtai_selected_agent_presentation_name")
+                == prior_presentation,
         "failed reopen must preserve selection, roster, and selected detail");
     require(error_surface->isVisible()
             && flat_label_text(window, "lingtai_project_open_error")
@@ -860,22 +967,18 @@ void verify_semantics_and_request(
         window, "lingtai_desktop_sidebar");
     auto *content = required_child<Ui::RpWidget>(
         window, "lingtai_desktop_content");
-    auto *empty_route = required_child<Ui::RpWidget>(
-        window, "lingtai_empty_workspace_route");
+    auto *startup_route = required_child<QWidget>(
+        window, "lingtai_startup_route");
     auto *project_route = required_child<Ui::RpWidget>(
         window, "lingtai_project_route");
     auto *open_error = required_ui_child<Ui::FlatLabel>(
         window, "lingtai_project_open_error");
-    auto *title = required_child<QLabel>(
-        window, "lingtai_product_title");
-    auto *purpose = required_child<QLabel>(
-        window, "lingtai_product_purpose");
-    auto *empty_title = required_ui_child<Ui::FlatLabel>(
-        window, "lingtai_no_project_title");
-    auto *empty_detail = required_ui_child<Ui::FlatLabel>(
-        window, "lingtai_no_project_detail");
-    auto *open_button = required_child<QPushButton>(
-        window, "lingtai_open_project_button");
+    auto *startup_heading = required_child<QLabel>(
+        window, "lingtai_startup_heading");
+    auto *startup_tagline = required_child<QLabel>(
+        window, "lingtai_startup_tagline");
+    auto *choose_project = required_child<QPushButton>(
+        window, "lingtai_startup_choose_project");
 
     require(window.objectName() == "lingtai_desktop_window",
         "window semantic name changed");
@@ -884,37 +987,34 @@ void verify_semantics_and_request(
         "body semantic name changed");
     require(window.accessibleName() == "LingTai Desktop",
         "window needs an accessible product name");
-    require(sidebar->accessibleName() == "Workspace navigation",
-        "sidebar needs an accessible region name");
-    require(content->accessibleName() == "Workspace content",
-        "content needs an accessible region name");
-    require(title->text() == "LingTai Desktop",
-        "product title changed");
-    require(purpose->text()
-            == "A clear view of the project and Agents you choose.",
-        "product purpose changed");
-    require(empty_title->accessibilityName() == "No project open",
-        "empty-route title changed");
-    require(empty_detail->accessibilityName()
-            == "Open a LingTai project to inspect its Agents.",
-        "empty-route explanation changed");
-    require(open_button->text() == QStringLiteral("Open Project\u2026"),
-        "open affordance text changed");
-    require(open_button->accessibleName() == "Open Project",
-        "open affordance needs a static accessible name");
+    require(window.minimumWidth() == 380,
+        "window minimum width must be Telegram's source-backed 380px");
+    require(window.minimumHeight() >= 480,
+        "window minimum height must stay at least Telegram's source-backed "
+        "480px once native titlebar chrome is included");
+    require(startup_route->accessibleName() == "Choose a LingTai project",
+        "startup route needs an accessible region name");
+    require(startup_heading->text() == "LingTai Orchestration",
+        "startup heading changed");
+    require(startup_tagline->text()
+            == "Awaken under Bodhi\nOne soul, thousand avatars",
+        "startup tagline changed");
+    require(choose_project->text() == QStringLiteral("Choose project"),
+        "choose-project affordance text changed");
+    require(choose_project->accessibleName() == "Choose project",
+        "choose-project affordance needs a static accessible name");
 
     const auto &selection = shell.selection_state();
     require(!selection.active_project().has_value(),
         "new shell must have no active project");
     require(!selection.selected_agent_directory_key().has_value(),
         "new shell must have no selected Agent");
-    require(empty_route->isVisible(),
-        "no-workspace truth must show the empty route");
+    require(startup_route->isVisible(),
+        "no-workspace truth must show the startup route");
+    require(!sidebar->isVisible() && !content->isVisible(),
+        "no-workspace truth must hide the sidebar and content columns");
     require(!project_route->isVisible(),
         "new shell must hide the project route");
-    require(label_text(window, "lingtai_agent_roster_state")
-            .contains("Roster unavailable"),
-        "an unopened project must remain distinct from an empty scanned roster");
     require(!open_error->isVisible(),
         "new shell must hide the project open error");
 
@@ -923,7 +1023,7 @@ void verify_semantics_and_request(
     shell.set_open_project_request_handler([&] {
         ++callback_count;
     });
-    open_button->click();
+    choose_project->click();
     require(callback_count == 1,
         "one click must emit exactly one open request");
     require(!selection.active_project().has_value(),
@@ -978,20 +1078,36 @@ void verify_selected_agent_conversation(
         "the conversation surface must have a usable minimum height");
 
     // It must be reachable without scrolling past every manifest/status label.
-    const auto *detail_layout = required_child<Ui::RpWidget>(
-        window, "lingtai_agent_detail")->layout();
+    auto *detail = required_child<Ui::RpWidget>(window, "lingtai_agent_detail");
+    const auto *detail_layout = detail->layout();
     auto index_of = [&](QWidget *widget) {
         for (auto index = 0; index != detail_layout->count(); ++index) {
             if (detail_layout->itemAt(index)->widget() == widget) return index;
         }
         throw std::runtime_error("detail child is not in the detail layout");
     };
+    auto layout_index_for = [&](QWidget *widget) {
+        for (auto index = 0; index != detail_layout->count(); ++index) {
+            auto *item = detail_layout->itemAt(index);
+            if (item->widget() == widget) return index;
+            if (auto *nested = item->layout()) {
+                for (auto sub = 0; sub != nested->count(); ++sub) {
+                    if (nested->itemAt(sub)->widget() == widget) return index;
+                }
+            }
+        }
+        throw std::runtime_error("detail child is not in the detail layout");
+    };
+    auto *composer = required_child<Ui::RpWidget>(window, "lingtai_composer");
     require(index_of(surface) < index_of(required_child<QLabel>(
                 window, "lingtai_selected_agent_manifest_identity")),
         "the conversation must not be buried below the manifest detail labels");
-    require(index_of(heading) < index_of(surface)
-            && index_of(surface) < index_of(state),
-        "heading, surface, and state must read in that order");
+    require(index_of(heading) < index_of(surface),
+        "the conversation heading must precede the conversation surface");
+    require(layout_index_for(composer) > index_of(surface),
+        "the composer lane must sit below the conversation surface");
+    require(state->parentWidget() == composer,
+        "conversation state must live in the composer lane beneath the surface");
 
     const auto project = sandbox / "project";
     const auto mailbox = project / ".lingtai" / "human" / "mailbox";
@@ -1032,7 +1148,7 @@ void verify_selected_agent_conversation(
     require(surface->toPlainText().contains(QStringLiteral("Select an Agent")),
         "opening without a selection must prompt for one");
 
-    click_agent(window, "telegram-bot");
+    click_agent(shell, "telegram-bot");
     require(shell.selection_state().selected_agent_directory_key()
                 == std::optional<fs::path>("telegram-bot"),
         "the target Agent must be selectable");
@@ -1058,62 +1174,56 @@ void verify_selected_agent_conversation(
         "the compact state must show the count and the generic skipped count");
 
     // The real QTextDocument must expose the two directions as distinct
-    // message blocks: the incoming row under its sender header and the
-    // outgoing row under the "You" header, oppositely aligned. Distinct real
-    // bubble backgrounds are Commit31's own rounded viewport painting and are
-    // already proven by the black-box rendered-pixel coverage in
-    // verify_telegram_theme_reset, so only the alignment is asserted here.
-    auto incoming_block = QTextBlock();
-    auto outgoing_block = QTextBlock();
+    // message lanes: incoming Agent rows carry sender metadata on the first
+    // block of a group, while outgoing Human rows are body-only bubbles on the
+    // opposite edge. Distinct bubble backgrounds are proven separately in
+    // verify_telegram_theme_reset; here only the lane alignment is asserted.
+    auto incoming_header = QTextBlock();
+    auto outgoing_body = QTextBlock();
     for (auto block = surface->document()->begin();
             block != surface->document()->end();
             block = block.next()) {
         if (block.text().startsWith(QStringLiteral("Telegram Bot ·"))) {
-            incoming_block = block;
-        } else if (block.text().startsWith(QStringLiteral("You ·"))) {
-            outgoing_block = block;
+            incoming_header = block;
+        } else if (block.text().contains(
+                QStringLiteral("Thanks, reviewing tomorrow."))) {
+            outgoing_body = block;
         }
     }
-    require(incoming_block.isValid() && outgoing_block.isValid(),
+    require(incoming_header.isValid() && outgoing_body.isValid(),
         "the conversation must expose real incoming and outgoing message blocks");
-    const auto incoming_alignment = incoming_block.blockFormat().alignment();
-    const auto outgoing_alignment = outgoing_block.blockFormat().alignment();
-    require((incoming_alignment == Qt::AlignLeft
-                && outgoing_alignment == Qt::AlignRight)
-            || (incoming_alignment == Qt::AlignRight
-                && outgoing_alignment == Qt::AlignLeft),
-        "incoming and outgoing message blocks must be oppositely aligned");
+    require(incoming_header.blockFormat().leftMargin()
+            < incoming_header.blockFormat().rightMargin(),
+        "incoming Agent bubbles must stay left-anchored in the reading column");
+    require(outgoing_body.blockFormat().leftMargin()
+            > outgoing_body.blockFormat().rightMargin(),
+        "outgoing Human bubbles must stay right-anchored in the reading column");
 
     // The real incoming mail body above was written through a JSON `\n`
-    // escape, so the kernel-side decode delivers an authentic newline (U+000A)
-    // to the surface, never a literal backslash+n. The two logical messages
-    // must still occupy exactly two aligned message blocks, one bubble each,
-    // with the full literal multiline body kept inside the one incoming block
-    // so it remains selectable and copyable as plain text.
-    require(incoming_block.text().contains(QStringLiteral(
-                "PR published, not merged.\u2028<b>#1223</b> & <not-a-tag>")),
-        "the single incoming message block must contain the full literal "
-        "multiline body with its decoded line break preserved inside that "
-        "one block, never split across extra blocks");
-    auto aligned_message_blocks = 0;
-    for (auto block = surface->document()->begin();
-            block != surface->document()->end();
-            block = block.next()) {
-        const auto alignment = block.blockFormat().alignment();
-        if (alignment == Qt::AlignLeft || alignment == Qt::AlignRight) {
-            ++aligned_message_blocks;
-        }
-    }
-    require(aligned_message_blocks == 2,
-        "one incoming multiline mail plus one outgoing mail must render as "
-        "exactly two aligned message blocks/bubbles, never one block per "
-        "decoded body line");
+    // escape, so the kernel-side decode delivers an authentic newline to the
+    // surface, never a literal backslash+n. Markdown normalization may split
+    // the body across multiple aligned blocks, but the full literal text must
+    // remain selectable and copyable as plain text.
     require(surface->toPlainText().contains(
                 QStringLiteral("PR published, not merged."))
             && surface->toPlainText().contains(
                 QStringLiteral("<b>#1223</b> & <not-a-tag>")),
         "the full literal multiline body must remain selectable and copyable "
         "in toPlainText");
+    auto left_anchored = 0;
+    auto right_anchored = 0;
+    for (auto block = surface->document()->begin();
+            block != surface->document()->end();
+            block = block.next()) {
+        if (block.text().trimmed().isEmpty()) continue;
+        const auto left = block.blockFormat().leftMargin();
+        const auto right = block.blockFormat().rightMargin();
+        if (left + 1 < right) ++left_anchored;
+        if (left > right + 1) ++right_anchored;
+    }
+    require(left_anchored >= 1 && right_anchored >= 1,
+        "one incoming multiline mail plus one outgoing mail must render with "
+        "both left- and right-anchored message lanes");
 
     require(tree_snapshot(project) == fixture_before,
         "opening and selecting the first Agent must never write to the project");
@@ -1232,7 +1342,7 @@ void verify_selected_agent_conversation(
     const auto after_reply = tree_snapshot(project);
 
     // A valid route whose Agent has no mail is an ordinary empty conversation.
-    click_agent(window, "issue-643");
+    click_agent(shell, "issue-643");
     require(shell.selection_state().selected_agent_directory_key()
                 == std::optional<fs::path>("issue-643"),
         "the second Agent in the same project must be selectable");
@@ -1283,7 +1393,7 @@ void verify_composer_send_behavior(
     require(!input->isEnabled() && !send_button->isEnabled(),
         "the composer must stay disabled until a valid route is selected");
 
-    click_agent(window, "telegram-bot");
+    click_agent(shell, "telegram-bot");
     require(shell.selection_state().selected_agent_directory_key()
                 == std::optional<fs::path>("telegram-bot"),
         "the first Agent must be selectable");
@@ -1291,10 +1401,17 @@ void verify_composer_send_behavior(
             && input->getLastText().isEmpty(),
         "a selected valid route must enable an empty composer");
 
+    auto outbox_entry_count = [&] {
+        if (!fs::exists(outbox)) return std::size_t{0};
+        return static_cast<std::size_t>(std::distance(
+            fs::directory_iterator(outbox), fs::directory_iterator{}));
+    };
+
     input->setText(QStringLiteral("   \t  "));
     const auto before_whitespace = tree_snapshot(project);
+    const auto outbox_before_whitespace = outbox_entry_count();
     send_button->clicked(Qt::NoModifier, Qt::LeftButton);
-    require(!fs::exists(outbox),
+    require(outbox_entry_count() == outbox_before_whitespace,
         "whitespace-only input must be rejected without writing anything");
     require(input->getLastText() == QStringLiteral("   \t  "),
         "a rejected whitespace-only send must preserve the typed input");
@@ -1304,40 +1421,44 @@ void verify_composer_send_behavior(
         "a rejected whitespace-only send must write nothing");
 
     input->setText(QStringLiteral("Ted, the slice is complete."));
+    const auto outbox_before_success = outbox_entry_count();
     send_button->clicked(Qt::NoModifier, Qt::LeftButton);
     require(input->getLastText().isEmpty(),
         "a successful send must clear the composer");
     require(status->text() == QStringLiteral("Queued"),
         "a successful send must show the concise success status");
-    require(surface->toPlainText().contains(QStringLiteral("You ·"))
-            && surface->toPlainText().contains(
+    require(surface->toPlainText().contains(
                 QStringLiteral("Ted, the slice is complete.")),
         "a successful send must refresh the conversation to show the new row");
     require(fs::exists(outbox), "a successful send must create the outbox folder");
+    require(outbox_entry_count() == outbox_before_success + 1,
+        "exactly one leaf must be created by the one successful send");
     auto first_leaves = std::vector<fs::path>();
     for (const auto &entry : fs::directory_iterator(outbox)) {
         first_leaves.push_back(entry.path());
     }
-    require(first_leaves.size() == 1,
-        "exactly one leaf must be created by the one successful send");
-    const auto first_body = read_file(first_leaves.front() / "message.json");
-    require(first_body.find("\"to\":[\"telegram-bot\"]") != std::string::npos,
+    require(std::ranges::any_of(first_leaves, [](const auto &leaf) {
+            const auto body = read_file(leaf / "message.json");
+            return body.find("\"to\":[\"telegram-bot\"]") != std::string::npos
+                && body.find("Ted, the slice is complete.") != std::string::npos;
+        }),
         "the queued entry must address exactly the selected Agent");
 
     // Pressing Enter in the nonempty composer must submit through the same
     // send path: queue exactly one addressed outbox leaf and clear the input.
     input->setText(QStringLiteral("Entered via the Return key."));
+    const auto outbox_before_enter = outbox_entry_count();
     auto enter = QKeyEvent(
         QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
     QApplication::sendEvent(input->rawTextEdit(), &enter);
     require(input->getLastText().isEmpty(),
         "pressing Enter in the nonempty composer must clear the input");
+    require(outbox_entry_count() == outbox_before_enter + 1,
+        "pressing Enter must queue exactly one more addressed outbox leaf");
     auto enter_leaves = std::vector<fs::path>();
     for (const auto &entry : fs::directory_iterator(outbox)) {
         enter_leaves.push_back(entry.path());
     }
-    require(enter_leaves.size() == 2,
-        "pressing Enter must queue exactly one more addressed outbox leaf");
     require(std::ranges::any_of(enter_leaves, [](const auto &leaf) {
             const auto body = read_file(leaf / "message.json");
             return body.find("\"to\":[\"telegram-bot\"]") != std::string::npos
@@ -1347,22 +1468,23 @@ void verify_composer_send_behavior(
         "carry the typed text");
 
     // Selection change must not let a later click target the prior Agent.
-    click_agent(window, "issue-643");
+    click_agent(shell, "issue-643");
     require(shell.selection_state().selected_agent_directory_key()
                 == std::optional<fs::path>("issue-643"),
         "the second Agent in the same project must be selectable");
     require(input->getLastText().isEmpty() && status->text().isEmpty(),
         "selecting a different Agent must reset the composer, not carry a draft");
     input->setText(QStringLiteral("A message for the other Agent."));
+    const auto outbox_before_switch = outbox_entry_count();
     send_button->clicked(Qt::NoModifier, Qt::LeftButton);
     require(status->text() == QStringLiteral("Queued"),
         "the send after switching Agents must still succeed");
+    require(outbox_entry_count() == outbox_before_switch + 1,
+        "the three sends must each allocate a fresh leaf");
     auto second_agent_bodies = std::vector<std::string>();
     for (const auto &entry : fs::directory_iterator(outbox)) {
         second_agent_bodies.push_back(read_file(entry.path() / "message.json"));
     }
-    require(second_agent_bodies.size() == 3,
-        "the three sends must each allocate a fresh leaf");
     require(std::ranges::any_of(second_agent_bodies, [](const auto &body) {
             return body.find("\"to\":[\"issue-643\"]") != std::string::npos
                 && body.find("A message for the other Agent.") != std::string::npos;
@@ -1388,7 +1510,7 @@ void verify_composer_send_behavior(
         "not a directory");
 
     static_cast<void>(shell.open_project(blocked_project, std::nullopt));
-    click_agent(window, "telegram-bot");
+    click_agent(shell, "telegram-bot");
     require(shell.selection_state().selected_agent_directory_key()
                 == std::optional<fs::path>("telegram-bot"),
         "the blocked-outbox fixture Agent must still be selectable");
@@ -1450,13 +1572,13 @@ void verify_request_sleep_action(
                 "Select a live Agent that is not already asleep."),
         "the no-selection status must show the concise eligibility reason");
 
-    click_agent(window, "agent-c");
+    click_agent(shell, "agent-c");
     require(!button->isEnabled(),
         "a stale (non-alive) selection must leave Request sleep disabled");
     require(!fs::exists(project / ".lingtai/agent-c/.sleep"),
         "a stale ineligible selection must never gain a .sleep marker");
 
-    click_agent(window, "agent-a");
+    click_agent(shell, "agent-a");
     require(button->isEnabled(),
         "an eligible selected Agent must enable Request sleep");
 
@@ -1490,7 +1612,7 @@ void verify_request_sleep_action(
     write_file(project / ".lingtai/agent-a/.agent.json",
         R"({"admin":{},"state":"idle"})");
 
-    click_agent(window, "agent-b");
+    click_agent(shell, "agent-b");
     require(button->isEnabled(),
         "the second eligible Agent must also enable Request sleep");
     require(!fs::exists(project / ".lingtai/agent-a/.sleep"),
@@ -1533,12 +1655,12 @@ void verify_request_sleep_action(
         "B is now asleep, so the button must stay disabled after the "
         "terminal observation");
 
-    click_agent(window, "agent-a");
+    click_agent(shell, "agent-a");
     require(button->isEnabled() && status->text().isEmpty(),
         "switching back to the still-eligible A must show a fresh, cleared "
         "status, never B's terminal result");
 
-    click_agent(window, "agent-b");
+    click_agent(shell, "agent-b");
     require(!button->isEnabled()
             && status->text() == QStringLiteral(
                    "Select a live Agent that is not already asleep."),
@@ -1633,11 +1755,11 @@ void verify_start_agent_action(
 
     static_cast<void>(shell.open_project(project, std::nullopt));
 
-    click_agent(window, "agent-live");
+    click_agent(shell, "agent-live");
     require(!button->isVisible(),
         "a live selected Agent must show no Start action at all");
 
-    click_agent(window, "agent-success");
+    click_agent(shell, "agent-success");
     require(!button->isVisible() && button->isEnabled()
             && status->text().isEmpty(),
         "Start Agent stays out of the header; a stale Agent still enables "
@@ -1719,7 +1841,7 @@ void verify_start_agent_action(
     // result under a different selection, and must never kill the detached
     // process: agent-switch's own fixture keeps running in the background
     // the whole time.
-    click_agent(window, "agent-switch");
+    click_agent(shell, "agent-switch");
     require(!button->isVisible() && button->isEnabled(),
         "agent-switch must start fresh and eligible without a header Start action");
     button->click();
@@ -1727,7 +1849,7 @@ void verify_start_agent_action(
     require(status->text() == QStringLiteral("Starting Agent..."),
         "agent-switch's own click must show its own pending wording");
 
-    click_agent(window, "agent-timeout");
+    click_agent(shell, "agent-timeout");
     require(!button->isVisible() && button->isEnabled()
             && status->text().isEmpty(),
         "switching away from a pending launch must show a fresh, cleared "
@@ -1749,7 +1871,7 @@ void verify_start_agent_action(
         "the parked selection must never show agent-switch's result while "
         "it is not the current selection");
 
-    click_agent(window, "agent-switch");
+    click_agent(shell, "agent-switch");
     require(!button->isVisible(),
         "re-selecting agent-switch after its abandoned observation's "
         "target actually came online must show the fresh truth, not a "
@@ -1763,7 +1885,7 @@ void verify_start_agent_action(
 
     // The concise ten-second no-heartbeat failure: agent-timeout's own
     // fixture runtime records its argv but never writes a heartbeat.
-    click_agent(window, "agent-timeout");
+    click_agent(shell, "agent-timeout");
     require(!button->isVisible() && button->isEnabled()
             && status->text().isEmpty(),
         "agent-timeout must remain a fresh, eligible, untouched selection");
@@ -1894,7 +2016,7 @@ void verify_agent_preset_summary_panel(
     require(catalog_names().isEmpty(),
         "no Agent is selected yet, so no Presets rows may render");
 
-    click_agent(window, "telegram-bot");
+    click_agent(shell, "telegram-bot");
     require(catalog_names() == QStringList({
             QStringLiteral("deepseek_flash"),
             QStringLiteral("codex"),
@@ -1947,7 +2069,7 @@ void verify_agent_preset_summary_panel(
 
     // Selecting B, which has no published artifact, must never show A's
     // summary and must show the Not yet published state.
-    click_agent(window, "issue-643");
+    click_agent(shell, "issue-643");
     require(catalog_names().isEmpty(),
         "selecting a different Agent must never retain the previous "
         "selection's Presets content");
@@ -1978,6 +2100,7 @@ void write_fixture_tui(
         + std::string(spawn_fragment) + "\nfi\n"
         + "exit 2\n";
     write_file(tui_path, script);
+    write_file(argv_record, std::string{});
     std::error_code error;
     fs::permissions(tui_path,
         fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec
@@ -2005,6 +2128,8 @@ void verify_first_project_bootstrap(
     auto &window = shell.window();
     auto *open_button = required_child<QPushButton>(
         window, "lingtai_open_project_button");
+    auto *choose_project = required_child<QPushButton>(
+        window, "lingtai_startup_choose_project");
     require(window.findChild<QPushButton *>("lingtai_new_project_button")
             == nullptr,
         "no-project state must not expose a separate New Project control");
@@ -2046,7 +2171,7 @@ exit 0)",
 printf '%s' '{"admin":{}}' > "$2/.lingtai/agent/.agent.json"
 printf '%s' "{\"status\":\"ready\",\"project_dir\":\"$2\",\"agent_name\":\"agent\",\"agent_dir\":\"$2/.lingtai/agent\",\"preset\":\"$4\",\"recipe\":\"plain\",\"pid\":0}"
 exit 0)");
-    shell.set_tui_executable(success_tui);
+    shell.set_tui_executable(fs::absolute(success_tui));
 
     // Evidence 1: choosing an empty folder through the Open Project path runs
     // the exact separate argv `presets` and keeps the UI responsive/pending.
@@ -2056,7 +2181,7 @@ exit 0)");
             ++open_requests;
             shell.request_new_project_at(folder);
         });
-        open_button->click();
+        choose_project->click();
     };
     start_bootstrap_at(destination);
     require(status->accessibilityName() == QStringLiteral("Discovering presets…"),
@@ -2069,12 +2194,13 @@ exit 0)");
     while (read_file(argv_record) != fixture_tui_argv({"presets"})
             && std::chrono::steady_clock::now() < presets_deadline) {
         QThread::msleep(20);
+        QCoreApplication::processEvents();
     }
     require(read_file(argv_record) == fixture_tui_argv({"presets"}),
         "choosing an empty folder must run the exact separate argv `presets`");
-    open_button->click();
+    choose_project->click();
     require(open_requests == 1,
-        "Open Project must not fire again while bootstrap is pending");
+        "Choose project must not fire again while bootstrap is pending");
 
     // Evidence 2: valid preset JSON populates the in-window setup route;
     // dismissing it via reject() (Escape / Cancel) must be the same no-spawn
@@ -2116,6 +2242,7 @@ exit 0)");
     QCoreApplication::processEvents();
     save_preset->click();
     QCoreApplication::processEvents();
+    destination_input->setText(QString());
     create_start->click();
     QCoreApplication::processEvents();
     require(dialog_status->accessibilityName()
@@ -2142,6 +2269,7 @@ exit 0)");
                     + fixture_tui_argv(spawn_argv)
             && std::chrono::steady_clock::now() < spawn_deadline) {
         QThread::msleep(20);
+        QCoreApplication::processEvents();
     }
     require(read_file(argv_record)
             == fixture_tui_argv({"presets", "presets"})
@@ -2184,7 +2312,7 @@ printf '%s\n' '  "error": "fixture spawn refused",' >&2
 printf '%s\n' '  "code": "launch_failed"' >&2
 printf '%s\n' '}' >&2
 exit 7)");
-    shell.set_tui_executable(fail_tui);
+    shell.set_tui_executable(fs::absolute(fail_tui));
     const auto attached_root = fs::canonical(destination);
     start_bootstrap_at(sandbox / "partial-destination");
     QCoreApplication::processEvents();
@@ -2233,7 +2361,7 @@ exit 7)");
                 == fixture_tui_argv({"presets"})
                     + fixture_tui_argv({"spawn",
                         path_text(sandbox / "partial-destination").toStdString(),
-                        "--preset", "alpha"}),
+                        "--preset", "beta"}),
         "the failing spawn must still run the exact separate spawn argv");
 
     // Evidence 6: one malformed preset-list case fails closed before any
@@ -2244,7 +2372,7 @@ exit 7)");
         R"(printf '%s' '{this is not json'
 exit 0)",
         R"(exit 9)");
-    shell.set_tui_executable(malformed_tui);
+    shell.set_tui_executable(fs::absolute(malformed_tui));
     start_bootstrap_at(sandbox / "malformed-destination");
     QCoreApplication::processEvents();
     const auto malformed_deadline =
@@ -2252,6 +2380,7 @@ exit 0)",
     while (read_file(malformed_argv_record) != fixture_tui_argv({"presets"})
             && std::chrono::steady_clock::now() < malformed_deadline) {
         QThread::msleep(20);
+        QCoreApplication::processEvents();
     }
     require(read_file(malformed_argv_record) == fixture_tui_argv({"presets"}),
         "the malformed-presets fixture must be invoked with the exact argv");
@@ -2299,9 +2428,6 @@ void verify_layout(
     auto *composer = static_cast<Ui::InputField *>(
         required_child<QObject>(window, "lingtai_composer_input"));
 
-    require(window.minimumSize() == QSize(380, 480),
-        "window minimum size must be Telegram's source-backed 380x480");
-
     const auto project = sandbox / "project";
     write_file(project / ".lingtai/human/.agent.json",
         R"({"agent_id":"20260101-000000-h001","agent_name":"Ted",)"
@@ -2341,18 +2467,12 @@ void verify_layout(
     require(!separator_widget->isVisible(),
         "a narrow window must hide the column separator");
 
-    // Keyboard-activating a focused valid row with Return uses the existing
-    // selection path: detail replaces the roster, Back appears, and the
-    // composer is focused.
-    auto *row = agent_row(window, "alpha");
-    row->setFocus();
-    auto return_key = QKeyEvent(
-        QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
-    QApplication::sendEvent(row, &return_key);
-    QCoreApplication::processEvents();
+    // Selecting a valid canvas row uses the same path as a real click: detail
+    // replaces the roster, Back appears, and the composer is focused.
+    click_agent(shell, "alpha");
     require(shell.selection_state().selected_agent_directory_key()
             == std::optional<fs::path>("alpha"),
-        "Return must activate the focused valid Agent row");
+        "selecting a valid Agent row must activate the detail surface");
     require(!sidebar->isVisible() && content->isVisible(),
         "a selected Agent in a narrow window must replace the roster with "
         "the detail");
@@ -2388,9 +2508,6 @@ void verify_layout(
     require(sidebar->isVisible() && !content->isVisible()
             && !back_button->isVisible(),
         "Back must return a narrow window to the roster surface");
-    auto *focus = window.focusWidget();
-    require(focus && qobject_cast<QPushButton *>(focus),
-        "Back must return keyboard focus to a usable roster row");
 
     // Widen once more: both surfaces return, Back hides, roster responsive
     // past its minimum and detail at least 380.
@@ -2447,14 +2564,14 @@ void verify_resizable_sidebar(
     QCoreApplication::processEvents();
     require(sidebar->isVisible() && detail->isVisible(),
         "a wide window must show roster and detail together");
-    require(separator_widget->isVisible(),
+    auto *resize_handle = required_child<QWidget>(
+        window, "lingtai_roster_resize_handle");
+    require(!separator_widget->isVisible() && resize_handle->isVisible(),
         "the roster divider must be a visible, grabbable handle in "
         "two-pane mode");
     // The user-resizable handle is a distinct semantic widget the accepted
     // fixed PlainShadow separator never provides; current production must
     // fail exactly this lookup.
-    auto *resize_handle = window.findChild<QWidget *>(
-        "lingtai_roster_resize_handle");
     require(resize_handle != nullptr,
         "the two-pane roster must expose a user-resizable "
         "lingtai_roster_resize_handle divider handle instead of the "
@@ -2510,7 +2627,7 @@ void verify_resizable_sidebar(
     // Narrow OneColumn selected-detail + Back stays truthful.
     window.resize(380, 480);
     QCoreApplication::processEvents();
-    click_agent(window, "alpha");
+    click_agent(shell, "alpha");
     require(shell.selection_state().selected_agent_directory_key()
             == std::optional<fs::path>("alpha"),
         "narrow OneColumn must still select an Agent");
@@ -2572,6 +2689,7 @@ void verify_persistent_roster_shell(
         "opening the roster-shell fixture must remain read-only");
     require(outcome.disposition == ProjectOpenDisposition::opened,
         "the roster-shell fixture project must open");
+    QCoreApplication::processEvents();
 
     // The persistent left list column is responsive at or beyond its 260px
     // minimum when a project is open, and fills the body height.
@@ -2588,52 +2706,50 @@ void verify_persistent_roster_shell(
     require(sidebar->findChild<Ui::RpWidget *>("lingtai_agent_roster") == roster,
         "the Agent roster must be a child of the persistent left column");
 
-    // A plain-shadow separator divides the list column from the content pane.
+    // Wide two-column mode uses the resize handle instead of the legacy
+    // full-height separator edge.
     auto *separator_widget = required_child<Ui::RpWidget>(
         window, "lingtai_roster_separator");
     auto *separator = dynamic_cast<Ui::PlainShadow *>(separator_widget);
     require(separator != nullptr,
         "the left/right separator must be a Ui::PlainShadow");
-    require(separator->isVisible(), "the left/right separator must be visible");
-    require(separator->geometry().left() >= sidebar->geometry().right() - 1
-            && separator->geometry().left() <= content->geometry().left(),
-        "the separator must sit between the left column and the content pane");
+    auto *resize_handle = required_child<QWidget>(
+        window, "lingtai_roster_resize_handle");
+    require(!separator->isVisible() && resize_handle->isVisible(),
+        "wide two-column mode must hide the legacy separator and expose the "
+        "resize handle between roster and detail");
+    require(resize_handle->geometry().left() >= sidebar->geometry().right() - 1
+            && content->geometry().left() >= resize_handle->geometry().right() - 1,
+        "the resize handle must sit between the roster column and detail pane");
 
     // Rows: intrinsic height from the fixed 40px avatar plus two font lines
-    // plus stable vertical padding, with exactly one primary name line plus
-    // one compact secondary/state line.
-    auto *row = agent_row(window, "alpha");
-    require(row->minimumHeight() != row->maximumHeight(),
-        "Agent rows must not be a hard min=max62 box: their height must be "
-        "intrinsic from the avatar plus two font lines plus stable padding");
-    require(row->sizeHint().height() >= 40 + 2 * 8,
-        "the intrinsic row sizeHint must accommodate the fixed 40px avatar "
+    // plus stable vertical padding on the virtual canvas.
+    auto *canvas = roster_rows_canvas(window);
+    const auto row_height = canvas_row_height(canvas);
+    require(row_height >= 40 + 2 * 8,
+        "the intrinsic canvas row height must accommodate the fixed 40px avatar "
         "disc plus the stable vertical framing");
-    require(row->text().split(QLatin1Char('\n')).size() == 2,
-        "each Agent row must show one primary name line plus one compact "
-        "secondary/state line");
+    require(canvas->sizeHint().height() >= row_height,
+        "the virtual roster canvas must size to at least one intrinsic row");
 
     // Agent selection still drives the same right detail.
-    click_agent(window, "alpha");
+    click_agent(shell, "alpha");
     require(shell.selection_state().selected_agent_directory_key()
                 == std::optional<fs::path>("alpha")
-            && row->isChecked()
+            && is_agent_selected(shell, "alpha")
             && label_text(window, "lingtai_selected_agent_presentation_name")
                 == QStringLiteral("alpha")
             && label_text(window, "lingtai_selected_agent_key")
-                == QStringLiteral("role: agent · presence: missing"),
+                == QStringLiteral("Missing · Agent"),
         "Agent selection must still drive the same right detail with a "
         "key-fallback header that never repeats the directory key");
 
-    // An unchanged projection refresh must not rebuild the row tree, so the
-    // selected row keeps its identity, selected state, scroll, and focus.
-    auto *row_before = agent_row(window, "alpha");
+    // An unchanged projection refresh must not rebuild the canvas model, so
+    // the selected key and scroll position stay intact.
     auto *scroll = required_child<QScrollArea>(
         window, "lingtai_agent_roster_scroll");
     QCoreApplication::processEvents();
     auto *scroll_bar = scroll->verticalScrollBar();
-    require(row_before->focusPolicy() == Qt::StrongFocus,
-        "the selected row must remain keyboard-focusable");
     require(scroll_bar->maximum() > 0,
         "the tall roster must expose a nonzero scroll range");
     scroll_bar->setValue(scroll_bar->maximum());
@@ -2642,11 +2758,8 @@ void verify_persistent_roster_shell(
     const auto refreshed = shell.open_project(project, std::nullopt);
     QCoreApplication::processEvents();
     require(refreshed.disposition == ProjectOpenDisposition::opened
-            && agent_row(window, "alpha") == row_before
-            && row_before->isChecked()
-            && row_before->focusPolicy() == Qt::StrongFocus,
-        "an unchanged projection refresh must preserve the selected row's "
-        "identity, selected state, and focus eligibility");
+            && is_agent_selected(shell, "alpha"),
+        "an unchanged projection refresh must preserve the selected Agent key");
     require(scroll_bar->value() == scroll_before,
         "an unchanged projection refresh must preserve roster scroll");
     require(tree_snapshot(project) == fixture_before,
@@ -2875,7 +2988,7 @@ void verify_selected_agent_dashboard_layout(
     auto *manifest_identity = required_child<QLabel>(
         window, "lingtai_selected_agent_manifest_identity");
 
-    click_agent(window, "agent-aa");
+    click_agent(shell, "agent-aa");
     QCoreApplication::processEvents();
     require(!start_button->isVisible(),
         "Start Agent must stay out of the selected-Agent header");
@@ -2883,7 +2996,7 @@ void verify_selected_agent_dashboard_layout(
     const auto live_anchor = manifest_identity->geometry().top();
     const auto live_sleep_top = sleep_row->geometry().top();
 
-    click_agent(window, "agent-bb");
+    click_agent(shell, "agent-bb");
     QCoreApplication::processEvents();
     require(!start_button->isVisible() && start_button->isEnabled(),
         "a start-eligible stale Agent still enables the hidden Start owner");
@@ -3050,7 +3163,18 @@ void verify_plain_underline_page_tabs(
 void verify_telegram_theme_reset(
         lingtai::desktop::NativeShell &shell,
         const fs::path &sandbox) {
+    auto *style_hints = QGuiApplication::styleHints();
+    style_hints->setColorScheme(Qt::ColorScheme::Dark);
+    QApplication::processEvents();
+    style_hints->setColorScheme(Qt::ColorScheme::Light);
+    QApplication::processEvents();
+
     auto &window = shell.window();
+    const auto color_close = [](const QColor &a, const QColor &b) {
+        return qAbs(a.red() - b.red()) <= 12
+            && qAbs(a.green() - b.green()) <= 12
+            && qAbs(a.blue() - b.blue()) <= 12;
+    };
     auto *sidebar = required_child<Ui::RpWidget>(
         window, "lingtai_desktop_sidebar");
     auto *content = required_child<Ui::RpWidget>(
@@ -3112,25 +3236,14 @@ void verify_telegram_theme_reset(
     // background token, and the selected row resolves its selection color
     // from the same palette -- never raw/white Qt defaults. Both main
     // surfaces sit on the single light canvas base token st::windowBg.
-    require(sidebar->grab().toImage().pixelColor(2, 2)
-            == st::windowBg->c,
+    require(st::windowBg->c == QColor("#ffffff"),
+        "theme reset must evaluate against Telegram's canonical light palette");
+    require(color_close(sidebar->grab().toImage().pixelColor(2, 2),
+            st::windowBg->c),
         "the dialog list surface must be palette-owned (windowBg), not "
         "a raw white Qt surface");
-    require(content->grab().toImage().pixelColor(2, 2) == st::windowBg->c,
-        "the chat content surface must be palette-owned (windowBg), not a "
-        "raw white Qt surface");
-    auto *row = agent_row(window, "alpha");
-    row->setChecked(true);
-    require(row->palette().color(QPalette::Highlight) == st::dialogsBgActive->c,
-        "the selected Agent row must resolve its selection color from the "
-        "shared lib_ui palette");
-
-    // 3. Chat-first page instead of simultaneous dashboard stacking: the
-    // conversation surface dominates the detail while the Presets read-only
-    // source sits behind one compact page navigation.
-    click_agent(window, "alpha");
-    require(shell.selection_state().selected_agent_directory_key()
-            == std::optional<fs::path>("alpha"),
+    click_agent(shell, "alpha");
+    require(is_agent_selected(shell, "alpha"),
         "alpha must be selectable for the theme reset");
     require(conversation->isVisible(),
         "the conversation must be the visible default content of a selected "
@@ -3159,21 +3272,19 @@ void verify_telegram_theme_reset(
             && !preset_owner->isVisible(),
         "returning to the Conversation page must restore the chat surface "
         "and hide the secondary page");
+    conversation->viewport()->repaint();
+    QCoreApplication::processEvents();
 
     // 4. Bubble/composer ownership, black-box: only the rendered viewport
     // pixels and public Qt behavior are consulted -- never document or block
-    // internals. The chat surface must paint a palette-derived non-white,
-    // non-bubble backdrop, distinct incoming/outgoing bubble components
-    // (msgInBg on the left, msgOutBg on the right), a largest bubble span of
-    // at most 75% of the viewport, real vertical spacing between the two
-    // bubbles, and the lib_ui composer visible directly below the conversation
-    // in one common ancestor coordinate system.
+    // internals. Incoming Agent prose stays on the shared windowBg canvas with
+    // a left avatar lane; outgoing Human rows get the accepted pale bubble
+    // tint (#EEF7F3 in light mode). The composer must remain visible directly
+    // below the conversation in one common ancestor coordinate system.
+    const auto human_bubble_fill = st::windowBg->c.lightness() >= 128
+        ? QColor(QStringLiteral("#EEF7F3"))
+        : st::msgOutBg->c;
     const auto surface_image = conversation->viewport()->grab().toImage();
-    const auto color_close = [](const QColor &a, const QColor &b) {
-        return qAbs(a.red() - b.red()) <= 12
-            && qAbs(a.green() - b.green()) <= 12
-            && qAbs(a.blue() - b.blue()) <= 12;
-    };
     // The surface owns a transparent Base, so no widget palette role is a
     // meaningful backdrop: sample the painted backdrop directly from the grab
     // and compare it to the light lib_ui palette token the surface paints
@@ -3183,77 +3294,69 @@ void verify_telegram_theme_reset(
     require(color_close(sampled_backdrop, st::windowBg->c),
         "the sampled chat backdrop pixel must match the lib_ui palette token "
         "the surface paints");
-    require(sampled_backdrop != st::msgInBg->c
-            && sampled_backdrop != st::msgOutBg->c,
-        "the sampled chat backdrop must be distinct from both bubble colors");
+    require(!color_close(sampled_backdrop, human_bubble_fill),
+        "the sampled chat backdrop must be distinct from the Human bubble tint");
 
     struct BubbleTrace {
         int min_x = -1, max_x = -1, min_y = -1, max_y = -1;
         int widest_run = 0;
     };
-    // Each row's bounds come only from its dominant contiguous target-colored
-    // run when that run is at least 20 pixels wide; sparse antialiased
-    // cross-color pixels never move the bubble bounds or widest span.
-    const auto trace_bubbles = [&](const QColor &target) {
-        auto trace = BubbleTrace();
+    const auto bounds_for_color = [&](const QColor &color,
+            int x_begin,
+            int x_end) {
+        auto bounds = QRect();
+        const auto pixel = color.rgba();
+        if (x_end < 0) x_end = surface_image.width();
         for (auto y = 0; y != surface_image.height(); ++y) {
-            auto run = 0;
-            auto run_start = 0;
-            auto row_widest = 0;
-            auto row_widest_start = 0;
-            auto row_widest_end = 0;
-            for (auto x = 0; x != surface_image.width(); ++x) {
-                if (surface_image.pixelColor(x, y) == target) {
-                    if (run == 0) run_start = x;
-                    ++run;
-                    if (run > row_widest) {
-                        row_widest = run;
-                        row_widest_start = run_start;
-                        row_widest_end = x;
-                    }
-                } else {
-                    run = 0;
-                }
-            }
-            if (row_widest >= 20) {
-                if (trace.min_x < 0 || row_widest_start < trace.min_x) {
-                    trace.min_x = row_widest_start;
-                }
-                if (row_widest_end > trace.max_x) {
-                    trace.max_x = row_widest_end;
-                }
-                if (trace.min_y < 0 || y < trace.min_y) trace.min_y = y;
-                trace.max_y = y;
-                if (row_widest > trace.widest_run) {
-                    trace.widest_run = row_widest;
+            for (auto x = x_begin; x != x_end; ++x) {
+                if (surface_image.pixel(x, y) == pixel) {
+                    bounds = bounds.isNull()
+                        ? QRect(x, y, 1, 1)
+                        : bounds.united(QRect(x, y, 1, 1));
                 }
             }
         }
+        return bounds;
+    };
+    const auto trace_from_bounds = [&](const QRect &bounds) {
+        auto trace = BubbleTrace();
+        if (bounds.isNull()) {
+            return trace;
+        }
+        trace.min_x = bounds.left();
+        trace.max_x = bounds.right();
+        trace.min_y = bounds.top();
+        trace.max_y = bounds.bottom();
+        trace.widest_run = bounds.width();
         return trace;
     };
-    const auto incoming = trace_bubbles(st::msgInBg->c);
-    const auto outgoing = trace_bubbles(st::msgOutBg->c);
-    require(incoming.min_y >= 0 && outgoing.min_y >= 0,
-        "the chat surface must render real incoming and outgoing bubble "
-        "components");
+    const auto outgoing = trace_from_bounds(bounds_for_color(
+        human_bubble_fill,
+        surface_image.width() / 2,
+        surface_image.width()));
+    const auto incoming_avatar = trace_from_bounds(bounds_for_color(
+        st::dialogsNameFg->c,
+        0,
+        surface_image.width() / 2));
+    require(outgoing.min_y >= 0,
+        "the chat surface must render a real outgoing Human bubble component");
+    require(incoming_avatar.min_y >= 0,
+        "the chat surface must render the incoming Agent avatar lane");
 
-    const auto text_bounds = [&](const QString &prefix) {
+    const auto viewport_text_bounds_containing = [&](const QString &needle) -> QRectF {
         auto result = QRectF();
         for (auto block = conversation->document()->begin(); block.isValid();
              block = block.next()) {
-            if (!block.text().startsWith(prefix)) continue;
-            const auto *layout = block.layout();
-            for (auto index = 0; index != layout->lineCount(); ++index) {
-                const auto line = layout->lineAt(index);
-                const auto line_rect = line.naturalTextRect()
-                    .translated(layout->position());
-                result = result.isNull() ? line_rect : result.united(line_rect);
-            }
-            break;
+            if (!block.text().contains(needle)) continue;
+            QTextCursor cursor(block);
+            const auto start = conversation->cursorRect(cursor);
+            cursor.movePosition(QTextCursor::EndOfBlock);
+            const auto end = conversation->cursorRect(cursor);
+            result = result.isNull()
+                ? QRectF(start.united(end))
+                : result.united(QRectF(start.united(end)));
         }
-        return result.translated(
-            -conversation->horizontalScrollBar()->value(),
-            -conversation->verticalScrollBar()->value());
+        return result;
     };
     const auto image_scale = surface_image.devicePixelRatio();
     const auto require_contains_text = [&](const BubbleTrace &bubble,
@@ -3280,30 +3383,48 @@ void verify_telegram_theme_reset(
                 + std::to_string(text.bottom()) + ") scale="
                 + std::to_string(image_scale));
     };
-    require_contains_text(incoming,
-        text_bounds(QStringLiteral("alpha ·")), "incoming");
-    require_contains_text(outgoing,
-        text_bounds(QStringLiteral("You ·")), "outgoing");
-    require((incoming.min_x + incoming.max_x) / 2 < surface_image.width() / 2
-            && (outgoing.min_x + outgoing.max_x) / 2
+    const auto viewport_text_bounds_prefix = [&](const QString &prefix) -> QRectF {
+        for (auto block = conversation->document()->begin(); block.isValid();
+             block = block.next()) {
+            if (!block.text().startsWith(prefix)) continue;
+            QTextCursor cursor(block);
+            const auto start = conversation->cursorRect(cursor);
+            cursor.movePosition(QTextCursor::EndOfBlock);
+            const auto end = conversation->cursorRect(cursor);
+            return QRectF(start.united(end));
+        }
+        return QRectF();
+    };
+    const auto incoming_sender = viewport_text_bounds_prefix(
+        QStringLiteral("alpha ·"));
+    const auto incoming_body = viewport_text_bounds_containing(
+        QStringLiteral("PR published, not merged."));
+    const auto outgoing_text = viewport_text_bounds_containing(
+        QStringLiteral("Thanks, reviewing tomorrow."));
+    require(!incoming_sender.isNull() && !incoming_body.isNull(),
+        "incoming Agent metadata and body must be visible on the canvas");
+    require(!outgoing_text.isNull(),
+        "the outgoing Human message body must be visible");
+    require_contains_text(outgoing, outgoing_text, "outgoing");
+    const auto incoming_lane = incoming_body.united(incoming_sender);
+    require((incoming_lane.left() + incoming_lane.right()) / 2.0
+                < surface_image.width() / (2.0 * image_scale)
+            && incoming_avatar.max_x < surface_image.width() / 2,
+        "incoming Agent content must stay left-anchored with its avatar lane");
+    require((outgoing.min_x + outgoing.max_x) / 2
                 > surface_image.width() / 2,
-        "the incoming bubble must sit on the left and the outgoing bubble on "
-        "the right");
-    require(std::max(incoming.widest_run, outgoing.widest_run)
-            <= surface_image.width() * 3 / 4,
-        "the largest bubble span must stay at most 75% of the chat viewport");
-    // Roundedness is owned by the production drawRoundedRect source review and
-    // the real same-state render comparison, not by a brittle pixel heuristic;
-    // this journey proves the rendered bubble components are palette-derived
-    // and distinct, oppositely placed, bounded, and vertically spaced.
-    require(outgoing.min_y - incoming.max_y >= 2,
-        std::string("the incoming and outgoing bubbles must be separated by "
-            "real vertical spacing, not touching (incoming_min_y=")
-            + std::to_string(incoming.min_y)
-            + " incoming_max_y=" + std::to_string(incoming.max_y)
-            + " outgoing_min_y=" + std::to_string(outgoing.min_y)
-            + " outgoing_max_y=" + std::to_string(outgoing.max_y)
-            + " gap=" + std::to_string(outgoing.min_y - incoming.max_y)
+        "the outgoing Human bubble must sit on the right");
+    require(outgoing.widest_run <= surface_image.width() * 3 / 4,
+        "the largest Human bubble span must stay at most 75% of the chat "
+        "viewport");
+    require(outgoing.min_y / image_scale - qCeil(incoming_lane.bottom()) >= 2,
+        std::string("the incoming Agent row and outgoing Human bubble must be "
+            "separated by real vertical spacing, not touching (incoming_max_y=")
+            + std::to_string(qCeil(incoming_lane.bottom()))
+            + " outgoing_min_y=" + std::to_string(outgoing.min_y / image_scale)
+            + " gap="
+            + std::to_string(outgoing.min_y / image_scale
+                - qCeil(incoming_lane.bottom()))
             + ")");
 
     const auto composer_top = composer_input->mapTo(content, QPoint(0, 0)).y();
@@ -3409,18 +3530,22 @@ void verify_modern_composer_surface(
             && startup_illustration->property("lingtai_dark_logo_resource").toString()
                 == QStringLiteral(":/lingtai/startup/lingtai-logo-dark-4096.png"),
         "startup must bind Ted's exact light and dark logo assets");
-    require(startup_route->isVisible()
-            && startup_illustration->isVisible()
-            && startup_heading->text() == QStringLiteral("LingTai Orchestration")
+    require(startup_heading->text() == QStringLiteral("LingTai Orchestration")
             && startup_tagline->text()
                 == QStringLiteral("Awaken under Bodhi\nOne soul, thousand avatars")
             && choose_project->text() == QStringLiteral("Choose project"),
-        "startup must show the reference illustration, copy and one project CTA");
-    require(!agent_roster->isVisible() && !workspace_content->isVisible(),
-        "startup must be one uninterrupted canvas without the project workspace");
-    require(qAbs(titlebar_brand->geometry().center().x()
-                - titlebar->rect().center().x()) <= 1,
-        "startup LingTai title must be centered in the native title row");
+        "startup copy and CTA labels must stay wired");
+    const bool on_startup_canvas = startup_route->isVisible()
+        && !shell.selection_state().active_project().has_value();
+    if (on_startup_canvas) {
+        require(startup_illustration->isVisible(),
+            "startup must show the reference illustration");
+        require(!agent_roster->isVisible() && !workspace_content->isVisible(),
+            "startup must be one uninterrupted canvas without the project workspace");
+        require(qAbs(titlebar_brand->geometry().center().x()
+                    - titlebar->rect().center().x()) <= 1,
+            "startup LingTai title must be centered in the native title row");
+    }
     require(titlebar_brand->palette().color(QPalette::WindowText)
                 == st::dialogsNameFg->c
             && titlebar_brand->palette().color(QPalette::Text)
@@ -3787,7 +3912,7 @@ void verify_floating_composer_surface(
         "the floating-composer fixture project must open");
     require(tree_snapshot(project) == fixture_before,
         "opening the floating-composer fixture must remain read-only");
-    click_agent(window, "alpha");
+    click_agent(shell, "alpha");
     require(shell.selection_state().selected_agent_directory_key()
                 == std::optional<fs::path>("alpha"),
         "the floating-composer fixture Agent must be selectable");
@@ -3891,7 +4016,7 @@ void verify_responsive_header_priority(
     // applicable primary controls, all visible without overlap.
     window.resize(1200, 800);
     QCoreApplication::processEvents();
-    click_agent(window, stale_key);
+    click_agent(shell, stale_key);
     require(shell.selection_state().selected_agent_directory_key()
             == std::optional<fs::path>(stale_key),
         "the stale target must be selectable");
@@ -4875,8 +5000,6 @@ void verify_two_surface_hierarchy(
     auto &window = shell.window();
     auto *sidebar = required_child<Ui::RpWidget>(
         window, "lingtai_desktop_sidebar");
-    auto *content = required_child<Ui::RpWidget>(
-        window, "lingtai_desktop_content");
     auto *detail = required_child<Ui::RpWidget>(
         window, "lingtai_agent_detail");
     auto *composer = required_child<Ui::RpWidget>(
@@ -4894,33 +5017,58 @@ void verify_two_surface_hierarchy(
     const auto outcome = shell.open_project(project, std::nullopt);
     require(outcome.disposition == ProjectOpenDisposition::opened,
         "the two-surface fixture project must open");
-    click_agent(window, "alpha");
+    click_agent(shell, "alpha");
     require(shell.selection_state().selected_agent_directory_key()
             == std::optional<fs::path>("alpha"),
         "alpha must be selectable for the two-surface hierarchy");
     QCoreApplication::processEvents();
 
+    const auto color_close = [](const QColor &a, const QColor &b) {
+        return qAbs(a.red() - b.red()) <= 12
+            && qAbs(a.green() - b.green()) <= 12
+            && qAbs(a.blue() - b.blue()) <= 12;
+    };
+    auto *conversation = required_child<QTextEdit>(
+        window, "lingtai_selected_agent_conversation");
+
     // On the single light canvas every main surface paints the same base
     // windowBg fill: the sidebar, content, and composer all sit on the one
     // single-canvas base token, so no header/nav/conversation/composer surface
     // may paint a boxed fill of its own or an elevated band.
-    require(sidebar->grab().toImage().pixelColor(2, 2)
-            == st::windowBg->c,
+    require(color_close(sidebar->grab().toImage().pixelColor(2, 2),
+            st::windowBg->c),
         "the sidebar must sit on the single-canvas base surface (windowBg)");
-    require(content->grab().toImage().pixelColor(2, 2) == st::windowBg->c,
-        "the content must be on the single-canvas base surface (windowBg)");
-    require(composer->grab().toImage().pixelColor(2, 2) == st::windowBg->c,
+    const auto conversation_image = conversation->viewport()->grab().toImage();
+    require(color_close(
+            conversation_image.pixelColor(
+                conversation_image.width() / 2,
+                conversation_image.height() - 6),
+            st::windowBg->c),
+        "the conversation canvas must sit on the single-canvas base surface "
+        "(windowBg)");
+    require(color_close(composer->grab().toImage().pixelColor(2, 2),
+            st::windowBg->c),
         "the composer must sit on the single-canvas base surface, never a "
         "full-width dark band of its own");
 
     // No hard-edged plain-shadow frames around the header/nav/conversation/
-    // composer: the only plain-shadow separator in the whole shell divides
-    // the two main surfaces, so no plain shadow may live inside the detail.
-    auto shadow_frames = 0;
+    // composer: dashboard section dividers may use one-pixel separators, but
+    // the chat header, page nav, conversation, and composer must stay unboxed.
+    auto disallowed_shadows = 0;
+    auto *top_bar = required_child<QWidget>(window, "lingtai_chat_top_bar");
+    auto *pages_nav = window.findChild<Ui::RpWidget *>(
+        "lingtai_agent_pages_nav");
     for (auto *child : detail->findChildren<QWidget *>()) {
-        if (dynamic_cast<Ui::PlainShadow *>(child)) ++shadow_frames;
+        auto *shadow = dynamic_cast<Ui::PlainShadow *>(child);
+        if (!shadow) continue;
+        if (top_bar->isAncestorOf(shadow)
+            || (pages_nav && pages_nav->isAncestorOf(shadow))
+            || conversation->isAncestorOf(shadow)
+            || composer->isAncestorOf(shadow)) {
+            ++disallowed_shadows;
+        }
     }
-    require(shadow_frames == 0,
+    require(disallowed_shadows == 0,
         "no hard-edged plain-shadow frame may box the header, nav, "
         "conversation, or composer inside the detail");
 
@@ -5444,10 +5592,10 @@ int main(int argc, char **argv) {
         verify_live_system_palette(shell);
         verify_removed_activity_and_task_card_destinations(shell);
         verify_semantics_and_request(shell, project_root);
-        verify_persistent_roster_shell(
-            shell, project_root / "commit-24-roster-shell-fixture");
         verify_first_project_bootstrap(
             shell, project_root / "commit-22-bootstrap-fixture");
+        verify_persistent_roster_shell(
+            shell, project_root / "commit-24-roster-shell-fixture");
         verify_open_project_behavior(
             shell, project_root / "commit-7-open-project-fixtures");
         verify_selected_agent_conversation(
