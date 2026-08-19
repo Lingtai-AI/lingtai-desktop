@@ -5,6 +5,8 @@
 
 #include <QString>
 
+class QWidget;
+
 namespace lingtai::desktop::visual_test {
 
 struct VisualDiffOptions {
@@ -22,12 +24,42 @@ struct VisualDiffResult {
     QString message;
 };
 
-// Milestone 4: full PNG compare + diff image generation.
+[[nodiscard]] bool updateBaselinesEnabled();
+
+[[nodiscard]] QString artifactsRoot();
+
+[[nodiscard]] QString baselinePath(
+    const QString &baseline_root,
+    const QString &theme,
+    const QString &snapshot_name);
+
+[[nodiscard]] QImage grabWidgetSnapshot(QWidget &widget);
+
+[[nodiscard]] bool saveImage(const QImage &image, const QString &path);
+
+[[nodiscard]] bool saveWidgetSnapshot(QWidget &widget, const QString &path);
+
+[[nodiscard]] QImage makeDiffImage(
+    const QImage &actual,
+    const QImage &expected,
+    int channel_threshold);
+
 [[nodiscard]] VisualDiffResult compareSnapshot(
     const QImage &actual,
     const QImage &expected,
     const VisualDiffOptions &options = {});
 
-[[nodiscard]] bool saveWidgetSnapshot(QWidget &widget, const QString &path);
+[[nodiscard]] bool writeFailureArtifacts(
+    const QString &test_name,
+    const QImage &actual,
+    const QImage &expected,
+    const QImage &diff,
+    const VisualDiffResult &result);
+
+[[nodiscard]] VisualDiffResult assertMatchesBaseline(
+    QWidget &widget,
+    const QString &baseline_path,
+    const QString &test_name,
+    const VisualDiffOptions &options = {});
 
 } // namespace lingtai::desktop::visual_test
