@@ -45,6 +45,7 @@ class RpWindow;
 namespace lingtai::desktop {
 
 class KanbanPage;
+class AgentDetailView;
 
 enum class ProjectOpenDisposition {
     opened,
@@ -222,6 +223,8 @@ private:
     // The one compact palette-owned Back control in the detail header, visible
     // only in Telegram's narrow OneColumn detail view.
     QPushButton *detail_back_button_ = nullptr;
+    // Stable pointer to the extracted selected-Agent detail widget.
+    AgentDetailView *detail_view_ = nullptr;
     // Stable pointers to the selected-Agent chat top bar and its secondary key
     // label, retained so the one responsive fit measure in `recompute_layout`
     // can evaluate the full natural row against the actual detail width and

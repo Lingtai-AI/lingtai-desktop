@@ -175,6 +175,7 @@ target_include_directories(lingtai_desktop_core PUBLIC
 
 add_library(lingtai_desktop_native_shell STATIC
     src/native_shell.cpp
+    src/agent_detail_view.cpp
     src/preset_catalog_presentation.cpp
     src/preset_editor_model.cpp
     src/preset_editor_page.cpp

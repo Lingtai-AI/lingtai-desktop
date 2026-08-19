@@ -1,5 +1,7 @@
 #include "native_shell.h"
 
+#include "agent_detail_view.h"
+
 #include "native_window_background.h"
 #include "agent_preset_summary.h"
 #include "agent_prompt_actions.h"
@@ -617,7 +619,7 @@ void hide_slash_command_popup(QWidget *window) {
     }
 }
 
-void apply_slash_popup_choice(
+[[maybe_unused]] void apply_slash_popup_choice(
         Ui::InputField *input, QListWidget *popup) {
     if (!input || !popup) return;
     const auto *item = popup->currentItem();
@@ -650,7 +652,7 @@ void position_slash_command_popup(
     card->raise();
 }
 
-void refresh_slash_command_popup(
+[[maybe_unused]] void refresh_slash_command_popup(
         QWidget *window, Ui::InputField *input) {
     auto *popup = window->findChild<QListWidget *>(
         "lingtai_slash_command_popup");
@@ -700,7 +702,7 @@ struct DashboardSection {
 
 constexpr auto kDashboardSectionSurfaceHeight = 300;
 
-DashboardSection add_dashboard_section(
+[[maybe_unused]] DashboardSection add_dashboard_section(
         Ui::RpWidget *detail,
         QVBoxLayout *detail_layout,
         const char *kind,
@@ -1338,6 +1340,7 @@ NativeShell::NativeShell()
     detail_scroll->setFrameShape(QFrame::NoFrame);
     detail_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     directory_layout->addWidget(detail_scroll, 1);
+    #if 0
     auto *detail = new Ui::RpWidget(detail_scroll);
     detail->setObjectName("lingtai_agent_detail");
     detail->setAccessibleName(QStringLiteral("Selected Agent detail"));
@@ -1783,6 +1786,72 @@ NativeShell::NativeShell()
 
     // The chat is the default selected-Agent page; the page navigation and
     // secondary surfaces start in that exact state.
+    show_detail_page(AgentDetailPage::conversation);
+
+    #endif
+
+    auto *detail = new AgentDetailView(detail_scroll);
+    detail_scroll->setWidget(detail);
+    detail_view_ = detail;
+
+    // Re-derive stable pointers/vectors until NativeShell delegates fully
+    // to AgentDetailView in follow-up plan steps.
+    detail_back_button_ = detail->findChild<QPushButton *>(
+        "lingtai_agent_detail_back");
+    chat_top_bar_ = detail->findChild<QWidget *>("lingtai_chat_top_bar");
+    selected_agent_key_ = detail->findChild<QLabel *>(
+        "lingtai_selected_agent_key");
+    composer_ = detail->findChild<Ui::RpWidget *>("lingtai_composer");
+
+    page_nav_buttons_.clear();
+    secondary_pages_.clear();
+    if (auto *nav_conversation = detail->findChild<QPushButton *>(
+            "lingtai_agent_page_nav_conversation")) {
+        page_nav_buttons_.push_back(nav_conversation);
+    }
+    if (auto *nav_presets = detail->findChild<QPushButton *>(
+            "lingtai_agent_page_nav_presets")) {
+        page_nav_buttons_.push_back(nav_presets);
+    }
+
+    if (auto *preset_section = detail->findChild<QWidget *>(
+            "lingtai_selected_agent_preset_summary_section")) {
+        secondary_pages_.push_back(preset_section);
+    }
+
+    kanban_page_ = detail->findChild<KanbanPage *>();
+    if (kanban_page_) secondary_pages_.push_back(kanban_page_);
+
+    // Delegate all user actions + page transitions back into the shell,
+    // keeping business logic and data reads here while the view owns the
+    // widget tree and page visibility.
+    QObject::connect(detail_view_, &AgentDetailView::back_requested,
+        [this] { handle_detail_back(); });
+    QObject::connect(detail_view_, &AgentDetailView::start_requested,
+        [this] { handle_start_agent(); });
+    QObject::connect(detail_view_, &AgentDetailView::sleep_requested,
+        [this] { handle_request_sleep(); });
+    QObject::connect(detail_view_, &AgentDetailView::send_message_requested,
+        [this](const QString &) { handle_send_message(); });
+    QObject::connect(detail_view_, &AgentDetailView::kanban_agent_selected,
+        [this](const fs::path &directory_key) {
+            handle_kanban_agent_selected(directory_key);
+        });
+    QObject::connect(detail_view_, &AgentDetailView::page_changed,
+        [this](AgentDetailPage previous, AgentDetailPage current) {
+            current_detail_page_ = current;
+            if (current == AgentDetailPage::kanban) {
+                render_kanban();
+            }
+            if (current == AgentDetailPage::presets) {
+                render_agent_preset_summary();
+            }
+            if (previous != current && selection_state_.active_project()
+                && window_) {
+                recompute_layout(window_->body()->width());
+            }
+        });
+
     show_detail_page(AgentDetailPage::conversation);
 
     // One simple view-scoped timer: it re-invokes the same stateless
@@ -2298,7 +2367,7 @@ void NativeShell::refresh_system_palette() {
             "lingtai_slash_command_popup")) {
         apply_slash_popup_palette(popup);
     }
-    if (kanban_page_) kanban_page_->apply_chrome();
+    if (detail_view_) detail_view_->refresh_chrome();
     render_conversation();
     window_->update();
     for (auto *widget : window_->findChildren<QWidget *>()) {
@@ -2943,41 +3012,32 @@ void NativeShell::render_roster() {
 // selected Agent. It reads the human's own mailbox and infers nothing about
 // delivery, replies, or unread state.
 void NativeShell::render_conversation() {
-    auto *surface = window_->findChild<ConversationSurface *>(
-        "lingtai_selected_agent_conversation");
-    auto *state = window_->findChild<QLabel *>(
-        "lingtai_selected_agent_conversation_state");
-    auto *composer_input = static_cast<Ui::InputField *>(
-        window_->findChild<QObject *>("lingtai_composer_input"));
-    auto *send_button = static_cast<Ui::RoundButton *>(
-        window_->findChild<QObject *>("lingtai_composer_send_button"));
-    if (!surface || !state || !composer_input || !send_button) return;
-    // Composer enablement only; never touches typed text or send status, so a
-    // refresh right after a send does not erase the status it just set.
-    const auto set_composer_eligible = [&](bool eligible) {
-        composer_input->setEnabled(eligible);
-        send_button->setEnabled(eligible);
-    };
+    if (!detail_view_) return;
 
-    if (!selection_state_.active_project()
-        || !selection_state_.selected_agent_directory_key()) {
-        surface->set_plain_state(QStringLiteral(
-            "Select an Agent to see your conversation."));
-        state->setText(QString());
-        set_composer_eligible(false);
+    const bool selection_present = selection_state_.active_project()
+        && selection_state_.selected_agent_directory_key();
+
+    if (!selection_present) {
+        DirectConversationHistory empty;
+        detail_view_->render_conversation(
+            QString(), empty, QString(),
+            /*selection_present=*/false,
+            /*conversation_route_available=*/false);
         return;
     }
+
     const auto route = resolve_direct_conversation_route(
         *selection_state_.active_project(), agents_,
         selection_state_.selected_agent_directory_key());
-    if (!route) {
-        surface->set_plain_state(QStringLiteral(
-                "No conversation is available for this selection."));
-        state->setText(QString());
-        set_composer_eligible(false);
+    const bool route_available = route.has_value();
+    if (!route_available) {
+        DirectConversationHistory empty;
+        detail_view_->render_conversation(
+            QString(), empty, QString(),
+            /*selection_present=*/true,
+            /*conversation_route_available=*/false);
         return;
     }
-    set_composer_eligible(true);
 
     const auto history = read_direct_conversation(*route);
     const auto *presentation_name = window_->findChild<QLabel *>(
@@ -2990,13 +3050,7 @@ void NativeShell::render_conversation() {
     const auto them = !full_title.isEmpty()
         ? full_title
         : path_text(route->target_directory_key);
-    // The owner rebuilds only on real change and owns the exact was-at-bottom
-    // capture plus scroll restoration; composer code stays untouched.
-    if (history.messages.empty()) {
-        surface->set_plain_state(QStringLiteral("No messages yet."));
-    } else {
-        surface->set_conversation(them, history.messages);
-    }
+
     const auto count = history.messages.size();
     auto compact = count == 1
         ? QStringLiteral("1 message")
@@ -3004,7 +3058,11 @@ void NativeShell::render_conversation() {
     if (history.skipped > 0) {
         compact += QStringLiteral(" · %1 skipped").arg(history.skipped);
     }
-    state->setText(compact);
+
+    detail_view_->render_conversation(
+        them, history, compact,
+        /*selection_present=*/true,
+        /*conversation_route_available=*/true);
 }
 
 // Called only when the selected target actually changes (a fresh project open
@@ -3030,99 +3088,32 @@ void NativeShell::reset_composer() {
 // exactly as read, so an absent/stale/unavailable current observation never
 // keeps a prior target's projection visible.
 void NativeShell::render_agent_preset_summary() {
-    auto *catalog = window_->findChild<QTreeWidget *>(
-        "lingtai_selected_agent_preset_summary");
-    auto *state = window_->findChild<QLabel *>(
-        "lingtai_selected_agent_preset_summary_state");
-    if (!catalog || !state) return;
-    const auto set_state = [&](const QString &compact) {
-        if (state->text() != compact) state->setText(compact);
-    };
+    if (!detail_view_) return;
 
     if (!selection_state_.active_project()
         || !selection_state_.selected_agent_directory_key()) {
-        if (catalog->topLevelItemCount() != 0) catalog->clear();
-        catalog->setProperty("lingtai_preset_signature", QString());
-        set_state(QString());
+        detail_view_->render_preset_summary(std::nullopt);
         return;
     }
 
     const auto summary = read_agent_preset_summary(
         *selection_state_.active_project(),
         *selection_state_.selected_agent_directory_key());
-
-    QString compact;
-    auto refs = std::vector<std::string>();
-    switch (summary.source) {
-    case AgentPresetSummarySource::not_yet_published:
-        compact = QStringLiteral("Not yet published");
-        break;
-    case AgentPresetSummarySource::unavailable:
-        compact = QStringLiteral("Unavailable");
-        break;
-    case AgentPresetSummarySource::resolved:
-        compact = QStringLiteral("Resolved");
-        for (const auto &ref : summary.allowed) refs.push_back(ref.ref);
-        break;
-    case AgentPresetSummarySource::stale:
-        compact = QStringLiteral("Stale");
-        for (const auto &ref : summary.allowed) refs.push_back(ref.ref);
-        break;
-    }
-
-    auto signature = compact + QLatin1Char('\n');
-    for (const auto &ref : refs) {
-        signature += QString::fromStdString(ref) + QLatin1Char('\n');
-    }
-    if (summary.active_ref) {
-        signature += QStringLiteral("active:")
-            + QString::fromStdString(*summary.active_ref);
-    }
-    if (catalog->property("lingtai_preset_signature").toString() == signature) {
-        set_state(compact);
-        return;
-    }
-    catalog->setProperty("lingtai_preset_signature", signature);
-    catalog->clear();
-    set_state(compact);
-
-    const auto rows = build_preset_catalog_rows_from_refs(refs);
-    QTreeWidgetItem *active_item = nullptr;
-    for (auto index = 0; index != static_cast<int>(rows.size()); ++index) {
-        add_preset_catalog_row(catalog, rows[static_cast<std::size_t>(index)],
-            index);
-        auto *item = catalog->topLevelItem(catalog->topLevelItemCount() - 1);
-        if (summary.active_ref
-                && rows[static_cast<std::size_t>(index)].entry.path
-                    == *summary.active_ref) {
-            active_item = item;
-        }
-    }
-    if (active_item) {
-        catalog->setCurrentItem(active_item);
-    } else if (catalog->topLevelItemCount() > 0) {
-        catalog->setCurrentItem(catalog->topLevelItem(0));
-    }
+    detail_view_->render_preset_summary(summary);
 }
 
 void NativeShell::render_kanban() {
-    if (!kanban_page_ || current_detail_page_ != AgentDetailPage::kanban) {
+    if (!detail_view_
+        || current_detail_page_ != AgentDetailPage::kanban) {
         return;
     }
-    auto *outer = window_->findChild<QScrollArea *>(
-        "lingtai_agent_detail_scroll");
-    const auto outer_pos = outer && outer->verticalScrollBar()
-        ? outer->verticalScrollBar()->value() : 0;
     if (!selection_state_.active_project()) {
-        kanban_page_->set_board({}, std::nullopt);
+        detail_view_->render_kanban({}, std::nullopt);
         return;
     }
-    kanban_page_->set_board(
+    detail_view_->render_kanban(
         read_kanban_board(*selection_state_.active_project(), agents_),
         selection_state_.selected_agent_directory_key());
-    if (outer && outer->verticalScrollBar()) {
-        outer->verticalScrollBar()->setValue(outer_pos);
-    }
 }
 
 void NativeShell::handle_kanban_agent_selected(const fs::path &directory_key) {
@@ -3532,9 +3523,13 @@ void NativeShell::recompute_layout(int body_width) {
         detail_back_button_->setVisible(false);
         const auto detail_width = body_width - roster_width
             - kRosterResizeHandleWidth - kRosterSeparatorWidth;
-        update_composer_width(detail_width);
-        update_top_bar_fit(detail_width);
-        fit_kanban_page(detail_width);
+        if (detail_view_) {
+            detail_view_->set_detail_width(detail_width);
+        } else {
+            update_composer_width(detail_width);
+            update_top_bar_fit(detail_width);
+            fit_kanban_page(detail_width);
+        }
         return;
     }
     const auto detail_active =
@@ -3547,9 +3542,13 @@ void NativeShell::recompute_layout(int body_width) {
     separator_->setVisible(false);
     content_->setVisible(detail_active);
     detail_back_button_->setVisible(detail_active);
-    update_composer_width(body_width);
-    update_top_bar_fit(body_width);
-    fit_kanban_page(body_width);
+    if (detail_view_) {
+        detail_view_->set_detail_width(body_width);
+    } else {
+        update_composer_width(body_width);
+        update_top_bar_fit(body_width);
+        fit_kanban_page(body_width);
+    }
 }
 
 // The one responsive chat-top-bar measure, re-entered on every recompute (and
@@ -3709,6 +3708,11 @@ void NativeShell::handle_detail_back() {
 // children (their object/accessibility anchors never move); switching only
 // flips the page visibility, and the source-facts labels stay hidden.
 void NativeShell::show_detail_page(AgentDetailPage page) {
+    if (detail_view_) {
+        current_detail_page_ = page;
+        detail_view_->set_page(page);
+        return;
+    }
     auto *conversation_heading = window_->findChild<QLabel *>(
         "lingtai_selected_agent_conversation_heading");
     auto *conversation = window_->findChild<QTextEdit *>(
