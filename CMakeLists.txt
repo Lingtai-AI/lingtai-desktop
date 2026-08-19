@@ -413,6 +413,32 @@ target_compile_options(lingtai_agent_preset_summary_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_agent_preset_summary_test PRIVATE
     lingtai_desktop_agent_preset_summary)
+
+add_executable(lingtai_agent_detail_view_test
+    tests/agent_detail_view_test.cpp
+    src/crl_integration.cpp)
+init_target(lingtai_agent_detail_view_test)
+target_compile_options(lingtai_agent_detail_view_test PRIVATE
+    -Wall -Wextra -Werror -pedantic
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-unused-parameter>
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-deprecated-this-capture>
+    $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-unused-parameter>
+    $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-deprecated-this-capture>)
+target_include_directories(lingtai_agent_detail_view_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(lingtai_agent_detail_view_test PRIVATE
+    lingtai_desktop_native_shell
+    desktop-app::lib_ui
+    Qt6::Widgets Qt6::Gui Qt6::Core)
+add_test(NAME agent_detail_view COMMAND lingtai_agent_detail_view_test)
+if(APPLE)
+    set_tests_properties(agent_detail_view PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
+else()
+    set_tests_properties(agent_detail_view PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
 add_executable(lingtai_kanban_model_test
     tests/kanban_model_test.cpp)
 init_target(lingtai_kanban_model_test)

@@ -1072,8 +1072,9 @@ std::unique_ptr<Ui::RpWindow> make_native_window() {
 
 } // namespace
 
-NativeShell::NativeShell()
-: window_(make_native_window()) {
+NativeShell::NativeShell(RuntimeOptions runtime_options)
+: runtime_options_(runtime_options)
+, window_(make_native_window()) {
     window_->setObjectName("lingtai_desktop_window");
     window_->setTitle(QString());
     window_->setWindowTitle(QStringLiteral("LingTai Desktop"));
@@ -1790,7 +1791,7 @@ NativeShell::NativeShell()
 
     #endif
 
-    auto *detail = new AgentDetailView(detail_scroll);
+    auto *detail = new AgentDetailView(runtime_options_, detail_scroll);
     detail_scroll->setWidget(detail);
     detail_view_ = detail;
 

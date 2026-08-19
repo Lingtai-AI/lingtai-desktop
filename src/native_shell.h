@@ -6,6 +6,7 @@
 #include "agent_sleep.h"
 #include "project_bootstrap.h"
 #include "project_setup_wizard.h"
+#include "runtime_options.h"
 #include "ui/agent_roster.h"
 #include "workspace_selection.h"
 
@@ -72,7 +73,7 @@ class NativeShell final {
 public:
     using OpenProjectRequestHandler = std::function<void()>;
 
-    NativeShell();
+    explicit NativeShell(RuntimeOptions runtime_options = {});
     ~NativeShell();
 
     NativeShell(const NativeShell &) = delete;
@@ -201,6 +202,7 @@ private:
     };
 
     WorkspaceSelectionState selection_state_;
+    RuntimeOptions runtime_options_;
     std::unique_ptr<Ui::RpWindow> window_;
     // The one no-project launch canvas. It owns only the first project CTA;
     // the existing roster/detail workspace replaces it after project open.

@@ -4,6 +4,7 @@
 #include "direct_conversation_history.h"
 #include "kanban_model.h"
 #include "native_shell.h" // for AgentDetailPage enum
+#include "runtime_options.h"
 
 #include "ui/rp_widget.h"
 
@@ -38,6 +39,7 @@ class AgentDetailView final : public Ui::RpWidget {
 
 public:
     explicit AgentDetailView(
+        RuntimeOptions runtime_options,
         QScrollArea *outer_scroll,
         QWidget *parent = nullptr);
     ~AgentDetailView() override = default;
@@ -88,6 +90,7 @@ signals:
         const std::filesystem::path &directory_key);
 
 private:
+    RuntimeOptions runtime_options_;
     QScrollArea *outer_scroll_ = nullptr;
 
     AgentDetailPage page_ = AgentDetailPage::conversation;

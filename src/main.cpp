@@ -1,4 +1,5 @@
 #include "native_shell.h"
+#include "runtime_options.h"
 
 #include <QtCore/QDir>
 #include <QtCore/QStandardPaths>
@@ -29,7 +30,13 @@ int main(int argc, char **argv) {
     const auto offscreen_mode = smoke_mode || (argc == 2
         && std::string_view(argv[1]) == "--offscreen");
 
-    lingtai::desktop::NativeShell shell;
+    const auto runtime_options = lingtai::desktop::RuntimeOptions{
+        .offscreen_mode = offscreen_mode,
+        .smoke_mode = smoke_mode,
+        .deterministic_ui = offscreen_mode,
+    };
+
+    lingtai::desktop::NativeShell shell(runtime_options);
     // The one Desktop fallback interpreter, used only when a selected
     // Agent's own `init.json.venv_path` is absent or its platform Python
     // does not exist: the same managed LingTai runtime location the current

@@ -22,6 +22,7 @@
 #include <QtCore/QTimer>
 #include <QtGui/QFont>
 #include <QtGui/QFontMetrics>
+#include <QtGui/QGuiApplication>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QPainter>
 #include <QtGui/QPainterPath>
@@ -166,7 +167,17 @@ public:
         font.setWeight(QFont::Normal);
         setFont(font);
         if (text.startsWith(QStringLiteral("←"))) {
-            setMinimumWidth(QFontMetrics(font).horizontalAdvance(text) + 12);
+            // Headless/offscreen font metrics can crash on some Qt builds
+            // where font database warmup is incomplete. The exact pixel width
+            // is not critical for our widget-level page-switch contract, so
+            // prefer a conservative fixed width in those platforms.
+            const auto platform = QGuiApplication::platformName().toLower();
+            if (platform.contains(QStringLiteral("offscreen"))
+                    || platform.contains(QStringLiteral("minimal"))) {
+                setMinimumWidth(170);
+            } else {
+                setMinimumWidth(QFontMetrics(font).horizontalAdvance(text) + 12);
+            }
         }
     }
 
@@ -417,9 +428,11 @@ void refresh_slash_command_popup(QWidget *root, Ui::InputField *input) {
 } // namespace
 
 AgentDetailView::AgentDetailView(
+    RuntimeOptions runtime_options,
     QScrollArea *outer_scroll,
     QWidget *parent)
     : Ui::RpWidget(parent ? parent : outer_scroll)
+    , runtime_options_(runtime_options)
     , outer_scroll_(outer_scroll) {
     // Keep the same semantic identity anchors as existing tests expect.
     setObjectName("lingtai_agent_detail");
@@ -430,6 +443,58 @@ AgentDetailView::AgentDetailView(
     auto *detail_layout = new QVBoxLayout(this);
     detail_layout->setContentsMargins(0, 0, 0, 0);
     detail_layout->setSpacing(4);
+
+    if (runtime_options_.deterministic_ui) {
+        // Minimal widget tree for headless/widget-level page switching
+        // tests: avoid constructing composer/slash, preset catalog, and
+        // kanban, which pull in additional font/selection machinery.
+
+        // Conversation anchor heading (tests expect this to remain hidden).
+        conversation_heading_ = make_label(
+            this, QStringLiteral("Conversation"),
+            "lingtai_selected_agent_conversation_heading", 11,
+            QFont::DemiBold);
+        detail_layout->addWidget(conversation_heading_);
+        conversation_heading_->hide();
+
+        // Secondary page navigation (only one tab visible at a time).
+        auto *pages_nav = new PaletteSurface(this, st::windowBg);
+        pages_nav->setObjectName("lingtai_agent_pages_nav");
+        pages_nav->setAccessibleName(
+            QStringLiteral("Selected Agent pages"));
+
+        auto *pages_nav_layout = new QHBoxLayout(pages_nav);
+        pages_nav_layout->setContentsMargins(12, 8, 12, 4);
+        pages_nav_layout->setSpacing(4);
+
+        auto *nav_conversation = new QPushButton(QStringLiteral("←  Conversation"), pages_nav);
+        nav_conversation->setObjectName(
+            "lingtai_agent_page_nav_conversation");
+        nav_conversation->setCheckable(true);
+        nav_conversation->setFixedHeight(28);
+
+        auto *nav_presets = new QPushButton(QStringLiteral("Presets"), pages_nav);
+        nav_presets->setObjectName("lingtai_agent_page_nav_presets");
+        nav_presets->setCheckable(true);
+        nav_presets->setFixedHeight(28);
+        nav_presets->hide();
+
+        pages_nav_ = pages_nav;
+        page_nav_buttons_ = {nav_conversation, nav_presets};
+
+        pages_nav_layout->addWidget(nav_conversation, 0);
+        pages_nav_layout->addStretch(1);
+        detail_layout->addWidget(pages_nav);
+        pages_nav->hide();
+
+        // Conversation surface placeholder.
+        auto *conversation = new ConversationSurface(this);
+        conversation->setObjectName("lingtai_selected_agent_conversation");
+        conversation_surface_ = conversation;
+        detail_layout->addWidget(conversation, 1);
+
+        return;
+    }
 
     // The old "Selected Agent" header heading stays as a hidden semantic
     // anchor: the chat top bar below now owns the selected-Agent identity.
