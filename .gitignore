@@ -11,3 +11,6 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .DS_Store
+
+# UI test run outputs (baselines stay under tests/visual/baselines/).
+artifacts/

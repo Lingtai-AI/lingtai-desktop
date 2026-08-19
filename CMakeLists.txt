@@ -665,3 +665,34 @@ else()
     set_tests_properties(conversation_surface_typography PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
+
+# CTest labels for UI testing workflow (see tests/UI_TESTING_PLAN.md).
+set(LINGTAI_UNIT_TESTS
+    project_attachment
+    agent_projection
+    direct_conversation_route
+    slash_command
+    direct_conversation_history
+    direct_mail_publisher
+    agent_preset_summary
+    kanban_model
+    agent_sleep
+    agent_prompt_actions
+    posix_descriptor_primitives
+    workspace_selection
+    agent_command_runner)
+foreach(test_name IN LISTS LINGTAI_UNIT_TESTS)
+    set_tests_properties(${test_name} PROPERTIES LABELS "unit")
+endforeach()
+
+set(LINGTAI_UI_TESTS
+    native_shell
+    native_shell_behavior
+    native_shell_destinations
+    agent_roster_presentation
+    native_shell_presets
+    conversation_surface_typography
+    agent_detail_view)
+foreach(test_name IN LISTS LINGTAI_UI_TESTS)
+    set_tests_properties(${test_name} PROPERTIES LABELS "ui")
+endforeach()

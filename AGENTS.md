@@ -48,3 +48,19 @@ Keep the one focused repository-contract test focused on pinned dependency
 provenance and tracked-artifact hygiene. Add a test only for a clearly
 distinct, owned behavior, and prefer a real CMake/ctest target over a
 Python wrapper that recompiles a C++ contract ctest already builds and runs.
+
+## UI testing (mac-first)
+
+Full plan: [`tests/UI_TESTING_PLAN.md`](tests/UI_TESTING_PLAN.md).
+
+**Platform decision:** visual baselines and CI gating are **macOS only**.
+Linux is out of scope unless it becomes a shipping target.
+
+When UI code changes:
+
+1. Run unit tests and `./scripts/run-ui-tests.sh`.
+2. Do not auto-update visual baselines to make tests pass.
+3. Inspect diff artifacts first; update baselines only via
+   `./scripts/update-ui-baselines.sh` when the visual change is intentional.
+4. Prefer widget `objectName` + Qt Test interaction over coordinate automation.
+5. Do not weaken global visual diff thresholds.
