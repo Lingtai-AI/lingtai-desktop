@@ -1886,7 +1886,9 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
         // refresh it: Reload and entering /kanban already do. Live refresh
         // here stalls scrolling on large agents.
     });
-    activity_timer_->start();
+    if (!runtime_options_.ui_test_mode) {
+        activity_timer_->start();
+    }
 
     bootstrap_runner_ = std::make_unique<ProjectBootstrapRunner>();
 

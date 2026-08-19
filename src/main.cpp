@@ -10,7 +10,6 @@
 
 #include <filesystem>
 #include <iostream>
-#include <string_view>
 
 int main(int argc, char **argv) {
     // QT_LOGGING_RULES is semicolon-separated. A newline makes Qt treat both
@@ -25,16 +24,10 @@ int main(int argc, char **argv) {
         QStringLiteral("Helvetica"),
         QStringLiteral("Arial"),
     });
-    const auto smoke_mode = argc == 2
-        && std::string_view(argv[1]) == "--smoke";
-    const auto offscreen_mode = smoke_mode || (argc == 2
-        && std::string_view(argv[1]) == "--offscreen");
-
-    const auto runtime_options = lingtai::desktop::RuntimeOptions{
-        .offscreen_mode = offscreen_mode,
-        .smoke_mode = smoke_mode,
-        .deterministic_ui = offscreen_mode,
-    };
+    const auto runtime_options =
+        lingtai::desktop::resolve_runtime_options(argc, argv);
+    const auto offscreen_mode = runtime_options.offscreen_mode;
+    const auto smoke_mode = runtime_options.smoke_mode;
 
     lingtai::desktop::NativeShell shell(runtime_options);
     // The one Desktop fallback interpreter, used only when a selected
@@ -75,6 +68,10 @@ int main(int argc, char **argv) {
         shell.show_offscreen();
     } else {
         shell.show();
+    }
+
+    if (runtime_options.ui_test_mode && !runtime_options.fixture_path.empty()) {
+        static_cast<void>(shell.open_project(runtime_options.fixture_path));
     }
 
     if (smoke_mode) {

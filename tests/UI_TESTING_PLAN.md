@@ -347,11 +347,12 @@ Partial work already landed; treat as inputs to this plan, not completion:
 
 | Item | Status |
 | --- | --- |
-| `RuntimeOptions` in `src/runtime_options.h` | Started (`offscreen_mode`, `smoke_mode`, `deterministic_ui`) |
+| `RuntimeOptions` + `resolve_runtime_options` | **Done** (`ui_test_mode`, `--ui-test`, env vars, activity timer guard) |
+| Phase 4 harness (`UiTestHarness.h`, empty fixture, `ui_test_harness`) | **Done** |
 | `AgentDetailView` extraction + delegation | Done |
 | Headless widget test `agent_detail_view_test` | Done (narrow contract, not full visual suite) |
 | Stable `lingtai_*` objectNames | Largely present; registry in `tests/ui/OBJECT_NAMES.md` + `object_names.h` |
-| CTest labels `unit` / `ui` / `visual` | **Done** (`unit` ×13, `ui` ×7; no `visual` tests yet) |
+| CTest labels `unit` / `ui` / `visual` | **Done** (`unit` ×13, `ui` ×8; no `visual` tests yet) |
 | Phase 1 dirs + scripts (`run-ui-tests.sh`, `update-ui-baselines.sh`, `ci/run-ui-macos.sh`) | **Done** |
 | `VisualTestUtils` stub + baseline dir layout | **Done** (compare logic lands Milestone 4) |
 | macOS CI workflow | Not yet |

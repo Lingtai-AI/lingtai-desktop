@@ -9,5 +9,6 @@ Shared helpers:
 
 - `object_names.h` — canonical `lingtai_*` identifiers for `findChild`
 - `UiTestUtils.h` — viewports, widget lookup, theme helpers
+- `UiTestHarness.h` — load fixture → show shell → open project (Phase 4)
 
 Registry: `OBJECT_NAMES.md`
