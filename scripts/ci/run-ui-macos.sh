@@ -22,5 +22,8 @@ ctest -L ui --output-on-failure
 if ctest -N -L visual 2>/dev/null | grep -q 'Total Tests: 0'; then
   echo "(no visual tests registered yet — skipping)"
 else
-  ctest -L visual --output-on-failure
+  if ! ctest -L visual --output-on-failure; then
+    echo "Visual failures: inspect $ARTIFACTS_DIR/visual/" >&2
+    exit 1
+  fi
 fi
