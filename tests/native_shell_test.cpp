@@ -5230,11 +5230,12 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
     auto *create_button = required_child<QPushButton>(
         *wizard, "lingtai_bootstrap_create_start");
 
-    require(wizard->minimumWidth() >= 840 && wizard->minimumHeight() >= 600
+    require(wizard->minimumWidth() == 0 && wizard->minimumHeight() == 0
             && wizard->parentWidget()
             && wizard->parentWidget()->objectName()
                 == QStringLiteral("lingtai_desktop_content"),
-        "new-folder setup must be a full workspace-sized route in the main window, not a separate dialog");
+        "new-folder setup must be an in-window route inside the content column, "
+        "not a separate dialog with its own inflated minimum size");
     require(dynamic_cast<QVBoxLayout *>(wizard->layout()) != nullptr
             && steps->height() <= 140,
         "Preset / Agents / Review flow must be one horizontal owner above the page, matching Ted's reference");
@@ -5268,10 +5269,11 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
                 Qt::ItemIsSelectable)
             && preset_catalog->topLevelItem(0)->isFirstColumnSpanned(),
         "the catalog must introduce saved presets and templates with non-selectable section rows");
-    require(preset_catalog->minimumHeight() >= 300
+    require(preset_catalog->minimumHeight() == 0
             && wizard->findChild<QWidget *>("lingtai_setup_preset_detail") == nullptr
             && wizard->findChild<QLabel *>("lingtai_setup_step_progress") == nullptr,
-        "preset selection must keep one catalog and a compact footer, not a boxed inspector or 1 of 3 chrome");
+        "preset selection must keep one scrollable catalog and a compact footer, "
+        "not a boxed inspector or 1 of 3 chrome");
     require(codex_strip != nullptr
             && codex_strip->minimumHeight() >= 52,
         "preset page must expose a Codex credentials strip above the footer");
@@ -5296,12 +5298,22 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
             && create_button->text() == QStringLiteral("Create orchestrator"),
         "the first setup step exposes an enabled Back to the homepage; Use/Configure is contextual; Edit preset saves; later pages keep Continue / Create orchestrator");
     require(preset_catalog->sizePolicy().verticalPolicy() == QSizePolicy::Expanding,
-        "the preset catalog must stretch with the wizard; file33 is the reference size, not a fixed cap");
+        "the preset catalog must stretch with the wizard instead of pinning a fixed height");
     wizard->setParent(nullptr);
     wizard->setAttribute(Qt::WA_DontShowOnScreen, true);
     wizard->resize(920, 840);
     wizard->show();
     QCoreApplication::processEvents();
+    const auto below = [](QWidget *upper, QWidget *lower, QWidget *root) {
+        return upper->mapTo(root, QPoint(0, upper->height())).y()
+            <= lower->mapTo(root, QPoint(0, 0)).y();
+    };
+    const auto assert_preset_stack = [&]() {
+        require(below(preset_catalog, codex_strip, wizard)
+                && below(codex_strip, preset_footer, wizard)
+                && below(codex_strip, continue_button, wizard),
+            "preset catalog, Codex strip, and compact footer must stack without overlapping");
+    };
     const auto click_widget = [](QWidget *widget) {
         const auto center = widget->rect().center();
         const auto global = widget->mapToGlobal(center);
@@ -5348,7 +5360,7 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
     QCoreApplication::processEvents();
     pages->setCurrentWidget(credentials_page);
     QCoreApplication::processEvents();
-    wizard->resize(840, 840);
+    wizard->resize(380, 480);
     QCoreApplication::processEvents();
     pages->setCurrentWidget(preset_page);
     QCoreApplication::processEvents();
@@ -5356,6 +5368,7 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
             && preset_catalog->width() <= pages->width() + 1,
         "returning to the preset catalog after a hidden resize must keep the "
         "page inside the setup stack, never the previous wider pane");
+    assert_preset_stack();
     auto *edit_manage = required_child<QPushButton>(
         *edit_page, "lingtai_setup_edit_preset_manage");
     require(edit_manage->cursor().shape() == Qt::PointingHandCursor
@@ -5385,17 +5398,11 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
         "credentials back from Edit preset must return to the editor");
     pages->setCurrentWidget(preset_page);
     QCoreApplication::processEvents();
-    const auto below = [](QWidget *upper, QWidget *lower, QWidget *root) {
-        return upper->mapTo(root, QPoint(0, upper->height())).y()
-            <= lower->mapTo(root, QPoint(0, 0)).y();
-    };
-    require(below(preset_catalog, codex_strip, wizard)
-            && below(codex_strip, preset_footer, wizard)
-            && below(codex_strip, continue_button, wizard),
-        "preset catalog, Codex strip, and compact footer must stack without overlapping");
-    require(preset_search->width() <= 520 && preset_search->width() >= 240
-            && preset_search->width() < wizard->width() / 2 + 80,
-        "search stays left-aligned at a preferred width instead of stretching across the window");
+    assert_preset_stack();
+    require(preset_search->width() <= 520
+            && preset_search->width() < wizard->width(),
+        "search must stay narrower than the wizard instead of stretching edge "
+        "to edge");
     require(preset_catalog->visualItemRect(preset_catalog->topLevelItem(0)).height()
                 <= 36,
         "section labels must be short tinted bands, not full-height data rows");

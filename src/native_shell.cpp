@@ -2019,7 +2019,9 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
     preset_catalog->setHeaderLabels({ QStringLiteral("Preset"),
         QStringLiteral("Provider / model"), QStringLiteral("Capabilities") });
     configure_preset_table(preset_catalog);
-    preset_catalog->setMinimumHeight(300);
+    preset_catalog->setMinimumHeight(0);
+    preset_catalog->setSizePolicy(
+        QSizePolicy::Expanding, QSizePolicy::Expanding);
     add_preset_section(preset_catalog, QStringLiteral("Saved presets"));
     add_preset_section(preset_catalog, QStringLiteral("Preset templates"));
     preset_layout->addWidget(preset_catalog, 1);
@@ -2578,7 +2580,6 @@ void NativeShell::show_setup_wizard(
             preset_footer_plain(name, provider_model, tags));
     }
     setup_route_visible_ = true;
-    setup_route_->setMinimumSize(840, 600);
     setup_route_->show();
     setup_route_->setFocus();
     refresh_route();
