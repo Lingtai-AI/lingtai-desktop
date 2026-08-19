@@ -25,8 +25,8 @@ test proves. This file descends into `tests/` itself.
   provenance and tracked-artifact hygiene: it asserts the exact
   `cmake/desktop-app-toolkit-lock.json` pins (Qt 6.11.1, the
   `tdesktop_commit`, and the seven pinned toolkit commits) and that no
-  `.deps/`, `build/`, `Qt/`, or `/tmp/` path and no leaked
-  `/tmp/lingtai-lib-ui-validation` marker is tracked by git. It is run with
+  `.deps/`, `build/`, `Qt/`, or system-temp paths and no leaked
+  validation-root marker from lib-ui validation is tracked by git. It is run with
   `python3 -m unittest tests.test_repository_contract`, deliberately not as
   a ctest: it is a repository contract, not a product behavior, and it is
   deliberately not a repository-shape or CMake-source assertion suite.
