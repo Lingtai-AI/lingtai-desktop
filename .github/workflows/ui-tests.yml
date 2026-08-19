@@ -1,0 +1,63 @@
+name: UI Tests (macOS)
+
+on:
+  pull_request:
+    paths:
+      - "**"
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Phase 16 split: PR runs unit + ui + visual (normal/light). Nightly can
+# extend the matrix to compact/wide and dark once those baselines exist.
+
+concurrency:
+  group: lingtai-desktop-ui-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ui-tests:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Qt 6.11.1
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.11.1"
+          host: mac
+          target: desktop
+          cache: true
+
+      - name: Bootstrap dependencies
+        env:
+          QT_ROOT: ${{ env.QT_ROOT_DIR }}/macos
+        run: ./scripts/bootstrap-deps.sh
+
+      - name: Configure
+        env:
+          QT_ROOT: ${{ env.QT_ROOT_DIR }}/macos
+        run: ./scripts/configure.sh
+
+      - name: Build
+        run: ./scripts/build.sh
+
+      - name: Repository contract
+        run: python3 -m unittest tests.test_repository_contract
+
+      - name: Run UI tests (unit + ui + visual)
+        env:
+          QT_QPA_PLATFORM: cocoa
+          ARTIFACTS_DIR: ${{ github.workspace }}/artifacts
+        run: ./scripts/ci/run-ui-macos.sh
+
+      - name: Upload visual failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lingtai-desktop-ui-artifacts
+          path: artifacts/
+          if-no-files-found: ignore
