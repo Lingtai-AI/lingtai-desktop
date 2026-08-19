@@ -497,6 +497,45 @@ else()
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
+add_library(lingtai_visual_test_utils STATIC
+    tests/visual/VisualTestUtils.cpp)
+init_target(lingtai_visual_test_utils)
+target_include_directories(lingtai_visual_test_utils PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+target_link_libraries(lingtai_visual_test_utils PUBLIC
+    Qt6::Widgets Qt6::Gui Qt6::Core)
+
+add_executable(lingtai_agent_detail_visual_test
+    tests/visual/agent_detail_visual_test.cpp
+    src/crl_integration.cpp)
+init_target(lingtai_agent_detail_visual_test)
+target_compile_options(lingtai_agent_detail_visual_test PRIVATE
+    -Wall -Wextra -Werror -pedantic
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-unused-parameter>
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-deprecated-this-capture>
+    $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-unused-parameter>
+    $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-deprecated-this-capture>)
+target_include_directories(lingtai_agent_detail_visual_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+target_compile_definitions(lingtai_agent_detail_visual_test PRIVATE
+    LINGTAI_UI_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
+    LINGTAI_VISUAL_BASELINE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/tests/visual/baselines")
+target_link_libraries(lingtai_agent_detail_visual_test PRIVATE
+    lingtai_visual_test_utils
+    lingtai_desktop_native_shell
+    desktop-app::lib_ui
+    Qt6::Widgets Qt6::Gui Qt6::Core)
+add_test(NAME agent_detail_visual
+    COMMAND lingtai_agent_detail_visual_test)
+if(APPLE)
+    set_tests_properties(agent_detail_visual PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
+else()
+    set_tests_properties(agent_detail_visual PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
 add_executable(lingtai_kanban_model_test
     tests/kanban_model_test.cpp)
 init_target(lingtai_kanban_model_test)
@@ -755,4 +794,10 @@ set(LINGTAI_UI_TESTS
     ui_agent_detail_pages)
 foreach(test_name IN LISTS LINGTAI_UI_TESTS)
     set_tests_properties(${test_name} PROPERTIES LABELS "ui")
+endforeach()
+
+set(LINGTAI_VISUAL_TESTS
+    agent_detail_visual)
+foreach(test_name IN LISTS LINGTAI_VISUAL_TESTS)
+    set_tests_properties(${test_name} PROPERTIES LABELS "ui;visual")
 endforeach()
