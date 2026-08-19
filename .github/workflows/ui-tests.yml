@@ -32,6 +32,9 @@ jobs:
           target: desktop
           cache: true
 
+      - name: Install UI test fonts
+        run: ./scripts/ci/install-ui-test-fonts.sh
+
       - name: Bootstrap dependencies
         env:
           QT_ROOT: ${{ env.QT_ROOT_DIR }}

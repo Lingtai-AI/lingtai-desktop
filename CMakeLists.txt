@@ -507,6 +507,7 @@ target_link_libraries(lingtai_visual_test_utils PUBLIC
 
 add_executable(lingtai_agent_detail_visual_test
     tests/visual/agent_detail_visual_test.cpp
+    tests/ui/UiTestFonts.cpp
     src/crl_integration.cpp)
 init_target(lingtai_agent_detail_visual_test)
 target_compile_options(lingtai_agent_detail_visual_test PRIVATE
@@ -520,6 +521,7 @@ target_include_directories(lingtai_agent_detail_visual_test PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/tests")
 target_compile_definitions(lingtai_agent_detail_visual_test PRIVATE
     LINGTAI_UI_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
+    LINGTAI_UI_TEST_FONTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fonts"
     LINGTAI_VISUAL_BASELINE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/tests/visual/baselines")
 target_link_libraries(lingtai_agent_detail_visual_test PRIVATE
     lingtai_visual_test_utils

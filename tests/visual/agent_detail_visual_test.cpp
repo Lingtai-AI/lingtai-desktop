@@ -1,6 +1,7 @@
 #include "native_shell.h"
 
 #include "ui/UiTestHarness.h"
+#include "ui/UiTestFonts.h"
 #include "ui/object_names.h"
 #include "visual/VisualSnapshotHarness.h"
 #include "visual/VisualTestUtils.h"
@@ -8,6 +9,7 @@
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QWidget>
 
+#include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 
@@ -68,8 +70,11 @@ void verify_conversation_snapshot(
 } // namespace
 
 int main(int argc, char **argv) {
+    qputenv("QT_LOGGING_RULES",
+        "qt.qpa.fonts.warning=false;qt.qpa.keymapper.warning=false");
     lingtai::desktop::ui_test::applyMacTestPlatformDefaults();
     QApplication app(argc, argv);
+    lingtai::desktop::ui_test::applyUiTestFontDefaults();
 
     try {
         verify_conversation_snapshot(
