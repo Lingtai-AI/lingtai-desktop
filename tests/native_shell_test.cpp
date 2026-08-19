@@ -54,9 +54,11 @@
 #include <QtWidgets/QTreeWidget>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <iterator>
 #include <map>
@@ -5451,6 +5453,148 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
     }
 }
 
+namespace {
+
+using lingtai::desktop::NativeShell;
+
+template<typename Fn>
+void with_offscreen_shell(Fn &&run) {
+    NativeShell shell;
+    shell.show_offscreen();
+    QCoreApplication::processEvents();
+    run(shell);
+}
+
+void run_native_shell_journey(
+        std::string_view journey,
+        const fs::path &project_root) {
+    if (journey == "semantics") {
+        const auto original_palette = QApplication::palette();
+        verify_dark_application_palette_inheritance(
+            project_root / "commit-8-palette-fixture");
+        require(QApplication::palette() == original_palette,
+            "dark palette test must restore the application palette");
+        with_offscreen_shell([&](NativeShell &shell) {
+            verify_live_system_palette(shell);
+            verify_removed_activity_and_task_card_destinations(shell);
+            verify_semantics_and_request(shell, project_root);
+        });
+        return;
+    }
+    if (journey == "bootstrap") {
+        with_offscreen_shell([&](NativeShell &shell) {
+            verify_first_project_bootstrap(
+                shell, project_root / "commit-22-bootstrap-fixture");
+        });
+        return;
+    }
+    if (journey == "roster") {
+        with_offscreen_shell([&](NativeShell &shell) {
+            verify_persistent_roster_shell(
+                shell, project_root / "commit-24-roster-shell-fixture");
+            verify_open_project_behavior(
+                shell, project_root / "commit-7-open-project-fixtures");
+        });
+        return;
+    }
+    if (journey == "conversation") {
+        with_offscreen_shell([&](NativeShell &shell) {
+            verify_selected_agent_conversation(
+                shell, project_root / "commit-13-conversation-fixture");
+            verify_composer_send_behavior(
+                shell, project_root / "commit-14-composer-fixture");
+            verify_conversation_slash_interception(
+                shell, project_root / "u2-slash-interception-fixture");
+        });
+        return;
+    }
+    if (journey == "lifecycle") {
+        with_offscreen_shell([&](NativeShell &shell) {
+            verify_request_sleep_action(
+                shell, project_root / "commit-16-sleep-fixture");
+            verify_start_agent_action(
+                shell, project_root / "commit-17-start-fixture");
+            verify_agent_preset_summary_panel(
+                shell, project_root / "commit-19-preset-summary-fixture");
+        });
+        return;
+    }
+    if (journey == "layout") {
+        with_offscreen_shell([&](NativeShell &shell) {
+            verify_layout(shell, project_root / "commit-30-responsive-fixture");
+            verify_resizable_sidebar(
+                shell, project_root / "commit-r1-resizable-sidebar-fixture");
+            verify_selected_agent_dashboard_layout(
+                shell, project_root / "commit-28-dashboard-fixture");
+            verify_compact_header_hierarchy(
+                shell, project_root / "commit-32-compact-header-fixture");
+            verify_responsive_header_priority(shell, project_root);
+        });
+        return;
+    }
+    if (journey == "theme") {
+        with_offscreen_shell([&](NativeShell &shell) {
+            verify_telegram_theme_reset(
+                shell, project_root / "commit-31-theme-reset-fixture");
+            verify_two_surface_hierarchy(
+                shell, project_root / "commit-s1-two-surface-fixture");
+        });
+        return;
+    }
+    if (journey == "composer") {
+        with_offscreen_shell([&](NativeShell &shell) {
+            verify_modern_composer_surface(
+                shell, project_root / "commit-m4-composer-surface-fixture");
+            verify_plain_underline_page_tabs(
+                shell, project_root / "commit-tab-plain-underline-fixture");
+            verify_floating_composer_surface(
+                shell, project_root / "commit-fc-floating-composer-fixture");
+        });
+        return;
+    }
+    if (journey == "kanban") {
+        with_offscreen_shell([&](NativeShell &shell) {
+            verify_kanban_page(
+                shell, project_root / "kanban-page-fixture");
+            verify_preset_editor_model(
+                project_root / "preset-editor-model-fixture");
+            verify_project_setup_wizard_contract(shell);
+        });
+        return;
+    }
+    if (journey == "all") {
+        constexpr std::array kStages = {
+            "semantics",
+            "bootstrap",
+            "roster",
+            "conversation",
+            "lifecycle",
+            "layout",
+            "theme",
+            "composer",
+            "kanban",
+        };
+        for (const auto *stage : kStages) {
+            run_native_shell_journey(stage, project_root);
+        }
+        return;
+    }
+    throw std::runtime_error(
+        std::string("unknown native shell journey: ")
+        + std::string(journey));
+}
+
+[[nodiscard]] std::optional<std::string_view> parse_journey_flag(
+        std::string_view arg) {
+    constexpr auto prefix = std::string_view("--journey=");
+    if (arg.starts_with(prefix)) {
+        return arg.substr(prefix.size());
+    }
+    return std::nullopt;
+}
+
+} // namespace
+
 int main(int argc, char **argv) {
     // Test-local execution modes: the exact binary with a fresh fixture root
     // and one literal flag runs only the R1 resizable-sidebar, R4
@@ -5476,17 +5620,23 @@ int main(int argc, char **argv) {
         && std::string_view(argv[2]) == "--project-setup-only";
     const auto kanban_only = argc == 3
         && std::string_view(argv[2]) == "--kanban-only";
-    if (argc != 2 && !responsive_sidebar_only && !responsive_header_only
-            && !modern_composer_only && !slash_interception_only
-            && !compact_header_only && !two_surface_only
-            && !plain_underline_only && !floating_composer_only
-            && !project_setup_only && !kanban_only) {
+    const auto journey_flag = argc == 3
+        ? parse_journey_flag(argv[2]) : std::nullopt;
+    const auto has_legacy_flag = responsive_sidebar_only
+        || responsive_header_only || modern_composer_only
+        || slash_interception_only || compact_header_only
+        || two_surface_only || plain_underline_only
+        || floating_composer_only || project_setup_only || kanban_only;
+    if (argc != 2 && !has_legacy_flag && !journey_flag) {
         std::cerr << "usage: native_shell_test PROJECT_ROOT "
-                     "[--responsive-sidebar-only|--responsive-header-only|"
+                     "[--journey=NAME|--journey=all|"
+                     "--responsive-sidebar-only|--responsive-header-only|"
                      "--modern-composer-only|--slash-interception-only|"
                      "--compact-header-only|--two-surface-only|"
                      "--plain-underline-only|--floating-composer-only|"
-                     "--project-setup-only|--kanban-only]\n";
+                     "--project-setup-only|--kanban-only]\n"
+                     "  journeys: semantics bootstrap roster conversation "
+                     "lifecycle layout theme composer kanban all\n";
         return 2;
     }
     try {
@@ -5581,50 +5731,10 @@ int main(int argc, char **argv) {
             std::cout << "native shell behavior: OK\n";
             return 0;
         }
-        const auto original_palette = QApplication::palette();
-        verify_dark_application_palette_inheritance(
-            project_root / "commit-8-palette-fixture");
-        require(QApplication::palette() == original_palette,
-            "dark palette test must restore the application palette");
-        lingtai::desktop::NativeShell shell;
-        shell.show_offscreen();
-        QCoreApplication::processEvents();
-        verify_live_system_palette(shell);
-        verify_removed_activity_and_task_card_destinations(shell);
-        verify_semantics_and_request(shell, project_root);
-        verify_first_project_bootstrap(
-            shell, project_root / "commit-22-bootstrap-fixture");
-        verify_persistent_roster_shell(
-            shell, project_root / "commit-24-roster-shell-fixture");
-        verify_open_project_behavior(
-            shell, project_root / "commit-7-open-project-fixtures");
-        verify_selected_agent_conversation(
-            shell, project_root / "commit-13-conversation-fixture");
-        verify_composer_send_behavior(
-            shell, project_root / "commit-14-composer-fixture");
-        verify_request_sleep_action(
-            shell, project_root / "commit-16-sleep-fixture");
-        verify_start_agent_action(
-            shell, project_root / "commit-17-start-fixture");
-        verify_agent_preset_summary_panel(
-            shell, project_root / "commit-19-preset-summary-fixture");
-        verify_layout(shell, project_root / "commit-30-responsive-fixture");
-        verify_resizable_sidebar(
-            shell, project_root / "commit-r1-resizable-sidebar-fixture");
-        verify_selected_agent_dashboard_layout(
-            shell, project_root / "commit-28-dashboard-fixture");
-        verify_telegram_theme_reset(
-            shell, project_root / "commit-31-theme-reset-fixture");
-        verify_two_surface_hierarchy(
-            shell, project_root / "commit-s1-two-surface-fixture");
-        verify_modern_composer_surface(
-            shell, project_root / "commit-m4-composer-surface-fixture");
-        verify_plain_underline_page_tabs(
-            shell, project_root / "commit-tab-plain-underline-fixture");
-        verify_floating_composer_surface(
-            shell, project_root / "commit-fc-floating-composer-fixture");
-        verify_kanban_page(
-            shell, project_root / "kanban-page-fixture");
+        const auto journey = journey_flag
+            ? *journey_flag
+            : std::string_view("all");
+        run_native_shell_journey(journey, project_root);
         std::cout << "native shell behavior: OK\n";
         return 0;
     } catch (const std::exception &error) {

@@ -659,9 +659,35 @@ target_link_libraries(lingtai_native_shell_test PRIVATE
 
 file(MAKE_DIRECTORY
     "${CMAKE_CURRENT_BINARY_DIR}/native-shell-no-write-fixture")
+set(NATIVE_SHELL_JOURNEYS
+    semantics
+    bootstrap
+    roster
+    conversation
+    lifecycle
+    layout
+    theme
+    composer
+    kanban)
+foreach(journey IN LISTS NATIVE_SHELL_JOURNEYS)
+    file(MAKE_DIRECTORY
+        "${CMAKE_CURRENT_BINARY_DIR}/native-shell-${journey}-fixture")
+    add_test(NAME native_shell_${journey}
+        COMMAND lingtai_native_shell_test
+            "${CMAKE_CURRENT_BINARY_DIR}/native-shell-${journey}-fixture"
+            --journey=${journey})
+    if(APPLE)
+        set_tests_properties(native_shell_${journey} PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
+    else()
+        set_tests_properties(native_shell_${journey} PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    endif()
+endforeach()
 add_test(NAME native_shell_behavior
     COMMAND lingtai_native_shell_test
-        "${CMAKE_CURRENT_BINARY_DIR}/native-shell-no-write-fixture")
+        "${CMAKE_CURRENT_BINARY_DIR}/native-shell-no-write-fixture"
+        --journey=all)
 if(APPLE)
     set_tests_properties(native_shell_behavior PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
@@ -784,6 +810,15 @@ endforeach()
 
 set(LINGTAI_UI_TESTS
     native_shell
+    native_shell_semantics
+    native_shell_bootstrap
+    native_shell_roster
+    native_shell_conversation
+    native_shell_lifecycle
+    native_shell_layout
+    native_shell_theme
+    native_shell_composer
+    native_shell_kanban
     native_shell_behavior
     native_shell_destinations
     agent_roster_presentation
