@@ -92,7 +92,7 @@ int main(int argc, char **argv) {
                 << " content=lingtai_desktop_content"
                 << " separator=lingtai_roster_separator"
                 << " roster=lingtai_agent_roster"
-                << " empty=visible"
+                << " startup=visible"
                 << " offscreen=true"
                 << " shown=true"
                 << std::endl;

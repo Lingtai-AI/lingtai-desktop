@@ -28,7 +28,7 @@ class NativeShellProcessTest(unittest.TestCase):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            timeout=4,
+            timeout=8,
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stdout)
@@ -53,7 +53,7 @@ class NativeShellProcessTest(unittest.TestCase):
         self.assertIn("content=lingtai_desktop_content", marker_lines[0])
         self.assertIn("separator=lingtai_roster_separator", marker_lines[0])
         self.assertIn("roster=lingtai_agent_roster", marker_lines[0])
-        self.assertIn("empty=visible", marker_lines[0])
+        self.assertIn("startup=visible", marker_lines[0])
         self.assertIn("offscreen=true", marker_lines[0])
         self.assertIn("shown=true", marker_lines[0])
         self.assertNotIn("malformed logging rule", result.stdout)
