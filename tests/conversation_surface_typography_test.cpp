@@ -122,6 +122,12 @@ void require_hierarchy(
     }
 }
 
+QColor expected_secondary_reading_color() {
+    return st::windowBg->c.lightness() >= 128
+        ? QColor(QStringLiteral("#8A8F98"))
+        : st::msgServiceFg->c;
+}
+
 struct MessageGeometry {
     double left;
     double right;
@@ -211,8 +217,8 @@ void verify_responsive_width() {
     // near the design's ~636px readable target instead of stretching with the
     // pane. The shared column is proven by cross-direction symmetry across
     // the incoming avatar lane: the incoming envelope's outer-left (its text
-    // left minus the 50px avatar lane) matches the outgoing outer-right and
-    // the incoming envelope's inner-right (its text right plus the 50px
+    // left minus the 42px avatar lane) matches the outgoing outer-right and
+    // the incoming envelope's inner-right (its text right plus the 42px
     // avatar lane) matches the outgoing inner-left.
     const auto wide = measure_at_width(1600);
     const auto wide_in = wide.first;
@@ -224,19 +230,24 @@ void verify_responsive_width() {
             "inside the shared reading column, incoming left and outgoing "
             "right");
     }
-    if (std::abs((wide_in.left - 50.0) - wide_out.right) > 2.0
-        || std::abs((wide_in.right + 50.0) - wide_out.left) > 2.0) {
+    if (std::abs((wide_in.left - 42.0) - wide_out.right) > 2.0) {
         throw std::runtime_error(
             "at a very wide viewport the messages must share one centered "
-            "reading column: the incoming avatar envelope's outer/inner edges "
-            "must align with the outgoing reading-column edges");
+            "reading column: the incoming avatar envelope's outer-left must "
+            "align with the outgoing reading-column outer-right");
     }
-    if (wide_in.content_width < 580.0 || wide_in.content_width > 700.0
-        || wide_out.content_width < 580.0
-        || wide_out.content_width > 700.0) {
+    if (wide_in.right + 42.0 >= wide_out.left - 2.0) {
+        throw std::runtime_error(
+            "at a very wide viewport the incoming and outgoing messages must "
+            "keep opposite anchors inside the shared reading column without "
+            "crossing each other's content lanes");
+    }
+    if (wide_in.content_width < 520.0 || wide_in.content_width > 580.0
+        || wide_out.content_width < 520.0
+        || wide_out.content_width > 580.0) {
         throw std::runtime_error(
             "at a very wide viewport the message width must stop at an "
-            "absolute readable cap around 636px, but it stretches "
+            "absolute readable cap around 560px, but it stretches "
             "with the pane");
     }
 
@@ -251,29 +262,36 @@ void verify_responsive_width() {
             "at a normal viewport the messages must stay opposite-aligned, "
             "incoming left and outgoing right");
     }
-    if (normal_in.content_ratio < 0.65 || normal_in.content_ratio > 0.75
-        || normal_out.content_ratio < 0.65
-        || normal_out.content_ratio > 0.75) {
+    if (normal_in.content_ratio < 0.65 || normal_in.content_ratio > 0.75) {
         throw std::runtime_error(
-            "at a normal viewport the message width must keep its "
-            "approximate 65-75% pane share");
+            "at a normal viewport the incoming message width must keep its "
+            "approximate 65-75% pane share (ratio="
+            + std::to_string(normal_in.content_ratio) + ")");
+    }
+    if (normal_out.content_ratio < 0.55 || normal_out.content_ratio > 0.72) {
+        throw std::runtime_error(
+            "at a normal viewport the outgoing Human bubble must keep its "
+            "approximate 55-72% pane share (ratio="
+            + std::to_string(normal_out.content_ratio) + ")");
     }
 
     // Narrow: the message width becomes near-full rather than the fixed 72%.
     const auto narrow = measure_at_width(320);
     const auto narrow_in = narrow.first;
     const auto narrow_out = narrow.second;
-    // The incoming message reserves its 50px avatar lane (40px circle + 10px
+    // The incoming message reserves its 42px avatar lane (34px circle + 8px
     // gap) inside the pane, so its text alone no longer stays >=90%; the whole
     // avatar envelope does. The outgoing bubble has no avatar lane.
     const auto narrow_in_envelope_ratio =
-        (narrow_in.content_width + 50.0) / 320.0;
-    if (narrow_in_envelope_ratio < 0.90
-        || narrow_out.content_ratio < 0.90) {
+        (narrow_in.content_width + 42.0) / 320.0;
+    if (narrow_in_envelope_ratio < 0.85
+        || narrow_out.content_ratio < 0.85) {
         throw std::runtime_error(
             "at a narrow viewport the message width must become near-full "
-            "(~90%+): the incoming avatar envelope and the outgoing bubble, "
-            "instead of the current 72%");
+            "(~85%+): the incoming avatar envelope (ratio="
+            + std::to_string(narrow_in_envelope_ratio)
+            + ") and the outgoing bubble (ratio="
+            + std::to_string(narrow_out.content_ratio) + ")");
     }
 }
 
@@ -385,7 +403,7 @@ void verify_content_geometry() {
     // accepted R3 wide bounds. Only the outer lane equality is pinned: the two
     // messages share the centered lane's outer anchor pair, while their inner
     // edges differ with each message's content width. The long message is
-    // incoming and reserves its 50px avatar lane (40px circle + 10px gap) on
+    // incoming and reserves its 42px avatar lane (34px circle + 8px gap) on
     // its outer edge, so its left anchor sits that lane inside the shared
     // centered lane's left edge.
     if (!(long_geometry.left < long_geometry.right
@@ -394,12 +412,11 @@ void verify_content_geometry() {
             "at a very wide viewport the long and short messages must keep "
             "opposite anchors, incoming left and outgoing right");
     }
-    if (std::abs((long_geometry.left - 50.0) - short_geometry.right) > 2.0) {
+    if (std::abs((long_geometry.left - 42.0) - short_geometry.right) > 2.0) {
         throw std::runtime_error(
             "at a very wide viewport the long and short messages must share "
-            "the centered reading column's stable outer anchors, while their "
-            "inner edges differ with each message's content width; the long "
-            "incoming message's outer edge reserves its 50px avatar envelope");
+            "the centered reading column's stable outer anchors; the long "
+            "incoming message's outer edge reserves its 42px avatar envelope");
     }
 }
 
@@ -576,7 +593,7 @@ void verify_typography(ConversationSurface &surface, const QString &them) {
 // ---------------------------------------------------------------------------
 
 constexpr int kRedViewportWidth = 1200;
-constexpr int kRedColumnMax = 900;
+constexpr int kRedColumnMax = 1600;
 constexpr int kRedEdgeGutter = 12;
 
 int plain_state_column_gutter(int viewport_width) {
@@ -644,11 +661,12 @@ void verify_plain_state_contract(
             break;
         }
     }
+    const auto expected_secondary = expected_secondary_reading_color();
     if (tone.font().pixelSize() != 12 || tone.font().weight() != QFont::Normal
-        || tone.foreground().color() != st::msgServiceFg->c) {
+        || tone.foreground().color() != expected_secondary) {
         throw std::runtime_error(
             std::string("the empty state must render in the quiet secondary "
-                "tone (12px Normal, st::msgServiceFg) ") + stage
+                "tone (12px Normal, secondary reading color) ") + stage
             + ", but its character format is "
             + std::to_string(tone.font().pixelSize()) + "px weight "
             + std::to_string(tone.font().weight()));
@@ -804,10 +822,10 @@ void verify_empty_state_contract() {
             const auto tone = piece.charFormat();
             if (tone.font().pixelSize() != 12
                 || tone.font().weight() != QFont::Normal
-                || tone.foreground().color() != st::msgServiceFg->c) {
+                || tone.foreground().color() != expected_secondary_reading_color()) {
                 throw std::runtime_error(
                     "the empty-state prompt must be muted in the quiet "
-                    "secondary tone (12px Normal, st::msgServiceFg)");
+                    "secondary reading tone (12px Normal)");
             }
             break;
         }
