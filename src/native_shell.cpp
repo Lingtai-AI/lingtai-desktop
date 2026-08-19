@@ -411,6 +411,12 @@ Widget *find_ui_child(QObject &root, const char *object_name) {
     return dynamic_cast<Widget *>(root.findChild<QObject *>(object_name));
 }
 
+bool open_error_active(Ui::RpWindow &window) {
+    auto *label = find_ui_child<Ui::FlatLabel>(
+        window, "lingtai_project_open_error");
+    return label && !label->accessibilityName().isEmpty();
+}
+
 // PaletteSurface: see ui/palette_surface.h
 
 // One Telegram-shaped Composer control envelope: attachment, field and Send
@@ -2572,6 +2578,7 @@ void NativeShell::show_setup_wizard(
             preset_footer_plain(name, provider_model, tags));
     }
     setup_route_visible_ = true;
+    setup_route_->setMinimumSize(840, 600);
     setup_route_->show();
     setup_route_->setFocus();
     refresh_route();
@@ -2581,13 +2588,18 @@ void NativeShell::show_setup_wizard(
 
 void NativeShell::hide_setup_wizard() {
     setup_route_visible_ = false;
-    if (setup_route_) setup_route_->hide();
+    if (setup_route_) {
+        setup_route_->hide();
+        setup_route_->setMinimumSize(0, 0);
+    }
+    window_->setMinimumSize(
+        QSize(kMinimumWindowWidth, kMinimumWindowHeight));
 }
 
 bool NativeShell::in_project_setup() const {
-    return setup_route_visible_
-        || bootstrap_pending_
-        || (bootstrap_status_surface_ && bootstrap_status_surface_->isVisible());
+    // The bootstrap status banner is informational only; once the explicit
+    // wizard or subprocess phases finish it must not suppress the project route.
+    return setup_route_visible_ || bootstrap_pending_;
 }
 
 void NativeShell::handle_browse_destination() {
@@ -2787,8 +2799,10 @@ ProjectOpenOutcome NativeShell::open_project(
         "lingtai_agent_selection_error");
     selection_error->clear();
     selection_error->hide();
-    find_ui_child<Ui::FlatLabel>(*window_, "lingtai_project_open_error")
-        ->setText(QString());
+    auto *open_error = find_ui_child<Ui::FlatLabel>(
+        *window_, "lingtai_project_open_error");
+    open_error->setText(QString());
+    open_error->setAccessibleName(QString());
     open_error_surface_->hide();
     reset_composer();
     // A fresh open must never let a prior target's pending sleep or Start
@@ -2827,7 +2841,7 @@ bool NativeShell::smoke_ready() const noexcept {
             == "lingtai_desktop_sidebar"
         && content && content->objectName() == "lingtai_desktop_content"
         && separator && separator->objectName() == "lingtai_roster_separator"
-        && empty_route_->isVisible()
+        && startup_route_ && startup_route_->isVisible()
         && window_->testAttribute(Qt::WA_DontShowOnScreen)
         && window_->isVisible();
 }
@@ -3478,7 +3492,9 @@ void NativeShell::recompute_layout(int body_width) {
     const auto project_active = selection_state_.active_project().has_value();
     const auto setup_active = in_project_setup();
     if (startup_route_) {
-        startup_route_->setVisible(!project_active && !setup_active);
+        const auto open_error_visible = open_error_active(*window_);
+        startup_route_->setVisible(!project_active && !setup_active
+            && !open_error_visible);
     }
     if (auto *brand = window_->findChild<QLabel *>("lingtai_titlebar_brand")) {
         auto *titlebar = brand->parentWidget();
@@ -3503,7 +3519,8 @@ void NativeShell::recompute_layout(int body_width) {
         agent_roster_->setVisible(false);
         roster_resize_handle_->setVisible(false);
         separator_->setVisible(false);
-        content_->setVisible(false);
+        const auto open_error_visible = open_error_active(*window_);
+        content_->setVisible(open_error_visible);
         return;
     }
     const auto available = body_width - kRosterResizeHandleWidth
@@ -4038,9 +4055,12 @@ ProjectOpenOutcome NativeShell::show_open_error(
         std::string message) {
     auto *label = find_ui_child<Ui::FlatLabel>(
         *window_, "lingtai_project_open_error");
-    label->setText(QString::fromStdString(message));
-    open_error_surface_->show();
+    const auto message_text = QString::fromStdString(message);
+    label->setText(message_text);
+    label->setAccessibleName(message_text);
     refresh_route();
+    recompute_layout(window_->body()->width());
+    open_error_surface_->show();
     return {
         .disposition = ProjectOpenDisposition::failed,
         .failure = failure,
