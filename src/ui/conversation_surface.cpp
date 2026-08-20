@@ -109,7 +109,6 @@ constexpr auto kCodeBlockProperty = QTextFormat::UserProperty + 4;
 constexpr auto kMessageOutgoingProperty = QTextFormat::UserProperty + 5;
 constexpr auto kMessageIdProperty = QTextFormat::UserProperty + 8;
 constexpr auto kMessageReactionsProperty = QTextFormat::UserProperty + 9;
-constexpr auto kMessageHoverPad = 4;
 
 // The symmetric gutter of the centered reading column for a viewport: fixed
 // 12px edge gutters until the column max, then a shared share of the excess.
@@ -902,7 +901,7 @@ void paint_glyph_tight_selection(
 
 // Vertical span for the hover wash. Human uses the painted bubble top/bottom
 // (not the taller frame rect that also covers day/timestamp margins); Agent
-// uses the text bounds so the wash lines up with the header/body.
+// uses the text bounds expanded by Human bubble vertical padding.
 [[nodiscard]] QRectF message_hover_vertical_span(
         QTextFrame *frame,
         QAbstractTextDocumentLayout *document_layout) {
@@ -914,7 +913,10 @@ void paint_glyph_tight_selection(
         .property(kMessageOutgoingProperty)
         .toBool();
     if (!outgoing) {
-        return text_bounds;
+        // Match Human bubble vertical padding so Agent hover has the same
+        // breathing room above and below the text block.
+        return text_bounds.adjusted(
+            0, -kHumanBubbleVPadding, 0, kHumanBubbleVPadding);
     }
     // Same geometry as the Human bubble painter: text ± bubble padding, right
     // edge from the first line's lane rect, optional reaction chips inside.
@@ -981,13 +983,13 @@ void paint_message_hover_row(
             return;
         }
         span.translate(-h_offset, -v_offset);
-        // Full-width row wash aligned to the message span, with a little
-        // vertical breathing room so the tint is not flush to the content.
-        auto row = QRectF(
+        // Full-width row wash. Vertical span already includes Human-bubble
+        // padding (Agent) or the painted bubble bounds (Human).
+        const auto row = QRectF(
             0,
-            span.top() - kMessageHoverPad,
+            span.top(),
             viewport_width,
-            span.height() + 2 * kMessageHoverPad);
+            span.height());
         if (!row.intersects(QRectF(clip))) {
             return;
         }
@@ -1938,7 +1940,7 @@ void ConversationSurface::update_hovered_message(const QPoint &viewport_pos) {
             continue;
         }
         auto hit = document_layout->frameBoundingRect(frame);
-        hit.adjust(0, -kMessageHoverPad, 0, kMessageHoverPad);
+        hit.adjust(0, -kHumanBubbleVPadding, 0, kHumanBubbleVPadding);
         if (hit.contains(doc_point)) {
             found = id;
             break;
