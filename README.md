@@ -1,73 +1,59 @@
 # LingTai Desktop
 
-LingTai Desktop is a GPL-3.0-or-later native-desktop foundation. It adopts the
-Telegram Desktop App Toolkit at a deliberately narrow boundary: the complete,
-pinned `desktop-app::lib_ui` target is built from source and exercised through a
-real `Ui::RpWidget` smoke executable.
+**The native app for your LingTai agent network.**
 
-This repository intentionally does **not** import Telegram product code. It has
-no Telegram protocol, accounts, contacts, chats, messages, media, cache, or
-product screens. The owned `src/` files are the initial LingTai integration
-surface; the toolkit source and its required parent icon resources are fetched
-into ignored `.deps/` directories.
+LingTai Desktop is the macOS client for [LingTai](https://github.com/TZZheng/lingtai) — open a project, see your agents, talk to them, and manage the network from one place. It reads the same on-disk project model as the TUI and CLI: no duplicate config, no second source of truth.
+
+## What you can do
+
+- **Open a LingTai project** — attach to an existing network or create your first orchestrator through a guided setup wizard.
+- **Browse agents** — roster with live status, selection, and quick navigation across the network.
+- **Talk to agents** — direct conversation surface with history, composer, and slash commands.
+- **Inspect an agent** — context usage, presets, capabilities, token stats, and network membership on a detail page.
+- **Track work** — kanban view over agent activity and session windows.
+- **Manage presets** — discover and apply saved orchestrator configurations without leaving the app.
+
+Desktop delegates project creation and preset/spawn operations to `lingtai-tui` subprocesses. It does not hand-edit `.lingtai` trees or invent configuration the TUI would not write.
 
 ## Requirements
 
-The validated environment is macOS with CMake 3.25+, Ninja, Git, curl, Python
-3, Clang/Xcode command-line tools, and the official universal Qt 6.11.1 macOS
-distribution. No script installs system packages.
+- macOS (validated on macOS 15 in CI)
+- CMake 3.25+, Ninja, Git, curl, Python 3, Xcode command-line tools
+- Qt 6.11.1 macOS universal distribution
+- `lingtai-tui` on `PATH` for setup, presets, and spawn flows
 
-Set `QT_ROOT` to the Qt 6.11.1 macOS prefix. If it is omitted, the scripts use
-`$HOME/Qt/6.11.1/macos`. `QT_ROOT` must contain `lib/cmake/Qt6` and the Qt
-plugins directory.
+Set `QT_ROOT` to your Qt 6.11.1 prefix (default: `$HOME/Qt/6.11.1/macos`).
 
-## Build and smoke
+## Build and run
 
 ```bash
-export QT_ROOT="$HOME/Qt/6.11.1/macos"  # or your official Qt 6.11.1 prefix
+export QT_ROOT="$HOME/Qt/6.11.1/macos"
 ./scripts/bootstrap-deps.sh
 ./scripts/configure.sh
 ./scripts/build.sh
-./scripts/smoke.py
+./build/lingtai_desktop_smoke   # offscreen smoke; omit --smoke for the full shell
 ```
 
-`bootstrap-deps.sh` fetches only lock-manifest sources into `.deps/`, verifies
-existing checkouts are clean and at their exact pinned commits, builds the
-ignored universal OpenSSL archives locally, and fetches/verifies the three
-parent resource Git blobs. It never uses a package manager or system installer.
-For a network-free reuse of independently obtained exact checkouts, pass generic
-local roots such as `--local-toolkit-root /path/to/toolkit` and
-`--local-third-party-root /path/to/third-party`; the script validates source
-remotes, commits, and cleanliness before cloning those selected checkouts.
+For a CI-parity check before pushing:
 
-The build wrapper builds `lingtai_desktop_smoke` and the focused behavior
-contracts. The smoke runner sets Qt's offscreen platform plugin and requires the
-executable's `LINGTAI_LIB_UI_FULL_TARGET_SMOKE_OK` marker.
+```bash
+./scripts/ci/preflight.sh
+```
 
-## First-project bootstrap
+## First project
 
-A user starting with no LingTai project can explicitly create a new project and
-its first Agent without dropping to the terminal. The Desktop delegates the
-whole creation to the canonical TUI headless surface: it runs the configured
-`lingtai-tui presets` subprocess (exact separate argv, never a shell string),
-shows one small dialog for the destination folder and preset choice, and on an
-explicit `Create & Start` runs the exact `lingtai-tui spawn <destination>
---preset <name>` argv. The returned project is attached only through the
-existing project-open path. Desktop still does not manually write project or
-Agent configuration and never adds an Agent to an existing network.
+If you have no LingTai project yet, use **Create project** in the app. Desktop runs `lingtai-tui presets` to list choices, then `lingtai-tui spawn <destination> --preset <name>` when you confirm. The new project opens through the normal attach path.
 
-## Dependency boundary
+## Architecture
 
-The machine-readable exact lock is
-[`cmake/desktop-app-toolkit-lock.json`](cmake/desktop-app-toolkit-lock.json).
-It records Qt, every toolkit and third-party source used by the minimal build,
-the matching tdesktop comparison commit, checksum-pinned helper files, and the
-three fetched resource blobs. See [ANATOMY.md](ANATOMY.md) for the source and
-build topology.
+LingTai Desktop is a native Qt app built on a pinned `desktop-app::lib_ui` toolkit slice. It is **not** a Telegram Desktop fork: no Telegram protocol, accounts, chats, or product screens. Owned code lives in `src/`; toolkit sources are fetched into ignored `.deps/` at build time.
+
+- [ANATOMY.md](ANATOMY.md) — repository map and build graph
+- [AGENTS.md](AGENTS.md) — contributor validation checklist
+- [`cmake/desktop-app-toolkit-lock.json`](cmake/desktop-app-toolkit-lock.json) — exact dependency lock
 
 ## License
 
 Copyright 2026 LingTai contributors.
 
-LingTai Desktop is licensed under the GNU General Public License, version 3 or
-later. See [LICENSE](LICENSE).
+LingTai Desktop is licensed under the GNU General Public License, version 3 or later. See [LICENSE](LICENSE).

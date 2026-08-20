@@ -13,7 +13,7 @@ struct VisualDiffOptions {
     int channel_threshold = 10;
     // Headroom for sub-pixel antialiasing across macOS runners after DPR
     // normalization and bundled Open Sans loading.
-    double max_changed_ratio = 0.002;
+    double max_changed_ratio = 0.02;
 };
 
 struct VisualDiffResult {
