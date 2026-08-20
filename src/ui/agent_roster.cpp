@@ -244,15 +244,17 @@ void paint_agent_row(
         bool over) {
     painter.setRenderHint(QPainter::Antialiasing, true);
     constexpr auto kSelectedRadius = 8.0;
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(selected
-        ? st::dialogsBgActive
-        : over
-            ? st::windowBgRipple
-            : st::windowBgOver);
-    painter.drawRoundedRect(
-        QRectF(row_rect).adjusted(0.5, 0.5, -0.5, -0.5),
-        kSelectedRadius, kSelectedRadius);
+    // Unselected rows stay transparent on the sidebar canvas; only hover and
+    // selection paint a rounded surface.
+    if (selected || over) {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(selected
+            ? st::dialogsBgActive
+            : st::windowBgRipple);
+        painter.drawRoundedRect(
+            QRectF(row_rect).adjusted(0.5, 0.5, -0.5, -0.5),
+            kSelectedRadius, kSelectedRadius);
+    }
 
     const auto content_rect = row_rect.adjusted(
         kRowHorizontalFrame, kRowVerticalFrame,
@@ -319,9 +321,15 @@ void paint_agent_row(
 
     auto secondary_font = base_font;
     secondary_font.setPointSize(12);
-    const auto secondary_ink = selected
+    // windowSubTextFg alone reads too faint on the transparent row; nudge it
+    // darker while staying in the same muted family (Active white remains on
+    // the solid selected fill).
+    auto secondary_ink = selected
         ? st::dialogsTextFgActive->c
-        : st::windowSubTextFg->c;
+        : (over ? st::windowSubTextFgOver->c : st::windowSubTextFg->c);
+    if (!selected) {
+        secondary_ink = secondary_ink.darker(118);
+    }
     const auto dot_top = secondary_rect.y()
         + (secondary_rect.height() - kStatusDotDiameter) / 2;
     painter.setPen(Qt::NoPen);
