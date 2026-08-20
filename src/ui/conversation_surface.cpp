@@ -867,9 +867,94 @@ void paint_glyph_tight_selection(
 }
 
 [[nodiscard]] QColor message_hover_wash_color() {
-    auto wash = st::windowBgActive->c;
-    wash.setAlpha(st::windowBg->c.lightness() >= 128 ? 22 : 36);
-    return wash;
+    // Match the Human bubble fill so hover uses the same soft tint.
+    return human_bubble_color();
+}
+
+// Visible message content bounds in document coordinates (union of laid-out
+// glyph runs), matching paintEvent's text_bounds construction.
+[[nodiscard]] QRectF message_text_bounds_doc(
+        QTextFrame *frame,
+        QAbstractTextDocumentLayout *document_layout) {
+    if (!frame || !document_layout) {
+        return {};
+    }
+    const auto frame_origin =
+        document_layout->frameBoundingRect(frame).topLeft();
+    auto text_bounds = QRectF();
+    for (auto block = frame->begin(); !block.atEnd(); ++block) {
+        const auto current_block = block.currentBlock();
+        if (!current_block.isValid()) {
+            continue;
+        }
+        const auto *block_layout = current_block.layout();
+        for (auto i = 0; i != block_layout->lineCount(); ++i) {
+            const auto line = block_layout->lineAt(i);
+            const auto line_bounds = line.naturalTextRect()
+                .translated(block_layout->position())
+                .translated(frame_origin);
+            text_bounds = text_bounds.isNull()
+                ? line_bounds
+                : text_bounds.united(line_bounds);
+        }
+    }
+    return text_bounds;
+}
+
+// Vertical span for the hover wash. Human uses the painted bubble top/bottom
+// (not the taller frame rect that also covers day/timestamp margins); Agent
+// uses the text bounds so the wash lines up with the header/body.
+[[nodiscard]] QRectF message_hover_vertical_span(
+        QTextFrame *frame,
+        QAbstractTextDocumentLayout *document_layout) {
+    const auto text_bounds = message_text_bounds_doc(frame, document_layout);
+    if (text_bounds.isNull()) {
+        return {};
+    }
+    const auto outgoing = frame->frameFormat()
+        .property(kMessageOutgoingProperty)
+        .toBool();
+    if (!outgoing) {
+        return text_bounds;
+    }
+    // Same geometry as the Human bubble painter: text ± bubble padding, right
+    // edge from the first line's lane rect, optional reaction chips inside.
+    const auto frame_origin =
+        document_layout->frameBoundingRect(frame).topLeft();
+    QTextBlock first_valid_block;
+    for (auto block = frame->begin(); !block.atEnd(); ++block) {
+        const auto current_block = block.currentBlock();
+        if (current_block.isValid() && current_block.layout()
+                && current_block.layout()->lineCount() > 0) {
+            first_valid_block = current_block;
+            break;
+        }
+    }
+    auto bubble = text_bounds.adjusted(
+        -kHumanBubbleHPadding,
+        -kHumanBubbleVPadding,
+        kHumanBubbleHPadding,
+        kHumanBubbleVPadding);
+    if (first_valid_block.isValid()) {
+        const auto *first_layout = first_valid_block.layout();
+        const auto lane_right = first_layout->lineAt(0).rect()
+            .translated(first_layout->position())
+            .translated(frame_origin)
+            .right();
+        bubble.setRight(lane_right + kHumanBubbleHPadding);
+    }
+    const auto reaction_labels = frame->frameFormat()
+        .property(kMessageReactionsProperty)
+        .toStringList();
+    if (!reaction_labels.isEmpty()) {
+        auto chip_font = secondary_format().font();
+        chip_font.setPixelSize(13);
+        const auto chip_row = reaction_row_height(QFontMetricsF(chip_font));
+        bubble.setBottom(
+            bubble.bottom() + kReactionRowTopGap + chip_row
+            + kReactionRowBottomInset);
+    }
+    return bubble;
 }
 
 void paint_message_hover_row(
@@ -892,13 +977,19 @@ void paint_message_hover_row(
                 != message_id) {
             continue;
         }
-        auto frame_rect = document_layout->frameBoundingRect(frame);
-        frame_rect.translate(-h_offset, -v_offset);
-        auto row = QRectF(
+        auto span = message_hover_vertical_span(frame, document_layout);
+        if (span.isNull()) {
+            return;
+        }
+        span.translate(-h_offset, -v_offset);
+        // Full-width row wash, but the vertical edges must match the message
+        // (Human bubble top/bottom, Agent text top/bottom) — never the taller
+        // frame rect that includes day/timestamp margins.
+        const auto row = QRectF(
             0,
-            frame_rect.top() - kMessageHoverPad,
+            span.top(),
             viewport_width,
-            frame_rect.height() + 2 * kMessageHoverPad);
+            span.height());
         if (!row.intersects(QRectF(clip))) {
             return;
         }
