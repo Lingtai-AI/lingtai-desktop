@@ -16,6 +16,7 @@ class QScrollArea;
 namespace lingtai::desktop {
 
 [[nodiscard]] QString friendly_agent_role_text(AgentRole role);
+[[nodiscard]] QString friendly_agent_lifecycle_text(const AgentRow &item);
 [[nodiscard]] QString friendly_agent_presence_text(
     AgentPresenceKind presence);
 

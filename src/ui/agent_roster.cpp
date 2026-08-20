@@ -161,17 +161,14 @@ QString row_facts(const AgentRow &item) {
 }
 
 // The visible two-line row renders a friendly 1:1 summary (`Main Agent ·
-// Active`) instead of the raw fact codes, so the compact row stays
-// human-readable; the accessible description and tooltip keep the raw facts
-// verbatim. An unknown role or presence falls back to the raw facts rather
-// than inventing a friendly label.
+// ACTIVE`) from the TUI lifecycle resolver, not raw heartbeat presence.
 QString row_summary(const AgentRow &item) {
     const auto role = friendly_agent_role_text(item.role);
-    const auto presence = friendly_agent_presence_text(item.presence);
-    if (role.isEmpty() || presence.isEmpty()) {
+    const auto state = friendly_agent_lifecycle_text(item);
+    if (role.isEmpty()) {
         return row_facts(item);
     }
-    return QStringLiteral("%1 · %2").arg(role, presence);
+    return QStringLiteral("%1 · %2").arg(role, state);
 }
 
 int agent_row_height(const QFont &base_font) {
@@ -311,6 +308,13 @@ QString friendly_agent_role_text(AgentRole role) {
     case AgentRole::unknown: return QString();
     }
     return QString();
+}
+
+QString friendly_agent_lifecycle_text(const AgentRow &item) {
+    if (item.lifecycle_state.empty()) {
+        return QStringLiteral("—");
+    }
+    return QString::fromStdString(item.lifecycle_state).toUpper();
 }
 
 QString friendly_agent_presence_text(AgentPresenceKind presence) {
@@ -721,7 +725,8 @@ void AgentRoster::set_rows(
                 || before.manifest_kind != after.manifest_kind
                 || before.role != after.role
                 || before.presence != after.presence
-                || before.manifest_diagnostic != after.manifest_diagnostic) {
+                || before.manifest_diagnostic != after.manifest_diagnostic
+                || before.lifecycle_state != after.lifecycle_state) {
                 model_unchanged = false;
                 break;
             }

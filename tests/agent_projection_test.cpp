@@ -414,6 +414,50 @@ void test_capabilities(const fs::path &base) {
     }
 }
 
+// -- lifecycle state: TUI resolveAgentLifecycle parity -------------------
+
+void test_lifecycle_state(const fs::path &base) {
+    auto attached = make_project(base, "lifecycle");
+    if (!attached) return;
+    const auto root = attached.attachment->root();
+    const auto agent_dir = [&](std::string_view key) {
+        std::error_code error;
+        fs::create_directories(root / ".lingtai" / key, error);
+        expect(!error, "lifecycle fixture directory is created");
+        return root / ".lingtai" / key;
+    };
+    write_file(agent_dir("active-idle") / ".agent.json",
+        R"({"admin":{},"state":"idle"})");
+    write_file(agent_dir("active-idle") / ".agent.heartbeat",
+        heartbeat_seconds_ago(1.0));
+    write_file(agent_dir("stale-suspended") / ".agent.json",
+        R"({"admin":{},"state":"active"})");
+    write_file(agent_dir("stale-suspended") / ".agent.heartbeat",
+        heartbeat_seconds_ago(10.0));
+    write_file(agent_dir("missing-suspended") / ".agent.json",
+        R"({"admin":{},"state":"asleep"})");
+    write_file(agent_dir("refreshing") / ".agent.json",
+        R"({"admin":{},"state":"active"})");
+    write_file(agent_dir("refreshing") / ".refresh.taken", "");
+    write_file(agent_dir("empty-alive") / ".agent.json", R"({"admin":{}})");
+    write_file(agent_dir("empty-alive") / ".agent.heartbeat",
+        heartbeat_seconds_ago(1.0));
+
+    const auto snapshot = project_agents(*attached.attachment);
+    const struct { const char *key; const char *state; } expectations[] = {
+        {"active-idle", "idle"},
+        {"stale-suspended", "suspended"},
+        {"missing-suspended", "suspended"},
+        {"refreshing", "refreshing"},
+        {"empty-alive", ""},
+    };
+    for (const auto &expectation : expectations) {
+        const auto *row = find_row(snapshot, expectation.key);
+        expect(row && row->lifecycle_state == expectation.state,
+            std::string(expectation.key) + " resolves to the expected lifecycle state");
+    }
+}
+
 // -- no-write proof --------------------------------------------------------
 
 void test_read_only(const fs::path &base) {
@@ -452,6 +496,7 @@ int main(int argc, char **argv) {
     test_presence_matrix(base);
     test_status_matrix(base);
     test_capabilities(base);
+    test_lifecycle_state(base);
     test_read_only(base);
 
     fs::remove_all(base, error);

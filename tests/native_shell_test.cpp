@@ -640,7 +640,7 @@ void verify_open_project_behavior(
         "agent_name":"Immutable Agent Name",
         "nickname":"Research Nickname",
         "address":"agent@example.test",
-        "state":"manifest-ready",
+        "state":"active",
         "llm":{"provider":"openai","model":"gpt-test",
             "base_url":"https://api.example.test/v1",
             "api_compat":"openai","context_limit":200000},
@@ -743,10 +743,10 @@ void verify_open_project_behavior(
             && label_text(window, "lingtai_selected_agent_presentation_name")
                 == QStringLiteral("A&B-agent")
             && label_text(window, "lingtai_selected_agent_key")
-                == QStringLiteral("Missing · Agent")
+                == QStringLiteral("SUSPENDED · Agent")
             && required_child<QLabel>(window, "lingtai_selected_agent_key")
                 ->textFormat() == Qt::PlainText,
-        "a key-fallback header must keep one title and friendly Status · "
+        "a key-fallback header must keep one title and manifest state · "
         "role below it");
     require(tree_snapshot(roster.project) == roster_before_selection,
         "ampersand selection at its exact project-relative path must remain read-only");
@@ -759,12 +759,12 @@ void verify_open_project_behavior(
             == QStringLiteral("Research Nickname"),
         "selected detail must prefer the manifest nickname as its presentation name");
     require(label_text(window, "lingtai_selected_agent_key")
-            == QStringLiteral("Active · Agent"),
-        "a distinct presentation title must keep one compact friendly "
-        "Status · role line below the name");
+            == QStringLiteral("ACTIVE · Agent"),
+        "a distinct presentation title must keep one compact lifecycle state · "
+        "role line below the name");
     require(label_text(window, "lingtai_selected_agent_manifest_identity")
             == QStringLiteral("Manifest identity\naddress: agent@example.test\n"
-                "agent ID: manifest-agent-id\nstate: manifest-ready"),
+                "agent ID: manifest-agent-id\nstate: active"),
         "manifest identity must not repeat the true name already used as the "
         "prominent title");
     require(label_text(window, "lingtai_selected_agent_manifest_llm")
@@ -2743,7 +2743,7 @@ void verify_persistent_roster_shell(
             && label_text(window, "lingtai_selected_agent_presentation_name")
                 == QStringLiteral("alpha")
             && label_text(window, "lingtai_selected_agent_key")
-                == QStringLiteral("Missing · Agent"),
+                == QStringLiteral("SUSPENDED · Agent"),
         "Agent selection must still drive the same right detail with a "
         "key-fallback header that never repeats the directory key");
 

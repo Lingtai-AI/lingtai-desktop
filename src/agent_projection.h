@@ -70,6 +70,9 @@ struct AgentRow {
     AgentPresenceKind presence = AgentPresenceKind::unknown;
     std::optional<double> heartbeat_age_seconds;
     std::optional<AgentRuntimeFacts> status;
+    // Resolved lifecycle label shared with the TUI mail refresh path:
+    // manifest state while heartbeat-fresh, otherwise suspended or refreshing.
+    std::string lifecycle_state;
 };
 
 enum class AgentScanState { complete, unavailable };

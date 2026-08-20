@@ -342,6 +342,32 @@ struct ParsedDecimal { DecimalParseState state; double value = 0.0; };
         ? AgentPresenceKind::alive : AgentPresenceKind::stale;
 }
 
+[[nodiscard]] bool is_presence_alive(AgentPresenceKind presence) {
+    return presence == AgentPresenceKind::alive
+        || presence == AgentPresenceKind::alive_human;
+}
+
+[[nodiscard]] bool has_refresh_taken(int parent_fd) {
+    const auto read = read_leaf(parent_fd, ".refresh.taken", 1U);
+    return read.outcome != LeafReadOutcome::absent
+        && read.outcome != LeafReadOutcome::unsafe_symlink;
+}
+
+[[nodiscard]] std::string resolve_lifecycle_state(
+        const AgentRow &row, bool refresh_taken) {
+    auto manifest_state = std::string{};
+    if (row.identity && row.identity->state) {
+        manifest_state = std::string(trim_ascii(*row.identity->state));
+    }
+    if (!is_presence_alive(row.presence)) {
+        if (refresh_taken) {
+            return "refreshing";
+        }
+        return "suspended";
+    }
+    return manifest_state;
+}
+
 [[nodiscard]] AgentSnapshot scan(
         const ProjectAttachment &attachment, double now) {
     AgentSnapshot snapshot;
@@ -414,6 +440,8 @@ struct ParsedDecimal { DecimalParseState state; double value = 0.0; };
                 row.status = std::move(parsed.facts);
             }
         }
+        row.lifecycle_state = resolve_lifecycle_state(
+            row, has_refresh_taken(child.get()));
         snapshot.items.push_back(std::move(row));
     }
     snapshot.scan = AgentScanState::complete;

@@ -1874,18 +1874,13 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
             tick_agent_sleep_observation();
         } else if (pending_start_observation_) {
             tick_agent_start_observation();
-        } else if (selection_state_.active_project()
-                && selection_state_.selected_agent_directory_key()) {
-            // No click-armed observation is pending, so eligibility can only
-            // go stale here: the target's own state can change (e.g. an
-            // ordinary-message wake, or a Start observation from a since-
-            // abandoned pending click for a different selection landing in
-            // the background) with no click or reselection to trigger a
-            // re-check. Reruns the same stateless projection this shell
-            // already reruns at every click/settle boundary.
+        } else if (selection_state_.active_project()) {
+            // No click-armed observation is pending. Rerun the same stateless
+            // projection the shell already uses at every click/settle
+            // boundary so manifest lifecycle state and heartbeat-derived
+            // eligibility stay current without reselection.
             agents_ = project_agents(*selection_state_.active_project());
-            render_agent_sleep_status();
-            render_agent_start_status();
+            render_roster();
         }
         // Kanban is a full disk snapshot (token ledgers, sqlite, daemon runs)
         // plus a widget-tree rebuild. The 1s conversation timer must not
@@ -2937,16 +2932,12 @@ void NativeShell::render_roster() {
     selected_avatar->set_agent_name(title);
     selected_avatar->show();
     const auto friendly_role = friendly_agent_role_text(detail_item->role);
-    const auto friendly_presence = friendly_agent_presence_text(
-        detail_item->presence);
+    const auto state = friendly_agent_lifecycle_text(*detail_item);
     const auto role = friendly_role.isEmpty()
         ? role_text(detail_item->role)
         : friendly_role;
-    const auto presence = friendly_presence.isEmpty()
-        ? presence_text(detail_item->presence)
-        : friendly_presence;
     selected_key->setText(
-        QStringLiteral("%1 · %2").arg(presence, role));
+        QStringLiteral("%1 · %2").arg(state, role));
     if (identity) {
         manifest_identity->setText(QStringLiteral(
             "Manifest identity\naddress: %1\nagent ID: %2\nstate: %3")
