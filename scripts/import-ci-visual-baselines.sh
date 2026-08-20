@@ -35,3 +35,15 @@ import_snapshot() {
 
 import_snapshot "conversation-normal"
 import_snapshot "presets-normal"
+
+# native_shell_visual artifacts use native_shell_visual/<surface>-normal/
+for snapshot_id in startup-idle setup-preset setup-agents setup-review \
+    conversation presets kanban empty-conversation; do
+  actual="$ARTIFACTS_ROOT/visual/native_shell_visual/${snapshot_id}-normal/actual.png"
+  dest="$BASELINE_DIR/${snapshot_id}-normal.png"
+  if [[ ! -f "$actual" ]]; then
+    continue
+  fi
+  cp "$actual" "$dest"
+  printf 'imported %s -> %s\n' "$actual" "$dest"
+done

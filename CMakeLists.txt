@@ -515,35 +515,36 @@ target_include_directories(lingtai_visual_test_utils PUBLIC
 target_link_libraries(lingtai_visual_test_utils PUBLIC
     Qt6::Widgets Qt6::Gui Qt6::Core)
 
-add_executable(lingtai_agent_detail_visual_test
-    tests/visual/agent_detail_visual_test.cpp
+add_executable(lingtai_native_shell_visual_test
+    tests/visual/native_shell_visual_test.cpp
+    tests/visual/VisualScenario.cpp
     src/crl_integration.cpp)
-init_target(lingtai_agent_detail_visual_test)
-target_compile_options(lingtai_agent_detail_visual_test PRIVATE
+init_target(lingtai_native_shell_visual_test)
+target_compile_options(lingtai_native_shell_visual_test PRIVATE
     -Wall -Wextra -Werror -pedantic
     $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-unused-parameter>
     $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-deprecated-this-capture>
     $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-unused-parameter>
     $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-deprecated-this-capture>)
-target_include_directories(lingtai_agent_detail_visual_test PRIVATE
+target_include_directories(lingtai_native_shell_visual_test PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests")
-target_compile_definitions(lingtai_agent_detail_visual_test PRIVATE
+target_compile_definitions(lingtai_native_shell_visual_test PRIVATE
     LINGTAI_UI_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
     LINGTAI_VISUAL_BASELINE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/tests/visual/baselines")
-target_link_libraries(lingtai_agent_detail_visual_test PRIVATE
+target_link_libraries(lingtai_native_shell_visual_test PRIVATE
     lingtai_ui_test_support
     lingtai_visual_test_utils
     lingtai_desktop_native_shell
     desktop-app::lib_ui
     Qt6::Widgets Qt6::Gui Qt6::Core)
-add_test(NAME agent_detail_visual
-    COMMAND lingtai_agent_detail_visual_test)
+add_test(NAME native_shell_visual
+    COMMAND lingtai_native_shell_visual_test)
 if(APPLE)
-    set_tests_properties(agent_detail_visual PROPERTIES
+    set_tests_properties(native_shell_visual PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
 else()
-    set_tests_properties(agent_detail_visual PROPERTIES
+    set_tests_properties(native_shell_visual PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
@@ -832,7 +833,7 @@ foreach(test_name IN LISTS LINGTAI_UI_TESTS)
 endforeach()
 
 set(LINGTAI_VISUAL_TESTS
-    agent_detail_visual)
+    native_shell_visual)
 foreach(test_name IN LISTS LINGTAI_VISUAL_TESTS)
     set_tests_properties(${test_name} PROPERTIES LABELS "ui;visual")
 endforeach()
