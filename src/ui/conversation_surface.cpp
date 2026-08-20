@@ -3,6 +3,7 @@
 #include "base/basic_types.h"
 #include "styles/palette.h"
 
+#include <QtCore/QEvent>
 #include <QtCore/QDate>
 #include <QtCore/QDateTime>
 #include <QtCore/QLocale>
@@ -15,6 +16,7 @@
 #include <QtGui/QFont>
 #include <QtGui/QFontMetricsF>
 #include <QtGui/QKeyEvent>
+#include <QtGui/QMouseEvent>
 #include <QtGui/QPainter>
 #include <QtGui/QPaintEvent>
 #include <QtGui/QPalette>
@@ -107,6 +109,8 @@ constexpr auto kCodeBlockProperty = QTextFormat::UserProperty + 4;
 constexpr auto kMessageOutgoingProperty = QTextFormat::UserProperty + 5;
 constexpr auto kMessageIdProperty = QTextFormat::UserProperty + 8;
 constexpr auto kMessageReactionsProperty = QTextFormat::UserProperty + 9;
+constexpr auto kMessageHoverPad = 4;
+constexpr auto kMessageHoverRail = 3;
 
 // The symmetric gutter of the centered reading column for a viewport: fixed
 // 12px edge gutters until the column max, then a shared share of the excess.
@@ -862,6 +866,56 @@ void paint_glyph_tight_selection(
     painter.restore();
 }
 
+[[nodiscard]] QColor message_hover_wash_color() {
+    auto wash = st::windowBgActive->c;
+    wash.setAlpha(st::windowBg->c.lightness() >= 128 ? 22 : 36);
+    return wash;
+}
+
+void paint_message_hover_row(
+        QPainter &painter,
+        QTextDocument *document,
+        const QString &message_id,
+        int viewport_width,
+        int h_offset,
+        int v_offset,
+        const QRect &clip) {
+    if (!document || message_id.isEmpty()) {
+        return;
+    }
+    auto *document_layout = document->documentLayout();
+    if (!document_layout) {
+        return;
+    }
+    for (auto *frame : document->rootFrame()->childFrames()) {
+        if (frame->frameFormat().property(kMessageIdProperty).toString()
+                != message_id) {
+            continue;
+        }
+        auto frame_rect = document_layout->frameBoundingRect(frame);
+        frame_rect.translate(-h_offset, -v_offset);
+        auto row = QRectF(
+            0,
+            frame_rect.top() - kMessageHoverPad,
+            viewport_width,
+            frame_rect.height() + 2 * kMessageHoverPad);
+        if (!row.intersects(QRectF(clip))) {
+            return;
+        }
+        painter.save();
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(message_hover_wash_color());
+        painter.drawRect(row);
+        auto rail = st::windowBgActive->c;
+        rail.setAlpha(st::windowBg->c.lightness() >= 128 ? 180 : 220);
+        painter.setBrush(rail);
+        painter.drawRect(QRectF(
+            0, row.top(), kMessageHoverRail, row.height()));
+        painter.restore();
+        return;
+    }
+}
+
 } // namespace
 
 ConversationSurface::ConversationSurface(QWidget *parent)
@@ -881,6 +935,9 @@ ConversationSurface::ConversationSurface(QWidget *parent)
     setPalette(transparent_palette);
     viewport()->setAutoFillBackground(false);
     viewport()->setAttribute(Qt::WA_OpaquePaintEvent, false);
+    viewport()->setMouseTracking(true);
+    viewport()->installEventFilter(this);
+    setMouseTracking(true);
     document()->setDocumentMargin(kDocumentMargin);
 }
 
@@ -900,6 +957,7 @@ void ConversationSurface::set_plain_state(const QString &text) {
     // A plain (selection/no-route/empty) state has no lazy history, so the
     // render-time window resets to the full initial tail.
     history_offset_ = 0;
+    clear_hovered_message();
     setPlainText(text);
     if (!text.isEmpty()) {
         apply_plain_state_formatting(
@@ -1009,6 +1067,7 @@ void ConversationSurface::set_conversation(
     history_offset_ = int(messages.size() > std::size_t(kHistoryPageSize)
         ? messages.size() - std::size_t(kHistoryPageSize)
         : std::size_t{0});
+    clear_hovered_message();
     if (messages.empty()) {
         rebuild_empty_state();
     } else {
@@ -1427,6 +1486,20 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
     // message bubbles and transient interaction states keep their own tokens.
     painter.fillRect(event->rect(), st::windowBg);
 
+    const auto h_offset = horizontalScrollBar()->value();
+    const auto v_offset = verticalScrollBar()->value();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(Qt::NoPen);
+    // Slack-like row hover: full-width pale wash + left accent, no toolbar.
+    paint_message_hover_row(
+        painter,
+        document(),
+        hovered_message_id_,
+        surface_viewport->width(),
+        h_offset,
+        v_offset,
+        event->rect());
+
     if (select_agent_prompt_active_) {
         const auto illustration = select_agent_illustration(
             kSelectAgentIllustrationSize);
@@ -1439,10 +1512,6 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
         painter.drawPixmap(x, y, illustration);
     }
 
-    const auto h_offset = horizontalScrollBar()->value();
-    const auto v_offset = verticalScrollBar()->value();
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setPen(Qt::NoPen);
     const auto *document_layout = document()->documentLayout();
     const auto message_frames = document()->rootFrame()->childFrames();
     for (auto *frame : message_frames) {
@@ -1734,6 +1803,68 @@ void ConversationSurface::keyPressEvent(QKeyEvent *event) {
         return;
     }
     QTextEdit::keyPressEvent(event);
+}
+
+bool ConversationSurface::eventFilter(QObject *watched, QEvent *event) {
+    if (watched == viewport()) {
+        switch (event->type()) {
+        case QEvent::MouseMove: {
+            const auto *mouse = static_cast<QMouseEvent *>(event);
+            update_hovered_message(mouse->pos());
+            break;
+        }
+        case QEvent::Leave:
+            clear_hovered_message();
+            break;
+        default:
+            break;
+        }
+    }
+    return QTextEdit::eventFilter(watched, event);
+}
+
+void ConversationSurface::clear_hovered_message() {
+    if (hovered_message_id_.isEmpty()) {
+        return;
+    }
+    hovered_message_id_.clear();
+    viewport()->update();
+}
+
+void ConversationSurface::update_hovered_message(const QPoint &viewport_pos) {
+    if (last_messages_.empty()
+            || empty_state_active_
+            || select_agent_prompt_active_) {
+        clear_hovered_message();
+        return;
+    }
+    auto *document_layout = document()->documentLayout();
+    if (!document_layout) {
+        clear_hovered_message();
+        return;
+    }
+    const auto doc_point = QPointF(
+        viewport_pos.x() + horizontalScrollBar()->value(),
+        viewport_pos.y() + verticalScrollBar()->value());
+    auto found = QString();
+    for (auto *frame : document()->rootFrame()->childFrames()) {
+        const auto id = frame->frameFormat()
+            .property(kMessageIdProperty).toString();
+        if (id.isEmpty()) {
+            continue;
+        }
+        auto hit = document_layout->frameBoundingRect(frame);
+        hit.adjust(0, -kMessageHoverPad, 0, kMessageHoverPad);
+        if (hit.contains(doc_point)) {
+            found = id;
+            break;
+        }
+    }
+    if (found == hovered_message_id_) {
+        return;
+    }
+    hovered_message_id_ = found;
+    viewport()->update();
 }
 
 } // namespace lingtai::desktop

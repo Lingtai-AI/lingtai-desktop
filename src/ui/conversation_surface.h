@@ -23,7 +23,9 @@ namespace lingtai::desktop {
 // programmatically with QTextCursor/QTextBlockFormat/QTextCharFormat blocks
 // (one message per block, incoming left / outgoing right, with the shared
 // palette's distinct rounded bubble backgrounds painted behind the text) from
-// the existing direct-conversation rows.
+// the existing direct-conversation rows. Drag-select uses a pale glyph-tight
+// wash; hovering a message paints a Slack-like full-width row tint and left
+// accent without an action toolbar.
 class ConversationSurface final : public QTextEdit {
     Q_OBJECT
 public:
@@ -64,6 +66,7 @@ protected:
     void showEvent(QShowEvent *event) override;
     // Ctrl+U at the top reveals the next older page of the cached history.
     void keyPressEvent(QKeyEvent *event) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     void reflow_to_viewport();
@@ -72,6 +75,8 @@ private:
     void rebuild_select_agent_prompt();
     void reveal_older();
     void scroll_to_bottom_now();
+    void update_hovered_message(const QPoint &viewport_pos);
+    void clear_hovered_message();
     [[nodiscard]] bool same_content(
         const std::vector<DirectConversationMessage> &messages,
         const std::unordered_map<std::string, MessageReactions> &reactions)
@@ -87,6 +92,7 @@ private:
     std::unordered_map<std::string, MessageReactions> last_reactions_;
     QString last_plain_state_;
     QString select_agent_main_name_;
+    QString hovered_message_id_;
     bool empty_state_active_ = false;
     bool select_agent_prompt_active_ = false;
     int last_layout_width_ = 0;
