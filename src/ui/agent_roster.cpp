@@ -2,15 +2,19 @@
 
 #include "styles/palette.h"
 
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QString>
+#include <QtCore/QTimer>
 #include <QtGui/QColor>
 #include <QtGui/QFont>
+#include <QtGui/QHideEvent>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QMouseEvent>
 #include <QtGui/QFontMetrics>
 #include <QtGui/QPainter>
 #include <QtGui/QPainterPath>
 #include <QtGui/QPen>
+#include <QtGui/QShowEvent>
 #include <QtWidgets/QFrame>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QHBoxLayout>
@@ -19,6 +23,7 @@
 #include <QtWidgets/QVBoxLayout>
 
 #include <algorithm>
+#include <cmath>
 #include <unordered_map>
 #include <utility>
 
@@ -37,6 +42,9 @@ constexpr auto kStatusDotDiameter = 6;
 constexpr auto kStatusDotGap = 6;
 constexpr auto kProjectIconSize = 14;
 constexpr auto kProjectIconGap = 8;
+// Soft “breath” period for Active status dots (milliseconds).
+constexpr auto kActiveBreathPeriodMs = 2200;
+constexpr auto kActiveBreathTickMs = 40;
 // Roster avatars share the composer Send fill (`windowBgActive`) so the
 // initial disc tracks the same light/dark accent as the up-arrow button.
 [[nodiscard]] QColor avatar_fill_color() {
@@ -495,6 +503,41 @@ QColor lifecycle_status_color(const AgentRow &item) {
     return st::windowSubTextFg->c;
 }
 
+[[nodiscard]] bool is_lifecycle_active(const AgentRow &item) {
+    return QString::fromStdString(item.lifecycle_state).toLower()
+        == QStringLiteral("active");
+}
+
+// 0..1 ease: 0.5 + 0.5·sin, so the Active dot swells and softens smoothly.
+[[nodiscard]] qreal active_breath_amount(qreal phase01) {
+    return 0.5 + 0.5 * std::sin(phase01 * 2.0 * 3.14159265358979323846);
+}
+
+void paint_status_dot(
+        QPainter &painter,
+        const QRectF &dot,
+        const QColor &status_color,
+        bool breathing,
+        qreal breath) {
+    painter.setPen(Qt::NoPen);
+    if (!breathing) {
+        painter.setBrush(status_color);
+        painter.drawEllipse(dot);
+        return;
+    }
+    // Soft halo grows/fades with the breath; the core stays readable.
+    const auto pulse = std::clamp(breath, 0.0, 1.0);
+    auto halo = status_color;
+    halo.setAlpha(int(28 + 72 * pulse));
+    const auto expand = 1.5 + 2.5 * pulse;
+    painter.setBrush(halo);
+    painter.drawEllipse(dot.adjusted(-expand, -expand, expand, expand));
+    auto core = status_color;
+    core.setAlpha(int(170 + 85 * pulse));
+    painter.setBrush(core);
+    painter.drawEllipse(dot);
+}
+
 int agent_row_height(const QFont &base_font) {
     auto primary_font = base_font;
     primary_font.setPointSize(13);
@@ -515,7 +558,9 @@ void paint_agent_row(
         const QColor &status_color,
         bool selected,
         bool over,
-        int unseen_count) {
+        int unseen_count,
+        bool breathing,
+        qreal breath) {
     painter.setRenderHint(QPainter::Antialiasing, true);
     constexpr auto kSelectedRadius = 8.0;
     // Unselected rows stay transparent on the sidebar canvas; only hover and
@@ -623,13 +668,16 @@ void paint_agent_row(
         secondary_ink = secondary_ink.darker(118);
         const auto dot_top = secondary_rect.y()
             + (secondary_rect.height() - kStatusDotDiameter) / 2;
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(status_color);
-        painter.drawEllipse(
-            secondary_rect.x(),
-            dot_top,
-            kStatusDotDiameter,
-            kStatusDotDiameter);
+        paint_status_dot(
+            painter,
+            QRectF(
+                secondary_rect.x(),
+                dot_top,
+                kStatusDotDiameter,
+                kStatusDotDiameter),
+            status_color,
+            breathing,
+            breath);
 
         const auto status_text_rect = secondary_rect.adjusted(
             kStatusDotDiameter + kStatusDotGap, 0, 0, 0);
@@ -734,6 +782,14 @@ public:
     : Ui::RpWidget(parent) {
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         setMouseTracking(true);
+        breath_timer_ = new QTimer(this);
+        breath_timer_->setInterval(kActiveBreathTickMs);
+        QObject::connect(breath_timer_, &QTimer::timeout, this, [this] {
+            if (!isVisible()) {
+                return;
+            }
+            update_active_dots();
+        });
     }
 
     void set_rows(
@@ -741,6 +797,7 @@ public:
             const std::optional<std::filesystem::path> &selected_key) {
         rows_ = visible_rows(snapshot);
         selected_key_ = selected_key;
+        sync_breath_timer();
         updateGeometry();
         update();
     }
@@ -782,6 +839,14 @@ protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
     void leaveEventHook(QEvent *event) override;
+    void showEvent(QShowEvent *event) override {
+        Ui::RpWidget::showEvent(event);
+        sync_breath_timer();
+    }
+    void hideEvent(QHideEvent *event) override {
+        breath_timer_->stop();
+        Ui::RpWidget::hideEvent(event);
+    }
 
 private:
     int content_height() const;
@@ -801,6 +866,38 @@ private:
         std::optional<std::size_t> index,
         std::optional<std::filesystem::path> key);
 
+    [[nodiscard]] bool has_active_rows() const {
+        return std::any_of(rows_.begin(), rows_.end(), is_lifecycle_active);
+    }
+
+    void sync_breath_timer() {
+        if (has_active_rows() && isVisible()) {
+            if (!breath_timer_->isActive()) {
+                breath_clock_.restart();
+                breath_timer_->start();
+            }
+        } else if (breath_timer_->isActive()) {
+            breath_timer_->stop();
+        }
+    }
+
+    void update_active_dots() {
+        for (auto index = std::size_t{0}; index != rows_.size(); ++index) {
+            if (is_lifecycle_active(rows_[index])) {
+                update(row_rect(index));
+            }
+        }
+    }
+
+    [[nodiscard]] qreal current_breath() const {
+        if (!breath_clock_.isValid()) {
+            return 1.0;
+        }
+        const auto elapsed = breath_clock_.elapsed() % kActiveBreathPeriodMs;
+        return active_breath_amount(
+            static_cast<qreal>(elapsed) / kActiveBreathPeriodMs);
+    }
+
     std::vector<AgentRow> rows_;
     std::optional<std::filesystem::path> selected_key_;
     std::unordered_map<std::string, int> unseen_counts_;
@@ -809,6 +906,8 @@ private:
     std::optional<std::size_t> hovered_row_;
     std::optional<std::size_t> pressed_row_;
     std::optional<std::filesystem::path> pressed_key_;
+    QTimer *breath_timer_ = nullptr;
+    QElapsedTimer breath_clock_;
 };
 
 QSize AgentRowsCanvas::sizeHint() const {
@@ -894,6 +993,7 @@ void AgentRowsCanvas::paintEvent(QPaintEvent *) {
     QPainter painter(this);
     painter.fillRect(rect(), st::windowBg);
     const auto row_height = agent_row_height(font());
+    const auto breath = current_breath();
     for (auto index = std::size_t{0}; index != rows_.size(); ++index) {
         const auto &item = rows_[index];
         auto primary_text = path_text(item.directory_key);
@@ -907,6 +1007,7 @@ void AgentRowsCanvas::paintEvent(QPaintEvent *) {
             const auto found = unseen_counts_.find(key);
             return found == unseen_counts_.end() ? 0 : found->second;
         }();
+        const auto active = is_lifecycle_active(item);
         paint_agent_row(
             painter,
             QRect(
@@ -920,7 +1021,9 @@ void AgentRowsCanvas::paintEvent(QPaintEvent *) {
             lifecycle_status_color(item),
             selected,
             over,
-            unseen);
+            unseen,
+            active,
+            breath);
     }
 }
 
