@@ -7,6 +7,7 @@
 #include <QtCore/QDateTime>
 #include <QtCore/QLocale>
 #include <QtCore/QRegularExpression>
+#include <QtCore/QTimer>
 #include <QtCore/QUrl>
 #include <QtCore/QVariant>
 #include <QtGui/QAbstractTextDocumentLayout>
@@ -1099,9 +1100,11 @@ void ConversationSurface::rebuild_document() {
     }
     document->documentLayout()->documentSize();
 
-    scrollbar->setValue(was_at_bottom
-        ? scrollbar->maximum()
-        : std::min(previous, scrollbar->maximum()));
+    if (was_at_bottom) {
+        scroll_to_bottom();
+    } else {
+        scrollbar->setValue(std::min(previous, scrollbar->maximum()));
+    }
 
     rebuild_in_progress_ = false;
 }
@@ -1171,6 +1174,27 @@ void ConversationSurface::reveal_older() {
     rebuild_document();
     const auto delta = scrollbar->maximum() - old_maximum;
     scrollbar->setValue(std::min(previous + delta, scrollbar->maximum()));
+}
+
+void ConversationSurface::scroll_to_bottom_now() {
+    auto *bar = verticalScrollBar();
+    const auto laid_out = document()->documentLayout()->documentSize().height();
+    const auto layout_max = std::max(0,
+        int(std::ceil(laid_out - viewport()->height())));
+    if (layout_max > bar->maximum()) {
+        bar->setMaximum(layout_max);
+    }
+    bar->setValue(bar->maximum());
+}
+
+void ConversationSurface::scroll_to_bottom() {
+    scroll_to_bottom_now();
+    // QTextEdit may still sync its slider from a queued documentSizeChanged
+    // after a new-day frame top margin lands. Pin again once that maximum is
+    // real so the viewport sits on the true document bottom.
+    QTimer::singleShot(0, this, [this] {
+        scroll_to_bottom_now();
+    });
 }
 
 void ConversationSurface::paintEvent(QPaintEvent *event) {

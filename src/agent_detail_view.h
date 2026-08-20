@@ -69,6 +69,8 @@ public:
         bool conversation_route_available,
         const std::unordered_map<std::string, MessageReactions> &reactions = {});
 
+    void scroll_conversation_to_bottom();
+
     // Preset summary UI (read-only preset catalog + state line).
     void render_preset_summary(
         const std::optional<AgentPresetSummary> &summary);

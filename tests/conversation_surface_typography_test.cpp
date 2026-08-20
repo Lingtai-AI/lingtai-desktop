@@ -1710,6 +1710,67 @@ void verify_history_window_only() {
 }
 
 
+// A send that starts a new calendar day adds the day-separator top margin.
+// After that rebuild, the viewport must sit on the true document bottom so
+// the extra separator height is not left below the fold.
+void verify_new_day_append_scrolls_to_bottom() {
+    ConversationSurface surface;
+    surface.resize(420, 180);
+    surface.show();
+    QCoreApplication::processEvents();
+
+    std::vector<DirectConversationMessage> messages;
+    for (auto index = 0; index != 6; ++index) {
+        messages.push_back({
+            .id = "d1-" + std::to_string(index),
+            .outgoing = true,
+            .timestamp = "2026-08-07T18:0" + std::to_string(index) + ":00Z",
+            .subject = std::string(),
+            .text = "same-day padding message " + std::to_string(index)
+                + " so the short viewport must scroll",
+        });
+    }
+    surface.set_conversation(QStringLiteral("Bot"), messages);
+    QCoreApplication::processEvents();
+    auto *bar = surface.verticalScrollBar();
+    if (bar->maximum() <= 0) {
+        throw std::runtime_error(
+            "the same-day history must overflow the short viewport");
+    }
+    bar->setValue(bar->maximum());
+
+    messages.push_back({
+        .id = "d2-send",
+        .outgoing = true,
+        .timestamp = "2026-08-08T01:00:00Z",
+        .subject = std::string(),
+        .text = "new-day-send",
+    });
+    surface.set_conversation(QStringLiteral("Bot"), messages);
+    surface.scroll_to_bottom();
+    QCoreApplication::processEvents();
+
+    if (bar->value() != bar->maximum()) {
+        throw std::runtime_error(
+            "a new-day send must pin the conversation to the scrollbar "
+            "bottom, but value=" + std::to_string(bar->value())
+            + " maximum=" + std::to_string(bar->maximum()));
+    }
+    const auto frames = surface.document()->rootFrame()->childFrames();
+    if (frames.isEmpty()) {
+        throw std::runtime_error("new-day send left the conversation empty");
+    }
+    const auto last_bottom = surface.document()->documentLayout()
+        ->frameBoundingRect(frames.back()).bottom();
+    const auto visible_bottom = bar->value() + surface.viewport()->height();
+    if (last_bottom > visible_bottom + 2.0) {
+        throw std::runtime_error(
+            "a new-day send left the last message below the fold by "
+            + std::to_string(last_bottom - visible_bottom) + "px");
+    }
+}
+
+
 // ---------------------------------------------------------------------------
 // Time-separators-only RED contract: a chronological stream that crosses a
 // midnight must expose only short wall-clock times and never the full raw ISO.
@@ -2240,6 +2301,7 @@ int run_typography_test(int argc, char **argv) {
         verify_per_message_containers();
         verify_directional_bubble_policy();
         verify_outgoing_body_first_and_external_time();
+        verify_new_day_append_scrolls_to_bottom();
         std::cout << "conversation surface typography: OK\n";
         return 0;
     } catch (const std::exception &error) {

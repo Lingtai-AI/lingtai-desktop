@@ -3277,6 +3277,9 @@ void NativeShell::handle_send_message() {
         }
         status->clear();
         render_conversation();
+        if (detail_view_) {
+            detail_view_->scroll_conversation_to_bottom();
+        }
     } else {
         status->setText(QStringLiteral("Message was not queued."));
     }

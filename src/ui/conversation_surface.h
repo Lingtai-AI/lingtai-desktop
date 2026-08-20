@@ -43,6 +43,11 @@ public:
     // One plain centered state for the selection/no-route/empty cases.
     void set_plain_state(const QString &text);
 
+    // Pin the viewport to the laid-out document bottom. Used after a send and
+    // after a rebuild that started already at the bottom, so extra height such
+    // as a new-day separator is included instead of a stale scrollbar maximum.
+    void scroll_to_bottom();
+
 protected:
     // Fills the viewport with the chat backdrop, paints the rounded message
     // bubbles behind the text, then lets the document layout draw the text.
@@ -61,6 +66,7 @@ private:
     void rebuild_document();
     void rebuild_empty_state();
     void reveal_older();
+    void scroll_to_bottom_now();
     [[nodiscard]] bool same_content(
         const std::vector<DirectConversationMessage> &messages,
         const std::unordered_map<std::string, MessageReactions> &reactions)

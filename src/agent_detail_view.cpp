@@ -1170,6 +1170,12 @@ void AgentDetailView::render_conversation(
     conversation_state_->setText(compact_state);
 }
 
+void AgentDetailView::scroll_conversation_to_bottom() {
+    if (conversation_surface_) {
+        conversation_surface_->scroll_to_bottom();
+    }
+}
+
 void AgentDetailView::refresh_chrome() {
     // Preset catalog chrome is stable except for theme/palette changes.
     if (pages_host_) {
