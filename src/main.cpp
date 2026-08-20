@@ -7,6 +7,7 @@
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QFileDialog>
 #include <QtGui/QFont>
+#include <QtGui/QIcon>
 
 #include <filesystem>
 #include <iostream>
@@ -18,6 +19,10 @@ int main(int argc, char **argv) {
     qputenv("QT_LOGGING_RULES",
         "qt.qpa.fonts.warning=false;qt.qpa.keymapper.warning=false");
     QApplication app(argc, argv);
+    app.setApplicationName(QStringLiteral("LingTai"));
+    app.setOrganizationName(QStringLiteral("LingTai"));
+    app.setWindowIcon(QIcon(
+        QStringLiteral(":/lingtai/macos/AppIcon-1024.png")));
     QFont::insertSubstitutions(QStringLiteral("Open Sans"), {
         QStringLiteral(".AppleSystemUIFont"),
         QStringLiteral("Helvetica Neue"),

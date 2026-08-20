@@ -31,7 +31,8 @@ export QT_ROOT="$HOME/Qt/6.11.1/macos"
 ./scripts/bootstrap-deps.sh
 ./scripts/configure.sh
 ./scripts/build.sh
-./build/lingtai_desktop_smoke   # offscreen smoke; omit --smoke for the full shell
+open ./build/LingTai.app            # Dock/Finder icon; omit --smoke for the full shell
+# ./build/LingTai.app/Contents/MacOS/LingTai --smoke
 ```
 
 For a CI-parity check before pushing:

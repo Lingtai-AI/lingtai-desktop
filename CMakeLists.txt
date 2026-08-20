@@ -202,6 +202,11 @@ qt_add_resources(lingtai_desktop_native_shell "lingtai_startup_assets"
     FILES
         resources/startup/lingtai-logo-light-4096.png
         resources/startup/lingtai-logo-dark-4096.png)
+qt_add_resources(lingtai_desktop_native_shell "lingtai_macos_assets"
+    PREFIX "/lingtai/macos"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/macos"
+    FILES
+        resources/macos/AppIcon-1024.png)
 target_include_directories(lingtai_desktop_native_shell PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_options(lingtai_desktop_native_shell PRIVATE
@@ -673,10 +678,22 @@ add_test(NAME agent_command_runner
     COMMAND lingtai_agent_command_runner_test
         "${CMAKE_CURRENT_BINARY_DIR}/agent-command-runner-fixture")
 
-add_executable(lingtai_desktop_smoke
+add_executable(lingtai_desktop_smoke MACOSX_BUNDLE
     src/main.cpp
-    src/crl_integration.cpp)
+    src/crl_integration.cpp
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/macos/AppIcon.icns")
+set_source_files_properties(
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/macos/AppIcon.icns"
+    PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
 init_target(lingtai_desktop_smoke)
+set_target_properties(lingtai_desktop_smoke PROPERTIES
+    OUTPUT_NAME LingTai
+    MACOSX_BUNDLE_BUNDLE_NAME "LingTai"
+    MACOSX_BUNDLE_GUI_IDENTIFIER "ai.lingtai.desktop"
+    MACOSX_BUNDLE_ICON_FILE AppIcon.icns
+    MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0"
+    MACOSX_BUNDLE_BUNDLE_VERSION "1"
+    MACOSX_BUNDLE_INFO_STRING "LingTai Desktop")
 target_link_libraries(lingtai_desktop_smoke PRIVATE
     lingtai_desktop_native_shell
     desktop-app::lib_ui)

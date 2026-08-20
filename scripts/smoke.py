@@ -10,8 +10,17 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BUILD_DIR = pathlib.Path(os.environ.get("BUILD_DIR", ROOT / "build"))
 QT_ROOT = pathlib.Path(os.environ.get("QT_ROOT", pathlib.Path.home() / "Qt/6.11.1/macos"))
-EXECUTABLE = BUILD_DIR / "lingtai_desktop_smoke"
 MARKER = "LINGTAI_LIB_UI_FULL_TARGET_SMOKE_OK"
+
+
+def resolve_executable() -> pathlib.Path:
+    bundled = BUILD_DIR / "LingTai.app" / "Contents" / "MacOS" / "LingTai"
+    if bundled.is_file():
+        return bundled
+    return BUILD_DIR / "lingtai_desktop_smoke"
+
+
+EXECUTABLE = resolve_executable()
 
 if not EXECUTABLE.is_file():
     print(f"smoke: executable is absent: {EXECUTABLE}", file=sys.stderr)
