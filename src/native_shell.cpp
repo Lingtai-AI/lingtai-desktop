@@ -3124,12 +3124,13 @@ void NativeShell::render_conversation() {
         ? full_title
         : path_text(route->target_directory_key);
 
-    const auto count = history.messages.size();
-    auto compact = count == 1
-        ? QStringLiteral("1 message")
-        : QStringLiteral("%1 messages").arg(count);
+    // Keep only non-count diagnostics under the conversation (e.g. skipped
+    // malformed mail). Message totals are visible in the thread itself.
+    auto compact = QString();
     if (history.skipped > 0) {
-        compact += QStringLiteral(" · %1 skipped").arg(history.skipped);
+        compact = history.skipped == 1
+            ? QStringLiteral("1 skipped")
+            : QStringLiteral("%1 skipped").arg(history.skipped);
     }
 
     detail_view_->render_conversation(

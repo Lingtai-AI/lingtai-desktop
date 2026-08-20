@@ -1243,8 +1243,9 @@ void verify_selected_agent_conversation(
         "the legacy `body` field must never be rendered");
     require(!conversation.contains(QStringLiteral("SHOULD NOT APPEAR")),
         "mail for another conversation must be absent");
-    require(state->text() == QStringLiteral("2 messages · 1 skipped"),
-        "the compact state must show the count and the generic skipped count");
+    require(state->text() == QStringLiteral("1 skipped"),
+        "the compact state must show the skipped count without a message "
+        "total");
 
     // The real QTextDocument must expose the two directions as distinct
     // message lanes: incoming Agent rows carry sender metadata on the first
@@ -1323,12 +1324,12 @@ void verify_selected_agent_conversation(
     }
     const auto filler_deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (!state->text().contains(QStringLiteral("122 messages"))
+    while (!surface->toPlainText().contains(QStringLiteral("Filler line one."))
             && std::chrono::steady_clock::now() < filler_deadline) {
         QThread::msleep(50);
         QCoreApplication::processEvents();
     }
-    require(state->text().contains(QStringLiteral("122 messages")),
+    require(surface->toPlainText().contains(QStringLiteral("Filler line one.")),
         "the filler fixture must render through the same one-second view "
         "timer before the pane-overflow assertions below are meaningful");
 
