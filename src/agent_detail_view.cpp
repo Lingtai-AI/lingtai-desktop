@@ -16,6 +16,7 @@
 
 #include "preset_catalog_presentation.h"
 
+#include <algorithm>
 #include <QtCore/QMargins>
 #include <QtCore/QPoint>
 #include <QtCore/QStringList>
@@ -84,7 +85,9 @@ protected:
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
         const auto outline = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-        const auto radius = outline.height() / 2.0;
+        // Cap the corner radius so a growing multi-line field stays a rounded
+        // capsule instead of becoming a full stadium.
+        const auto radius = std::min(26.0, outline.height() / 2.0);
         painter.setPen(QPen(st::shadowFg->c, 1.0));
         painter.setBrush(st::windowBg->c);
         painter.drawRoundedRect(outline, radius, radius);
@@ -687,7 +690,7 @@ AgentDetailView::AgentDetailView(
     auto *composer_controls = new ComposerControls(composer);
     composer_controls->setObjectName("lingtai_composer_controls");
     composer_controls->setAccessibleName(QStringLiteral("Message controls"));
-    composer_controls->setFixedHeight(52);
+    composer_controls->setMinimumHeight(52);
 
     auto *composer_action_row = new QHBoxLayout(composer_controls);
     composer_action_row->setContentsMargins(6, 4, 6, 4);
@@ -697,22 +700,27 @@ AgentDetailView::AgentDetailView(
         auto result = st::defaultInputField;
         result.border = 0;
         result.borderActive = 0;
-        result.textMargins = QMargins(0, 13, 0, 0);
+        // Balanced vertical padding so wrapped lines stay readable as the
+        // field grows beyond the single-line capsule height.
+        result.textMargins = QMargins(0, 10, 0, 10);
         result.placeholderMargins = QMargins();
         result.placeholderScale = 0.0;
         result.placeholderShift = 0;
         return result;
     }();
 
+    // NoNewlines keeps Enter-to-send, but enables Qt word wrap (SingleLine
+    // forces QTextOption::NoWrap).
     auto *composer_input = new Ui::InputField(
         composer_controls,
         borderless_composer_input,
-        Ui::InputField::Mode::SingleLine,
+        Ui::InputField::Mode::NoNewlines,
         rpl::single(QStringLiteral("Message…")));
     composer_input_ = composer_input;
     composer_input->setObjectName("lingtai_composer_input");
     composer_input->setAccessibleName(QStringLiteral("Message"));
-    composer_input->setFixedHeight(40);
+    composer_input->setMinHeight(40);
+    composer_input->setMaxHeight(120);
     composer_input->setEnabled(false);
 
     auto *attachment_button = new ComposerAttachmentButton(composer_controls);
@@ -740,6 +748,19 @@ AgentDetailView::AgentDetailView(
     send_button->setFixedSize(44, 44);
     send_button->setFullRadius(true);
     composer_action_row->addWidget(send_button, 0, Qt::AlignVCenter);
+
+    const auto sync_composer_controls_height =
+        [composer_controls, composer_input] {
+            const auto margins = composer_controls->layout()->contentsMargins();
+            const auto target = composer_input->height()
+                + margins.top() + margins.bottom();
+            composer_controls->setFixedHeight(std::max(52, target));
+        };
+    sync_composer_controls_height();
+    composer_input->heightChanges()
+        | rpl::on_next([sync_composer_controls_height] {
+            sync_composer_controls_height();
+        }, composer_lifetime_);
 
     composer_layout->addWidget(composer_controls);
 
