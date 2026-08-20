@@ -1,7 +1,10 @@
 #include "native_shell.h"
+#include "shell_host.h"
 #include "agent_projection.h"
 #include "preset_editor_model.h"
 #include "project_setup_wizard.h"
+#include "runtime_options.h"
+#include "ui/object_names.h"
 
 #include "styles/palette.h"
 #include "ui/UiTestFonts.h"
@@ -956,6 +959,73 @@ void verify_open_project_behavior(
     std::error_code cleanup_error;
     fs::remove_all(sandbox, cleanup_error);
     require(!cleanup_error, "focused fixtures must be removed");
+}
+
+// Folder menu "Open Project in Another Window" must keep the requester on its
+// current project while opening the chosen path in a second shell window.
+void verify_open_project_in_another_window(const fs::path &sandbox) {
+    using lingtai::desktop::ui_test::kOpenProjectNewWindowButton;
+    using lingtai::desktop::ShellHost;
+    using lingtai::desktop::RuntimeOptions;
+
+    RuntimeOptions options;
+    options.offscreen_mode = true;
+    options.ui_test_mode = true;
+    ShellHost host(options);
+    require(host.shell_count() == 1,
+        "ShellHost must start with exactly one window");
+
+    auto &primary = host.primary();
+    primary.show_offscreen();
+    QCoreApplication::processEvents();
+
+    auto *new_window_button = required_child<QPushButton>(
+        primary.window(), kOpenProjectNewWindowButton);
+    auto request_count = std::size_t{0};
+    primary.set_open_project_in_new_window_request_handler([&] {
+        ++request_count;
+    });
+    new_window_button->click();
+    require(request_count == 1,
+        "Open Project in Another Window must fire exactly one request");
+
+    const auto first = sandbox / "window-a";
+    const auto second = sandbox / "window-b";
+    write_file(first / ".lingtai/alpha/.agent.json", R"({"admin":{}})");
+    write_file(second / ".lingtai/beta/.agent.json", R"({"admin":{}})");
+    const auto first_root = fs::canonical(first);
+    const auto second_root = fs::canonical(second);
+
+    const auto opened = primary.open_project(first, std::nullopt);
+    require(opened.disposition == ProjectOpenDisposition::opened,
+        "primary window must open the first project");
+    require(primary.selection_state().active_project()
+            && primary.selection_state().active_project()->root() == first_root,
+        "primary window must keep the first project root");
+
+    host.open_path_in_new_window(primary, second);
+    QCoreApplication::processEvents();
+    require(host.shell_count() == 2,
+        "Open in Another Window must create a second shell");
+    require(primary.selection_state().active_project()
+            && primary.selection_state().active_project()->root() == first_root,
+        "primary window must remain on its project after spawning another");
+
+    auto &secondary = host.shell_at(1);
+    require(secondary.selection_state().active_project()
+            && secondary.selection_state().active_project()->root()
+                == second_root,
+        "new window must open the second project");
+    require(label_text(primary.window(), "lingtai_project_root").toStdString()
+            == first_root.string(),
+        "primary project-root label must stay on the first project");
+    require(label_text(secondary.window(), "lingtai_project_root").toStdString()
+            == second_root.string(),
+        "new window project-root label must show the second project");
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "multi-window fixtures must be removed");
 }
 
 void verify_semantics_and_request(
@@ -2193,6 +2263,11 @@ exit 0)");
         "a pending discovery must show one truthful phase status");
     require(!open_button->isEnabled(),
         "Open Project must be disabled while bootstrap is pending");
+    auto *open_new_window = required_child<QPushButton>(
+        window, "lingtai_open_project_new_window_button");
+    require(!open_new_window->isEnabled(),
+        "Open Project in Another Window must be disabled while bootstrap "
+        "is pending");
     QCoreApplication::processEvents();
     const auto presets_deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(3);
@@ -5518,6 +5593,8 @@ void run_native_shell_journey(
             verify_open_project_behavior(
                 shell, project_root / "commit-7-open-project-fixtures");
         });
+        verify_open_project_in_another_window(
+            project_root / "multi-window-open-fixture");
         return;
     }
     if (journey == "conversation") {

@@ -15,8 +15,11 @@ inline constexpr auto kStartupRoute = "lingtai_startup_route";
 inline constexpr auto kStartupChooseProject = "lingtai_startup_choose_project";
 inline constexpr auto kEmptyWorkspaceRoute = "lingtai_empty_workspace_route";
 inline constexpr auto kOpenProjectButton = "lingtai_open_project_button";
+inline constexpr auto kOpenProjectNewWindowButton =
+    "lingtai_open_project_new_window_button";
 inline constexpr auto kProjectRoot = "lingtai_project_root";
 inline constexpr auto kProjectSelector = "lingtai_project_selector";
+inline constexpr auto kProjectSelectorMenu = "lingtai_project_selector_menu";
 
 inline constexpr auto kAgentRoster = "lingtai_agent_roster";
 inline constexpr auto kAgentRosterRows = "lingtai_agent_roster_rows";

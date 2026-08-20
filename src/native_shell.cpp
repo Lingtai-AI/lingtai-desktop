@@ -1179,6 +1179,12 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
             request_open_project();
         });
     }
+    if (auto *open_new_window = agent_roster_->findChild<QPushButton *>(
+            "lingtai_open_project_new_window_button")) {
+        QObject::connect(open_new_window, &QPushButton::clicked, [this] {
+            request_open_project_in_new_window();
+        });
+    }
     shell_layout->addWidget(agent_roster_);
 
     // One semantic drag handle between the roster and its shadow: a fixed 8px
@@ -2423,6 +2429,11 @@ void NativeShell::set_open_project_request_handler(
     open_project_request_handler_ = std::move(handler);
 }
 
+void NativeShell::set_open_project_in_new_window_request_handler(
+        OpenProjectRequestHandler handler) {
+    open_project_in_new_window_request_handler_ = std::move(handler);
+}
+
 void NativeShell::request_new_project_at(const fs::path &destination) {
     if (auto *input = find_ui_child<Ui::InputField>(
             *window_, "lingtai_bootstrap_destination_input")) {
@@ -2444,6 +2455,10 @@ void NativeShell::set_bootstrap_actions_enabled(bool enabled) {
     if (auto *open_button = window_->findChild<QPushButton *>(
             "lingtai_open_project_button")) {
         open_button->setEnabled(enabled);
+    }
+    if (auto *open_new_window = window_->findChild<QPushButton *>(
+            "lingtai_open_project_new_window_button")) {
+        open_new_window->setEnabled(enabled);
     }
 }
 
@@ -2867,6 +2882,13 @@ void NativeShell::request_open_project() {
     if (bootstrap_pending_) return;
     if (open_project_request_handler_) {
         open_project_request_handler_();
+    }
+}
+
+void NativeShell::request_open_project_in_new_window() {
+    if (bootstrap_pending_) return;
+    if (open_project_in_new_window_request_handler_) {
+        open_project_in_new_window_request_handler_();
     }
 }
 

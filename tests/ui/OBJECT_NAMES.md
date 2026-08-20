@@ -17,6 +17,9 @@ C++ constants: [`object_names.h`](object_names.h)
 | `lingtai_startup_choose_project` | Choose project button |
 | `lingtai_empty_workspace_route` | No project open state |
 | `lingtai_open_project_button` | Open project (hidden seam; menu forwards here) |
+| `lingtai_open_project_new_window_button` | Open project in another window (hidden seam) |
+| `lingtai_open_project_menu_action` | Folder-menu Open Project action |
+| `lingtai_open_project_new_window_menu_action` | Folder-menu Open in Another Window action |
 | `lingtai_project_root` | Current project path label |
 | `lingtai_project_selector` | Compact project selector |
 | `lingtai_project_selector_menu` | Selector dropdown menu |

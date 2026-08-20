@@ -1,0 +1,61 @@
+#pragma once
+
+#include "native_shell.h"
+#include "runtime_options.h"
+
+#include <QtCore/QObject>
+
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <vector>
+
+namespace lingtai::desktop {
+
+// Owns every open NativeShell window for the process. Open Project still
+// rebinds the requesting shell; Open Project in Another Window spawns another
+// shell and opens the chosen directory only there.
+class ShellHost final : public QObject {
+public:
+    explicit ShellHost(
+        RuntimeOptions runtime_options,
+        QObject *parent = nullptr);
+    ~ShellHost() override;
+
+    [[nodiscard]] NativeShell &primary();
+    [[nodiscard]] NativeShell &shell_at(std::size_t index);
+    [[nodiscard]] std::size_t shell_count() const;
+
+    // Shows a directory picker parented to `requester`, then opens or
+    // bootstraps that path in `requester` itself.
+    void open_project_for(NativeShell &requester);
+
+    // Shows a directory picker parented to `requester`, then creates a new
+    // window and opens or bootstraps that path only in the new shell.
+    void open_project_in_new_window(NativeShell &requester);
+
+    // Test / programmatic seam: open `directory` in a newly created window
+    // without showing a directory picker.
+    void open_path_in_new_window(
+        NativeShell &requester,
+        const std::filesystem::path &directory);
+
+private:
+    [[nodiscard]] NativeShell *spawn_shell();
+    void configure_shell(NativeShell &shell);
+    void watch_shell(NativeShell *shell);
+    void remove_shell(NativeShell *shell);
+    [[nodiscard]] std::optional<std::filesystem::path> pick_project_directory(
+        QWidget *parent) const;
+    void open_or_bootstrap(
+        NativeShell &shell,
+        const std::filesystem::path &directory);
+
+    RuntimeOptions runtime_options_;
+    std::filesystem::path agent_start_fallback_python_;
+    std::filesystem::path tui_executable_;
+    std::vector<std::unique_ptr<NativeShell>> shells_;
+    bool shutting_down_ = false;
+};
+
+} // namespace lingtai::desktop

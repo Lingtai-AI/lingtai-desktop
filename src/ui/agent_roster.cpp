@@ -661,6 +661,18 @@ AgentRoster::AgentRoster(QWidget *parent)
     open_button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     open_button->hide();
     header->addWidget(open_button);
+    auto *open_new_window_button = new QPushButton(
+        QStringLiteral("Open Project in Another Window…"), this);
+    open_new_window_button->setObjectName(
+        "lingtai_open_project_new_window_button");
+    open_new_window_button->setAccessibleName(
+        QStringLiteral("Open Project in Another Window"));
+    open_new_window_button->setAccessibleDescription(QStringLiteral(
+        "Open a project location in another LingTai window."));
+    open_new_window_button->setSizePolicy(
+        QSizePolicy::Expanding, QSizePolicy::Fixed);
+    open_new_window_button->hide();
+    header->addWidget(open_new_window_button);
     auto *selector = new ProjectSelectorButton(this);
     selector->setText(QStringLiteral("LingTai"));
     project_selector_ = selector;
@@ -675,9 +687,15 @@ AgentRoster::AgentRoster(QWidget *parent)
     path_action->setEnabled(false);
     auto *open_action =
         selector_menu->addAction(QStringLiteral("Open Project"));
-    open_action->setObjectName("lingtai_open_project_button");
+    open_action->setObjectName("lingtai_open_project_menu_action");
     QObject::connect(open_action, &QAction::triggered,
         open_button, &QPushButton::click);
+    auto *open_new_window_action = selector_menu->addAction(
+        QStringLiteral("Open Project in Another Window…"));
+    open_new_window_action->setObjectName(
+        "lingtai_open_project_new_window_menu_action");
+    QObject::connect(open_new_window_action, &QAction::triggered,
+        open_new_window_button, &QPushButton::click);
     QObject::connect(selector, &QPushButton::clicked,
         [selector, selector_menu, path_action, project_root] {
             path_action->setText(project_root->text());

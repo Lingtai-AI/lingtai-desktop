@@ -84,6 +84,8 @@ public:
     void show();
     void show_offscreen();
     void set_open_project_request_handler(OpenProjectRequestHandler handler);
+    void set_open_project_in_new_window_request_handler(
+        OpenProjectRequestHandler handler);
     void request_new_project_at(const std::filesystem::path &destination);
     // The one Desktop-configured TUI executable for explicit first-project
     // bootstrap: the shipped `lingtai-tui` or a focused test fixture. It is
@@ -112,6 +114,7 @@ public:
 
 private:
     void request_open_project();
+    void request_open_project_in_new_window();
     void request_new_project();
     void handle_presets_finished(PresetDiscoveryResult result);
     void handle_spawn_finished(SpawnOutcome outcome);
@@ -246,6 +249,7 @@ private:
     MessageReactionStore reaction_store_;
     InjectedMailJournal injected_mail_journal_;
     OpenProjectRequestHandler open_project_request_handler_;
+    OpenProjectRequestHandler open_project_in_new_window_request_handler_;
     std::filesystem::path agent_start_fallback_python_;
     // One narrow injectable dependency: the configured TUI executable used by
     // the explicit New Project flow and the selected-Agent lifecycle commands.
