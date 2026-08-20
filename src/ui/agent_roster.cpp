@@ -41,6 +41,18 @@ constexpr auto kProjectIconGap = 8;
     return st::windowBgActive->c;
 }
 
+// Soft selection wash: blend the composer Send accent into the sidebar base
+// so the selected row reads as a pale blue tint, not a solid filled pill.
+[[nodiscard]] QColor selected_row_fill_color() {
+    const auto base = st::windowBg->c;
+    const auto accent = st::windowBgActive->c;
+    constexpr auto kTint = 0.16;
+    return QColor(
+        int(base.red() * (1.0 - kTint) + accent.red() * kTint + 0.5),
+        int(base.green() * (1.0 - kTint) + accent.green() * kTint + 0.5),
+        int(base.blue() * (1.0 - kTint) + accent.blue() * kTint + 0.5));
+}
+
 // Telegram lib_ui's FlatButton paints only a flat base/hover background before
 // its ripple, while IconButton paints the ripple and glyph without asking the
 // platform style for a frame. Keep that same ownership here: the project
@@ -249,8 +261,8 @@ void paint_agent_row(
     if (selected || over) {
         painter.setPen(Qt::NoPen);
         painter.setBrush(selected
-            ? st::dialogsBgActive
-            : st::windowBgRipple);
+            ? selected_row_fill_color()
+            : st::windowBgRipple->c);
         painter.drawRoundedRect(
             QRectF(row_rect).adjusted(0.5, 0.5, -0.5, -0.5),
             kSelectedRadius, kSelectedRadius);
@@ -282,7 +294,7 @@ void paint_agent_row(
     primary_font.setPointSize(13);
     primary_font.setWeight(QFont::DemiBold);
     const auto primary_color = selected
-        ? st::dialogsNameFgActive
+        ? (over ? st::dialogsNameFgOver : st::dialogsNameFg)
         : over
             ? st::dialogsNameFgOver
             : st::dialogsNameFg;
@@ -321,15 +333,11 @@ void paint_agent_row(
 
     auto secondary_font = base_font;
     secondary_font.setPointSize(12);
-    // windowSubTextFg alone reads too faint on the transparent row; nudge it
-    // darker while staying in the same muted family (Active white remains on
-    // the solid selected fill).
-    auto secondary_ink = selected
-        ? st::dialogsTextFgActive->c
-        : (over ? st::windowSubTextFgOver->c : st::windowSubTextFg->c);
-    if (!selected) {
-        secondary_ink = secondary_ink.darker(118);
-    }
+    // Pale selection keeps normal muted secondary ink (not active-white).
+    auto secondary_ink = over
+        ? st::windowSubTextFgOver->c
+        : st::windowSubTextFg->c;
+    secondary_ink = secondary_ink.darker(118);
     const auto dot_top = secondary_rect.y()
         + (secondary_rect.height() - kStatusDotDiameter) / 2;
     painter.setPen(Qt::NoPen);

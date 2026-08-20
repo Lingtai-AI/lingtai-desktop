@@ -31,8 +31,9 @@ class AgentRowsCanvas;
 // Rows are a fixed 62px with 10px/8px framing and show one primary name line
 // plus one compact manifest/role/presence state line. Unselected rows stay
 // transparent on the sidebar canvas; hover uses `windowBgRipple`, and the
-// selected row keeps solid `dialogsBgActive`. Secondary role · status ink is
-// a slightly darkened `windowSubTextFg` so it stays muted but readable.
+// selected row uses a pale `windowBgActive` tint over `windowBg`. Secondary
+// role · status ink is a slightly darkened `windowSubTextFg` so it stays
+// muted but readable.
 //
 // The visible rows omit the human pseudo-agent: the shared `AgentSnapshot`
 // keeps the human for routing/mailbox/detail truth, but the roster never
