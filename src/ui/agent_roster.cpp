@@ -4,6 +4,7 @@
 
 #include <QtCore/QString>
 #include <QtGui/QAction>
+#include <QtGui/QColor>
 #include <QtGui/QFont>
 #include <QtGui/QMouseEvent>
 #include <QtGui/QFontMetrics>
@@ -26,9 +27,17 @@ constexpr auto kRosterColumnWidth = 260;
 constexpr auto kNarrowRosterWidth = 120;
 constexpr auto kAvatarDiameter = 40;
 constexpr auto kAvatarTextGap = 10;
+constexpr auto kAvatarLetterPixelSize = 22;
 constexpr auto kRowHorizontalFrame = 14;
 constexpr auto kRowVerticalFrame = 8;
 constexpr auto kRowSpacing = 2;
+constexpr auto kStatusDotDiameter = 6;
+constexpr auto kStatusDotGap = 6;
+constexpr auto kProjectIconSize = 14;
+constexpr auto kProjectIconGap = 8;
+// Roster avatars use a fixed brand green so the initial reads like the design
+// disc rather than shifting with selection/hover ink tokens.
+const auto kAvatarFill = QColor(QStringLiteral("#16785C"));
 
 // Telegram lib_ui's FlatButton paints only a flat base/hover background before
 // its ripple, while IconButton paints the ripple and glyph without asking the
@@ -41,9 +50,13 @@ public:
     : QPushButton(parent) {
         setFlat(true);
         setCursor(Qt::PointingHandCursor);
-        setFixedHeight(30);
+        setFixedHeight(34);
         setMinimumWidth(0);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        auto font = this->font();
+        font.setPointSize(15);
+        font.setWeight(QFont::DemiBold);
+        setFont(font);
     }
 
 protected:
@@ -65,18 +78,35 @@ protected:
         const auto ink = (underMouse() || isDown())
             ? st::dialogsNameFgOver->c
             : st::dialogsNameFg->c;
-        painter.setPen(ink);
 
-        auto font = this->font();
-        font.setPointSize(11);
-        font.setWeight(QFont::DemiBold);
-        painter.setFont(font);
         const auto label = text();
         if (label == QStringLiteral("⋯")) {
+            painter.setPen(ink);
+            painter.setFont(font());
             painter.drawText(rect(), Qt::AlignCenter, label);
         } else {
-            const auto left = 9;
-            const auto metrics = QFontMetrics(font);
+            // 2×2 apps/grid glyph matching the design folder row.
+            const auto icon_left = 8.0;
+            const auto icon_top = (height() - kProjectIconSize) / 2.0;
+            const auto cell = 5.5;
+            const auto gap = 3.0;
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(ink);
+            painter.drawRoundedRect(
+                QRectF(icon_left, icon_top, cell, cell), 1.2, 1.2);
+            painter.drawRoundedRect(
+                QRectF(icon_left + cell + gap, icon_top, cell, cell), 1.2, 1.2);
+            painter.drawRoundedRect(
+                QRectF(icon_left, icon_top + cell + gap, cell, cell), 1.2, 1.2);
+            painter.drawRoundedRect(
+                QRectF(icon_left + cell + gap, icon_top + cell + gap, cell, cell),
+                1.2, 1.2);
+
+            const auto label_font = font();
+            painter.setFont(label_font);
+            painter.setPen(ink);
+            const auto left = int(icon_left + kProjectIconSize + kProjectIconGap);
+            const auto metrics = QFontMetrics(label_font);
             const auto label_width = metrics.horizontalAdvance(label);
             painter.drawText(
                 QRect(left, 0, label_width, height()),
@@ -84,7 +114,7 @@ protected:
                 label);
             const auto chevron_x = left + label_width + 7.0;
             const auto chevron_y = height() / 2.0;
-            auto chevron_pen = QPen(ink, 1.4);
+            auto chevron_pen = QPen(ink, 1.6);
             chevron_pen.setCapStyle(Qt::RoundCap);
             painter.setPen(chevron_pen);
             painter.drawLine(
@@ -160,8 +190,8 @@ QString row_facts(const AgentRow &item) {
             presence_text(item.presence));
 }
 
-// The visible two-line row renders a friendly 1:1 summary (`Main Agent ·
-// ACTIVE`) from the TUI lifecycle resolver, not raw heartbeat presence.
+// The visible two-line row renders a friendly 1:1 summary (`Main agent ·
+// Active`) from the TUI lifecycle resolver, not raw heartbeat presence.
 QString row_summary(const AgentRow &item) {
     const auto role = friendly_agent_role_text(item.role);
     const auto state = friendly_agent_lifecycle_text(item);
@@ -169,6 +199,25 @@ QString row_summary(const AgentRow &item) {
         return row_facts(item);
     }
     return QStringLiteral("%1 · %2").arg(role, state);
+}
+
+QColor lifecycle_status_color(const AgentRow &item) {
+    const auto state = QString::fromStdString(item.lifecycle_state).toLower();
+    if (state == QStringLiteral("active")) {
+        return QColor(QStringLiteral("#16785C"));
+    }
+    if (state == QStringLiteral("suspended")
+        || state == QStringLiteral("stuck")) {
+        return QColor(QStringLiteral("#D97706"));
+    }
+    if (state == QStringLiteral("asleep")) {
+        return QColor(QStringLiteral("#64748B"));
+    }
+    if (state == QStringLiteral("idle")
+        || state == QStringLiteral("refreshing")) {
+        return QColor(QStringLiteral("#94A3B8"));
+    }
+    return st::windowSubTextFg->c;
 }
 
 int agent_row_height(const QFont &base_font) {
@@ -188,6 +237,7 @@ void paint_agent_row(
         const QFont &base_font,
         const QString &primary_text,
         const QString &secondary_text,
+        const QColor &status_color,
         bool selected,
         bool over) {
     painter.setRenderHint(QPainter::Antialiasing, true);
@@ -235,14 +285,13 @@ void paint_agent_row(
 
     const auto avatar_initial = primary_display.trimmed().left(1).toUpper();
     painter.setPen(Qt::NoPen);
-    painter.setBrush(primary_color);
+    painter.setBrush(kAvatarFill);
     painter.drawEllipse(avatar_rect);
-    painter.setPen(selected
-        ? st::dialogsBgActive
-        : over
-            ? st::windowBgRipple
-            : st::windowBg);
-    painter.setFont(primary_font);
+    painter.setPen(QColor(Qt::white));
+    auto avatar_font = base_font;
+    avatar_font.setPixelSize(kAvatarLetterPixelSize);
+    avatar_font.setWeight(QFont::DemiBold);
+    painter.setFont(avatar_font);
     painter.drawText(avatar_rect, Qt::AlignCenter, avatar_initial);
 
     // Telegram's dialogs painter returns immediately after the userpic in its
@@ -268,17 +317,30 @@ void paint_agent_row(
 
     auto secondary_font = base_font;
     secondary_font.setPointSize(12);
+    const auto secondary_ink = selected
+        ? st::dialogsTextFgActive->c
+        : st::windowSubTextFg->c;
+    const auto dot_top = secondary_rect.y()
+        + (secondary_rect.height() - kStatusDotDiameter) / 2;
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(status_color);
+    painter.drawEllipse(
+        secondary_rect.x(),
+        dot_top,
+        kStatusDotDiameter,
+        kStatusDotDiameter);
+
+    const auto status_text_rect = secondary_rect.adjusted(
+        kStatusDotDiameter + kStatusDotGap, 0, 0, 0);
     painter.setFont(secondary_font);
-    painter.setPen(selected
-        ? st::dialogsTextFgActive
-        : st::windowSubTextFg);
+    painter.setPen(secondary_ink);
     painter.drawText(
-        secondary_rect,
+        status_text_rect,
         flags,
         QFontMetrics(secondary_font).elidedText(
             secondary_text,
             Qt::ElideRight,
-            std::max(0, secondary_rect.width())));
+            std::max(0, status_text_rect.width())));
 }
 
 QLabel *make_label(
@@ -302,7 +364,7 @@ QLabel *make_label(
 
 QString friendly_agent_role_text(AgentRole role) {
     switch (role) {
-    case AgentRole::main: return QStringLiteral("Main Agent");
+    case AgentRole::main: return QStringLiteral("Main agent");
     case AgentRole::agent: return QStringLiteral("Agent");
     case AgentRole::human: return QStringLiteral("Human");
     case AgentRole::unknown: return QString();
@@ -314,7 +376,9 @@ QString friendly_agent_lifecycle_text(const AgentRow &item) {
     if (item.lifecycle_state.empty()) {
         return QStringLiteral("—");
     }
-    return QString::fromStdString(item.lifecycle_state).toUpper();
+    auto text = QString::fromStdString(item.lifecycle_state).toLower();
+    text[0] = text[0].toUpper();
+    return text;
 }
 
 QString friendly_agent_presence_text(AgentPresenceKind presence) {
@@ -511,6 +575,7 @@ void AgentRowsCanvas::paintEvent(QPaintEvent *) {
             font(),
             primary_text,
             row_summary(item),
+            lifecycle_status_color(item),
             selected,
             over);
     }
@@ -683,7 +748,11 @@ void AgentRoster::set_project_display_name(const QString &name) {
 
 void AgentRoster::update_narrow_mode() {
     const auto narrow = width() <= kNarrowRosterWidth;
-    const auto available = narrow ? qMax(18, width() - 48) : qMax(40, width() - 58);
+    // Reserve the painted grid icon + gaps before eliding the folder name.
+    const auto icon_gutter = kProjectIconSize + kProjectIconGap + 16;
+    const auto available = narrow
+        ? qMax(18, width() - 48 - icon_gutter)
+        : qMax(40, width() - 58 - icon_gutter);
     project_selector_->setText(project_selector_->fontMetrics().elidedText(
         project_display_name_, Qt::ElideRight, available));
     roster_heading_->setVisible(!narrow);

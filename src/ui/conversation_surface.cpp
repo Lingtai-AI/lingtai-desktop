@@ -84,7 +84,9 @@ constexpr auto kEmptyAvatarGap = 10;
 constexpr auto kEmptyTitleGap = 6;
 constexpr auto kEmptyStateHeadroom = 28;
 constexpr auto kEmptyStateTitleSize = 15;
-constexpr auto kEmptyStateAvatarLetterSize = 14;
+constexpr auto kSelectAgentIllustrationSize = 72;
+constexpr auto kSelectAgentIllustrationGap = 14;
+constexpr auto kSelectAgentTitleSize = 17;
 // The leading lazy-history banner's vertical breathing room around the single
 // centered muted line. It is deliberately small so the banner reads as a quiet
 // inline note above the first revealed message rather than a tall separator.
@@ -693,6 +695,52 @@ QTextCharFormat empty_state_title_format() {
     return format;
 }
 
+QTextCharFormat select_agent_title_format() {
+    auto format = QTextCharFormat();
+    format.setForeground(st::dialogsNameFg);
+    auto font = format.font();
+    font.setPixelSize(kSelectAgentTitleSize);
+    font.setWeight(QFont::DemiBold);
+    format.setFont(font);
+    return format;
+}
+
+// Quiet line-art illustration for the no-selection empty state: two figures
+// with speech bubbles in the design's muted green.
+QPixmap select_agent_illustration(int size) {
+    auto pixmap = QPixmap(size, size);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const auto ink = QColor(QStringLiteral("#8BBFAF"));
+    auto pen = QPen(ink, 2.2);
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+    painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
+
+    const auto s = qreal(size);
+    // Left figure.
+    painter.drawEllipse(QRectF(s * 0.18, s * 0.18, s * 0.22, s * 0.22));
+    painter.drawRoundedRect(
+        QRectF(s * 0.14, s * 0.44, s * 0.30, s * 0.34), s * 0.12, s * 0.12);
+    // Right figure.
+    painter.drawEllipse(QRectF(s * 0.58, s * 0.22, s * 0.22, s * 0.22));
+    painter.drawRoundedRect(
+        QRectF(s * 0.54, s * 0.48, s * 0.30, s * 0.34), s * 0.12, s * 0.12);
+    // Speech bubbles.
+    painter.drawRoundedRect(
+        QRectF(s * 0.34, s * 0.08, s * 0.22, s * 0.14), 4, 4);
+    painter.drawLine(
+        QPointF(s * 0.40, s * 0.22), QPointF(s * 0.36, s * 0.28));
+    painter.drawRoundedRect(
+        QRectF(s * 0.52, s * 0.34, s * 0.20, s * 0.12), 4, 4);
+    painter.drawLine(
+        QPointF(s * 0.62, s * 0.46), QPointF(s * 0.66, s * 0.52));
+    painter.end();
+    return pixmap;
+}
+
 // The small empty-state Agent avatar: a quiet muted circle carrying the
 // Agent's own initial, painted with the same shared palette tokens the roster
 // rows use so the empty conversation reads as the same partner identity.
@@ -702,13 +750,13 @@ QPixmap empty_state_avatar(const QString &initial, int diameter) {
     QPainter painter(&pixmap);
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setPen(Qt::NoPen);
-    painter.setBrush(st::msgServiceFg);
+    painter.setBrush(QColor(QStringLiteral("#16785C")));
     painter.drawEllipse(0, 0, diameter, diameter);
     auto font = QFont();
-    font.setPixelSize(kEmptyStateAvatarLetterSize);
+    font.setPixelSize(std::max(14, diameter / 2));
     font.setWeight(QFont::DemiBold);
     painter.setFont(font);
-    painter.setPen(st::windowBg);
+    painter.setPen(QColor(Qt::white));
     painter.drawText(QRect(0, 0, diameter, diameter), Qt::AlignCenter, initial);
     painter.end();
     return pixmap;
@@ -733,10 +781,15 @@ ConversationSurface::ConversationSurface(QWidget *parent)
 }
 
 void ConversationSurface::set_plain_state(const QString &text) {
-    empty_state_active_ = false;
-    if (text == last_plain_state_) {
+    if (text == last_plain_state_
+            && !select_agent_prompt_active_
+            && !empty_state_active_) {
         return;
     }
+    empty_state_active_ = false;
+    select_agent_prompt_active_ = false;
+    select_agent_main_name_.clear();
+    them_.clear();
     last_plain_state_ = text;
     last_messages_.clear();
     last_reactions_.clear();
@@ -751,6 +804,49 @@ void ConversationSurface::set_plain_state(const QString &text) {
         clear_plain_state_anchor(document());
     }
     last_layout_width_ = int(viewport()->width() / 8) * 8;
+}
+
+void ConversationSurface::set_select_agent_prompt(const QString &main_agent_name) {
+    auto text = QStringLiteral(
+        "Select an agent\n"
+        "Choose an agent from the sidebar to view its conversation.");
+    if (!main_agent_name.trimmed().isEmpty()) {
+        text += QStringLiteral("\nYour main agent is %1.")
+            .arg(main_agent_name.trimmed());
+    }
+    // Keep the no-selection prompt on the plain-state path so a later
+    // set_conversation() rebuild is identical to the pre-illustration flow.
+    // The design illustration is painted in paintEvent while this prompt is
+    // active (see select_agent_prompt_active_).
+    if (select_agent_prompt_active_
+            && select_agent_main_name_ == main_agent_name
+            && last_plain_state_ == text) {
+        return;
+    }
+    select_agent_main_name_ = main_agent_name;
+    select_agent_prompt_active_ = true;
+    empty_state_active_ = false;
+    them_.clear();
+    last_messages_.clear();
+    last_reactions_.clear();
+    history_offset_ = 0;
+    last_plain_state_ = text;
+    setPlainText(text);
+    // Leave room above the title for the painted illustration.
+    apply_plain_state_formatting(
+        document(), viewport()->width(), viewport()->height());
+    auto frame_format = document()->rootFrame()->frameFormat();
+    frame_format.setTopMargin(std::max(
+        frame_format.topMargin(),
+        qreal(kSelectAgentIllustrationSize + kSelectAgentIllustrationGap
+            + kEmptyStateHeadroom)));
+    document()->rootFrame()->setFrameFormat(frame_format);
+    auto cursor = QTextCursor(document());
+    cursor.movePosition(QTextCursor::Start);
+    cursor.movePosition(QTextCursor::EndOfBlock, QTextCursor::KeepAnchor);
+    cursor.mergeCharFormat(select_agent_title_format());
+    last_layout_width_ = int(viewport()->width() / 8) * 8;
+    update();
 }
 
 bool ConversationSurface::same_content(
@@ -800,6 +896,8 @@ void ConversationSurface::set_conversation(
     last_messages_ = messages;
     last_reactions_ = reactions;
     last_plain_state_.clear();
+    select_agent_prompt_active_ = false;
+    select_agent_main_name_.clear();
     empty_state_active_ = messages.empty();
     // Reset the render-time window to the initial chronological tail whenever
     // the conversation identity or content is replaced: nothing is paged in
@@ -1103,10 +1201,25 @@ void ConversationSurface::rebuild_document() {
     if (was_at_bottom) {
         scroll_to_bottom();
     } else {
+        // Cancel any deferred bottom pin from a prior follow-bottom rebuild so
+        // it cannot yank the viewport after this non-bottom restore.
+        ++scroll_pin_generation_;
         scrollbar->setValue(std::min(previous, scrollbar->maximum()));
     }
 
     rebuild_in_progress_ = false;
+}
+
+void ConversationSurface::rebuild_select_agent_prompt() {
+    if (!select_agent_prompt_active_ || last_plain_state_.isEmpty()) {
+        return;
+    }
+    apply_plain_state_formatting(
+        document(), viewport()->width(), viewport()->height());
+    auto cursor = QTextCursor(document());
+    cursor.movePosition(QTextCursor::Start);
+    cursor.movePosition(QTextCursor::EndOfBlock, QTextCursor::KeepAnchor);
+    cursor.mergeCharFormat(select_agent_title_format());
 }
 
 void ConversationSurface::rebuild_empty_state() {
@@ -1191,8 +1304,13 @@ void ConversationSurface::scroll_to_bottom() {
     scroll_to_bottom_now();
     // QTextEdit may still sync its slider from a queued documentSizeChanged
     // after a new-day frame top margin lands. Pin again once that maximum is
-    // real so the viewport sits on the true document bottom.
-    QTimer::singleShot(0, this, [this] {
+    // real so the viewport sits on the true document bottom — but only if the
+    // human has not scrolled away from the pin in the meantime.
+    const auto pinned_at = verticalScrollBar()->value();
+    const auto generation = ++scroll_pin_generation_;
+    QTimer::singleShot(0, this, [this, generation, pinned_at] {
+        if (generation != scroll_pin_generation_) return;
+        if (verticalScrollBar()->value() != pinned_at) return;
         scroll_to_bottom_now();
     });
 }
@@ -1204,6 +1322,18 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
     // The chat backdrop shares the shell's single-canvas `windowBg` base;
     // message bubbles and transient interaction states keep their own tokens.
     painter.fillRect(event->rect(), st::windowBg);
+
+    if (select_agent_prompt_active_) {
+        const auto illustration = select_agent_illustration(
+            kSelectAgentIllustrationSize);
+        const auto x = (surface_viewport->width()
+            - kSelectAgentIllustrationSize) / 2;
+        const auto y = std::max(16,
+            int(document()->rootFrame()->frameFormat().topMargin())
+                - kSelectAgentIllustrationSize
+                - kSelectAgentIllustrationGap);
+        painter.drawPixmap(x, y, illustration);
+    }
 
     const auto h_offset = horizontalScrollBar()->value();
     const auto v_offset = verticalScrollBar()->value();
@@ -1384,13 +1514,13 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
                     kMessageAvatarDiameter,
                     kMessageAvatarDiameter);
                 if (avatar.intersects(QRectF(event->rect()))) {
-                    painter.setBrush(st::dialogsNameFg);
+                    painter.setBrush(QColor(QStringLiteral("#16785C")));
                     painter.drawEllipse(avatar);
                     auto font = QFont();
-                    font.setPixelSize(13);
+                    font.setPixelSize(18);
                     font.setWeight(QFont::DemiBold);
                     painter.setFont(font);
-                    painter.setPen(st::windowBg);
+                    painter.setPen(QColor(Qt::white));
                     painter.drawText(avatar, Qt::AlignCenter,
                         them_.trimmed().left(1).toUpper());
                     painter.setPen(Qt::NoPen);
@@ -1452,7 +1582,9 @@ void ConversationSurface::reflow_to_viewport() {
     if (rebuild_in_progress_) {
         return;
     }
-    if (empty_state_active_) {
+    if (select_agent_prompt_active_) {
+        rebuild_select_agent_prompt();
+    } else if (empty_state_active_) {
         rebuild_empty_state();
     } else if (!last_messages_.empty()) {
         // A resize reflows the already-materialized render-time window; it
@@ -1469,7 +1601,7 @@ void ConversationSurface::resizeEvent(QResizeEvent *event) {
 void ConversationSurface::showEvent(QShowEvent *event) {
     QTextEdit::showEvent(event);
     if (last_messages_.empty() && last_plain_state_.isEmpty()
-            && !empty_state_active_) {
+            && !empty_state_active_ && !select_agent_prompt_active_) {
         return;
     }
     last_layout_width_ = -1;

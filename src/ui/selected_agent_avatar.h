@@ -4,6 +4,7 @@
 
 #include "styles/palette.h"
 
+#include <QtGui/QColor>
 #include <QtGui/QPainter>
 #include <QtWidgets/QWidget>
 
@@ -34,13 +35,13 @@ protected:
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
         painter.setPen(Qt::NoPen);
-        painter.setBrush(st::dialogsNameFg);
+        painter.setBrush(QColor(QStringLiteral("#16785C")));
         painter.drawEllipse(QRectF(rect()).adjusted(1, 1, -1, -1));
         auto font = this->font();
-        font.setPointSize(13);
+        font.setPixelSize(20);
         font.setWeight(QFont::DemiBold);
         painter.setFont(font);
-        painter.setPen(st::windowBg);
+        painter.setPen(QColor(Qt::white));
         painter.drawText(
             rect(), Qt::AlignCenter, name_.left(1).toUpper());
     }

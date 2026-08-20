@@ -743,11 +743,11 @@ void verify_open_project_behavior(
             && label_text(window, "lingtai_selected_agent_presentation_name")
                 == QStringLiteral("A&B-agent")
             && label_text(window, "lingtai_selected_agent_key")
-                == QStringLiteral("SUSPENDED · Agent")
+                == QStringLiteral("Agent · Suspended")
             && required_child<QLabel>(window, "lingtai_selected_agent_key")
                 ->textFormat() == Qt::PlainText,
-        "a key-fallback header must keep one title and manifest state · "
-        "role below it");
+        "a key-fallback header must keep one title and manifest role · "
+        "state below it");
     require(tree_snapshot(roster.project) == roster_before_selection,
         "ampersand selection at its exact project-relative path must remain read-only");
     click_agent(shell, "agent");
@@ -759,9 +759,9 @@ void verify_open_project_behavior(
             == QStringLiteral("Research Nickname"),
         "selected detail must prefer the manifest nickname as its presentation name");
     require(label_text(window, "lingtai_selected_agent_key")
-            == QStringLiteral("ACTIVE · Agent"),
-        "a distinct presentation title must keep one compact lifecycle state · "
-        "role line below the name");
+            == QStringLiteral("Agent · Active"),
+        "a distinct presentation title must keep one compact role · "
+        "lifecycle state line below the name");
     require(label_text(window, "lingtai_selected_agent_manifest_identity")
             == QStringLiteral("Manifest identity\naddress: agent@example.test\n"
                 "agent ID: manifest-agent-id\nstate: active"),
@@ -1148,7 +1148,7 @@ void verify_selected_agent_conversation(
     const auto open_outcome = shell.open_project(project, std::nullopt);
     require(open_outcome.disposition != ProjectOpenDisposition::failed,
         "the conversation fixture project must open");
-    require(surface->toPlainText().contains(QStringLiteral("Select an Agent")),
+    require(surface->toPlainText().contains(QStringLiteral("Select an agent")),
         "opening without a selection must prompt for one");
 
     click_agent(shell, "telegram-bot");
@@ -2745,7 +2745,7 @@ void verify_persistent_roster_shell(
             && label_text(window, "lingtai_selected_agent_presentation_name")
                 == QStringLiteral("alpha")
             && label_text(window, "lingtai_selected_agent_key")
-                == QStringLiteral("SUSPENDED · Agent"),
+                == QStringLiteral("Agent · Suspended"),
         "Agent selection must still drive the same right detail with a "
         "key-fallback header that never repeats the directory key");
 
@@ -2836,7 +2836,7 @@ void verify_compact_header_hierarchy(
     require(presentation_name->font().pointSize() == 16,
         "the selected-Agent title must scale with the 16px Conversation body");
     require(status->font().pointSize() == 12,
-        "the friendly Status · role line must scale to the legible 12pt secondary rung");
+        "the friendly role · Status line must scale to the legible 12pt secondary rung");
     require(status->font().pointSize() < presentation_name->font().pointSize(),
         "the header status must stay smaller than the title");
     require(status->palette().color(QPalette::WindowText)
@@ -2854,10 +2854,11 @@ void verify_compact_header_hierarchy(
         "the header avatar must identify the same selected Agent as the "
         "prominent name");
     require(status->text().contains(QStringLiteral(" · "))
-            && status->text().endsWith(QStringLiteral("Agent"))
+            && (status->text().startsWith(QStringLiteral("Agent · "))
+                || status->text().startsWith(QStringLiteral("Main agent · ")))
             && !status->text().contains(QStringLiteral("role:"))
             && !status->text().contains(QStringLiteral("presence:")),
-        "the secondary line must read friendly Status · role, matching the "
+        "the secondary line must read friendly role · Status, matching the "
         "Sidebar semantics without raw fact labels");
 
     // Header chrome no longer carries Start Agent or Request sleep; those
@@ -3737,10 +3738,18 @@ void verify_modern_composer_surface(
         "ordinary composer text must dismiss the slash-command popup");
     require(composer_input->accessibilityName().isEmpty(),
         "typed composer text must hide the Message… placeholder");
+    composer_input->setFocus();
+    QCoreApplication::processEvents();
     composer_input->clear();
     QCoreApplication::processEvents();
+    // Focused empty field keeps the Message… string for accessibility but
+    // hides it visually; clearing focus restores the visible placeholder.
     require(composer_input->accessibilityName() == QStringLiteral("Message…"),
-        "clearing the composer must restore the Message… placeholder");
+        "clearing the composer must restore the Message… placeholder name");
+    composer_input->clearFocus();
+    QCoreApplication::processEvents();
+    require(composer_input->accessibilityName() == QStringLiteral("Message…"),
+        "an unfocused empty composer must keep the Message… placeholder");
 
     require(attachment_button->parent() == controls
             && composer_input->parent() == controls

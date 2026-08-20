@@ -928,6 +928,15 @@ AgentDetailView::AgentDetailView(
                     composer_input_);
             }, composer_lifetime_);
 
+        // With placeholderScale 0 the field would keep "Message…" while
+        // focused; hide it for an empty ready-to-type cursor and restore it
+        // only when focus leaves an empty field.
+        composer_input_->focusedChanges()
+            | rpl::on_next([this](bool focused) {
+                if (!composer_input_) return;
+                composer_input_->setPlaceholderHidden(focused);
+            }, composer_lifetime_);
+
         base::install_event_filter(
             composer_input_->rawTextEdit(),
             composer_input_->rawTextEdit(),
@@ -1140,15 +1149,15 @@ void AgentDetailView::render_conversation(
     const QString &compact_state,
     bool selection_present,
     bool conversation_route_available,
-    const std::unordered_map<std::string, MessageReactions> &reactions) {
+    const std::unordered_map<std::string, MessageReactions> &reactions,
+    const QString &main_agent_name) {
     const auto composer_eligible = selection_present
         && conversation_route_available;
     refresh_composer_enablement(composer_eligible);
     if (!conversation_surface_ || !conversation_state_) return;
 
     if (!selection_present) {
-        conversation_surface_->set_plain_state(
-            QStringLiteral("Select an Agent to see your conversation."));
+        conversation_surface_->set_select_agent_prompt(main_agent_name);
         conversation_state_->setText(QString());
         return;
     }

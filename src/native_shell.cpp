@@ -2339,9 +2339,9 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
     }();
     if (titlebar) {
         const auto traffic_anchor = NativeTrafficLightAnchor(window_.get());
-        auto *titlebar_brand = new QLabel(QStringLiteral("LingTai"), titlebar);
+        auto *titlebar_brand = new QLabel(QStringLiteral("LINGTAI AI"), titlebar);
         titlebar_brand->setObjectName("lingtai_titlebar_brand");
-        titlebar_brand->setAccessibleName(QStringLiteral("LingTai"));
+        titlebar_brand->setAccessibleName(QStringLiteral("LINGTAI AI"));
         titlebar_brand->setAttribute(Qt::WA_TransparentForMouseEvents);
         titlebar_brand->setStyleSheet(QStringLiteral("background: transparent;"));
         auto brand_font = titlebar_brand->font();
@@ -2808,6 +2808,10 @@ ProjectOpenOutcome NativeShell::open_project(
     // observation surface under the newly opened project/selection.
     pending_sleep_observation_.reset();
     pending_start_observation_.reset();
+    if (auto *start_status = window_->findChild<QLabel *>(
+            "lingtai_selected_agent_start_status")) {
+        start_status->clear();
+    }
     refresh_route();
     show_detail_page(AgentDetailPage::conversation);
     recompute_layout(window_->body()->width());
@@ -2896,7 +2900,7 @@ void NativeShell::render_roster() {
     }
 
     if (!detail_item) {
-        selected_key->setText(QStringLiteral("No Agent selected"));
+        selected_key->setText(QString());
         presentation_name->clear();
         presentation_name->setProperty("lingtai_full_text", QString());
         presentation_name->setAccessibleDescription(QString());
@@ -2940,7 +2944,7 @@ void NativeShell::render_roster() {
         ? role_text(detail_item->role)
         : friendly_role;
     selected_key->setText(
-        QStringLiteral("%1 · %2").arg(state, role));
+        QStringLiteral("%1 · %2").arg(role, state));
     if (identity) {
         manifest_identity->setText(QStringLiteral(
             "Manifest identity\naddress: %1\nagent ID: %2\nstate: %3")
@@ -3014,10 +3018,10 @@ void NativeShell::render_roster() {
     render_agent_preset_summary();
     render_agent_sleep_status();
     render_agent_start_status();
-    if (auto *start_status = window_->findChild<QLabel *>(
-            "lingtai_selected_agent_start_status")) {
-        start_status->clear();
-    }
+    // Do not clear lingtai_selected_agent_start_status here. Ambient one-
+    // second roster refreshes call this path and must leave terminal Start
+    // wording ("Agent is online.", failures) intact; selection/project
+    // boundaries clear the label themselves.
 }
 
 // Shows the current direct conversation for whatever the roster just made the
@@ -3029,12 +3033,29 @@ void NativeShell::render_conversation() {
     const bool selection_present = selection_state_.active_project()
         && selection_state_.selected_agent_directory_key();
 
+    auto main_agent_name = QString();
+    for (const auto &item : agents_.items) {
+        if (item.role != AgentRole::main) {
+            continue;
+        }
+        if (item.identity && item.identity->nickname) {
+            main_agent_name = QString::fromStdString(*item.identity->nickname);
+        } else if (item.identity && item.identity->true_name) {
+            main_agent_name = QString::fromStdString(*item.identity->true_name);
+        } else {
+            main_agent_name = path_text(item.directory_key);
+        }
+        break;
+    }
+
     if (!selection_present) {
         DirectConversationHistory empty;
         detail_view_->render_conversation(
             QString(), empty, QString(),
             /*selection_present=*/false,
-            /*conversation_route_available=*/false);
+            /*conversation_route_available=*/false,
+            {},
+            main_agent_name);
         return;
     }
 
@@ -3157,6 +3178,10 @@ void NativeShell::handle_kanban_agent_selected(const fs::path &directory_key) {
     bump_lifecycle_generation();
     pending_sleep_observation_.reset();
     pending_start_observation_.reset();
+    if (auto *start_status = window_->findChild<QLabel *>(
+            "lingtai_selected_agent_start_status")) {
+        start_status->clear();
+    }
     render_roster();
     show_detail_page(AgentDetailPage::kanban);
     if (error) {
@@ -3314,6 +3339,10 @@ void NativeShell::handle_agent_selection(const fs::path &directory_key) {
     // Agent.
     pending_sleep_observation_.reset();
     pending_start_observation_.reset();
+    if (auto *start_status = window_->findChild<QLabel *>(
+            "lingtai_selected_agent_start_status")) {
+        start_status->clear();
+    }
     render_roster();
     show_detail_page(AgentDetailPage::conversation);
     recompute_layout(window_->body()->width());

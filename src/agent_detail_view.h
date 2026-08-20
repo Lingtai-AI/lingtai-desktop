@@ -67,7 +67,8 @@ public:
         const QString &compact_state,
         bool selection_present,
         bool conversation_route_available,
-        const std::unordered_map<std::string, MessageReactions> &reactions = {});
+        const std::unordered_map<std::string, MessageReactions> &reactions = {},
+        const QString &main_agent_name = {});
 
     void scroll_conversation_to_bottom();
 

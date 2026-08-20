@@ -43,6 +43,10 @@ public:
     // One plain centered state for the selection/no-route/empty cases.
     void set_plain_state(const QString &text);
 
+    // Design empty state when no Agent is selected: illustration, title,
+    // helper copy, and an optional quieter main-agent hint.
+    void set_select_agent_prompt(const QString &main_agent_name);
+
     // Pin the viewport to the laid-out document bottom. Used after a send and
     // after a rebuild that started already at the bottom, so extra height such
     // as a new-day separator is included instead of a stale scrollbar maximum.
@@ -65,6 +69,7 @@ private:
     void reflow_to_viewport();
     void rebuild_document();
     void rebuild_empty_state();
+    void rebuild_select_agent_prompt();
     void reveal_older();
     void scroll_to_bottom_now();
     [[nodiscard]] bool same_content(
@@ -81,7 +86,9 @@ private:
     std::vector<DirectConversationMessage> last_messages_;
     std::unordered_map<std::string, MessageReactions> last_reactions_;
     QString last_plain_state_;
+    QString select_agent_main_name_;
     bool empty_state_active_ = false;
+    bool select_agent_prompt_active_ = false;
     int last_layout_width_ = 0;
     // The number of oldest cached rows still hidden above the visible window;
     // also the count shown by the leading banner when it is nonzero.
@@ -90,6 +97,9 @@ private:
     // being rebuilt. Ignore that nested reflow instead of recursively clearing
     // and appending into the same document.
     bool rebuild_in_progress_ = false;
+    // Cancels a deferred bottom pin when the human scrolls away or a rebuild
+    // restores a non-bottom position before the queued pass runs.
+    int scroll_pin_generation_ = 0;
 };
 
 } // namespace lingtai::desktop
