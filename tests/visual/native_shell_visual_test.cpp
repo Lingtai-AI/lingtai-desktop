@@ -10,10 +10,10 @@
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QWidget>
 
-#include <array>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string_view>
 
@@ -135,16 +135,49 @@ void captureSurface(
               << ": OK\n";
 }
 
-constexpr std::array<std::string_view, 8> kSurfaces{{
-    "startup-idle",
-    "setup-preset",
-    "setup-agents",
-    "setup-review",
-    "conversation",
-    "presets",
-    "kanban",
-    "empty-conversation",
-}};
+[[nodiscard]] std::optional<std::string_view> parseFlagValue(
+        std::string_view arg,
+        std::string_view prefix) {
+    if (!arg.starts_with(prefix)) {
+        return std::nullopt;
+    }
+    return arg.substr(prefix.size());
+}
+
+[[nodiscard]] ThemeMode parseTheme(std::string_view value) {
+    if (value == "light") {
+        return ThemeMode::light;
+    }
+    if (value == "dark") {
+        return ThemeMode::dark;
+    }
+    throw std::runtime_error("unknown theme: " + std::string(value));
+}
+
+[[nodiscard]] bool isKnownSurface(std::string_view surface) {
+    for (const auto *known : {
+            "startup-idle",
+            "setup-preset",
+            "setup-agents",
+            "setup-review",
+            "conversation",
+            "presets",
+            "kanban",
+            "empty-conversation",
+        }) {
+        if (surface == known) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void printUsage() {
+    std::cerr
+        << "usage: native_shell_visual_test --surface=NAME --theme=light|dark\n"
+        << "  surfaces: startup-idle setup-preset setup-agents setup-review\n"
+        << "            conversation presets kanban empty-conversation\n";
+}
 
 } // namespace
 
@@ -155,12 +188,33 @@ int main(int argc, char **argv) {
     QApplication app(argc, argv);
     lingtai::desktop::ui_test::applyUiTestFontDefaults();
 
-    try {
-        for (const auto theme : {ThemeMode::light, ThemeMode::dark}) {
-            for (const auto surface : kSurfaces) {
-                captureSurface(surface, theme);
-            }
+    std::optional<std::string_view> surface;
+    std::optional<ThemeMode> theme;
+    for (int index = 1; index < argc; ++index) {
+        const auto arg = std::string_view(argv[index]);
+        if (const auto value = parseFlagValue(arg, "--surface=")) {
+            surface = *value;
+            continue;
         }
+        if (const auto value = parseFlagValue(arg, "--theme=")) {
+            theme = parseTheme(*value);
+            continue;
+        }
+        printUsage();
+        return 2;
+    }
+
+    if (!surface || !theme) {
+        printUsage();
+        return 2;
+    }
+    if (!isKnownSurface(*surface)) {
+        std::cerr << "FAIL: unknown surface " << *surface << '\n';
+        return 2;
+    }
+
+    try {
+        captureSurface(*surface, *theme);
     } catch (const std::exception &error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

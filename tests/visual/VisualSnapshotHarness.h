@@ -42,9 +42,10 @@ using ui_test::ThemeMode;
     return assertMatchesBaseline(
         widget,
         path,
-        QStringLiteral("%1/%2-%3")
+        QStringLiteral("%1/%2-%3-%4")
             .arg(QString::fromUtf8(test_name),
                 QString::fromUtf8(snapshot_id),
+                themeDirectory(theme),
                 QString::fromUtf8(viewport_name.data(),
                     static_cast<int>(viewport_name.size()))),
         options);

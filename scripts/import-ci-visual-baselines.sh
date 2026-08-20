@@ -9,7 +9,10 @@ if [[ -z "$ARTIFACTS_ROOT" || ! -d "$ARTIFACTS_ROOT" ]]; then
 Usage: $0 ARTIFACTS_ROOT
 
 Import actual.png files from a downloaded GitHub Actions visual artifact
-(lingtai-desktop-ui-artifacts) into tests/visual/baselines/macos/light/.
+(lingtai-desktop-ui-artifacts) into tests/visual/baselines/macos/{light,dark}/.
+
+Artifact folders use native_shell_visual/<surface>-<theme>-normal/ (current)
+or native_shell_visual/<surface>-normal/ (legacy, treated as light).
 
 Example:
   gh run download RUN_ID -n lingtai-desktop-ui-artifacts -D /tmp/ci-ui-artifacts
@@ -18,13 +21,19 @@ USAGE
   exit 1
 fi
 
-BASELINE_DIR="$ROOT/tests/visual/baselines/macos/light"
-mkdir -p "$BASELINE_DIR"
+BASELINE_ROOT="$ROOT/tests/visual/baselines/macos"
+mkdir -p "$BASELINE_ROOT/light" "$BASELINE_ROOT/dark"
 
-import_snapshot() {
-  local snapshot_id="$1"
-  local actual="$ARTIFACTS_ROOT/visual/agent_detail_visual/${snapshot_id}/actual.png"
-  local dest="$BASELINE_DIR/${snapshot_id}.png"
+import_native_shell() {
+  local surface="$1"
+  local theme="$2"
+  local artifact_name="${surface}-${theme}-normal"
+  local actual="$ARTIFACTS_ROOT/visual/native_shell_visual/${artifact_name}/actual.png"
+  local dest="$BASELINE_ROOT/${theme}/${surface}-normal.png"
+
+  if [[ ! -f "$actual" && "$theme" == "light" ]]; then
+    actual="$ARTIFACTS_ROOT/visual/native_shell_visual/${surface}-normal/actual.png"
+  fi
   if [[ ! -f "$actual" ]]; then
     printf 'skip: missing %s\n' "$actual" >&2
     return 0
@@ -33,17 +42,9 @@ import_snapshot() {
   printf 'imported %s -> %s\n' "$actual" "$dest"
 }
 
-import_snapshot "conversation-normal"
-import_snapshot "presets-normal"
-
-# native_shell_visual artifacts use native_shell_visual/<surface>-normal/
-for snapshot_id in startup-idle setup-preset setup-agents setup-review \
+for surface in startup-idle setup-preset setup-agents setup-review \
     conversation presets kanban empty-conversation; do
-  actual="$ARTIFACTS_ROOT/visual/native_shell_visual/${snapshot_id}-normal/actual.png"
-  dest="$BASELINE_DIR/${snapshot_id}-normal.png"
-  if [[ ! -f "$actual" ]]; then
-    continue
-  fi
-  cp "$actual" "$dest"
-  printf 'imported %s -> %s\n' "$actual" "$dest"
+  for theme in light dark; do
+    import_native_shell "$surface" "$theme"
+  done
 done

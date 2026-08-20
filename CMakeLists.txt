@@ -538,15 +538,35 @@ target_link_libraries(lingtai_native_shell_visual_test PRIVATE
     lingtai_desktop_native_shell
     desktop-app::lib_ui
     Qt6::Widgets Qt6::Gui Qt6::Core)
-add_test(NAME native_shell_visual
-    COMMAND lingtai_native_shell_visual_test)
-if(APPLE)
-    set_tests_properties(native_shell_visual PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
-else()
-    set_tests_properties(native_shell_visual PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-endif()
+set(LINGTAI_VISUAL_SURFACES
+    startup-idle
+    setup-preset
+    setup-agents
+    setup-review
+    conversation
+    presets
+    kanban
+    empty-conversation)
+set(LINGTAI_VISUAL_THEMES light dark)
+set(LINGTAI_VISUAL_TESTS "")
+foreach(surface IN LISTS LINGTAI_VISUAL_SURFACES)
+    foreach(theme IN LISTS LINGTAI_VISUAL_THEMES)
+        string(REPLACE "-" "_" surface_underscore "${surface}")
+        set(visual_test_name "visual_${surface_underscore}_${theme}")
+        add_test(
+            NAME ${visual_test_name}
+            COMMAND lingtai_native_shell_visual_test
+                --surface=${surface} --theme=${theme})
+        if(APPLE)
+            set_tests_properties(${visual_test_name} PROPERTIES
+                ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
+        else()
+            set_tests_properties(${visual_test_name} PROPERTIES
+                ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+        endif()
+        list(APPEND LINGTAI_VISUAL_TESTS ${visual_test_name})
+    endforeach()
+endforeach()
 
 add_executable(lingtai_kanban_model_test
     tests/kanban_model_test.cpp)
@@ -832,8 +852,6 @@ foreach(test_name IN LISTS LINGTAI_UI_TESTS)
     set_tests_properties(${test_name} PROPERTIES LABELS "ui")
 endforeach()
 
-set(LINGTAI_VISUAL_TESTS
-    native_shell_visual)
 foreach(test_name IN LISTS LINGTAI_VISUAL_TESTS)
     set_tests_properties(${test_name} PROPERTIES LABELS "ui;visual")
 endforeach()
