@@ -775,6 +775,12 @@ ConversationSurface::ConversationSurface(QWidget *parent)
     auto transparent_palette = palette();
     transparent_palette.setBrush(QPalette::Base, QBrush(Qt::transparent));
     transparent_palette.setBrush(QPalette::Window, QBrush(Qt::transparent));
+    // Slack-like soft selection wash: pale accent over body ink, not the
+    // system opaque Highlight that reads as a solid blue card.
+    auto selection = st::windowBgActive->c;
+    selection.setAlpha(st::windowBg->c.lightness() >= 128 ? 48 : 72);
+    transparent_palette.setColor(QPalette::Highlight, selection);
+    transparent_palette.setColor(QPalette::HighlightedText, st::windowFg->c);
     setPalette(transparent_palette);
     viewport()->setAutoFillBackground(false);
     viewport()->setAttribute(Qt::WA_OpaquePaintEvent, false);
