@@ -4,6 +4,7 @@
 
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace lingtai::desktop {
@@ -43,7 +44,6 @@ struct MessageReactions {
 enum class ReceiptStage {
     none,
     received,
-    // Reserved until Desktop has a real ack field; never authored today.
     seen,
     replied,
 };
@@ -69,8 +69,7 @@ public:
     [[nodiscard]] const std::unordered_map<std::string, MessageReactions> &
         all() const noexcept { return by_message_; }
 
-    // Monotonic system receipt on a Human message: received → replied.
-    // Seen is accepted into the catalog but never authored here.
+    // Monotonic system receipt on a Human message: received → seen → replied.
     void set_receipt(const std::string &message_id, ReceiptStage stage);
 
     // Peer reaction slot: same id from the same reactor is idempotent; a new
@@ -90,5 +89,12 @@ private:
 void sync_receipts_from_history(
     MessageReactionStore &store,
     const std::vector<DirectConversationMessage> &messages);
+
+// Upgrades an existing received receipt to seen when that mailbox id was
+// named in a committed notification_block_injected email lane. Does not
+// invent receipts.
+void sync_seen_from_injected(
+    MessageReactionStore &store,
+    const std::unordered_set<std::string> &injected_ids);
 
 } // namespace lingtai::desktop

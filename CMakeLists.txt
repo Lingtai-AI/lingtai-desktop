@@ -273,7 +273,8 @@ target_link_libraries(lingtai_desktop_native_shell PRIVATE
 # mailbox and nothing else, and it owns no presentation.
 add_library(lingtai_desktop_conversation STATIC
     src/direct_conversation_history.cpp
-    src/message_reactions.cpp)
+    src/message_reactions.cpp
+    src/injected_mail_journal.cpp)
 init_target(lingtai_desktop_conversation)
 target_include_directories(lingtai_desktop_conversation PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src")

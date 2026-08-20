@@ -2803,6 +2803,7 @@ ProjectOpenOutcome NativeShell::open_project(
     open_error_surface_->hide();
     reset_composer();
     reaction_store_.clear();
+    injected_mail_journal_.reset();
     // A fresh open must never let a prior target's pending sleep or Start
     // observation surface under the newly opened project/selection.
     pending_sleep_observation_.reset();
@@ -3051,6 +3052,9 @@ void NativeShell::render_conversation() {
     }
 
     const auto history = read_direct_conversation(*route);
+    injected_mail_journal_.poll(
+        route->project_root, route->target_directory_key);
+    sync_seen_from_injected(reaction_store_, injected_mail_journal_.ids());
     sync_receipts_from_history(reaction_store_, history.messages);
     const auto *presentation_name = window_->findChild<QLabel *>(
         "lingtai_selected_agent_presentation_name");
@@ -3301,6 +3305,7 @@ void NativeShell::handle_agent_selection(const fs::path &directory_key) {
     reset_composer();
     bump_lifecycle_generation();
     reaction_store_.clear();
+    injected_mail_journal_.reset();
     // A selection change must never let a prior target's pending sleep or
     // Start observation or terminal result surface under the newly selected
     // Agent.

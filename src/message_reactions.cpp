@@ -1,6 +1,7 @@
 #include "message_reactions.h"
 
 #include <algorithm>
+#include <unordered_set>
 
 namespace lingtai::desktop {
 namespace {
@@ -48,7 +49,7 @@ void erase_receipts(MessageReactions &bag) {
 }
 
 void ensure_receipt_first(MessageReactions &bag, ReceiptStage stage) {
-    if (stage == ReceiptStage::none || stage == ReceiptStage::seen) {
+    if (stage == ReceiptStage::none) {
         return;
     }
     erase_receipts(bag);
@@ -109,8 +110,6 @@ MessageReactions MessageReactionStore::get(
 void MessageReactionStore::set_receipt(
         const std::string &message_id, ReceiptStage stage) {
     if (message_id.empty() || stage == ReceiptStage::none) return;
-    // Seen is catalog-only until a real ack field exists.
-    if (stage == ReceiptStage::seen) return;
 
     auto &bag = by_message_[message_id];
     const auto current = highest_receipt(bag);
@@ -172,6 +171,16 @@ void sync_receipts_from_history(
             continue;
         }
         store.set_receipt(message.id, ReceiptStage::replied);
+    }
+}
+
+void sync_seen_from_injected(
+        MessageReactionStore &store,
+        const std::unordered_set<std::string> &injected_ids) {
+    for (const auto &id : injected_ids) {
+        if (id.empty()) continue;
+        if (highest_receipt(store.get(id)) != ReceiptStage::received) continue;
+        store.set_receipt(id, ReceiptStage::seen);
     }
 }
 
