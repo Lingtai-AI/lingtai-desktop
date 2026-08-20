@@ -981,14 +981,13 @@ void paint_message_hover_row(
             return;
         }
         span.translate(-h_offset, -v_offset);
-        // Full-width row wash, but the vertical edges must match the message
-        // (Human bubble top/bottom, Agent text top/bottom) — never the taller
-        // frame rect that includes day/timestamp margins.
-        const auto row = QRectF(
+        // Full-width row wash aligned to the message span, with a little
+        // vertical breathing room so the tint is not flush to the content.
+        auto row = QRectF(
             0,
-            span.top(),
+            span.top() - kMessageHoverPad,
             viewport_width,
-            span.height());
+            span.height() + 2 * kMessageHoverPad);
         if (!row.intersects(QRectF(clip))) {
             return;
         }
