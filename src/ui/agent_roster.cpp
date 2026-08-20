@@ -6,6 +6,8 @@
 #include <QtCore/QString>
 #include <QtCore/QTimer>
 #include <QtGui/QColor>
+#include <QtGui/QEnterEvent>
+#include <QtGui/QFocusEvent>
 #include <QtGui/QFont>
 #include <QtGui/QHideEvent>
 #include <QtGui/QKeyEvent>
@@ -169,10 +171,14 @@ private:
 // Compact contextual menu metrics (logical px; Qt scales for DPI).
 constexpr auto kProjectMenuShadow = 5;
 constexpr auto kProjectMenuRadius = 6;
+constexpr auto kProjectMenuCardPad = 4;
+constexpr auto kProjectMenuRowInset = 2;
+constexpr auto kProjectMenuContentPad = 8;
 constexpr auto kProjectMenuActionHeight = 30;
 constexpr auto kProjectMenuActionTextPx = 12;
 constexpr auto kProjectMenuPathTextPx = 10;
 constexpr auto kProjectMenuIconBox = 14;
+constexpr auto kProjectMenuIconTextGap = 8;
 constexpr auto kProjectMenuMinWidth = 200;
 constexpr auto kProjectMenuMaxWidth = 280;
 constexpr auto kProjectMenuSideMargin = 8;
@@ -230,6 +236,8 @@ void paint_project_menu_glyph(
 }
 
 // Compact action row: small leading icon + left label + subtle full-row wash.
+// Hover wash tracks the mouse only; keyboard focus is painted separately with
+// the same geometry so macOS never draws its own misaligned focus ring.
 class ProjectMenuAction final : public QPushButton {
 public:
     ProjectMenuAction(
@@ -243,6 +251,9 @@ public:
         setFixedHeight(kProjectMenuActionHeight);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         setFocusPolicy(Qt::StrongFocus);
+        setAttribute(Qt::WA_MacShowFocusRect, false);
+        setStyleSheet(QStringLiteral(
+            "QPushButton { border: none; outline: none; background: transparent; }"));
         auto font = this->font();
         font.setPointSize(kProjectMenuActionTextPx);
         font.setWeight(QFont::Normal);
@@ -250,12 +261,44 @@ public:
     }
 
 protected:
+    void enterEvent(QEnterEvent *event) override {
+        QPushButton::enterEvent(event);
+        update();
+    }
+
+    void leaveEvent(QEvent *event) override {
+        QPushButton::leaveEvent(event);
+        // Pointer exit must drop both the grey wash and any keyboard ring so
+        // a previously focused row never looks "stuck" selected.
+        if (hasFocus()) {
+            clearFocus();
+        }
+        update();
+    }
+
+    void focusInEvent(QFocusEvent *event) override {
+        QPushButton::focusInEvent(event);
+        update();
+    }
+
+    void focusOutEvent(QFocusEvent *event) override {
+        QPushButton::focusOutEvent(event);
+        update();
+    }
+
     void paintEvent(QPaintEvent *) override {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
-        const auto row = QRectF(rect()).adjusted(4, 1, -4, -1);
-        const auto active = underMouse() || isDown() || hasFocus();
-        if (active) {
+        // Equal inset on every side so the wash sits centered in the row.
+        const auto row = QRectF(rect()).adjusted(
+            kProjectMenuRowInset,
+            kProjectMenuRowInset,
+            -kProjectMenuRowInset,
+            -kProjectMenuRowInset);
+        // Grey wash follows the pointer (or press). Keyboard focus alone does
+        // not keep a stuck wash after the mouse leaves the row.
+        const auto hovered = underMouse() || isDown();
+        if (hovered) {
             auto wash = st::windowBgRipple->c;
             if (isDown()) {
                 wash = wash.darker(110);
@@ -263,19 +306,26 @@ protected:
             painter.setPen(Qt::NoPen);
             painter.setBrush(wash);
             painter.drawRoundedRect(row, 4, 4);
+        } else if (hasFocus()) {
+            auto ring = st::windowBgActive->c;
+            ring.setAlpha(st::windowBg->c.lightness() >= 128 ? 160 : 200);
+            painter.setBrush(Qt::NoBrush);
+            painter.setPen(QPen(ring, 1));
+            painter.drawRoundedRect(row.adjusted(0.5, 0.5, -0.5, -0.5), 4, 4);
         }
         const auto ink = st::windowFg->c;
         const auto icon_box = QRectF(
-            row.left() + 6,
+            row.left() + (kProjectMenuContentPad - kProjectMenuRowInset),
             row.center().y() - kProjectMenuIconBox / 2.0,
             kProjectMenuIconBox,
             kProjectMenuIconBox);
         paint_project_menu_glyph(painter, icon_box, glyph_, ink);
         painter.setFont(font());
         painter.setPen(ink);
-        const auto text_left = int(icon_box.right() + 8);
+        const auto text_left = int(icon_box.right() + kProjectMenuIconTextGap);
+        const auto text_right_pad = kProjectMenuContentPad;
         painter.drawText(
-            QRect(text_left, 0, width() - text_left - 8, height()),
+            QRect(text_left, 0, width() - text_left - text_right_pad, height()),
             Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
             text());
     }
@@ -307,7 +357,11 @@ public:
         card->setObjectName("lingtai_project_selector_menu_card");
         card->setAttribute(Qt::WA_TranslucentBackground);
         auto *card_layout = new QVBoxLayout(card);
-        card_layout->setContentsMargins(4, 4, 4, 4);
+        card_layout->setContentsMargins(
+            kProjectMenuCardPad,
+            kProjectMenuCardPad,
+            kProjectMenuCardPad,
+            kProjectMenuCardPad);
         card_layout->setSpacing(0);
 
         path_label_ = new QLabel(card);
@@ -319,7 +373,9 @@ public:
         path_font.setPointSize(kProjectMenuPathTextPx);
         path_font.setWeight(QFont::Normal);
         path_label_->setFont(path_font);
-        path_label_->setContentsMargins(8, 2, 8, 4);
+        // Match the action-row content pad so path and icons share one left edge.
+        path_label_->setContentsMargins(
+            kProjectMenuContentPad, 2, kProjectMenuContentPad, 4);
         card_layout->addWidget(path_label_);
 
         auto *divider = new QFrame(card);
@@ -379,7 +435,10 @@ public:
         if (anchor_) {
             anchor_->set_menu_open(true);
         }
-        open_action_->setFocus(Qt::PopupFocusReason);
+        // Keep focus on the popover shell so the first row is not stuck in a
+        // "selected" wash until the pointer actually enters it. Arrow keys
+        // still move focus onto the actions below.
+        setFocus(Qt::PopupFocusReason);
     }
 
     void apply_palette() {
@@ -390,9 +449,10 @@ public:
         line.setAlpha(st::windowBg->c.lightness() >= 128 ? 24 : 40);
         divider_->setStyleSheet(QStringLiteral(
             "QFrame { border: none; background: rgba(%1,%2,%3,%4); "
-            "margin: 2px 6px 3px 6px; }")
+            "margin: 2px %5px 3px %5px; }")
             .arg(line.red()).arg(line.green()).arg(line.blue())
-            .arg(line.alpha()));
+            .arg(line.alpha())
+            .arg(kProjectMenuContentPad));
         update();
     }
 
@@ -498,7 +558,9 @@ private:
         }
         const auto content_width = popup_content_width();
         const auto path_inner = content_width
-            - 2 * kProjectMenuShadow - 16;
+            - 2 * kProjectMenuShadow
+            - 2 * kProjectMenuCardPad
+            - 2 * kProjectMenuContentPad;
         const auto metrics = QFontMetrics(path_label_->font());
         const auto elided = metrics.elidedText(
             full_path_, Qt::ElideMiddle, std::max(40, path_inner));
@@ -508,7 +570,13 @@ private:
         path_label_->setAccessibleDescription(full_path_);
 
         const auto action_text_width = content_width
-            - 2 * kProjectMenuShadow - 4 - 6 - kProjectMenuIconBox - 8 - 8;
+            - 2 * kProjectMenuShadow
+            - 2 * kProjectMenuCardPad
+            - 2 * kProjectMenuRowInset
+            - (kProjectMenuContentPad - kProjectMenuRowInset)
+            - kProjectMenuIconBox
+            - kProjectMenuIconTextGap
+            - kProjectMenuContentPad;
         const auto action_metrics = QFontMetrics(open_new_window_action_->font());
         const auto preferred = QStringLiteral("Open %1 in new window")
             .arg(project_name_);
@@ -524,8 +592,11 @@ private:
         adjustSize();
         resize(outer_width, sizeHint().height());
 
+        // Align the opaque card's left edge with the trigger, not the outer
+        // translucent shadow margins.
         auto global = anchor_->mapToGlobal(
-            QPoint(0, anchor_->height() + kProjectMenuTriggerGap));
+            QPoint(-kProjectMenuShadow,
+                anchor_->height() + kProjectMenuTriggerGap));
         // Keep the menu within the visible screen as much as possible.
         if (const auto *screen = anchor_->screen()) {
             const auto geo = screen->availableGeometry();
@@ -534,7 +605,8 @@ private:
             }
             if (global.y() + height() > geo.bottom()) {
                 global = anchor_->mapToGlobal(
-                    QPoint(0, -height() - kProjectMenuTriggerGap));
+                    QPoint(-kProjectMenuShadow,
+                        -height() - kProjectMenuTriggerGap));
             }
             global.setX(std::max(geo.left(), global.x()));
             global.setY(std::max(geo.top(), global.y()));
