@@ -110,7 +110,6 @@ constexpr auto kMessageOutgoingProperty = QTextFormat::UserProperty + 5;
 constexpr auto kMessageIdProperty = QTextFormat::UserProperty + 8;
 constexpr auto kMessageReactionsProperty = QTextFormat::UserProperty + 9;
 constexpr auto kMessageHoverPad = 4;
-constexpr auto kMessageHoverRail = 3;
 
 // The symmetric gutter of the centered reading column for a viewport: fixed
 // 12px edge gutters until the column max, then a shared share of the excess.
@@ -997,11 +996,6 @@ void paint_message_hover_row(
         painter.setPen(Qt::NoPen);
         painter.setBrush(message_hover_wash_color());
         painter.drawRect(row);
-        auto rail = st::windowBgActive->c;
-        rail.setAlpha(st::windowBg->c.lightness() >= 128 ? 180 : 220);
-        painter.setBrush(rail);
-        painter.drawRect(QRectF(
-            0, row.top(), kMessageHoverRail, row.height()));
         painter.restore();
         return;
     }
@@ -1581,7 +1575,7 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
     const auto v_offset = verticalScrollBar()->value();
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setPen(Qt::NoPen);
-    // Slack-like row hover: full-width pale wash + left accent, no toolbar.
+    // Slack-like row hover: full-width pale wash, no toolbar or left rail.
     paint_message_hover_row(
         painter,
         document(),
