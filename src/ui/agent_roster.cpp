@@ -3,14 +3,15 @@
 #include "styles/palette.h"
 
 #include <QtCore/QString>
-#include <QtGui/QAction>
 #include <QtGui/QColor>
 #include <QtGui/QFont>
+#include <QtGui/QKeyEvent>
 #include <QtGui/QMouseEvent>
 #include <QtGui/QFontMetrics>
 #include <QtGui/QPainter>
+#include <QtGui/QPainterPath>
 #include <QtGui/QPen>
-#include <QtWidgets/QMenu>
+#include <QtWidgets/QFrame>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QPushButton>
@@ -146,6 +147,265 @@ protected:
                 st::dialogsBgActive);
         }
     }
+};
+
+constexpr auto kProjectMenuShadow = 8;
+constexpr auto kProjectMenuRadius = 10;
+constexpr auto kProjectMenuActionHeight = 42;
+constexpr auto kProjectMenuActionTextPx = 14;
+constexpr auto kProjectMenuIconBox = 18;
+
+enum class ProjectMenuGlyph {
+    folder,
+    window,
+};
+
+void paint_project_menu_glyph(
+        QPainter &painter,
+        const QRectF &box,
+        ProjectMenuGlyph glyph,
+        const QColor &ink) {
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    auto pen = QPen(ink, 1.5);
+    pen.setCapStyle(Qt::RoundCap);
+    pen.setJoinStyle(Qt::RoundJoin);
+    painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
+    if (glyph == ProjectMenuGlyph::folder) {
+        auto path = QPainterPath();
+        path.moveTo(box.left() + 1.5, box.top() + 6.0);
+        path.lineTo(box.left() + 1.5, box.top() + 4.0);
+        path.quadTo(box.left() + 1.5, box.top() + 2.5,
+            box.left() + 3.0, box.top() + 2.5);
+        path.lineTo(box.left() + 7.5, box.top() + 2.5);
+        path.lineTo(box.left() + 9.5, box.top() + 5.0);
+        path.lineTo(box.right() - 1.5, box.top() + 5.0);
+        path.quadTo(box.right() - 0.2, box.top() + 5.0,
+            box.right() - 0.2, box.top() + 6.3);
+        path.lineTo(box.right() - 0.2, box.bottom() - 1.5);
+        path.quadTo(box.right() - 0.2, box.bottom() - 0.2,
+            box.right() - 1.5, box.bottom() - 0.2);
+        path.lineTo(box.left() + 1.5, box.bottom() - 0.2);
+        path.quadTo(box.left() + 0.2, box.bottom() - 0.2,
+            box.left() + 0.2, box.bottom() - 1.5);
+        path.lineTo(box.left() + 0.2, box.top() + 6.0);
+        path.closeSubpath();
+        painter.drawPath(path);
+    } else {
+        const auto front = QRectF(
+            box.left() + 1.0, box.top() + 4.0,
+            box.width() - 5.0, box.height() - 5.5);
+        const auto back = QRectF(
+            box.left() + 4.0, box.top() + 1.5,
+            box.width() - 5.0, box.height() - 5.5);
+        painter.drawRoundedRect(back, 2.0, 2.0);
+        painter.setBrush(st::windowBg->c);
+        painter.drawRoundedRect(front, 2.0, 2.0);
+    }
+    painter.restore();
+}
+
+// Themed folder-menu row: 42px tall, 14px label, pale accent hover wash.
+class ProjectMenuAction final : public QPushButton {
+public:
+    ProjectMenuAction(
+            const QString &label,
+            ProjectMenuGlyph glyph,
+            QWidget *parent)
+    : QPushButton(label, parent)
+    , glyph_(glyph) {
+        setFlat(true);
+        setCursor(Qt::PointingHandCursor);
+        setFixedHeight(kProjectMenuActionHeight);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        auto font = this->font();
+        font.setPointSize(kProjectMenuActionTextPx);
+        font.setWeight(QFont::Normal);
+        setFont(font);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const auto row = QRectF(rect()).adjusted(6, 2, -6, -2);
+        if (underMouse() || isDown()) {
+            auto wash = st::windowBgActive->c;
+            wash.setAlpha(isDown() ? 36 : 22);
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(wash);
+            painter.drawRoundedRect(row, 8, 8);
+        }
+        const auto ink = st::windowFg->c;
+        const auto icon_box = QRectF(
+            row.left() + 8,
+            row.center().y() - kProjectMenuIconBox / 2.0,
+            kProjectMenuIconBox,
+            kProjectMenuIconBox);
+        paint_project_menu_glyph(painter, icon_box, glyph_, ink);
+        painter.setFont(font());
+        painter.setPen(ink);
+        const auto text_left = int(icon_box.right() + 10);
+        painter.drawText(
+            QRect(text_left, 0, width() - text_left - 12, height()),
+            Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
+            text());
+    }
+
+private:
+    ProjectMenuGlyph glyph_;
+};
+
+// White/dark themed popover that replaces the native QMenu for the project
+// selector. Keeps the stable object names tests and shell wiring already use.
+class ProjectSelectorPopover final : public QWidget {
+public:
+    explicit ProjectSelectorPopover(QWidget *parent)
+    : QWidget(parent, Qt::Popup | Qt::FramelessWindowHint) {
+        setObjectName("lingtai_project_selector_menu");
+        setAttribute(Qt::WA_TranslucentBackground);
+        setFocusPolicy(Qt::StrongFocus);
+
+        auto *root = new QVBoxLayout(this);
+        root->setContentsMargins(
+            kProjectMenuShadow,
+            kProjectMenuShadow,
+            kProjectMenuShadow,
+            kProjectMenuShadow + 2);
+        root->setSpacing(0);
+
+        auto *card = new QWidget(this);
+        card->setObjectName("lingtai_project_selector_menu_card");
+        card->setAttribute(Qt::WA_TranslucentBackground);
+        auto *card_layout = new QVBoxLayout(card);
+        card_layout->setContentsMargins(6, 8, 6, 6);
+        card_layout->setSpacing(0);
+
+        path_label_ = new QLabel(card);
+        path_label_->setObjectName("lingtai_project_selector_menu_path");
+        path_label_->setWordWrap(true);
+        path_label_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        auto path_font = path_label_->font();
+        path_font.setPointSize(11);
+        path_font.setWeight(QFont::Normal);
+        path_label_->setFont(path_font);
+        path_label_->setContentsMargins(10, 4, 10, 8);
+        card_layout->addWidget(path_label_);
+
+        auto *divider = new QFrame(card);
+        divider->setObjectName("lingtai_project_selector_menu_divider");
+        divider->setFrameShape(QFrame::HLine);
+        divider->setFixedHeight(1);
+        divider->setContentsMargins(8, 0, 8, 0);
+        card_layout->addWidget(divider);
+        divider_ = divider;
+
+        open_action_ = new ProjectMenuAction(
+            QStringLiteral("Open Project"),
+            ProjectMenuGlyph::folder,
+            card);
+        open_action_->setObjectName("lingtai_open_project_menu_action");
+        open_action_->setAccessibleName(QStringLiteral("Open Project"));
+        card_layout->addWidget(open_action_);
+
+        open_new_window_action_ = new ProjectMenuAction(
+            QStringLiteral("Open Project in Another Window…"),
+            ProjectMenuGlyph::window,
+            card);
+        open_new_window_action_->setObjectName(
+            "lingtai_open_project_new_window_menu_action");
+        open_new_window_action_->setAccessibleName(
+            QStringLiteral("Open Project in Another Window"));
+        card_layout->addWidget(open_new_window_action_);
+
+        root->addWidget(card);
+        apply_palette();
+        hide();
+    }
+
+    [[nodiscard]] QPushButton *open_action() const { return open_action_; }
+    [[nodiscard]] QPushButton *open_new_window_action() const {
+        return open_new_window_action_;
+    }
+
+    void present(const QPoint &global_top_left, const QString &path_text) {
+        path_label_->setText(path_text);
+        path_label_->setAccessibleName(path_text);
+        apply_palette();
+        const auto hint = sizeHint();
+        const auto anchor_width = parentWidget() ? parentWidget()->width() : 0;
+        const auto width = std::max({
+            280,
+            hint.width(),
+            anchor_width + 2 * kProjectMenuShadow,
+        });
+        resize(width, hint.height());
+        move(global_top_left);
+        show();
+        raise();
+        activateWindow();
+        setFocus(Qt::PopupFocusReason);
+    }
+
+    void apply_palette() {
+        auto path_palette = path_label_->palette();
+        path_palette.setColor(QPalette::WindowText, st::windowSubTextFg->c);
+        path_label_->setPalette(path_palette);
+        auto line = st::windowFg->c;
+        line.setAlpha(28);
+        auto divider_palette = divider_->palette();
+        divider_palette.setColor(QPalette::WindowText, line);
+        divider_palette.setColor(QPalette::Dark, line);
+        divider_palette.setColor(QPalette::Light, line);
+        divider_palette.setColor(QPalette::Mid, line);
+        divider_->setPalette(divider_palette);
+        divider_->setStyleSheet(QStringLiteral(
+            "QFrame { border: none; background: rgba(%1,%2,%3,%4); margin: 0 8px; }")
+            .arg(line.red()).arg(line.green()).arg(line.blue()).arg(line.alpha()));
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const auto card = rect().adjusted(
+            kProjectMenuShadow,
+            kProjectMenuShadow - 1,
+            -kProjectMenuShadow,
+            -(kProjectMenuShadow - 1));
+        auto shadow = st::windowFg->c;
+        for (auto i = 3; i >= 1; --i) {
+            shadow.setAlpha(8 * (4 - i));
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(shadow);
+            painter.drawRoundedRect(
+                card.adjusted(-i, i - 1, i, i + 1),
+                kProjectMenuRadius,
+                kProjectMenuRadius);
+        }
+        auto border = st::windowFg->c;
+        border.setAlpha(36);
+        painter.setBrush(st::windowBg->c);
+        painter.setPen(QPen(border, 1));
+        painter.drawRoundedRect(card, kProjectMenuRadius, kProjectMenuRadius);
+    }
+
+    void keyPressEvent(QKeyEvent *event) override {
+        if (event->key() == Qt::Key_Escape) {
+            hide();
+            event->accept();
+            return;
+        }
+        QWidget::keyPressEvent(event);
+    }
+
+private:
+    QLabel *path_label_ = nullptr;
+    QFrame *divider_ = nullptr;
+    ProjectMenuAction *open_action_ = nullptr;
+    ProjectMenuAction *open_new_window_action_ = nullptr;
 };
 
 // The presentation row set: the shared snapshot keeps the human pseudo-agent
@@ -762,26 +1022,23 @@ AgentRoster::AgentRoster(QWidget *parent)
     header->addWidget(selector);
     layout->addLayout(header);
 
-    auto *selector_menu = new QMenu(selector);
-    selector_menu->setObjectName("lingtai_project_selector_menu");
-    auto *path_action = selector_menu->addAction(project_root->text());
-    path_action->setEnabled(false);
-    auto *open_action =
-        selector_menu->addAction(QStringLiteral("Open Project"));
-    open_action->setObjectName("lingtai_open_project_menu_action");
-    QObject::connect(open_action, &QAction::triggered,
-        open_button, &QPushButton::click);
-    auto *open_new_window_action = selector_menu->addAction(
-        QStringLiteral("Open Project in Another Window…"));
-    open_new_window_action->setObjectName(
-        "lingtai_open_project_new_window_menu_action");
-    QObject::connect(open_new_window_action, &QAction::triggered,
-        open_new_window_button, &QPushButton::click);
+    auto *selector_menu = new ProjectSelectorPopover(selector);
+    QObject::connect(selector_menu->open_action(), &QPushButton::clicked,
+        [selector_menu, open_button] {
+            selector_menu->hide();
+            open_button->click();
+        });
+    QObject::connect(selector_menu->open_new_window_action(),
+        &QPushButton::clicked,
+        [selector_menu, open_new_window_button] {
+            selector_menu->hide();
+            open_new_window_button->click();
+        });
     QObject::connect(selector, &QPushButton::clicked,
-        [selector, selector_menu, path_action, project_root] {
-            path_action->setText(project_root->text());
-            selector_menu->popup(selector->mapToGlobal(
-                QPoint(0, selector->height())));
+        [selector, selector_menu, project_root] {
+            selector_menu->present(
+                selector->mapToGlobal(QPoint(0, selector->height() + 4)),
+                project_root->text());
         });
 
     auto *roster = new Ui::RpWidget(this);
