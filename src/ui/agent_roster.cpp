@@ -35,9 +35,11 @@ constexpr auto kStatusDotDiameter = 6;
 constexpr auto kStatusDotGap = 6;
 constexpr auto kProjectIconSize = 14;
 constexpr auto kProjectIconGap = 8;
-// Roster avatars use a fixed brand green so the initial reads like the design
-// disc rather than shifting with selection/hover ink tokens.
-const auto kAvatarFill = QColor(QStringLiteral("#16785C"));
+// Roster avatars share the composer Send fill (`windowBgActive`) so the
+// initial disc tracks the same light/dark accent as the up-arrow button.
+[[nodiscard]] QColor avatar_fill_color() {
+    return st::windowBgActive->c;
+}
 
 // Telegram lib_ui's FlatButton paints only a flat base/hover background before
 // its ripple, while IconButton paints the ripple and glyph without asking the
@@ -204,7 +206,7 @@ QString row_summary(const AgentRow &item) {
 QColor lifecycle_status_color(const AgentRow &item) {
     const auto state = QString::fromStdString(item.lifecycle_state).toLower();
     if (state == QStringLiteral("active")) {
-        return QColor(QStringLiteral("#16785C"));
+        return avatar_fill_color();
     }
     if (state == QStringLiteral("suspended")
         || state == QStringLiteral("stuck")) {
@@ -285,7 +287,7 @@ void paint_agent_row(
 
     const auto avatar_initial = primary_display.trimmed().left(1).toUpper();
     painter.setPen(Qt::NoPen);
-    painter.setBrush(kAvatarFill);
+    painter.setBrush(avatar_fill_color());
     painter.drawEllipse(avatar_rect);
     painter.setPen(QColor(Qt::white));
     auto avatar_font = base_font;

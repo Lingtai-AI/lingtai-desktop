@@ -451,9 +451,17 @@ protected:
             QPoint((width() - scaled.width()) / 2,
                 (height() - scaled.height()) / 2),
             scaled);
+        // Recolor the packaged jade glyph to the composer Send accent so the
+        // launch mark stays on the same blue family as chat chrome.
+        auto tinted = logo;
+        {
+            QPainter tint(&tinted);
+            tint.setCompositionMode(QPainter::CompositionMode_SourceIn);
+            tint.fillRect(tinted.rect(), st::windowBgActive->c);
+        }
         QPainter painter(this);
         painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-        painter.drawPixmap(target, logo);
+        painter.drawPixmap(target, tinted);
     }
 
 private:
@@ -1122,7 +1130,7 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
     heading_font.setWeight(QFont::DemiBold);
     startup_heading->setFont(heading_font);
     auto startup_palette = startup_heading->palette();
-    startup_palette.setColor(QPalette::WindowText, QColor(QStringLiteral("#008f79")));
+    startup_palette.setColor(QPalette::WindowText, st::windowBgActive->c);
     startup_heading->setPalette(startup_palette);
     startup_layout->addWidget(startup_heading);
     startup_layout->addSpacing(16);
@@ -2370,6 +2378,12 @@ void NativeShell::refresh_system_palette() {
     apply_titlebar_brand_palette(window_.get());
     apply_project_setup_palette(setup_route_);
     apply_preset_catalog_chrome(window_.get());
+    if (auto *startup_heading = window_->findChild<QLabel *>(
+            "lingtai_startup_heading")) {
+        auto startup_palette = startup_heading->palette();
+        startup_palette.setColor(QPalette::WindowText, st::windowBgActive->c);
+        startup_heading->setPalette(startup_palette);
+    }
     if (auto *popup = window_->findChild<QListWidget *>(
             "lingtai_slash_command_popup")) {
         apply_slash_popup_palette(popup);

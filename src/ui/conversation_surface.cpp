@@ -706,13 +706,14 @@ QTextCharFormat select_agent_title_format() {
 }
 
 // Quiet line-art illustration for the no-selection empty state: two figures
-// with speech bubbles in the design's muted green.
+// with speech bubbles in a muted companion to the composer Send blue.
 QPixmap select_agent_illustration(int size) {
     auto pixmap = QPixmap(size, size);
     pixmap.fill(Qt::transparent);
     QPainter painter(&pixmap);
     painter.setRenderHint(QPainter::Antialiasing, true);
-    const auto ink = QColor(QStringLiteral("#8BBFAF"));
+    auto ink = st::windowBgActive->c;
+    ink.setAlpha(160);
     auto pen = QPen(ink, 2.2);
     pen.setCapStyle(Qt::RoundCap);
     pen.setJoinStyle(Qt::RoundJoin);
@@ -750,7 +751,7 @@ QPixmap empty_state_avatar(const QString &initial, int diameter) {
     QPainter painter(&pixmap);
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(QStringLiteral("#16785C")));
+    painter.setBrush(st::windowBgActive->c);
     painter.drawEllipse(0, 0, diameter, diameter);
     auto font = QFont();
     font.setPixelSize(std::max(14, diameter / 2));
@@ -1514,7 +1515,7 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
                     kMessageAvatarDiameter,
                     kMessageAvatarDiameter);
                 if (avatar.intersects(QRectF(event->rect()))) {
-                    painter.setBrush(QColor(QStringLiteral("#16785C")));
+                    painter.setBrush(st::windowBgActive->c);
                     painter.drawEllipse(avatar);
                     auto font = QFont();
                     font.setPixelSize(18);

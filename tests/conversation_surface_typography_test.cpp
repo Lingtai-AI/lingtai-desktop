@@ -1256,7 +1256,7 @@ void verify_directional_bubble_policy() {
         incoming_text.left() - 8.0 - 34.0,
         incoming_text.top(),
         34.0, 34.0);
-    const auto avatar_fill = QColor(QStringLiteral("#16785C"));
+    const auto avatar_fill = st::windowBgActive->c;
     const auto sample_avatar = [&](double x, double y) {
         const auto px = int(std::lround(x * image.devicePixelRatio()));
         const auto py = int(std::lround(y * image.devicePixelRatio()));
@@ -1273,7 +1273,7 @@ void verify_directional_bubble_policy() {
         if (sample_avatar(ax + dx, ay) != avatar_fill) {
             throw std::runtime_error(
                 "incoming must draw a 34px Agent avatar circle filled with "
-                "#16785C immediately left of its text bounds, but "
+                "st::windowBgActive immediately left of its text bounds, but "
                 "the sampled avatar interior is not the circle fill (the "
                 "avatar circle is missing)");
         }
@@ -1282,7 +1282,7 @@ void verify_directional_bubble_policy() {
         if (sample_avatar(ax, ay + dy) != avatar_fill) {
             throw std::runtime_error(
                 "incoming must draw a 34px Agent avatar circle filled with "
-                "#16785C immediately left of its text bounds, but "
+                "st::windowBgActive immediately left of its text bounds, but "
                 "the sampled avatar interior is not the circle fill (the "
                 "avatar circle is missing)");
         }
@@ -2067,7 +2067,7 @@ void verify_same_agent_grouping_only() {
         }
         return image.pixelColor(px, py);
     };
-    const auto avatar_fill = QColor(QStringLiteral("#16785C"));
+    const auto avatar_fill = st::windowBgActive->c;
     const auto backdrop = st::windowBg->c;
     if (avatar_top_probe(*first) != avatar_fill
         || avatar_top_probe(*long_pause) != avatar_fill

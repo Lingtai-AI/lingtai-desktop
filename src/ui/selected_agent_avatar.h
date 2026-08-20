@@ -35,7 +35,8 @@ protected:
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
         painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor(QStringLiteral("#16785C")));
+        // Same fill as composer Send (`windowBgActive`).
+        painter.setBrush(st::windowBgActive->c);
         painter.drawEllipse(QRectF(rect()).adjusted(1, 1, -1, -1));
         auto font = this->font();
         font.setPixelSize(20);
