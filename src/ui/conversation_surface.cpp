@@ -763,6 +763,105 @@ QPixmap empty_state_avatar(const QString &initial, int diameter) {
     return pixmap;
 }
 
+// Pale accent wash for drag-select. Soft enough to stay Slack-like on both
+// light and dark windowBg without drowning body ink.
+[[nodiscard]] QColor text_selection_wash_color() {
+    auto wash = st::windowBgActive->c;
+    wash.setAlpha(st::windowBg->c.lightness() >= 128 ? 48 : 72);
+    return wash;
+}
+
+[[nodiscard]] QTextFrame *frame_owning_block(
+        QTextDocument *document,
+        const QTextBlock &block) {
+    if (!document || !block.isValid()) {
+        return nullptr;
+    }
+    const auto position = block.position();
+    for (auto *frame : document->rootFrame()->childFrames()) {
+        if (position >= frame->firstPosition()
+                && position <= frame->lastPosition()) {
+            return frame;
+        }
+    }
+    return document->rootFrame();
+}
+
+// Paint selection behind the glyphs only (cursorToX → natural text span), not
+// across the full message lane width Qt would fill with QPalette::Highlight.
+void paint_glyph_tight_selection(
+        QPainter &painter,
+        QTextDocument *document,
+        const QTextCursor &cursor,
+        int h_offset,
+        int v_offset,
+        const QRect &clip) {
+    if (!document || !cursor.hasSelection()) {
+        return;
+    }
+    const auto sel_start = cursor.selectionStart();
+    const auto sel_end = cursor.selectionEnd();
+    if (sel_start >= sel_end) {
+        return;
+    }
+    auto *document_layout = document->documentLayout();
+    if (!document_layout) {
+        return;
+    }
+    painter.save();
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(text_selection_wash_color());
+    for (auto block = document->findBlock(sel_start);
+            block.isValid() && block.position() < sel_end;
+            block = block.next()) {
+        auto *block_layout = block.layout();
+        if (!block_layout || block_layout->lineCount() <= 0) {
+            continue;
+        }
+        auto *frame = frame_owning_block(document, block);
+        if (!frame) {
+            continue;
+        }
+        const auto frame_origin =
+            document_layout->frameBoundingRect(frame).topLeft();
+        // Exclude the block separator so a whole-line select stops at the last
+        // glyph instead of extending through the trailing paragraph break.
+        const auto block_pos = block.position();
+        const auto local_start = std::max(0, sel_start - block_pos);
+        const auto local_end = std::min(
+            std::max(0, block.length() - 1),
+            sel_end - block_pos);
+        if (local_start >= local_end) {
+            continue;
+        }
+        for (auto i = 0; i != block_layout->lineCount(); ++i) {
+            const auto line = block_layout->lineAt(i);
+            const auto line_start = line.textStart();
+            const auto line_end = line_start + line.textLength();
+            const auto from = std::max(local_start, line_start);
+            const auto to = std::min(local_end, line_end);
+            if (from >= to) {
+                continue;
+            }
+            const auto x1 = line.cursorToX(from);
+            const auto x2 = line.cursorToX(to);
+            auto glyph = QRectF(
+                std::min(x1, x2),
+                line.y(),
+                std::abs(x2 - x1),
+                line.height())
+                .translated(block_layout->position())
+                .translated(frame_origin);
+            glyph.translate(-h_offset, -v_offset);
+            if (!glyph.intersects(QRectF(clip))) {
+                continue;
+            }
+            painter.drawRoundedRect(glyph.adjusted(-1, 0, 1, 0), 3, 3);
+        }
+    }
+    painter.restore();
+}
+
 } // namespace
 
 ConversationSurface::ConversationSurface(QWidget *parent)
@@ -775,11 +874,9 @@ ConversationSurface::ConversationSurface(QWidget *parent)
     auto transparent_palette = palette();
     transparent_palette.setBrush(QPalette::Base, QBrush(Qt::transparent));
     transparent_palette.setBrush(QPalette::Window, QBrush(Qt::transparent));
-    // Slack-like soft selection wash: pale accent over body ink, not the
-    // system opaque Highlight that reads as a solid blue card.
-    auto selection = st::windowBgActive->c;
-    selection.setAlpha(st::windowBg->c.lightness() >= 128 ? 48 : 72);
-    transparent_palette.setColor(QPalette::Highlight, selection);
+    // Selection geometry is painted by paintEvent (glyph-tight). Keep Highlight
+    // transparent so Qt does not fill the full message lane underneath.
+    transparent_palette.setColor(QPalette::Highlight, Qt::transparent);
     transparent_palette.setColor(QPalette::HighlightedText, st::windowFg->c);
     setPalette(transparent_palette);
     viewport()->setAutoFillBackground(false);
@@ -1547,6 +1644,15 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
             }
         }
     }
+    // Glyph-tight selection wash sits above bubbles and below Qt's text draw,
+    // so selected ink stays readable without a full-lane Highlight fill.
+    paint_glyph_tight_selection(
+        painter,
+        document(),
+        textCursor(),
+        h_offset,
+        v_offset,
+        event->rect());
     painter.setRenderHint(QPainter::Antialiasing, false);
     painter.end();
 
