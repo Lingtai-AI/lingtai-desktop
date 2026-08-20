@@ -8,6 +8,8 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <string>
+#include <unordered_map>
 
 class QLabel;
 class QPushButton;
@@ -54,6 +56,10 @@ public:
 
     void set_rows(const AgentSnapshot &snapshot,
         const std::optional<std::filesystem::path> &selected_key);
+    // Telegram-style unseen inbound counts keyed by directory_key UTF-8.
+    // Updates independently of set_rows so the 1s refresh can move badges
+    // without rebuilding the row model.
+    void set_unseen_counts(std::unordered_map<std::string, int> counts);
     void set_row_click_handler(RowClickHandler handler);
     // The shell owns the actual column width. This setter applies it and keeps
     // the project/Agent header in sync with the avatar-only compact state.

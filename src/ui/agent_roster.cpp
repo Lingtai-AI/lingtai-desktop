@@ -18,6 +18,7 @@
 #include <QtWidgets/QVBoxLayout>
 
 #include <algorithm>
+#include <unordered_map>
 #include <utility>
 
 namespace lingtai::desktop {
@@ -253,7 +254,8 @@ void paint_agent_row(
         const QString &secondary_text,
         const QColor &status_color,
         bool selected,
-        bool over) {
+        bool over,
+        int unseen_count) {
     painter.setRenderHint(QPainter::Antialiasing, true);
     constexpr auto kSelectedRadius = 8.0;
     // Unselected rows stay transparent on the sidebar canvas; only hover and
@@ -275,10 +277,33 @@ void paint_agent_row(
         content_rect.x(),
         content_rect.y() + (content_rect.height() - kAvatarDiameter) / 2,
         kAvatarDiameter, kAvatarDiameter);
+
+    // Telegram-style unread capsule on the secondary line's trailing edge.
+    constexpr auto kUnreadHeight = 19;
+    constexpr auto kUnreadPadding = 5;
+    auto unread_badge_width = 0;
+    auto unread_label = QString();
+    if (unseen_count > 0) {
+        unread_label = unseen_count > 99
+            ? QStringLiteral("99+")
+            : QString::number(unseen_count);
+        auto badge_font = base_font;
+        badge_font.setPointSize(12);
+        badge_font.setWeight(QFont::Bold);
+        unread_badge_width = std::max(
+            kUnreadHeight,
+            QFontMetrics(badge_font).horizontalAdvance(unread_label)
+                + 2 * kUnreadPadding);
+    }
+    const auto text_right_inset = unread_badge_width > 0
+        ? unread_badge_width + 8
+        : 0;
     const auto text_rect = QRect(
         avatar_rect.right() + 1 + kAvatarTextGap,
         content_rect.y(),
-        content_rect.width() - kAvatarDiameter - 1 - kAvatarTextGap,
+        std::max(0,
+            content_rect.width() - kAvatarDiameter - 1 - kAvatarTextGap
+                - text_right_inset),
         content_rect.height());
     const auto primary_height = text_rect.height() / 2;
     const auto primary_rect = QRect(
@@ -316,49 +341,73 @@ void paint_agent_row(
     // their existing right elision instead of widening the canvas.
     const auto minimum_useful_text_width =
         QFontMetrics(primary_font).horizontalAdvance(QStringLiteral("MM…"));
-    if (text_rect.width() < minimum_useful_text_width) {
-        return;
+    const auto paint_text = text_rect.width() >= minimum_useful_text_width;
+    constexpr auto flags = Qt::AlignLeft | Qt::AlignVCenter;
+    if (paint_text) {
+        painter.setFont(primary_font);
+        painter.setPen(primary_color);
+        painter.drawText(
+            primary_rect,
+            flags,
+            QFontMetrics(primary_font).elidedText(
+                primary_display,
+                Qt::ElideRight,
+                std::max(0, primary_rect.width())));
+
+        auto secondary_font = base_font;
+        secondary_font.setPointSize(12);
+        // Pale selection keeps normal muted secondary ink (not active-white).
+        auto secondary_ink = over
+            ? st::windowSubTextFgOver->c
+            : st::windowSubTextFg->c;
+        secondary_ink = secondary_ink.darker(118);
+        const auto dot_top = secondary_rect.y()
+            + (secondary_rect.height() - kStatusDotDiameter) / 2;
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(status_color);
+        painter.drawEllipse(
+            secondary_rect.x(),
+            dot_top,
+            kStatusDotDiameter,
+            kStatusDotDiameter);
+
+        const auto status_text_rect = secondary_rect.adjusted(
+            kStatusDotDiameter + kStatusDotGap, 0, 0, 0);
+        painter.setFont(secondary_font);
+        painter.setPen(secondary_ink);
+        painter.drawText(
+            status_text_rect,
+            flags,
+            QFontMetrics(secondary_font).elidedText(
+                secondary_text,
+                Qt::ElideRight,
+                std::max(0, status_text_rect.width())));
     }
 
-    constexpr auto flags = Qt::AlignLeft | Qt::AlignVCenter;
-    painter.setFont(primary_font);
-    painter.setPen(primary_color);
-    painter.drawText(
-        primary_rect,
-        flags,
-        QFontMetrics(primary_font).elidedText(
-            primary_display,
-            Qt::ElideRight,
-            std::max(0, primary_rect.width())));
-
-    auto secondary_font = base_font;
-    secondary_font.setPointSize(12);
-    // Pale selection keeps normal muted secondary ink (not active-white).
-    auto secondary_ink = over
-        ? st::windowSubTextFgOver->c
-        : st::windowSubTextFg->c;
-    secondary_ink = secondary_ink.darker(118);
-    const auto dot_top = secondary_rect.y()
-        + (secondary_rect.height() - kStatusDotDiameter) / 2;
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(status_color);
-    painter.drawEllipse(
-        secondary_rect.x(),
-        dot_top,
-        kStatusDotDiameter,
-        kStatusDotDiameter);
-
-    const auto status_text_rect = secondary_rect.adjusted(
-        kStatusDotDiameter + kStatusDotGap, 0, 0, 0);
-    painter.setFont(secondary_font);
-    painter.setPen(secondary_ink);
-    painter.drawText(
-        status_text_rect,
-        flags,
-        QFontMetrics(secondary_font).elidedText(
-            secondary_text,
-            Qt::ElideRight,
-            std::max(0, status_text_rect.width())));
+    if (unseen_count > 0 && unread_badge_width > 0) {
+        auto badge_font = base_font;
+        badge_font.setPointSize(12);
+        badge_font.setWeight(QFont::Bold);
+        const auto badge_top = paint_text
+            ? secondary_rect.y()
+                + (secondary_rect.height() - kUnreadHeight) / 2
+            : content_rect.y()
+                + (content_rect.height() - kUnreadHeight) / 2;
+        const auto badge_rect = QRect(
+            content_rect.right() - unread_badge_width + 1,
+            badge_top,
+            unread_badge_width,
+            kUnreadHeight);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(st::dialogsUnreadBg->c);
+        painter.drawRoundedRect(
+            QRectF(badge_rect),
+            kUnreadHeight / 2.0,
+            kUnreadHeight / 2.0);
+        painter.setFont(badge_font);
+        painter.setPen(st::dialogsUnreadFg->c);
+        painter.drawText(badge_rect, Qt::AlignCenter, unread_label);
+    }
 }
 
 QLabel *make_label(
@@ -445,6 +494,15 @@ public:
         update();
     }
 
+    void set_unseen_counts(
+            std::unordered_map<std::string, int> counts) {
+        if (unseen_counts_ == counts) {
+            return;
+        }
+        unseen_counts_ = std::move(counts);
+        update();
+    }
+
     void set_row_click_handler(
             std::function<void(const std::filesystem::path &)> handler) {
         row_click_handler_ = std::move(handler);
@@ -485,6 +543,7 @@ private:
 
     std::vector<AgentRow> rows_;
     std::optional<std::filesystem::path> selected_key_;
+    std::unordered_map<std::string, int> unseen_counts_;
     std::function<void(const std::filesystem::path &)> row_click_handler_;
     std::optional<std::filesystem::path> focus_key_;
     std::optional<std::size_t> hovered_row_;
@@ -583,6 +642,11 @@ void AgentRowsCanvas::paintEvent(QPaintEvent *) {
             && *selected_key_ == item.directory_key;
         const auto over = (hovered_row_ && *hovered_row_ == index)
             || (pressed_row_ && *pressed_row_ == index);
+        const auto key = path_text(item.directory_key).toStdString();
+        const auto unseen = [&] {
+            const auto found = unseen_counts_.find(key);
+            return found == unseen_counts_.end() ? 0 : found->second;
+        }();
         paint_agent_row(
             painter,
             QRect(
@@ -595,7 +659,8 @@ void AgentRowsCanvas::paintEvent(QPaintEvent *) {
             row_summary(item),
             lifecycle_status_color(item),
             selected,
-            over);
+            over,
+            unseen);
     }
 }
 
@@ -797,6 +862,10 @@ void AgentRoster::update_narrow_mode() {
 
 void AgentRoster::set_row_click_handler(RowClickHandler handler) {
     canvas_->set_row_click_handler(std::move(handler));
+}
+
+void AgentRoster::set_unseen_counts(std::unordered_map<std::string, int> counts) {
+    canvas_->set_unseen_counts(std::move(counts));
 }
 
 void AgentRoster::update_state_label(const AgentSnapshot &snapshot) {

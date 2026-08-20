@@ -4,6 +4,7 @@
 #include "agent_launch.h"
 #include "agent_projection.h"
 #include "agent_sleep.h"
+#include "conversation_unread.h"
 #include "injected_mail_journal.h"
 #include "message_reactions.h"
 #include "project_bootstrap.h"
@@ -128,6 +129,7 @@ private:
     [[nodiscard]] bool in_project_setup() const;
     void refresh_route();
     void render_roster();
+    void refresh_unseen_badges();
     void render_conversation();
     // Reapplies the generated light or canonical Telegram Night palette after
     // the host appearance changes, then refreshes palette-backed descendants.
@@ -247,6 +249,7 @@ private:
     Ui::RpWidget *open_error_surface_ = nullptr;
     AgentSnapshot agents_;
     MessageReactionStore reaction_store_;
+    ConversationUnreadState conversation_unread_;
     InjectedMailJournal injected_mail_journal_;
     OpenProjectRequestHandler open_project_request_handler_;
     OpenProjectRequestHandler open_project_in_new_window_request_handler_;

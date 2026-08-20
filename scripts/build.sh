@@ -11,6 +11,7 @@ cmake --build "$BUILD_DIR" --target \
   lingtai_desktop_smoke \
   lingtai_agent_projection_test lingtai_direct_conversation_route_test \
   lingtai_direct_conversation_history_test \
+  lingtai_conversation_unread_test \
   lingtai_direct_mail_publisher_test \
   lingtai_posix_descriptor_primitives_test \
   lingtai_workspace_selection_test lingtai_project_attachment_test \

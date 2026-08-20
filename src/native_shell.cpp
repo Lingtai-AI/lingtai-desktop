@@ -7,6 +7,7 @@
 #include "agent_prompt_actions.h"
 #include "agent_sleep.h"
 #include "direct_conversation_history.h"
+#include "conversation_unread.h"
 #include "direct_mail_publisher.h"
 #include "message_reactions.h"
 #include "preset_catalog_presentation.h"
@@ -91,6 +92,7 @@
 #include <algorithm>
 #include <array>
 #include <memory>
+#include <unordered_map>
 #include <utility>
 
 namespace lingtai::desktop {
@@ -2832,6 +2834,7 @@ ProjectOpenOutcome NativeShell::open_project(
     open_error_surface_->hide();
     reset_composer();
     reaction_store_.clear();
+    conversation_unread_.clear();
     injected_mail_journal_.reset();
     // A fresh open must never let a prior target's pending sleep or Start
     // observation surface under the newly opened project/selection.
@@ -2924,6 +2927,7 @@ void NativeShell::render_roster() {
     // row identity intact.
     agent_roster_->set_rows(
         agents_, selection_state_.selected_agent_directory_key());
+    refresh_unseen_badges();
 
     const auto selected = selection_state_.selected_agent_directory_key();
     const AgentRow *detail_item = nullptr;
@@ -3060,9 +3064,47 @@ void NativeShell::render_roster() {
     // boundaries clear the label themselves.
 }
 
-// Shows the current direct conversation for whatever the roster just made the
-// selected Agent. It reads the human's own mailbox and infers nothing about
-// delivery, replies, or unread state.
+void NativeShell::refresh_unseen_badges() {
+    if (!agent_roster_ || !selection_state_.active_project()) {
+        if (agent_roster_) {
+            agent_roster_->set_unseen_counts({});
+        }
+        return;
+    }
+    const auto &attachment = *selection_state_.active_project();
+    const auto selected = selection_state_.selected_agent_directory_key();
+    auto counts = std::unordered_map<std::string, int>{};
+    for (const auto &item : agents_.items) {
+        if (item.role == AgentRole::human
+            || item.manifest_kind != AgentManifestKind::valid) {
+            continue;
+        }
+        const auto route = resolve_direct_conversation_route(
+            attachment, agents_, item.directory_key);
+        if (!route) {
+            continue;
+        }
+        const auto key = path_text(item.directory_key).toStdString();
+        const auto history = read_direct_conversation(*route);
+        if (selected && *selected == item.directory_key) {
+            conversation_unread_.catch_up(key, history);
+            continue;
+        }
+        if (!conversation_unread_.has_cursor(key)) {
+            // First sight after attach: treat historical inbound as already
+            // read so only mail that arrives later badges the row.
+            conversation_unread_.catch_up(key, history);
+            continue;
+        }
+        const auto unseen = conversation_unread_.unseen_inbound_count(
+            key, history);
+        if (unseen > 0) {
+            counts.emplace(key, static_cast<int>(unseen));
+        }
+    }
+    agent_roster_->set_unseen_counts(std::move(counts));
+}
+
 void NativeShell::render_conversation() {
     if (!detail_view_) return;
 

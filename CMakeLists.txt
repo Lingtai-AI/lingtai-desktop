@@ -280,7 +280,8 @@ target_link_libraries(lingtai_desktop_native_shell PRIVATE
 add_library(lingtai_desktop_conversation STATIC
     src/direct_conversation_history.cpp
     src/message_reactions.cpp
-    src/injected_mail_journal.cpp)
+    src/injected_mail_journal.cpp
+    src/conversation_unread.cpp)
 init_target(lingtai_desktop_conversation)
 target_include_directories(lingtai_desktop_conversation PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -414,6 +415,13 @@ init_target(lingtai_message_reactions_test)
 target_compile_options(lingtai_message_reactions_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_message_reactions_test PRIVATE
+    lingtai_desktop_conversation)
+add_executable(lingtai_conversation_unread_test
+    tests/conversation_unread_test.cpp)
+init_target(lingtai_conversation_unread_test)
+target_compile_options(lingtai_conversation_unread_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_conversation_unread_test PRIVATE
     lingtai_desktop_conversation)
 add_executable(lingtai_direct_mail_publisher_test
     tests/direct_mail_publisher_test.cpp)
@@ -654,6 +662,8 @@ add_test(NAME direct_conversation_history
         "${CMAKE_CURRENT_BINARY_DIR}/direct-conversation-history-fixture")
 add_test(NAME message_reactions
     COMMAND lingtai_message_reactions_test)
+add_test(NAME conversation_unread
+    COMMAND lingtai_conversation_unread_test)
 add_test(NAME direct_mail_publisher
     COMMAND lingtai_direct_mail_publisher_test
         "${CMAKE_CURRENT_BINARY_DIR}/direct-mail-publisher-fixture")
@@ -828,6 +838,7 @@ set(LINGTAI_UNIT_TESTS
     slash_command
     direct_conversation_history
     message_reactions
+    conversation_unread
     direct_mail_publisher
     agent_preset_summary
     kanban_model
