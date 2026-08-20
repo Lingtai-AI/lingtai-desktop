@@ -14,6 +14,7 @@
 #include <QtGui/QPainter>
 #include <QtGui/QPainterPath>
 #include <QtGui/QPen>
+#include <QtGui/QScreen>
 #include <QtGui/QShowEvent>
 #include <QtWidgets/QFrame>
 #include <QtWidgets/QLabel>
@@ -74,32 +75,44 @@ public:
     : QPushButton(parent) {
         setFlat(true);
         setCursor(Qt::PointingHandCursor);
-        setFixedHeight(34);
+        setFixedHeight(30);
         setMinimumWidth(0);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         auto font = this->font();
-        font.setPointSize(15);
+        font.setPointSize(13);
         font.setWeight(QFont::DemiBold);
         setFont(font);
+        setFocusPolicy(Qt::StrongFocus);
     }
+
+    void set_menu_open(bool open) {
+        if (menu_open_ == open) {
+            return;
+        }
+        menu_open_ = open;
+        update();
+    }
+
+    [[nodiscard]] bool menu_open() const { return menu_open_; }
 
 protected:
     void paintEvent(QPaintEvent *) override {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
 
-        if (underMouse() || isDown()) {
+        const auto active = underMouse() || isDown() || hasFocus() || menu_open_;
+        if (active) {
             auto background = st::windowBgRipple->c;
-            if (isDown()) {
-                background = background.darker(112);
+            if (isDown() || menu_open_) {
+                background = background.darker(108);
             }
             painter.setPen(Qt::NoPen);
             painter.setBrush(background);
             painter.drawRoundedRect(
-                QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 6, 6);
+                QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 5, 5);
         }
 
-        const auto ink = (underMouse() || isDown())
+        const auto ink = active
             ? st::dialogsNameFgOver->c
             : st::dialogsNameFg->c;
 
@@ -109,22 +122,21 @@ protected:
             painter.setFont(font());
             painter.drawText(rect(), Qt::AlignCenter, label);
         } else {
-            // 2×2 apps/grid glyph matching the design folder row.
-            const auto icon_left = 8.0;
+            const auto icon_left = 6.0;
             const auto icon_top = (height() - kProjectIconSize) / 2.0;
-            const auto cell = 5.5;
-            const auto gap = 3.0;
+            const auto cell = 5.0;
+            const auto gap = 2.5;
             painter.setPen(Qt::NoPen);
             painter.setBrush(ink);
             painter.drawRoundedRect(
-                QRectF(icon_left, icon_top, cell, cell), 1.2, 1.2);
+                QRectF(icon_left, icon_top, cell, cell), 1.0, 1.0);
             painter.drawRoundedRect(
-                QRectF(icon_left + cell + gap, icon_top, cell, cell), 1.2, 1.2);
+                QRectF(icon_left + cell + gap, icon_top, cell, cell), 1.0, 1.0);
             painter.drawRoundedRect(
-                QRectF(icon_left, icon_top + cell + gap, cell, cell), 1.2, 1.2);
+                QRectF(icon_left, icon_top + cell + gap, cell, cell), 1.0, 1.0);
             painter.drawRoundedRect(
                 QRectF(icon_left + cell + gap, icon_top + cell + gap, cell, cell),
-                1.2, 1.2);
+                1.0, 1.0);
 
             const auto label_font = font();
             painter.setFont(label_font);
@@ -136,32 +148,35 @@ protected:
                 QRect(left, 0, label_width, height()),
                 Qt::AlignLeft | Qt::AlignVCenter,
                 label);
-            const auto chevron_x = left + label_width + 7.0;
+            const auto chevron_x = left + label_width + 6.0;
             const auto chevron_y = height() / 2.0;
-            auto chevron_pen = QPen(ink, 1.6);
+            auto chevron_pen = QPen(ink, 1.4);
             chevron_pen.setCapStyle(Qt::RoundCap);
             painter.setPen(chevron_pen);
             painter.drawLine(
-                QPointF(chevron_x - 3.0, chevron_y - 1.5),
-                QPointF(chevron_x, chevron_y + 1.5));
+                QPointF(chevron_x - 2.5, chevron_y - 1.2),
+                QPointF(chevron_x, chevron_y + 1.2));
             painter.drawLine(
-                QPointF(chevron_x, chevron_y + 1.5),
-                QPointF(chevron_x + 3.0, chevron_y - 1.5));
-        }
-
-        if (hasFocus()) {
-            painter.fillRect(
-                QRect(7, height() - 2, qMax(0, width() - 14), 2),
-                st::dialogsBgActive);
+                QPointF(chevron_x, chevron_y + 1.2),
+                QPointF(chevron_x + 2.5, chevron_y - 1.2));
         }
     }
+
+private:
+    bool menu_open_ = false;
 };
 
-constexpr auto kProjectMenuShadow = 8;
-constexpr auto kProjectMenuRadius = 10;
-constexpr auto kProjectMenuActionHeight = 42;
-constexpr auto kProjectMenuActionTextPx = 14;
-constexpr auto kProjectMenuIconBox = 18;
+// Compact contextual menu metrics (logical px; Qt scales for DPI).
+constexpr auto kProjectMenuShadow = 5;
+constexpr auto kProjectMenuRadius = 6;
+constexpr auto kProjectMenuActionHeight = 30;
+constexpr auto kProjectMenuActionTextPx = 12;
+constexpr auto kProjectMenuPathTextPx = 10;
+constexpr auto kProjectMenuIconBox = 14;
+constexpr auto kProjectMenuMinWidth = 200;
+constexpr auto kProjectMenuMaxWidth = 280;
+constexpr auto kProjectMenuSideMargin = 8;
+constexpr auto kProjectMenuTriggerGap = 3;
 
 enum class ProjectMenuGlyph {
     folder,
@@ -175,46 +190,46 @@ void paint_project_menu_glyph(
         const QColor &ink) {
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing, true);
-    auto pen = QPen(ink, 1.5);
+    auto pen = QPen(ink, 1.25);
     pen.setCapStyle(Qt::RoundCap);
     pen.setJoinStyle(Qt::RoundJoin);
     painter.setPen(pen);
     painter.setBrush(Qt::NoBrush);
     if (glyph == ProjectMenuGlyph::folder) {
         auto path = QPainterPath();
-        path.moveTo(box.left() + 1.5, box.top() + 6.0);
-        path.lineTo(box.left() + 1.5, box.top() + 4.0);
-        path.quadTo(box.left() + 1.5, box.top() + 2.5,
-            box.left() + 3.0, box.top() + 2.5);
-        path.lineTo(box.left() + 7.5, box.top() + 2.5);
-        path.lineTo(box.left() + 9.5, box.top() + 5.0);
-        path.lineTo(box.right() - 1.5, box.top() + 5.0);
-        path.quadTo(box.right() - 0.2, box.top() + 5.0,
-            box.right() - 0.2, box.top() + 6.3);
-        path.lineTo(box.right() - 0.2, box.bottom() - 1.5);
+        path.moveTo(box.left() + 1.2, box.top() + 5.0);
+        path.lineTo(box.left() + 1.2, box.top() + 3.2);
+        path.quadTo(box.left() + 1.2, box.top() + 2.0,
+            box.left() + 2.4, box.top() + 2.0);
+        path.lineTo(box.left() + 5.8, box.top() + 2.0);
+        path.lineTo(box.left() + 7.4, box.top() + 4.0);
+        path.lineTo(box.right() - 1.2, box.top() + 4.0);
+        path.quadTo(box.right() - 0.2, box.top() + 4.0,
+            box.right() - 0.2, box.top() + 5.0);
+        path.lineTo(box.right() - 0.2, box.bottom() - 1.2);
         path.quadTo(box.right() - 0.2, box.bottom() - 0.2,
-            box.right() - 1.5, box.bottom() - 0.2);
-        path.lineTo(box.left() + 1.5, box.bottom() - 0.2);
+            box.right() - 1.2, box.bottom() - 0.2);
+        path.lineTo(box.left() + 1.2, box.bottom() - 0.2);
         path.quadTo(box.left() + 0.2, box.bottom() - 0.2,
-            box.left() + 0.2, box.bottom() - 1.5);
-        path.lineTo(box.left() + 0.2, box.top() + 6.0);
+            box.left() + 0.2, box.bottom() - 1.2);
+        path.lineTo(box.left() + 0.2, box.top() + 5.0);
         path.closeSubpath();
         painter.drawPath(path);
     } else {
         const auto front = QRectF(
-            box.left() + 1.0, box.top() + 4.0,
-            box.width() - 5.0, box.height() - 5.5);
+            box.left() + 0.8, box.top() + 3.2,
+            box.width() - 4.0, box.height() - 4.4);
         const auto back = QRectF(
-            box.left() + 4.0, box.top() + 1.5,
-            box.width() - 5.0, box.height() - 5.5);
-        painter.drawRoundedRect(back, 2.0, 2.0);
+            box.left() + 3.2, box.top() + 1.2,
+            box.width() - 4.0, box.height() - 4.4);
+        painter.drawRoundedRect(back, 1.5, 1.5);
         painter.setBrush(st::windowBg->c);
-        painter.drawRoundedRect(front, 2.0, 2.0);
+        painter.drawRoundedRect(front, 1.5, 1.5);
     }
     painter.restore();
 }
 
-// Themed folder-menu row: 42px tall, 14px label, pale accent hover wash.
+// Compact action row: small leading icon + left label + subtle full-row wash.
 class ProjectMenuAction final : public QPushButton {
 public:
     ProjectMenuAction(
@@ -227,6 +242,7 @@ public:
         setCursor(Qt::PointingHandCursor);
         setFixedHeight(kProjectMenuActionHeight);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        setFocusPolicy(Qt::StrongFocus);
         auto font = this->font();
         font.setPointSize(kProjectMenuActionTextPx);
         font.setWeight(QFont::Normal);
@@ -237,26 +253,29 @@ protected:
     void paintEvent(QPaintEvent *) override {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
-        const auto row = QRectF(rect()).adjusted(6, 2, -6, -2);
-        if (underMouse() || isDown()) {
-            auto wash = st::windowBgActive->c;
-            wash.setAlpha(isDown() ? 36 : 22);
+        const auto row = QRectF(rect()).adjusted(4, 1, -4, -1);
+        const auto active = underMouse() || isDown() || hasFocus();
+        if (active) {
+            auto wash = st::windowBgRipple->c;
+            if (isDown()) {
+                wash = wash.darker(110);
+            }
             painter.setPen(Qt::NoPen);
             painter.setBrush(wash);
-            painter.drawRoundedRect(row, 8, 8);
+            painter.drawRoundedRect(row, 4, 4);
         }
         const auto ink = st::windowFg->c;
         const auto icon_box = QRectF(
-            row.left() + 8,
+            row.left() + 6,
             row.center().y() - kProjectMenuIconBox / 2.0,
             kProjectMenuIconBox,
             kProjectMenuIconBox);
         paint_project_menu_glyph(painter, icon_box, glyph_, ink);
         painter.setFont(font());
         painter.setPen(ink);
-        const auto text_left = int(icon_box.right() + 10);
+        const auto text_left = int(icon_box.right() + 8);
         painter.drawText(
-            QRect(text_left, 0, width() - text_left - 12, height()),
+            QRect(text_left, 0, width() - text_left - 8, height()),
             Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine,
             text());
     }
@@ -265,12 +284,13 @@ private:
     ProjectMenuGlyph glyph_;
 };
 
-// White/dark themed popover that replaces the native QMenu for the project
-// selector. Keeps the stable object names tests and shell wiring already use.
+// Compact anchored popover for the project selector. Stable object names are
+// preserved for tests and shell wiring. Colors come from st:: palette tokens.
 class ProjectSelectorPopover final : public QWidget {
 public:
-    explicit ProjectSelectorPopover(QWidget *parent)
-    : QWidget(parent, Qt::Popup | Qt::FramelessWindowHint) {
+    explicit ProjectSelectorPopover(ProjectSelectorButton *anchor)
+    : QWidget(anchor, Qt::Popup | Qt::FramelessWindowHint)
+    , anchor_(anchor) {
         setObjectName("lingtai_project_selector_menu");
         setAttribute(Qt::WA_TranslucentBackground);
         setFocusPolicy(Qt::StrongFocus);
@@ -280,54 +300,61 @@ public:
             kProjectMenuShadow,
             kProjectMenuShadow,
             kProjectMenuShadow,
-            kProjectMenuShadow + 2);
+            kProjectMenuShadow + 1);
         root->setSpacing(0);
 
         auto *card = new QWidget(this);
         card->setObjectName("lingtai_project_selector_menu_card");
         card->setAttribute(Qt::WA_TranslucentBackground);
         auto *card_layout = new QVBoxLayout(card);
-        card_layout->setContentsMargins(6, 8, 6, 6);
+        card_layout->setContentsMargins(4, 4, 4, 4);
         card_layout->setSpacing(0);
 
         path_label_ = new QLabel(card);
         path_label_->setObjectName("lingtai_project_selector_menu_path");
-        path_label_->setWordWrap(true);
-        path_label_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        path_label_->setWordWrap(false);
+        path_label_->setTextInteractionFlags(Qt::NoTextInteraction);
+        path_label_->setAttribute(Qt::WA_TransparentForMouseEvents);
         auto path_font = path_label_->font();
-        path_font.setPointSize(11);
+        path_font.setPointSize(kProjectMenuPathTextPx);
         path_font.setWeight(QFont::Normal);
         path_label_->setFont(path_font);
-        path_label_->setContentsMargins(10, 4, 10, 8);
+        path_label_->setContentsMargins(8, 2, 8, 4);
         card_layout->addWidget(path_label_);
 
         auto *divider = new QFrame(card);
         divider->setObjectName("lingtai_project_selector_menu_divider");
-        divider->setFrameShape(QFrame::HLine);
+        divider->setFrameShape(QFrame::NoFrame);
         divider->setFixedHeight(1);
-        divider->setContentsMargins(8, 0, 8, 0);
         card_layout->addWidget(divider);
         divider_ = divider;
 
         open_action_ = new ProjectMenuAction(
-            QStringLiteral("Open Project"),
+            QStringLiteral("Open another project…"),
             ProjectMenuGlyph::folder,
             card);
         open_action_->setObjectName("lingtai_open_project_menu_action");
-        open_action_->setAccessibleName(QStringLiteral("Open Project"));
+        open_action_->setAccessibleName(
+            QStringLiteral("Open another project"));
         card_layout->addWidget(open_action_);
 
         open_new_window_action_ = new ProjectMenuAction(
-            QStringLiteral("Open Project in Another Window…"),
+            QStringLiteral("Open in new window"),
             ProjectMenuGlyph::window,
             card);
         open_new_window_action_->setObjectName(
             "lingtai_open_project_new_window_menu_action");
         open_new_window_action_->setAccessibleName(
-            QStringLiteral("Open Project in Another Window"));
+            QStringLiteral("Open in new window"));
         card_layout->addWidget(open_new_window_action_);
 
         root->addWidget(card);
+        if (anchor_) {
+            anchor_->installEventFilter(this);
+            if (auto *window = anchor_->window()) {
+                window->installEventFilter(this);
+            }
+        }
         apply_palette();
         hide();
     }
@@ -337,23 +364,22 @@ public:
         return open_new_window_action_;
     }
 
-    void present(const QPoint &global_top_left, const QString &path_text) {
-        path_label_->setText(path_text);
-        path_label_->setAccessibleName(path_text);
+    void present(
+            const QString &path_text,
+            const QString &project_display_name) {
+        full_path_ = path_text;
+        project_name_ = project_display_name.isEmpty()
+            ? QStringLiteral("project")
+            : project_display_name;
         apply_palette();
-        const auto hint = sizeHint();
-        const auto anchor_width = parentWidget() ? parentWidget()->width() : 0;
-        const auto width = std::max({
-            280,
-            hint.width(),
-            anchor_width + 2 * kProjectMenuShadow,
-        });
-        resize(width, hint.height());
-        move(global_top_left);
+        relayout_to_anchor();
         show();
         raise();
         activateWindow();
-        setFocus(Qt::PopupFocusReason);
+        if (anchor_) {
+            anchor_->set_menu_open(true);
+        }
+        open_action_->setFocus(Qt::PopupFocusReason);
     }
 
     void apply_palette() {
@@ -361,16 +387,12 @@ public:
         path_palette.setColor(QPalette::WindowText, st::windowSubTextFg->c);
         path_label_->setPalette(path_palette);
         auto line = st::windowFg->c;
-        line.setAlpha(28);
-        auto divider_palette = divider_->palette();
-        divider_palette.setColor(QPalette::WindowText, line);
-        divider_palette.setColor(QPalette::Dark, line);
-        divider_palette.setColor(QPalette::Light, line);
-        divider_palette.setColor(QPalette::Mid, line);
-        divider_->setPalette(divider_palette);
+        line.setAlpha(st::windowBg->c.lightness() >= 128 ? 24 : 40);
         divider_->setStyleSheet(QStringLiteral(
-            "QFrame { border: none; background: rgba(%1,%2,%3,%4); margin: 0 8px; }")
-            .arg(line.red()).arg(line.green()).arg(line.blue()).arg(line.alpha()));
+            "QFrame { border: none; background: rgba(%1,%2,%3,%4); "
+            "margin: 2px 6px 3px 6px; }")
+            .arg(line.red()).arg(line.green()).arg(line.blue())
+            .arg(line.alpha()));
         update();
     }
 
@@ -384,36 +406,149 @@ protected:
             -kProjectMenuShadow,
             -(kProjectMenuShadow - 1));
         auto shadow = st::windowFg->c;
-        for (auto i = 3; i >= 1; --i) {
-            shadow.setAlpha(8 * (4 - i));
+        for (auto i = 2; i >= 1; --i) {
+            shadow.setAlpha(st::windowBg->c.lightness() >= 128
+                ? 6 * (3 - i)
+                : 10 * (3 - i));
             painter.setPen(Qt::NoPen);
             painter.setBrush(shadow);
             painter.drawRoundedRect(
-                card.adjusted(-i, i - 1, i, i + 1),
+                card.adjusted(-i, i, i, i + 1),
                 kProjectMenuRadius,
                 kProjectMenuRadius);
         }
         auto border = st::windowFg->c;
-        border.setAlpha(36);
+        border.setAlpha(st::windowBg->c.lightness() >= 128 ? 28 : 48);
         painter.setBrush(st::windowBg->c);
         painter.setPen(QPen(border, 1));
         painter.drawRoundedRect(card, kProjectMenuRadius, kProjectMenuRadius);
     }
 
     void keyPressEvent(QKeyEvent *event) override {
-        if (event->key() == Qt::Key_Escape) {
-            hide();
+        switch (event->key()) {
+        case Qt::Key_Escape:
+            dismiss();
             event->accept();
             return;
+        case Qt::Key_Down:
+            if (open_action_->hasFocus()) {
+                open_new_window_action_->setFocus(Qt::TabFocusReason);
+            } else {
+                open_action_->setFocus(Qt::TabFocusReason);
+            }
+            event->accept();
+            return;
+        case Qt::Key_Up:
+            if (open_new_window_action_->hasFocus()) {
+                open_action_->setFocus(Qt::TabFocusReason);
+            } else {
+                open_new_window_action_->setFocus(Qt::TabFocusReason);
+            }
+            event->accept();
+            return;
+        default:
+            break;
         }
         QWidget::keyPressEvent(event);
     }
 
+    void hideEvent(QHideEvent *event) override {
+        if (anchor_) {
+            anchor_->set_menu_open(false);
+        }
+        QWidget::hideEvent(event);
+    }
+
+    bool eventFilter(QObject *watched, QEvent *event) override {
+        if (isVisible()
+                && (event->type() == QEvent::Resize
+                    || event->type() == QEvent::Move)) {
+            if (watched == anchor_
+                    || (anchor_ && watched == anchor_->window())) {
+                relayout_to_anchor();
+            }
+        }
+        return QWidget::eventFilter(watched, event);
+    }
+
 private:
+    void dismiss() {
+        hide();
+        if (anchor_) {
+            anchor_->setFocus(Qt::OtherFocusReason);
+        }
+    }
+
+    [[nodiscard]] int popup_content_width() const {
+        auto *roster = anchor_ ? anchor_->parentWidget() : nullptr;
+        const auto sidebar = roster ? roster->width() : kRosterColumnWidth;
+        const auto available = std::max(
+            0, sidebar - 2 * kProjectMenuSideMargin);
+        // Narrow sidebars: use most of the remaining width. Wider sidebars:
+        // stop growing once the menu has comfortable room.
+        if (available <= kProjectMenuMinWidth) {
+            return std::max(160, available);
+        }
+        return std::min(kProjectMenuMaxWidth, available);
+    }
+
+    void relayout_to_anchor() {
+        if (!anchor_) {
+            return;
+        }
+        const auto content_width = popup_content_width();
+        const auto path_inner = content_width
+            - 2 * kProjectMenuShadow - 16;
+        const auto metrics = QFontMetrics(path_label_->font());
+        const auto elided = metrics.elidedText(
+            full_path_, Qt::ElideMiddle, std::max(40, path_inner));
+        path_label_->setText(elided);
+        path_label_->setToolTip(full_path_);
+        path_label_->setAccessibleName(full_path_);
+        path_label_->setAccessibleDescription(full_path_);
+
+        const auto action_text_width = content_width
+            - 2 * kProjectMenuShadow - 4 - 6 - kProjectMenuIconBox - 8 - 8;
+        const auto action_metrics = QFontMetrics(open_new_window_action_->font());
+        const auto preferred = QStringLiteral("Open %1 in new window")
+            .arg(project_name_);
+        const auto short_label = QStringLiteral("Open in new window");
+        const auto use_short =
+            action_metrics.horizontalAdvance(preferred) > action_text_width;
+        open_new_window_action_->setText(
+            use_short ? short_label : preferred);
+        open_new_window_action_->setAccessibleName(
+            use_short ? short_label : preferred);
+
+        const auto outer_width = content_width + 2 * kProjectMenuShadow;
+        adjustSize();
+        resize(outer_width, sizeHint().height());
+
+        auto global = anchor_->mapToGlobal(
+            QPoint(0, anchor_->height() + kProjectMenuTriggerGap));
+        // Keep the menu within the visible screen as much as possible.
+        if (const auto *screen = anchor_->screen()) {
+            const auto geo = screen->availableGeometry();
+            if (global.x() + width() > geo.right()) {
+                global.setX(std::max(geo.left(), geo.right() - width() + 1));
+            }
+            if (global.y() + height() > geo.bottom()) {
+                global = anchor_->mapToGlobal(
+                    QPoint(0, -height() - kProjectMenuTriggerGap));
+            }
+            global.setX(std::max(geo.left(), global.x()));
+            global.setY(std::max(geo.top(), global.y()));
+        }
+        move(global);
+    }
+
+    ProjectSelectorButton *anchor_ = nullptr;
     QLabel *path_label_ = nullptr;
     QFrame *divider_ = nullptr;
     ProjectMenuAction *open_action_ = nullptr;
     ProjectMenuAction *open_new_window_action_ = nullptr;
+    QString full_path_;
+    QString project_name_;
 };
 
 // The presentation row set: the shared snapshot keeps the human pseudo-agent
@@ -1138,10 +1273,10 @@ AgentRoster::AgentRoster(QWidget *parent)
             open_new_window_button->click();
         });
     QObject::connect(selector, &QPushButton::clicked,
-        [selector, selector_menu, project_root] {
+        [this, selector_menu, project_root] {
             selector_menu->present(
-                selector->mapToGlobal(QPoint(0, selector->height() + 4)),
-                project_root->text());
+                project_root->text(),
+                project_display_name_);
         });
 
     auto *roster = new Ui::RpWidget(this);
