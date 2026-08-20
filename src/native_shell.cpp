@@ -3261,6 +3261,7 @@ void NativeShell::handle_kanban_agent_selected(const fs::path &directory_key) {
             "lingtai_selected_agent_start_status")) {
         start_status->clear();
     }
+    agents_ = project_agents(*selection_state_.active_project());
     render_roster();
     show_detail_page(AgentDetailPage::kanban);
     if (error) {
@@ -3422,6 +3423,10 @@ void NativeShell::handle_agent_selection(const fs::path &directory_key) {
             "lingtai_selected_agent_start_status")) {
         start_status->clear();
     }
+    // Reselection must not reuse a cached snapshot: an Agent that came
+    // online in the background while deselected must show through a fresh
+    // `project_agents` projection on the click boundary, same as Start/sleep.
+    agents_ = project_agents(*selection_state_.active_project());
     render_roster();
     show_detail_page(AgentDetailPage::conversation);
     recompute_layout(window_->body()->width());

@@ -194,8 +194,12 @@ void write_fixture_python(
         + "echo lingtai-fixture-stdout-marker\n"
         + "echo lingtai-fixture-stderr-marker 1>&2\n";
     if (heartbeat_path) {
+        // Write via temp+rename so a waiter cannot observe an empty truncated
+        // target from `>` and classify the heartbeat as invalid.
         script += "( sleep " + std::to_string(delay_seconds)
-            + "; date +%s > \"" + heartbeat_path->string() + "\" ) &\n";
+            + "; date +%s > \"" + heartbeat_path->string() + ".tmp\""
+            + " && mv \"" + heartbeat_path->string() + ".tmp\" \""
+            + heartbeat_path->string() + "\" ) &\n";
     }
     script += "exit 0\n";
     write_file(python_path, script);
@@ -1934,15 +1938,25 @@ void verify_start_agent_action(
 
     // Give agent-switch's detached fixture time to actually write its
     // heartbeat while this shell remains parked on a different selection.
-    // One check before and one after the wait is enough to prove isolation
-    // held throughout; polling the identical assertion on every tick in
-    // between proves nothing more.
+    // Wait for a non-empty heartbeat body (not mere path existence): a plain
+    // `>` truncate can briefly create an empty file that projects as
+    // `invalid` before `date` finishes writing.
+    const auto switch_heartbeat = switch_dir / ".agent.heartbeat";
     const auto isolation_deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    auto heartbeat_ready = false;
     while (std::chrono::steady_clock::now() < isolation_deadline) {
+        if (fs::exists(switch_heartbeat)
+                && !read_file(switch_heartbeat).empty()) {
+            heartbeat_ready = true;
+            break;
+        }
         QThread::msleep(50);
         QCoreApplication::processEvents();
     }
+    require(heartbeat_ready,
+        "agent-switch's background fixture must write its heartbeat while "
+        "deselected");
     require(status->text().isEmpty(),
         "the parked selection must never show agent-switch's result while "
         "it is not the current selection");
