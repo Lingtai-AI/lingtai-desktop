@@ -102,18 +102,6 @@ touches a real Agent or project, and none depends on a network or provider.
   the low-level `lingtai_selected_agent_status_activity` fact label stays
   present with its stable identity. It runs with the platform Qt plugin like
   `native_shell_behavior`.
-- `tests/agent_roster_presentation_test.cpp` — `agent_roster_presentation`
-  ctest. The widget contract for the roster presentation boundary: it links
-  `lingtai_desktop_native_shell` + `desktop-app::lib_ui` +
-  `src/crl_integration.cpp` (`CMakeLists.txt:466-486`), constructs a real
-  `QApplication`, builds an `AgentRoster` directly, and feeds it an
-  `AgentSnapshot` containing the human pseudo-agent plus real Agents to prove
-  the visible roster rows omit the human while retaining every real Agent in
-  deterministic snapshot order, count only visible Agents in the roster state
-  label, and keep selection bound to real-Agent keys. The human is a
-  projection member but never a roster row. On macOS it runs with
-  `QT_QPA_PLATFORM=cocoa`, elsewhere with `offscreen`
-  (`CMakeLists.txt:480-486`).
 - `tests/native_shell_presets_test.cpp` — `native_shell_presets` ctest. The
   one dedicated Repair4 Presets presentation contract: it links the same
   shell + `desktop-app::lib_ui` + `src/crl_integration.cpp`
@@ -165,7 +153,6 @@ no fixture); the test itself creates and removes its sandbox within that root
 | `agent_sleep_test.cpp` | `lingtai_agent_sleep_test` | `agent_sleep` | `agent-sleep-fixture` |
 | `native_shell_test.cpp` | `lingtai_native_shell_test` | `native_shell_behavior` | `native-shell-no-write-fixture` (CMake-created) |
 | `native_shell_destinations_test.cpp` | `lingtai_native_shell_destinations_test` | `native_shell_destinations` | — |
-| `agent_roster_presentation_test.cpp` | `lingtai_agent_roster_presentation_test` | `agent_roster_presentation` | — |
 | `native_shell_presets_test.cpp` | `lingtai_native_shell_presets_test` | `native_shell_presets` | `native-shell-presets-fixture` (CMake-created) |
 | `conversation_surface_typography_test.cpp` | `lingtai_conversation_surface_typography_test` | `conversation_surface_typography` | — (no fixture) |
 | `test_native_shell.py` | `lingtai_desktop_smoke` (built) | `native_shell` | `$<TARGET_FILE:lingtai_desktop_smoke>` |

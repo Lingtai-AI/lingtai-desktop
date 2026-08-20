@@ -112,9 +112,6 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
 - `tests/agent_sleep_test.cpp` — `agent_sleep`.
 - `tests/native_shell_test.cpp` — `native_shell_behavior` (links the shell +
   `lib_ui` + `crl_integration.cpp`; the real-Qt layer).
-- `tests/agent_roster_presentation_test.cpp` — `agent_roster_presentation`
-  (links the shell + `lib_ui` + `crl_integration.cpp`; the real-Qt widget
-  layer, proving the roster presentation boundary directly).
 - `tests/conversation_surface_typography_test.cpp` —
   `conversation_surface_typography` (the dedicated widget/document typography
   contract on the real `ConversationSurface`).

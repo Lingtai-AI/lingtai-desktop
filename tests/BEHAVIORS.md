@@ -27,16 +27,13 @@ ctest --test-dir build --output-on-failure -R '^agent_preset_summary$'
 ctest --test-dir build --output-on-failure -R '^agent_sleep$'
 ctest --test-dir build --output-on-failure -R '^posix_descriptor_primitives$'
 ctest --test-dir build --output-on-failure -R '^workspace_selection$'
-ctest --test-dir build --output-on-failure -R '^agent_roster_presentation$'
 ctest --test-dir build --output-on-failure -R '^native_shell(_behavior)?$'
 ./scripts/smoke.py
 ```
 
 `ctest -R '^native_shell(_behavior)?$'` runs both the real-Qt shell behavior
 and the process smoke; `./scripts/smoke.py` runs the same `--smoke` with the
-Qt plugin path set and an 8 s watchdog. `agent_roster_presentation` proves
-the roster presentation boundary directly against the widget, without a
-project fixture or the shell.
+Qt plugin path set and an 8 s watchdog.
 
 ## What each proof layer establishes
 
@@ -118,14 +115,6 @@ project fixture or the shell.
 
 ### Real-Qt widget/shell contracts
 
-- `agent_roster_presentation` proves the roster presentation boundary
-  directly on the widget: it feeds `AgentRoster::set_rows` an `AgentSnapshot`
-  containing the human pseudo-agent plus real Agents and asserts the human is
-  never a rendered roster row, every real Agent stays rendered in the
-  snapshot's deterministic order, the roster state label counts only visible
-  Agents, and selection still binds to the caller's real-Agent key
-  (`tests/agent_roster_presentation_test.cpp`). The human is a projection
-  member but never a roster row.
 - `native_shell_behavior` proves the composed shell on a real `QApplication`
   with the real widgets shown off-screen: dark palette inheritance and
   restoration, live light/dark scheme transitions sampling the current
