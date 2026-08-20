@@ -25,7 +25,7 @@ namespace lingtai::desktop {
 // palette's distinct rounded bubble backgrounds painted behind the text) from
 // the existing direct-conversation rows. Drag-select uses a pale glyph-tight
 // wash; hovering a message paints a Slack-like full-width row tint without an
-// action toolbar or left accent rail. Human hover vertical span matches the
+// action toolbar. Human hover vertical span matches the
 // painted bubble, not the taller frame margins.
 class ConversationSurface final : public QTextEdit {
     Q_OBJECT

@@ -1575,7 +1575,7 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
     const auto v_offset = verticalScrollBar()->value();
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setPen(Qt::NoPen);
-    // Slack-like row hover: full-width pale wash, no toolbar or left rail.
+    // Slack-like row hover: full-width wash matching the Human bubble tint.
     paint_message_hover_row(
         painter,
         document(),
