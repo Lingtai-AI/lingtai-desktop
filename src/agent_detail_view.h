@@ -3,6 +3,7 @@
 #include "agent_preset_summary.h"
 #include "direct_conversation_history.h"
 #include "kanban_model.h"
+#include "message_reactions.h"
 #include "native_shell.h" // for AgentDetailPage enum
 #include "runtime_options.h"
 
@@ -13,6 +14,8 @@
 
 #include <filesystem>
 #include <optional>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 class QPalette;
@@ -63,7 +66,8 @@ public:
         const DirectConversationHistory &history,
         const QString &compact_state,
         bool selection_present,
-        bool conversation_route_available);
+        bool conversation_route_available,
+        const std::unordered_map<std::string, MessageReactions> &reactions = {});
 
     // Preset summary UI (read-only preset catalog + state line).
     void render_preset_summary(

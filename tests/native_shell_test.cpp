@@ -1428,8 +1428,9 @@ void verify_composer_send_behavior(
     send_button->clicked(Qt::NoModifier, Qt::LeftButton);
     require(input->getLastText().isEmpty(),
         "a successful send must clear the composer");
-    require(status->text() == QStringLiteral("Queued"),
-        "a successful send must show the concise success status");
+    require(status->text().isEmpty(),
+        "a successful send attaches a receipt to the bubble instead of a "
+        "composer Queued label");
     require(surface->toPlainText().contains(
                 QStringLiteral("Ted, the slice is complete.")),
         "a successful send must refresh the conversation to show the new row");
@@ -1480,8 +1481,9 @@ void verify_composer_send_behavior(
     input->setText(QStringLiteral("A message for the other Agent."));
     const auto outbox_before_switch = outbox_entry_count();
     send_button->clicked(Qt::NoModifier, Qt::LeftButton);
-    require(status->text() == QStringLiteral("Queued"),
-        "the send after switching Agents must still succeed");
+    require(status->text().isEmpty(),
+        "the send after switching Agents must still succeed without a Queued "
+        "composer label");
     require(outbox_entry_count() == outbox_before_switch + 1,
         "the three sends must each allocate a fresh leaf");
     auto second_agent_bodies = std::vector<std::string>();

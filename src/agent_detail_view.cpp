@@ -1139,7 +1139,8 @@ void AgentDetailView::render_conversation(
     const DirectConversationHistory &history,
     const QString &compact_state,
     bool selection_present,
-    bool conversation_route_available) {
+    bool conversation_route_available,
+    const std::unordered_map<std::string, MessageReactions> &reactions) {
     const auto composer_eligible = selection_present
         && conversation_route_available;
     refresh_composer_enablement(composer_eligible);
@@ -1163,7 +1164,8 @@ void AgentDetailView::render_conversation(
         conversation_surface_->set_plain_state(
             QStringLiteral("No messages yet."));
     } else {
-        conversation_surface_->set_conversation(them, history.messages);
+        conversation_surface_->set_conversation(
+            them, history.messages, reactions);
     }
     conversation_state_->setText(compact_state);
 }

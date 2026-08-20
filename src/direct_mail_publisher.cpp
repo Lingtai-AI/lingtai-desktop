@@ -147,7 +147,7 @@ struct StampedId {
 
 } // namespace
 
-DirectMailSendResult send_direct_mail(
+DirectMailSendOutcome send_direct_mail(
         const DirectConversationRoute &route, const std::string &text) noexcept {
     try {
         // Paths derive only from the accepted canonical root and the accepted
@@ -156,7 +156,7 @@ DirectMailSendResult send_direct_mail(
         const auto &key = route.human_directory_key;
         if (key.empty() || key.has_root_path() || !key.parent_path().empty()
             || key == "." || key == "..") {
-            return DirectMailSendResult::failed_local;
+            return {};
         }
         // Anchored, descriptor-relative walk: every component from the
         // project root down to the outbox is opened no-follow, one leaf at a
@@ -167,39 +167,42 @@ DirectMailSendResult send_direct_mail(
         // created here if missing.
         const auto root = posix::open_root_directory(
             route.project_root);
-        if (root.get() < 0) return DirectMailSendResult::failed_local;
+        if (root.get() < 0) return {};
         const auto lingtai = posix::open_directory_component(root.get(), ".lingtai");
-        if (lingtai.get() < 0) return DirectMailSendResult::failed_local;
+        if (lingtai.get() < 0) return {};
         const auto human = posix::open_directory_component(lingtai.get(), key);
-        if (human.get() < 0) return DirectMailSendResult::failed_local;
+        if (human.get() < 0) return {};
         const auto mailbox = posix::open_directory_component(
             human.get(), "mailbox", /*create=*/true);
-        if (mailbox.get() < 0) return DirectMailSendResult::failed_local;
+        if (mailbox.get() < 0) return {};
         const auto outbox = posix::open_directory_component(
             mailbox.get(), "outbox", /*create=*/true);
-        if (outbox.get() < 0) return DirectMailSendResult::failed_local;
+        if (outbox.get() < 0) return {};
 
         for (auto attempt = 0; attempt != kIdCollisionRetries; ++attempt) {
             const auto stamp = fresh_id();
-            if (!stamp) return DirectMailSendResult::failed_local;
+            if (!stamp) return {};
 
             // Exclusive create: mkdirat(2) fails rather than replacing an
             // existing leaf, exactly mirroring the current sender's
             // os.Mkdir-plus-retry-on-collision leaf allocation.
             if (::mkdirat(outbox.get(), stamp->directory_id.c_str(), 0700) != 0) {
                 if (errno == EEXIST) continue; // another writer owns this id
-                return DirectMailSendResult::failed_local;
+                return {};
             }
             const auto leaf = posix::open_directory_component(
                 outbox.get(), stamp->directory_id);
             if (leaf.get() < 0) {
                 ::unlinkat(outbox.get(), stamp->directory_id.c_str(),
                     AT_REMOVEDIR);
-                return DirectMailSendResult::failed_local;
+                return {};
             }
 
             if (write_leaf_json(leaf.get(), build_payload(route, text, *stamp))) {
-                return DirectMailSendResult::queued;
+                return {
+                    DirectMailSendResult::queued,
+                    stamp->directory_id,
+                };
             }
 
             // The leaf never gained a parseable message.json, so the poller
@@ -209,13 +212,13 @@ DirectMailSendResult send_direct_mail(
             // call moments earlier.
             ::unlinkat(leaf.get(), "message.json.tmp", 0);
             ::unlinkat(outbox.get(), stamp->directory_id.c_str(), AT_REMOVEDIR);
-            return DirectMailSendResult::failed_local;
+            return {};
         }
-        return DirectMailSendResult::failed_local;
+        return {};
     } catch (...) {
         // Only string/JSON allocation can throw here. Fail closed rather than
         // terminating or leaving an ambiguous partial write.
-        return DirectMailSendResult::failed_local;
+        return {};
     }
 }
 

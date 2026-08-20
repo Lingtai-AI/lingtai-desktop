@@ -1,11 +1,13 @@
 #pragma once
 
 #include "direct_conversation_history.h"
+#include "message_reactions.h"
 
 #include <QtWidgets/QTextEdit>
 
 #include <cstddef>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 class QKeyEvent;
@@ -31,9 +33,12 @@ public:
     // chronological order. Changed contents only: an identical refresh is a
     // no-op that preserves scroll, selection, and focus. The sender/direction
     // label shown for incoming rows is the caller-chosen presentation name.
+    // Session reaction bags are keyed by message id and painted as Telegram-
+    // like in-bubble chips (receipts and peer reactions).
     void set_conversation(
         const QString &them,
-        const std::vector<DirectConversationMessage> &messages);
+        const std::vector<DirectConversationMessage> &messages,
+        const std::unordered_map<std::string, MessageReactions> &reactions = {});
 
     // One plain centered state for the selection/no-route/empty cases.
     void set_plain_state(const QString &text);
@@ -57,7 +62,9 @@ private:
     void rebuild_empty_state();
     void reveal_older();
     [[nodiscard]] bool same_content(
-        const std::vector<DirectConversationMessage> &messages) const;
+        const std::vector<DirectConversationMessage> &messages,
+        const std::unordered_map<std::string, MessageReactions> &reactions)
+        const;
 
     // The render-time history window reveals the cached rows in fixed pages:
     // initially only the chronological tail is materialized and each reveal
@@ -66,6 +73,7 @@ private:
 
     QString them_;
     std::vector<DirectConversationMessage> last_messages_;
+    std::unordered_map<std::string, MessageReactions> last_reactions_;
     QString last_plain_state_;
     bool empty_state_active_ = false;
     int last_layout_width_ = 0;

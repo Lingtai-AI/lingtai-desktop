@@ -8,6 +8,7 @@
 #include "agent_sleep.h"
 #include "direct_conversation_history.h"
 #include "direct_mail_publisher.h"
+#include "message_reactions.h"
 #include "preset_catalog_presentation.h"
 #include "preset_editor_page.h"
 #include "agent_presets_page.h"
@@ -2801,6 +2802,7 @@ ProjectOpenOutcome NativeShell::open_project(
     open_error->setAccessibleName(QString());
     open_error_surface_->hide();
     reset_composer();
+    reaction_store_.clear();
     // A fresh open must never let a prior target's pending sleep or Start
     // observation surface under the newly opened project/selection.
     pending_sleep_observation_.reset();
@@ -3049,6 +3051,7 @@ void NativeShell::render_conversation() {
     }
 
     const auto history = read_direct_conversation(*route);
+    sync_receipts_from_history(reaction_store_, history.messages);
     const auto *presentation_name = window_->findChild<QLabel *>(
         "lingtai_selected_agent_presentation_name");
     // Sender identity always comes from the stored full title, never the
@@ -3071,12 +3074,13 @@ void NativeShell::render_conversation() {
     detail_view_->render_conversation(
         them, history, compact,
         /*selection_present=*/true,
-        /*conversation_route_available=*/true);
+        /*conversation_route_available=*/true,
+        reaction_store_.all());
 }
 
 // Called only when the selected target actually changes (a fresh project open
 // or a successful Agent selection), never on an ordinary conversation
-// refresh, so a just-set "Queued" status is never wiped by its own refresh.
+// refresh, so a just-set receipt is never wiped by its own refresh.
 void NativeShell::reset_composer() {
     if (auto *input = static_cast<Ui::InputField *>(
             window_->findChild<QObject *>("lingtai_composer_input"))) {
@@ -3260,10 +3264,14 @@ void NativeShell::handle_send_message() {
         return;
     }
 
-    const auto result = send_direct_mail(*route, text.toStdString());
-    if (result == DirectMailSendResult::queued) {
+    const auto outcome = send_direct_mail(*route, text.toStdString());
+    if (outcome.result == DirectMailSendResult::queued) {
         input->clear();
-        status->setText(QStringLiteral("Queued"));
+        if (!outcome.message_id.empty()) {
+            reaction_store_.set_receipt(
+                outcome.message_id, ReceiptStage::received);
+        }
+        status->clear();
         render_conversation();
     } else {
         status->setText(QStringLiteral("Message was not queued."));
@@ -3292,6 +3300,7 @@ void NativeShell::handle_agent_selection(const fs::path &directory_key) {
     }
     reset_composer();
     bump_lifecycle_generation();
+    reaction_store_.clear();
     // A selection change must never let a prior target's pending sleep or
     // Start observation or terminal result surface under the newly selected
     // Agent.

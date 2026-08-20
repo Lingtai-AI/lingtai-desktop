@@ -4,6 +4,7 @@
 #include "agent_launch.h"
 #include "agent_projection.h"
 #include "agent_sleep.h"
+#include "message_reactions.h"
 #include "project_bootstrap.h"
 #include "project_setup_wizard.h"
 #include "runtime_options.h"
@@ -241,6 +242,7 @@ private:
     Ui::RpWidget *project_route_ = nullptr;
     Ui::RpWidget *open_error_surface_ = nullptr;
     AgentSnapshot agents_;
+    MessageReactionStore reaction_store_;
     OpenProjectRequestHandler open_project_request_handler_;
     std::filesystem::path agent_start_fallback_python_;
     // One narrow injectable dependency: the configured TUI executable used by

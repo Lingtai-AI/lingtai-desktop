@@ -272,7 +272,8 @@ target_link_libraries(lingtai_desktop_native_shell PRIVATE
 # the direct rows the selected-Agent surface renders. It reads the human's own
 # mailbox and nothing else, and it owns no presentation.
 add_library(lingtai_desktop_conversation STATIC
-    src/direct_conversation_history.cpp)
+    src/direct_conversation_history.cpp
+    src/message_reactions.cpp)
 init_target(lingtai_desktop_conversation)
 target_include_directories(lingtai_desktop_conversation PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -399,6 +400,13 @@ init_target(lingtai_direct_conversation_history_test)
 target_compile_options(lingtai_direct_conversation_history_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_direct_conversation_history_test PRIVATE
+    lingtai_desktop_conversation)
+add_executable(lingtai_message_reactions_test
+    tests/message_reactions_test.cpp)
+init_target(lingtai_message_reactions_test)
+target_compile_options(lingtai_message_reactions_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_message_reactions_test PRIVATE
     lingtai_desktop_conversation)
 add_executable(lingtai_direct_mail_publisher_test
     tests/direct_mail_publisher_test.cpp)
@@ -637,6 +645,8 @@ add_test(NAME slash_command
 add_test(NAME direct_conversation_history
     COMMAND lingtai_direct_conversation_history_test
         "${CMAKE_CURRENT_BINARY_DIR}/direct-conversation-history-fixture")
+add_test(NAME message_reactions
+    COMMAND lingtai_message_reactions_test)
 add_test(NAME direct_mail_publisher
     COMMAND lingtai_direct_mail_publisher_test
         "${CMAKE_CURRENT_BINARY_DIR}/direct-mail-publisher-fixture")
@@ -766,7 +776,8 @@ else()
 endif()
 add_executable(lingtai_conversation_surface_typography_test
     tests/conversation_surface_typography_test.cpp
-    src/ui/conversation_surface.cpp)
+    src/ui/conversation_surface.cpp
+    src/message_reactions.cpp)
 init_target(lingtai_conversation_surface_typography_test)
 # The real palette globals the surface references come from the already-owned
 # lib_ui dependency; only the direct source include is added here.
@@ -797,6 +808,7 @@ set(LINGTAI_UNIT_TESTS
     direct_conversation_route
     slash_command
     direct_conversation_history
+    message_reactions
     direct_mail_publisher
     agent_preset_summary
     kanban_model

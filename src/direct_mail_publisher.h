@@ -11,6 +11,12 @@ namespace lingtai::desktop {
 // slice; nothing here observes or infers them.
 enum class DirectMailSendResult { queued, failed_local };
 
+struct DirectMailSendOutcome {
+    DirectMailSendResult result = DirectMailSendResult::failed_local;
+    // Non-empty only when result is queued: the outbox leaf directory id.
+    std::string message_id;
+};
+
 // Publishes one plain-text human outbox entry for the route's target, using
 // the same final-directory-then-atomic-JSON pattern the current Go TUI
 // pseudo-agent sender uses: an exclusively created `outbox/<id>` directory,
@@ -19,7 +25,7 @@ enum class DirectMailSendResult { queued, failed_local };
 // and never retries or reuses an id across calls. `text` must already be
 // validated non-empty by the caller; this function performs no UI-level
 // validation.
-[[nodiscard]] DirectMailSendResult send_direct_mail(
+[[nodiscard]] DirectMailSendOutcome send_direct_mail(
     const DirectConversationRoute &route, const std::string &text) noexcept;
 
 } // namespace lingtai::desktop

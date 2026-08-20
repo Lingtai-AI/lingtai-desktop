@@ -101,7 +101,7 @@ void verify_publish_and_failure(const fs::path &sandbox) {
     const auto before = tree_snapshot(project);
 
     const auto result = send_direct_mail(route, "Ted, the slice is complete.");
-    require(result == DirectMailSendResult::queued,
+    require(result.result == DirectMailSendResult::queued,
         "a writable outbox must publish successfully");
 
     require(fs::exists(outbox), "the outbox directory must now exist");
@@ -113,6 +113,8 @@ void verify_publish_and_failure(const fs::path &sandbox) {
         "exactly one fresh leaf must be created by one publish call");
     const auto &leaf = leaves.front();
     const auto id = leaf.filename().string();
+    require(result.message_id == id,
+        "queued outcome must expose the created leaf id");
     require(id.size() == 20 && id[8] == 'T' && id[15] == '-',
         "the id must be the interoperable YYYYMMDDTHHMMSS-xxxx shape");
     require(leaf_entries(leaf) == std::vector<std::string>{"message.json"},
@@ -146,7 +148,7 @@ void verify_publish_and_failure(const fs::path &sandbox) {
     }
 
     const auto second = send_direct_mail(route, "A second, distinct message.");
-    require(second == DirectMailSendResult::queued,
+    require(second.result == DirectMailSendResult::queued,
         "a second publish on the same route must also succeed");
     auto leaves_after_second = std::vector<std::string>();
     for (const auto &entry : fs::directory_iterator(outbox)) {
@@ -169,7 +171,7 @@ void verify_publish_and_failure(const fs::path &sandbox) {
     const auto blocked_before = tree_snapshot(blocked_project);
     const auto blocked_result = send_direct_mail(
         blocked_route, "Should never be queued.");
-    require(blocked_result == DirectMailSendResult::failed_local,
+    require(blocked_result.result == DirectMailSendResult::failed_local,
         "an outbox path blocked by a regular file must fail closed, generically");
     require(tree_snapshot(blocked_project) == blocked_before,
         "a failed publish must leave every pre-existing byte and path untouched");
@@ -198,7 +200,7 @@ void verify_intermediate_symlink_no_outside_write(const fs::path &sandbox) {
     const auto outside_before = tree_snapshot(outside);
     const auto result = send_direct_mail(route_for(project),
         "Must never leave the project through a symlinked outbox.");
-    require(result == DirectMailSendResult::failed_local,
+    require(result.result == DirectMailSendResult::failed_local,
         "a symlinked outbox component must fail closed rather than "
         "publish outside the project");
     require(tree_snapshot(outside) == outside_before,

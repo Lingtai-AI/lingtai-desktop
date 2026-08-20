@@ -59,6 +59,12 @@ constexpr auto kBubbleHPadding = 11;
 constexpr auto kHumanBubbleHPadding = 15;
 constexpr auto kHumanBubbleVPadding = 11;
 constexpr auto kHumanBubbleRadius = 12;
+constexpr auto kReactionChipHPadding = 7;
+constexpr auto kReactionChipVPadding = 3;
+constexpr auto kReactionChipGap = 4;
+constexpr auto kReactionRowTopGap = 6;
+constexpr auto kReactionRowBottomInset = 6;
+constexpr auto kReactionRowSideInset = 8;
 // The Human timestamp sits below the bubble with a small quiet gap; the frame
 // reserves enough bottom space for the 12px metadata line and this padding.
 constexpr auto kTimestampGap = 4;
@@ -96,6 +102,8 @@ constexpr auto kCodeBlockProperty = QTextFormat::UserProperty + 4;
 // Direction is frame metadata, not body alignment: Human body text stays left
 // aligned while the frame's margins and painter keep the bubble on the right.
 constexpr auto kMessageOutgoingProperty = QTextFormat::UserProperty + 5;
+constexpr auto kMessageIdProperty = QTextFormat::UserProperty + 8;
+constexpr auto kMessageReactionsProperty = QTextFormat::UserProperty + 9;
 
 // The symmetric gutter of the centered reading column for a viewport: fixed
 // 12px edge gutters until the column max, then a shared share of the excess.
@@ -190,6 +198,31 @@ QColor human_bubble_color() {
     return st::windowBg->c.lightness() >= 128
         ? QColor(QStringLiteral("#EEF7F3"))
         : st::msgOutBg->c;
+}
+
+QStringList reaction_chip_labels(const MessageReactions &bag) {
+    auto labels = QStringList();
+    for (const auto &entry : bag.list) {
+        auto label = QString::fromStdString(reaction_glyph(entry.id));
+        if (entry.count > 1) {
+            label += QStringLiteral(" %1").arg(entry.count);
+        }
+        labels.push_back(label);
+    }
+    return labels;
+}
+
+int reaction_row_height(const QFontMetricsF &metrics) {
+    return int(std::ceil(metrics.height())) + 2 * kReactionChipVPadding;
+}
+
+QColor reaction_chip_fill(bool outgoing) {
+    if (outgoing) {
+        return st::windowBg->c.lightness() >= 128
+            ? QColor(QStringLiteral("#D7EBE3"))
+            : st::windowBgRipple->c;
+    }
+    return st::windowBgRipple->c;
 }
 
 QTextCharFormat secondary_format() {
@@ -705,6 +738,7 @@ void ConversationSurface::set_plain_state(const QString &text) {
     }
     last_plain_state_ = text;
     last_messages_.clear();
+    last_reactions_.clear();
     // A plain (selection/no-route/empty) state has no lazy history, so the
     // render-time window resets to the full initial tail.
     history_offset_ = 0;
@@ -719,8 +753,11 @@ void ConversationSurface::set_plain_state(const QString &text) {
 }
 
 bool ConversationSurface::same_content(
-        const std::vector<DirectConversationMessage> &messages) const {
-    if (last_messages_.size() != messages.size()) {
+        const std::vector<DirectConversationMessage> &messages,
+        const std::unordered_map<std::string, MessageReactions> &reactions)
+        const {
+    if (last_messages_.size() != messages.size()
+        || last_reactions_.size() != reactions.size()) {
         return false;
     }
     for (auto index = std::size_t{0}; index != messages.size(); ++index) {
@@ -732,17 +769,35 @@ bool ConversationSurface::same_content(
             return false;
         }
     }
+    for (const auto &[key, after] : reactions) {
+        const auto found = last_reactions_.find(key);
+        if (found == last_reactions_.end()
+            || found->second.list.size() != after.list.size()) {
+            return false;
+        }
+        for (auto index = std::size_t{0}; index != after.list.size(); ++index) {
+            const auto &left = found->second.list[index];
+            const auto &right = after.list[index];
+            if (left.id != right.id || left.count != right.count
+                || left.source != right.source
+                || left.reactor != right.reactor) {
+                return false;
+            }
+        }
+    }
     return true;
 }
 
 void ConversationSurface::set_conversation(
         const QString &them,
-        const std::vector<DirectConversationMessage> &messages) {
-    if (them == them_ && same_content(messages)) {
+        const std::vector<DirectConversationMessage> &messages,
+        const std::unordered_map<std::string, MessageReactions> &reactions) {
+    if (them == them_ && same_content(messages, reactions)) {
         return;
     }
     them_ = them;
     last_messages_ = messages;
+    last_reactions_ = reactions;
     last_plain_state_.clear();
     empty_state_active_ = messages.empty();
     // Reset the render-time window to the initial chronological tail whenever
@@ -899,6 +954,26 @@ void ConversationSurface::rebuild_document() {
                 : kBetweenGroupBottomMargin));
         frame_format.setBackground(Qt::transparent);
         frame_format.setProperty(kMessageOutgoingProperty, outgoing);
+        frame_format.setProperty(
+            kMessageIdProperty, QString::fromStdString(message.id));
+        const auto reaction_found = last_reactions_.find(message.id);
+        const auto reaction_labels = reaction_found == last_reactions_.end()
+            ? QStringList()
+            : reaction_chip_labels(reaction_found->second);
+        if (!reaction_labels.isEmpty()) {
+            frame_format.setProperty(
+                kMessageReactionsProperty, reaction_labels);
+            // Telegram-like in-bubble chips need room below the body text.
+            const auto chip_font = secondary_format().font();
+            const auto chip_row = reaction_row_height(QFontMetricsF(chip_font));
+            frame_format.setBottomMargin(
+                (outgoing
+                    ? kHumanMessageBottomMargin
+                    : (group_continues
+                        ? kWithinGroupBottomMargin
+                        : kBetweenGroupBottomMargin))
+                + chip_row + kReactionRowTopGap);
+        }
         frame_format.setProperty(
             kMessageAvatarProperty, incoming_group_first);
         // The Human timestamp is not a visible header: it rides on the frame so
@@ -1183,12 +1258,45 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
                 kHumanBubbleHPadding,
                 kHumanBubbleVPadding);
             bubble.setRight(lane_right + kHumanBubbleHPadding);
+            const auto reaction_labels = frame->frameFormat()
+                .property(kMessageReactionsProperty)
+                .toStringList();
+            auto chip_font = secondary_format().font();
+            chip_font.setPixelSize(13);
+            const auto chip_metrics = QFontMetricsF(chip_font);
+            const auto chip_row = reaction_labels.isEmpty()
+                ? 0
+                : reaction_row_height(chip_metrics);
+            if (chip_row > 0) {
+                bubble.setBottom(
+                    bubble.bottom() + kReactionRowTopGap + chip_row
+                    + kReactionRowBottomInset);
+            }
             // The painter is already clipped to event->rect(). Do not skip the
             // whole message merely because the bubble itself misses a partial
             // repaint: the below-bubble timestamp may still intersect it.
             painter.setBrush(human_bubble_color());
             painter.drawRoundedRect(
                 bubble, kHumanBubbleRadius, kHumanBubbleRadius);
+            if (chip_row > 0) {
+                auto chip_x = bubble.left() + kReactionRowSideInset;
+                const auto chip_y = bubble.bottom() - kReactionRowBottomInset
+                    - chip_row;
+                for (const auto &label : reaction_labels) {
+                    const auto text_width = chip_metrics.horizontalAdvance(label);
+                    const auto chip_width = text_width + 2 * kReactionChipHPadding;
+                    const auto chip_rect = QRectF(
+                        chip_x, chip_y, chip_width, chip_row);
+                    painter.setBrush(reaction_chip_fill(true));
+                    painter.drawRoundedRect(chip_rect, chip_row / 2.0, chip_row / 2.0);
+                    painter.setPen(body_reading_color(true));
+                    painter.setFont(chip_font);
+                    painter.drawText(
+                        chip_rect, Qt::AlignCenter, label);
+                    painter.setPen(Qt::NoPen);
+                    chip_x += chip_width + kReactionChipGap;
+                }
+            }
             // The stored HH:mm is one compact muted 12px line below the bubble,
             // sharing its right edge instead of floating beside the top.
             const auto timestamp = frame->frameFormat()
@@ -1215,25 +1323,54 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
                     painter.restore();
                 }
             }
-        } else if (frame->frameFormat()
+        } else {
+            const auto reaction_labels = frame->frameFormat()
+                .property(kMessageReactionsProperty)
+                .toStringList();
+            if (!reaction_labels.isEmpty()) {
+                auto chip_font = secondary_format().font();
+                chip_font.setPixelSize(13);
+                const auto chip_metrics = QFontMetricsF(chip_font);
+                const auto chip_row = reaction_row_height(chip_metrics);
+                auto chip_x = text_bounds.left();
+                const auto chip_y = text_bounds.bottom() + kReactionRowTopGap;
+                for (const auto &label : reaction_labels) {
+                    const auto text_width = chip_metrics.horizontalAdvance(label);
+                    const auto chip_width = text_width + 2 * kReactionChipHPadding;
+                    const auto chip_rect = QRectF(
+                        chip_x, chip_y, chip_width, chip_row);
+                    if (chip_rect.intersects(QRectF(event->rect()))) {
+                        painter.setBrush(reaction_chip_fill(false));
+                        painter.drawRoundedRect(
+                            chip_rect, chip_row / 2.0, chip_row / 2.0);
+                        painter.setPen(body_reading_color(false));
+                        painter.setFont(chip_font);
+                        painter.drawText(chip_rect, Qt::AlignCenter, label);
+                        painter.setPen(Qt::NoPen);
+                    }
+                    chip_x += chip_width + kReactionChipGap;
+                }
+            }
+            if (frame->frameFormat()
                 .property(kMessageAvatarProperty).toBool()) {
-            const auto avatar = QRectF(
-                text_bounds.left() - kMessageAvatarGap
-                    - kMessageAvatarDiameter,
-                text_bounds.top(),
-                kMessageAvatarDiameter,
-                kMessageAvatarDiameter);
-            if (avatar.intersects(QRectF(event->rect()))) {
-                painter.setBrush(st::dialogsNameFg);
-                painter.drawEllipse(avatar);
-                auto font = QFont();
-                font.setPixelSize(13);
-                font.setWeight(QFont::DemiBold);
-                painter.setFont(font);
-                painter.setPen(st::windowBg);
-                painter.drawText(avatar, Qt::AlignCenter,
-                    them_.trimmed().left(1).toUpper());
-                painter.setPen(Qt::NoPen);
+                const auto avatar = QRectF(
+                    text_bounds.left() - kMessageAvatarGap
+                        - kMessageAvatarDiameter,
+                    text_bounds.top(),
+                    kMessageAvatarDiameter,
+                    kMessageAvatarDiameter);
+                if (avatar.intersects(QRectF(event->rect()))) {
+                    painter.setBrush(st::dialogsNameFg);
+                    painter.drawEllipse(avatar);
+                    auto font = QFont();
+                    font.setPixelSize(13);
+                    font.setWeight(QFont::DemiBold);
+                    painter.setFont(font);
+                    painter.setPen(st::windowBg);
+                    painter.drawText(avatar, Qt::AlignCenter,
+                        them_.trimmed().left(1).toUpper());
+                    painter.setPen(Qt::NoPen);
+                }
             }
         }
         // Only fenced code gets a separate low-contrast rounded surface;
