@@ -167,12 +167,12 @@ void apply_project_setup_palette(QWidget *root) {
     auto palette = root->palette();
     const auto dark = st::windowBg->c.lightness() < 128;
     palette.setColor(QPalette::Window,
-        dark ? QColor(QStringLiteral("#181B1A"))
+        dark ? QColor(QStringLiteral("#17212B"))
              : QColor(QStringLiteral("#F7F7F7")));
     palette.setColor(QPalette::WindowText, st::windowFg->c);
     palette.setColor(QPalette::Text, st::windowFg->c);
     palette.setColor(QPalette::Base, dark
-        ? QColor(QStringLiteral("#181B1A"))
+        ? QColor(QStringLiteral("#17212B"))
         : QColor(QStringLiteral("#FFFFFF")));
     palette.setColor(QPalette::AlternateBase, st::windowBgOver->c);
     palette.setColor(QPalette::ButtonText, st::windowFg->c);
@@ -388,13 +388,15 @@ void update_setup_step_indicator(QWidget *steps, int active_index) {
                     "background: %1; color: white; border-radius: 11px;")
                     .arg(accent)
                 : QStringLiteral(
-                    "background: transparent; color: #8a8f98; "
-                    "border: 1px solid palette(mid); border-radius: 11px;"));
+                    "background: transparent; color: %1; "
+                    "border: 1px solid palette(mid); border-radius: 11px;")
+                    .arg(setup_color_css(tokens.muted_text)));
         }
         if (auto *label = steps->findChild<QLabel *>(names[index])) {
             label->setStyleSheet(active || complete
                 ? QStringLiteral("color: %1;").arg(accent)
-                : QStringLiteral("color: #8a8f98;"));
+                : QStringLiteral("color: %1;")
+                    .arg(setup_color_css(tokens.muted_text)));
             auto font = label->font();
             font.setWeight(active ? QFont::DemiBold : QFont::Normal);
             label->setFont(font);
@@ -1914,14 +1916,19 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
     // pane. It reuses the canonical headless preset discovery and spawn owner
     // below; the pages own only the human decisions reviewed before spawn.
     apply_project_setup_palette(setup_route_);
-    setup_route_->setStyleSheet(QStringLiteral(
-        "QWidget#lingtai_project_setup_wizard { background: transparent; } "
-        "QPushButton { border-radius: 6px; padding: 0 16px; } "
-        "QPushButton#lingtai_setup_preset_continue, "
-        "QPushButton#lingtai_setup_edit_preset_save, "
-        "QPushButton#lingtai_setup_agents_continue, "
-        "QPushButton#lingtai_bootstrap_create_start { "
-        "min-height: 34px; background: #16785C; color: white; border: none; font-weight: 600; }"));
+    {
+        const auto accent = setup_color_css(
+            setup_tokens(setup_route_->palette()).selection_accent);
+        setup_route_->setStyleSheet(QStringLiteral(
+            "QWidget#lingtai_project_setup_wizard { background: transparent; } "
+            "QPushButton { border-radius: 6px; padding: 0 16px; } "
+            "QPushButton#lingtai_setup_preset_continue, "
+            "QPushButton#lingtai_setup_edit_preset_save, "
+            "QPushButton#lingtai_setup_agents_continue, "
+            "QPushButton#lingtai_bootstrap_create_start { "
+            "min-height: 34px; background: %1; color: white; border: none; "
+            "font-weight: 600; }").arg(accent));
+    }
     auto *wizard_layout = new QVBoxLayout(setup_route_);
     wizard_layout->setContentsMargins(0, 0, 0, 0);
     wizard_layout->setSpacing(0);
@@ -1973,8 +1980,8 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
         "lingtai_setup_step_review", "lingtai_setup_step_badge_review");
     steps_layout->addStretch();
     auto *step_index = make_setup_label(steps, QStringLiteral("1 of 3"),
-        "lingtai_setup_step_index", 12);
-    step_index->setStyleSheet(QStringLiteral("color: #8a8f98;"));
+        "lingtai_setup_step_index", 12, QFont::Normal,
+        setup_tokens(steps->palette()).muted_text);
     steps_layout->addWidget(step_index);
     wizard_layout->addWidget(steps);
 
@@ -2062,7 +2069,9 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
     auto *preset_continue = new QPushButton(QStringLiteral("Use preset"), preset_page);
     preset_continue->setObjectName("lingtai_setup_preset_continue");
     preset_continue->setStyleSheet(QStringLiteral(
-        "background: #16785C; color: white; border: none; font-weight: 600;"));
+        "background: %1; color: white; border: none; font-weight: 600;")
+        .arg(setup_color_css(
+            setup_tokens(preset_continue->palette()).selection_accent)));
     preset_actions->addWidget(preset_back);
     preset_actions->addWidget(preset_footer_summary, 1);
     preset_actions->addWidget(preset_continue);
