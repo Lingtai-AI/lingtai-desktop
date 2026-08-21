@@ -2,6 +2,9 @@
 
 #include "setup_style.h"
 
+#include "base/basic_types.h"
+#include <styles/palette.h>
+
 #include <QtCore/QEasingCurve>
 #include <QtCore/QSignalBlocker>
 #include <QtGui/QColor>
@@ -74,9 +77,9 @@ void SetupToggle::paintEvent(QPaintEvent *) {
     const auto track = rect().adjusted(0, 0, -1, -1);
     painter.setPen(Qt::NoPen);
     const auto off = setup_is_dark(palette())
-        ? QColor(QStringLiteral("#3A4541"))
+        ? QColor(QStringLiteral("#2A3540"))
         : QColor(QStringLiteral("#D1D5DB"));
-    painter.setBrush(progress_ > 0.01 ? QColor(QStringLiteral("#16785C")) : off);
+    painter.setBrush(progress_ > 0.01 ? st::windowBgActive->c : off);
     painter.drawRoundedRect(track, kHeight / 2.0, kHeight / 2.0);
 
     const auto knob_diameter = kHeight - 4;
