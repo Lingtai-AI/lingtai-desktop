@@ -199,7 +199,7 @@ private:
     int size_ = 48;
     QString letter_;
     QColor fill_ = QColor(QStringLiteral("#E7F4EF"));
-    QColor ink_ = QColor(QStringLiteral("#16785C"));
+    QColor ink_ = st::windowBgActive->c;
 };
 
 class SegmentedBar final : public QWidget {
@@ -234,10 +234,25 @@ protected:
             painter.drawRoundedRect(QRectF(x, 0, width, height()), 4, 4);
             x += width + 2;
         };
-        draw(system_, QColor(QStringLiteral("#0F3D32")));
-        draw(tools_, QColor(QStringLiteral("#16785C")));
-        draw(history_, QColor(QStringLiteral("#8FBFB0")));
-        draw(free_, QColor(QStringLiteral("#E6EDEA")));
+        const auto tokens = setup_tokens(palette());
+        const auto dark = setup_is_dark(palette());
+        draw(system_, dark
+            ? QColor(QStringLiteral("#1A3A4A"))
+            : QColor(QStringLiteral("#0F3D32")));
+        draw(tools_, tokens.selection_accent);
+        draw(history_, dark
+            ? QColor(QStringLiteral("#4A7A9A"))
+            : QColor(QStringLiteral("#8FBFB0")));
+        draw(free_, dark
+            ? QColor(QStringLiteral("#2A3540"))
+            : QColor(QStringLiteral("#E6EDEA")));
+        if (total <= 0) {
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(dark
+                ? QColor(QStringLiteral("#2A3540"))
+                : QColor(QStringLiteral("#E6EDEA")));
+            painter.drawRoundedRect(rect(), 4, 4);
+        }
     }
 
 private:
@@ -267,7 +282,9 @@ protected:
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing, true);
         painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor(QStringLiteral("#E6EDEA")));
+        painter.setBrush(setup_is_dark(palette())
+            ? QColor(QStringLiteral("#2A3540"))
+            : QColor(QStringLiteral("#E6EDEA")));
         painter.drawRoundedRect(rect(), 3, 3);
         const auto width = static_cast<int>(rect().width() * fraction_);
         if (width > 0) {
@@ -278,7 +295,7 @@ protected:
 
 private:
     double fraction_ = 0.0;
-    QColor fill_ = QColor(QStringLiteral("#16785C"));
+    QColor fill_ = st::windowBgActive->c;
 };
 
 QFrame *v_rule(QWidget *parent, const QColor &color) {
@@ -836,17 +853,24 @@ void place_grid(
     }
 }
 
-QColor avatar_fill_for(const QString &name) {
-    static const QColor fills[] = {
+QColor avatar_fill_for(const QString &name, bool dark) {
+    static const QColor light_fills[] = {
         QColor(QStringLiteral("#DCEEE6")),
         QColor(QStringLiteral("#E7F4EF")),
         QColor(QStringLiteral("#F4E7E7")),
         QColor(QStringLiteral("#E7EEF4")),
         QColor(QStringLiteral("#F4F0E7")),
     };
+    static const QColor dark_fills[] = {
+        QColor(QStringLiteral("#243A48")),
+        QColor(QStringLiteral("#2A3F38")),
+        QColor(QStringLiteral("#3A2A2A")),
+        QColor(QStringLiteral("#2A3548")),
+        QColor(QStringLiteral("#3A3828")),
+    };
     auto hash = 0;
     for (const auto ch : name) hash = (hash * 33 + ch.unicode()) & 0x7fffffff;
-    return fills[hash % 5];
+    return (dark ? dark_fills : light_fills)[hash % 5];
 }
 
 } // namespace
@@ -1253,7 +1277,8 @@ void KanbanPage::rebuild() {
     hero_layout->setSpacing(16);
     auto *avatar = new AvatarDisc(hero, 56);
     avatar->setObjectName("lingtai_kanban_avatar");
-    avatar->set_name(name, QColor(QStringLiteral("#DCEEE6")), tokens.selection_accent);
+    avatar->set_name(name, avatar_fill_for(name, setup_is_dark(palette())),
+        tokens.selection_accent);
     hero_layout->addWidget(avatar, 0, Qt::AlignTop);
 
     auto *identity = new QWidget(hero);
@@ -1463,10 +1488,16 @@ void KanbanPage::rebuild() {
         legend_items_.push_back(item);
         legend_layout->addWidget(item, 0, static_cast<int>(legend_items_.size()) - 1);
     };
-    legend_item(QStringLiteral("System"), system_tokens, QColor(QStringLiteral("#0F3D32")));
-    legend_item(QStringLiteral("Tools"), tools_tokens, QColor(QStringLiteral("#16785C")));
-    legend_item(QStringLiteral("History"), history_tokens, QColor(QStringLiteral("#8FBFB0")));
-    legend_item(QStringLiteral("Free"), free_tokens, QColor(QStringLiteral("#C5D4CE")));
+    legend_item(QStringLiteral("System"), system_tokens, setup_is_dark(palette())
+        ? QColor(QStringLiteral("#1A3A4A"))
+        : QColor(QStringLiteral("#0F3D32")));
+    legend_item(QStringLiteral("Tools"), tools_tokens, tokens.selection_accent);
+    legend_item(QStringLiteral("History"), history_tokens, setup_is_dark(palette())
+        ? QColor(QStringLiteral("#4A7A9A"))
+        : QColor(QStringLiteral("#8FBFB0")));
+    legend_item(QStringLiteral("Free"), free_tokens, setup_is_dark(palette())
+        ? QColor(QStringLiteral("#2A3540"))
+        : QColor(QStringLiteral("#C5D4CE")));
     context_layout->addWidget(legend);
     left_layout->addWidget(context_block);
 
@@ -1491,7 +1522,10 @@ void KanbanPage::rebuild() {
     active_head_layout->addStretch(1);
     if (agent->presets.active_ref) {
         active_head_layout->addWidget(pill(active_head, QStringLiteral("Active"),
-            QColor(QStringLiteral("#E7F4EF")), tokens.selection_accent,
+            setup_is_dark(palette())
+                ? QColor(QStringLiteral("#243F38"))
+                : QColor(QStringLiteral("#E7F4EF")),
+            tokens.selection_accent,
             "lingtai_kanban_preset_badge"));
     }
     active_layout->addWidget(active_head);
@@ -1633,7 +1667,13 @@ void KanbanPage::rebuild() {
                 || enabled.compare(QStringLiteral("enabled"), Qt::CaseInsensitive) == 0;
             row_layout->addWidget(pill(row,
                 on ? QStringLiteral("Enabled") : enabled,
-                on ? QColor(QStringLiteral("#E7F4EF")) : QColor(QStringLiteral("#F4E7E7")),
+                on
+                    ? (setup_is_dark(palette())
+                        ? QColor(QStringLiteral("#243F38"))
+                        : QColor(QStringLiteral("#E7F4EF")))
+                    : (setup_is_dark(palette())
+                        ? QColor(QStringLiteral("#3A2A2A"))
+                        : QColor(QStringLiteral("#F4E7E7"))),
                 on ? tokens.selection_accent : tokens.danger_text,
                 "lingtai_kanban_admin_value"));
             admin_layout->addWidget(row);
@@ -1759,7 +1799,8 @@ void KanbanPage::rebuild() {
         leaf.remove(QStringLiteral("├ "));
         leaf = leaf.trimmed();
         auto *disc = new AvatarDisc(row, 22);
-        disc->set_name(leaf, avatar_fill_for(leaf), tokens.selection_accent);
+        disc->set_name(leaf, avatar_fill_for(leaf, setup_is_dark(palette())),
+            tokens.selection_accent);
         auto *label = make_label(row, text, "lingtai_kanban_tree_label", 12);
         color_text(label, tokens.value_text);
         row_layout->addWidget(disc);
