@@ -19,11 +19,14 @@
 namespace lingtai::desktop {
 namespace {
 
-const auto kJade = QStringLiteral("#16785C");
 constexpr auto kRowToggleSlot = 36;
 
 QString value_css(const QWidget *widget) {
     return setup_color_css(setup_tokens(widget->palette()).value_text);
+}
+
+QString accent_css(const QWidget *widget) {
+    return setup_color_css(setup_tokens(widget->palette()).selection_accent);
 }
 
 QString muted_css(const QWidget *widget) {
@@ -171,7 +174,7 @@ AgentPresetsPage::AgentPresetsPage(QWidget *parent)
     continue_->setFixedHeight(34);
     continue_->setStyleSheet(QStringLiteral(
         "QPushButton { background: %1; color: white; border: none; "
-        "border-radius: 6px; padding: 0 16px; font-weight: 600; }").arg(kJade));
+        "border-radius: 6px; padding: 0 16px; font-weight: 600; }").arg(accent_css(this)));
     actions->addWidget(back);
     actions->addStretch();
     actions->addWidget(continue_);
@@ -313,7 +316,8 @@ void AgentPresetsPage::rebuild_rows() {
         row_layout->addWidget(make_pills(widget, row.tags), 2);
 
         auto *default_label = make_label(widget, QString(),
-            "lingtai_setup_agents_row_default", 12, QFont::DemiBold, kJade);
+            "lingtai_setup_agents_row_default", 12, QFont::DemiBold,
+            accent_css(this));
         default_label->setFixedWidth(56);
         default_label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         row_layout->addWidget(default_label, 0, Qt::AlignRight | Qt::AlignVCenter);

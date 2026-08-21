@@ -27,10 +27,12 @@
 namespace lingtai::desktop {
 namespace {
 
-const auto kJade = QStringLiteral("#16785C");
-
 QString value_css(const QWidget *widget) {
     return setup_color_css(setup_tokens(widget->palette()).value_text);
+}
+
+QString accent_css(const QWidget *widget) {
+    return setup_color_css(setup_tokens(widget->palette()).selection_accent);
 }
 
 QString muted_css(const QWidget *widget) {
@@ -390,7 +392,7 @@ AgentConfigPage::AgentConfigPage(QWidget *parent)
     create->setFixedHeight(34);
     create->setStyleSheet(QStringLiteral(
         "QPushButton { background: %1; color: white; border: none; "
-        "border-radius: 6px; padding: 0 16px; font-weight: 600; }").arg(kJade));
+        "border-radius: 6px; padding: 0 16px; font-weight: 600; }").arg(accent_css(this)));
     actions->addWidget(back);
     actions->addStretch();
     actions->addWidget(create);

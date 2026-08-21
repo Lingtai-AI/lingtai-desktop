@@ -25,10 +25,12 @@
 namespace lingtai::desktop {
 namespace {
 
-const auto kJade = QStringLiteral("#16785C");
-
 QString value_css(const QWidget *widget) {
     return setup_color_css(setup_tokens(widget->palette()).value_text);
+}
+
+QString accent_css(const QWidget *widget) {
+    return setup_color_css(setup_tokens(widget->palette()).selection_accent);
 }
 
 QString muted_css(const QWidget *widget) {
@@ -390,7 +392,7 @@ PresetEditorPage::PresetEditorPage(QWidget *parent)
         "QPushButton { color: %1; background: %2; border: 1px solid %1; "
         "border-radius: 8px; padding: 0 14px; font-weight: 600; } "
         "QPushButton:hover { background: %3; }")
-        .arg(kJade,
+        .arg(accent_css(this),
             setup_color_css(tokens.control_fill),
             setup_color_css(tokens.selected_row)));
     auto *credential_inner = new QWidget(body);
@@ -435,7 +437,7 @@ PresetEditorPage::PresetEditorPage(QWidget *parent)
         toggle->setStyleSheet(QStringLiteral(
             "QCheckBox::indicator { width: 36px; height: 20px; }"
             "QCheckBox::indicator:checked { image: none; border-radius: 10px; "
-            "background: %1; }").arg(kJade));
+            "background: %1; }").arg(accent_css(this)));
         auto *copy = new QWidget(item);
         auto *copy_layout = new QVBoxLayout(copy);
         copy_layout->setContentsMargins(0, 0, 0, 0);
@@ -490,7 +492,7 @@ PresetEditorPage::PresetEditorPage(QWidget *parent)
     save_->setFixedHeight(34);
     save_->setStyleSheet(QStringLiteral(
         "QPushButton { background: %1; color: white; border: none; border-radius: 6px; "
-        "padding: 0 16px; font-weight: 600; }").arg(kJade));
+        "padding: 0 16px; font-weight: 600; }").arg(accent_css(this)));
     actions->addWidget(cancel);
     actions->addStretch();
     actions->addWidget(save_);
@@ -665,7 +667,7 @@ void PresetEditorPage::rebuild_from_model() {
             ? QStringLiteral("Connected as %1").arg(label)
             : QStringLiteral("%1 — not logged in").arg(label));
         credential_status_->setStyleSheet(valid
-            ? QStringLiteral("color: %1;").arg(kJade)
+            ? QStringLiteral("color: %1;").arg(accent_css(this))
             : QStringLiteral("color: #B42318;"));
     } else if (model_.is_codex_pool_provider() || model_.is_claude_cli_provider()) {
         credential_status_->setText(
