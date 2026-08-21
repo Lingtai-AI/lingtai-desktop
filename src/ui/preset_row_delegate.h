@@ -40,27 +40,27 @@ inline bool preset_catalog_is_dark(const QPalette &palette) {
 inline PresetCatalogTokens preset_catalog_tokens(const QPalette &palette) {
     if (preset_catalog_is_dark(palette)) {
         return {
-            QColor(QStringLiteral("#181B1A")),
-            QColor(QStringLiteral("#202422")),
-            QColor(QStringLiteral("#222A26")),
-            QColor(QStringLiteral("#B8CBC2")),
+            QColor(QStringLiteral("#17212B")),
+            QColor(QStringLiteral("#202B36")),
+            QColor(QStringLiteral("#232E3C")),
+            QColor(QStringLiteral("#7F91A4")),
             QColor(255, 255, 255, 20),
-            QColor(QStringLiteral("#213A31")),
-            QColor(QStringLiteral("#78C9A7")),
+            QColor(QStringLiteral("#1E2F40")),
+            st::windowBgActive->c,
             QColor(255, 255, 255, 20),
-            QColor(QStringLiteral("#222A26")),
-            QColor(QStringLiteral("#E8EEEA")),
+            QColor(QStringLiteral("#232E3C")),
+            QColor(QStringLiteral("#E4ECF2")),
         };
     }
     return {
         QColor(QStringLiteral("#FFFFFF")),
-        QColor(QStringLiteral("#F1F3F2")),
-        QColor(QStringLiteral("#EDF3F0")),
-        QColor(QStringLiteral("#4D6259")),
+        QColor(QStringLiteral("#F7F7F7")),
+        QColor(QStringLiteral("#EEF1F4")),
+        QColor(QStringLiteral("#5B6B7A")),
         QColor(0, 0, 0, 20),
-        QColor(QStringLiteral("#E7F4EF")),
-        QColor(QStringLiteral("#16785C")),
-        QColor(QStringLiteral("#DCE2DF")),
+        QColor(QStringLiteral("#E8F1F8")),
+        st::windowBgActive->c,
+        QColor(QStringLiteral("#D8DEE6")),
         QColor(0, 0, 0, 8),
         QColor(QStringLiteral("#1F2933")),
     };

@@ -17,32 +17,34 @@ bool setup_is_dark(const QPalette &palette) {
 
 SetupTokens setup_tokens(const QPalette &palette) {
     if (setup_is_dark(palette)) {
+        // Match Telegram night shell blues on both setup and chat canvases.
         return {
-            QColor(QStringLiteral("#181B1A")),
-            QColor(QStringLiteral("#202422")),
-            QColor(QStringLiteral("#222A26")),
-            QColor(QStringLiteral("#B8CBC2")),
+            QColor(QStringLiteral("#17212B")),
+            QColor(QStringLiteral("#202B36")),
+            QColor(QStringLiteral("#232E3C")),
+            QColor(QStringLiteral("#7F91A4")),
             QColor(255, 255, 255, 38),
-            QColor(QStringLiteral("#213A31")),
-            QColor(QStringLiteral("#78C9A7")),
+            QColor(QStringLiteral("#1E2F40")),
+            st::windowBgActive->c,
             QColor(255, 255, 255, 38),
             QColor(255, 255, 255, 12),
-            QColor(QStringLiteral("#9CA3AF")),
+            QColor(QStringLiteral("#7F91A4")),
             QColor(QStringLiteral("#F87171")),
-            QColor(QStringLiteral("#181B1A")),
-            QColor(QStringLiteral("#E8EEEA")),
-            QColor(QStringLiteral("#202422")),
+            QColor(QStringLiteral("#17212B")),
+            QColor(QStringLiteral("#E4ECF2")),
+            QColor(QStringLiteral("#202B36")),
         };
     }
+    // Match the light shell neutrals — not a leftover jade-green setup island.
     return {
         QColor(QStringLiteral("#FFFFFF")),
-        QColor(QStringLiteral("#F1F3F2")),
-        QColor(QStringLiteral("#EDF3F0")),
-        QColor(QStringLiteral("#4D6259")),
+        QColor(QStringLiteral("#F7F7F7")),
+        QColor(QStringLiteral("#EEF1F4")),
+        QColor(QStringLiteral("#5B6B7A")),
         QColor(0, 0, 0, 20),
-        QColor(QStringLiteral("#E7F4EF")),
-        QColor(QStringLiteral("#16785C")),
-        QColor(QStringLiteral("#DCE2DF")),
+        QColor(QStringLiteral("#E8F1F8")),
+        st::windowBgActive->c,
+        QColor(QStringLiteral("#D8DEE6")),
         QColor(0, 0, 0, 8),
         QColor(QStringLiteral("#6B7280")),
         QColor(QStringLiteral("#B42318")),
@@ -197,10 +199,15 @@ void apply_setup_card(QWidget *widget, const SetupTokens &tokens, bool dashed) {
 
 void apply_setup_primary_button(QPushButton *button) {
     if (!button) return;
+    const auto tokens = setup_tokens(button->palette());
+    const auto accent = setup_color_css(tokens.selection_accent);
+    auto disabled = tokens.selection_accent;
+    disabled.setAlpha(st::windowBg->c.lightness() >= 128 ? 160 : 120);
     button->setStyleSheet(QStringLiteral(
         "QPushButton { min-height: 34px; padding: 0 16px; border-radius: 6px; "
-        "background: #16785C; color: white; border: none; font-weight: 600; } "
-        "QPushButton:disabled { background: #A8CFC0; color: rgba(255,255,255,0.8); }"));
+        "background: %1; color: white; border: none; font-weight: 600; } "
+        "QPushButton:disabled { background: %2; color: rgba(255,255,255,0.8); }")
+        .arg(accent, setup_color_css(disabled)));
 }
 
 void apply_setup_secondary_button(QPushButton *button, const SetupTokens &tokens) {
