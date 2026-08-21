@@ -186,23 +186,29 @@ QTextCharFormat sender_format(bool outgoing) {
     return format;
 }
 
+[[nodiscard]] bool conversation_canvas_is_light() {
+    return st::windowBg->c.lightness() >= 128;
+}
+
 QColor body_reading_color(bool outgoing) {
-    if (st::windowBg->c.lightness() >= 128) {
+    if (conversation_canvas_is_light()) {
         return QColor(QStringLiteral("#26282B"));
     }
     return outgoing ? st::historyTextOutFg->c : st::historyTextInFg->c;
 }
 
 QColor secondary_reading_color() {
-    return st::windowBg->c.lightness() >= 128
+    return conversation_canvas_is_light()
         ? QColor(QStringLiteral("#8A8F98"))
         : st::msgServiceFg->c;
 }
 
+// Soft mint Human bubble for both themes. Light and dark are equal companions
+// over windowBg — never Telegram's solid Send/active msgOutBg.
 QColor human_bubble_color() {
-    return st::windowBg->c.lightness() >= 128
+    return conversation_canvas_is_light()
         ? QColor(QStringLiteral("#EEF7F3"))
-        : st::msgOutBg->c;
+        : QColor(QStringLiteral("#2A4038"));
 }
 
 QStringList reaction_chip_labels(const MessageReactions &bag) {
@@ -222,12 +228,13 @@ int reaction_row_height(const QFontMetricsF &metrics) {
 }
 
 QColor reaction_chip_fill(bool outgoing) {
-    if (outgoing) {
-        return st::windowBg->c.lightness() >= 128
-            ? QColor(QStringLiteral("#D7EBE3"))
-            : st::windowBgRipple->c;
+    if (!outgoing) {
+        return st::windowBgRipple->c;
     }
-    return st::windowBgRipple->c;
+    // Stronger mint than the bubble so chips read on top in both themes.
+    return conversation_canvas_is_light()
+        ? QColor(QStringLiteral("#D7EBE3"))
+        : QColor(QStringLiteral("#354F46"));
 }
 
 QTextCharFormat secondary_format() {
@@ -865,8 +872,11 @@ void paint_glyph_tight_selection(
 }
 
 [[nodiscard]] QColor message_hover_wash_color() {
-    // Match the Human bubble fill so hover uses the same soft tint.
-    return human_bubble_color();
+    // Same mint wash in both themes; keep it translucent so Agent rows stay on
+    // the canvas and neither theme floods the pane with opaque bubble chrome.
+    auto wash = human_bubble_color();
+    wash.setAlpha(150);
+    return wash;
 }
 
 // Visible message content bounds in document coordinates (union of laid-out

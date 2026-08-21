@@ -55,15 +55,16 @@ constexpr auto kActiveBreathTickMs = 40;
 }
 
 // Soft selection wash: blend the composer Send accent into the sidebar base
-// so the selected row reads as a pale blue tint, not a solid filled pill.
+// in both themes so the selected row reads as a pale tint, not a solid pill.
+// Tint strength scales with canvas luminance so contrast stays comparable.
 [[nodiscard]] QColor selected_row_fill_color() {
     const auto base = st::windowBg->c;
     const auto accent = st::windowBgActive->c;
-    constexpr auto kTint = 0.16;
+    const auto tint = base.lightness() >= 128 ? 0.16 : 0.28;
     return QColor(
-        int(base.red() * (1.0 - kTint) + accent.red() * kTint + 0.5),
-        int(base.green() * (1.0 - kTint) + accent.green() * kTint + 0.5),
-        int(base.blue() * (1.0 - kTint) + accent.blue() * kTint + 0.5));
+        int(base.red() * (1.0 - tint) + accent.red() * tint + 0.5),
+        int(base.green() * (1.0 - tint) + accent.green() * tint + 0.5),
+        int(base.blue() * (1.0 - tint) + accent.blue() * tint + 0.5));
 }
 
 // Telegram lib_ui's FlatButton paints only a flat base/hover background before

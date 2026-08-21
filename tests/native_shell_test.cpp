@@ -3375,11 +3375,11 @@ void verify_telegram_theme_reset(
     // pixels and public Qt behavior are consulted -- never document or block
     // internals. Incoming Agent prose stays on the shared windowBg canvas with
     // a left avatar lane; outgoing Human rows get the accepted pale bubble
-    // tint (#EEF7F3 in light mode). The composer must remain visible directly
-    // below the conversation in one common ancestor coordinate system.
+    // tint (#EEF7F3 light / #2A4038 dark). The composer must remain visible
+    // directly below the conversation in one common ancestor coordinate system.
     const auto human_bubble_fill = st::windowBg->c.lightness() >= 128
         ? QColor(QStringLiteral("#EEF7F3"))
-        : st::msgOutBg->c;
+        : QColor(QStringLiteral("#2A4038"));
     const auto surface_image = conversation->viewport()->grab().toImage();
     // The surface owns a transparent Base, so no widget palette role is a
     // meaningful backdrop: sample the painted backdrop directly from the grab
