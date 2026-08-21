@@ -3375,8 +3375,9 @@ void verify_telegram_theme_reset(
     // pixels and public Qt behavior are consulted -- never document or block
     // internals. Incoming Agent prose stays on the shared windowBg canvas with
     // a left avatar lane; outgoing Human rows get the accepted pale bubble
-    // tint (#EEF7F3 light / #2A4038 dark). The composer must remain visible
-    // directly below the conversation in one common ancestor coordinate system.
+    // tint (#EEF7F3 light / #2A4038 dark). The composer must remain
+    // visible directly below the conversation in one common ancestor
+    // coordinate system.
     const auto human_bubble_fill = st::windowBg->c.lightness() >= 128
         ? QColor(QStringLiteral("#EEF7F3"))
         : QColor(QStringLiteral("#2A4038"));
@@ -5305,7 +5306,7 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
         *agents_page, "lingtai_setup_agents_search");
     if (st::windowBg->c.lightness() < 128) {
         require(!agents_search->styleSheet().contains(QStringLiteral("#FFFFFF"))
-                && agents_search->styleSheet().contains(QStringLiteral("#202422")),
+                && agents_search->styleSheet().contains(QStringLiteral("#202B36")),
             "dark-mode Configure agent presets search must not be a white hole");
         for (auto *chip : agents_page->findChildren<QLabel *>(
                 "lingtai_setup_agents_row_caps")) {
@@ -5315,7 +5316,7 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
             }
             require(!chip->styleSheet().contains(QStringLiteral("#FFFFFF"))
                     && !chip->styleSheet().contains(QStringLiteral("#E7F4EF"))
-                    && chip->styleSheet().contains(QStringLiteral("#222A26")),
+                    && chip->styleSheet().contains(QStringLiteral("#232E3C")),
                 "dark-mode Vision/Tools chips must use the muted band, not a white rectangle");
         }
     }
@@ -5387,12 +5388,12 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
         "credentials page must live behind the preset catalog stack");
     require(preset_catalog->palette().color(QPalette::Base)
                 == QColor(wizard->palette().color(QPalette::Window).lightness() < 128
-                    ? QStringLiteral("#181B1A")
+                    ? QStringLiteral("#17212B")
                     : QStringLiteral("#FFFFFF"))
-            && (preset_catalog->styleSheet().contains(QStringLiteral("#E7F4EF"))
-                || preset_catalog->styleSheet().contains(QStringLiteral("#213A31")))
-            && (preset_catalog->styleSheet().contains(QStringLiteral("#F1F3F2"))
-                || preset_catalog->styleSheet().contains(QStringLiteral("#202422"))),
+            && (preset_catalog->styleSheet().contains(QStringLiteral("#E8F1F8"))
+                || preset_catalog->styleSheet().contains(QStringLiteral("#1E2F40")))
+            && (preset_catalog->styleSheet().contains(QStringLiteral("#F7F7F7"))
+                || preset_catalog->styleSheet().contains(QStringLiteral("#202B36"))),
         "preset catalog chrome must use the supplied light/dark surface, header, and selection tokens");
     require(continue_button->text() == QStringLiteral("Use preset")
             && preset_back->isEnabled()
@@ -5478,18 +5479,21 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
     auto *edit_manage = required_child<QPushButton>(
         *edit_page, "lingtai_setup_edit_preset_manage");
     require(edit_manage->cursor().shape() == Qt::PointingHandCursor
-            && edit_manage->styleSheet().contains(QStringLiteral("#16785C")),
-        "Edit preset Manage must be a jade action button, not a text label");
+            && edit_manage->styleSheet().contains(
+                st::windowBgActive->c.name(QColor::HexRgb).toUpper()),
+        "Edit preset Manage must be a Send-accent action button, not a text label");
     auto *edit_name = required_child<QLineEdit>(
         *edit_page, "lingtai_setup_edit_preset_name");
     if (st::windowBg->c.lightness() < 128) {
-        require(edit_back->styleSheet().contains(QStringLiteral("#78C9A7"))
+        require(edit_back->styleSheet().contains(
+                    st::windowBgActive->c.name(QColor::HexRgb).toUpper())
                 && !edit_name->styleSheet().contains(QStringLiteral("#FFFFFF"))
-                && edit_name->styleSheet().contains(QStringLiteral("#202422")),
+                && edit_name->styleSheet().contains(QStringLiteral("#202B36")),
             "dark-mode Edit preset must keep ← Presets readable and fields off the white hole fill");
     } else {
-        require(edit_back->styleSheet().contains(QStringLiteral("#16785C")),
-            "light-mode Edit preset back link stays jade");
+        require(edit_back->styleSheet().contains(
+                st::windowBgActive->c.name(QColor::HexRgb).toUpper()),
+            "light-mode Edit preset back link tracks the Send accent");
     }
     pages->setCurrentWidget(edit_page);
     QCoreApplication::processEvents();
