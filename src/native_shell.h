@@ -6,6 +6,7 @@
 #include "agent_sleep.h"
 #include "conversation_unread.h"
 #include "injected_mail_journal.h"
+#include "kanban_model.h"
 #include "message_reactions.h"
 #include "project_bootstrap.h"
 #include "project_setup_wizard.h"
@@ -26,6 +27,7 @@
 
 #include <rpl/lifetime.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -136,6 +138,13 @@ private:
     void refresh_system_palette();
     void render_agent_preset_summary();
     void render_kanban();
+    // Starts or reuses an off-UI-thread board read. When a warm cache exists
+    // for the active project, the page paints immediately and refresh runs
+    // in the background. `force` cancels an in-flight read and rebuilds.
+    void request_kanban_board(bool force);
+    void apply_kanban_board(std::uint64_t generation, KanbanBoard board);
+    void invalidate_kanban_cache();
+    void maybe_warm_kanban_cache();
     void handle_kanban_agent_selected(const std::filesystem::path &directory_key);
     void reset_composer();
     void handle_send_message();
@@ -169,10 +178,9 @@ private:
     // the roster and drops the selection. No-op outside the narrow detail.
     void handle_detail_back();
     // The one responsive chat-top-bar fit, owned by the same recompute width
-    // owner: hides the secondary key label first when the full natural top-bar
-    // row with the current key text does not fit the actual detail width just
-    // derived by `recompute_layout`, restoring it as soon as it fits again.
-    // Primary controls, the presentation name, and fonts are never touched.
+    // owner: allocates remaining width to the identity column and elides the
+    // presentation name plus Role · Status line under it. The status row is
+    // never hidden for width; action captions may still drop under pressure.
     void update_top_bar_fit(int detail_width);
     // Recomputes the one bounded composer lane's width from the actual detail
     // width just derived by `recompute_layout`: near-full at the narrow
@@ -234,10 +242,9 @@ private:
     QPushButton *detail_back_button_ = nullptr;
     // Stable pointer to the extracted selected-Agent detail widget.
     AgentDetailView *detail_view_ = nullptr;
-    // Stable pointers to the selected-Agent chat top bar and its secondary key
-    // label, retained so the one responsive fit measure in `recompute_layout`
-    // can evaluate the full natural row against the actual detail width and
-    // hide/restore only the secondary key.
+    // Stable pointers to the selected-Agent chat top bar and its status label,
+    // retained so the one responsive fit measure in `recompute_layout` can
+    // elide the identity column against the actual detail width.
     QWidget *chat_top_bar_ = nullptr;
     QLabel *selected_agent_key_ = nullptr;
     // The one bounded composer lane, retained so the same body-resize owner
@@ -301,6 +308,22 @@ private:
     std::vector<QWidget *> secondary_pages_;
     AgentDetailPage current_detail_page_ = AgentDetailPage::conversation;
     KanbanPage *kanban_page_ = nullptr;
+    // Session-only warm board for the active project. Cleared on project
+    // change. Lets /kanban paint instantly while a background refresh runs.
+    std::optional<KanbanBoard> kanban_cache_;
+    std::filesystem::path kanban_cache_root_;
+    // Bumped to drop stale async results after project change, force reload,
+    // or shell teardown.
+    std::uint64_t kanban_load_generation_ = 0;
+    bool kanban_load_inflight_ = false;
+    int kanban_warm_ticks_ = 0;
+    // Shared cancel token so a detached board read never touches a destroyed
+    // shell. Set cancelled in the destructor before members tear down.
+    struct KanbanLoadToken {
+        std::atomic<bool> cancelled{false};
+    };
+    std::shared_ptr<KanbanLoadToken> kanban_load_token_
+        = std::make_shared<KanbanLoadToken>();
 };
 
 } // namespace lingtai::desktop

@@ -1141,6 +1141,7 @@ void KanbanPage::set_board(
         "lingtai_kanban_detail_scroll");
     const auto summary_pos = scroll_value(summary_scroll);
     const auto detail_pos = scroll_value(detail_scroll);
+    loading_ = false;
     board_ = board;
     selected_key_ = selected_key;
     rebuild();
@@ -1153,6 +1154,16 @@ void KanbanPage::set_board(
     if (detail_scroll && detail_scroll->verticalScrollBar()) {
         detail_scroll->verticalScrollBar()->setValue(detail_pos);
     }
+}
+
+void KanbanPage::set_loading(bool loading) {
+    if (loading_ == loading && loading) return;
+    loading_ = loading;
+    if (!loading_) return;
+    board_ = {};
+    selected_key_.reset();
+    rebuild();
+    apply_chrome();
 }
 
 const KanbanAgent *KanbanPage::selected_agent() const {
@@ -1248,8 +1259,10 @@ void KanbanPage::rebuild() {
     if (!host_layout || !summary_layout || !detail_layout) return;
     if (!agent) {
         auto *empty = make_label(summary_body_,
-            QStringLiteral("Select an Agent to inspect its properties."),
-            "lingtai_kanban_empty", 13);
+            loading_
+                ? QStringLiteral("Loading agent network…")
+                : QStringLiteral("Select an Agent to inspect its properties."),
+            loading_ ? "lingtai_kanban_loading" : "lingtai_kanban_empty", 13);
         color_text(empty, tokens.muted_text);
         summary_layout->addWidget(empty);
         summary_layout->addStretch(1);

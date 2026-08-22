@@ -497,7 +497,7 @@ void verify_dark_application_palette_inheritance(const fs::path &sandbox) {
         window, "lingtai_agent_directory");
     auto *roster = required_child<Ui::RpWidget>(
         window, "lingtai_agent_roster");
-    auto *roster_scroll = required_child<QWidget>(
+    auto *roster_scroll = required_child<QScrollArea>(
         window, "lingtai_agent_roster_scroll");
     auto *detail = required_child<Ui::RpWidget>(
         window, "lingtai_agent_detail");
@@ -583,6 +583,13 @@ void verify_dark_application_palette_inheritance(const fs::path &sandbox) {
         "dark application Button role must reach the project selector");
     require(roster_scroll->palette().color(QPalette::Base) == text_surface,
         "dark application Base role must reach the roster scroll surface");
+    auto *viewport = roster_scroll->viewport();
+    require(viewport != nullptr
+            && viewport->palette().color(QPalette::Base) == token_window
+            && viewport->palette().color(QPalette::Window) == token_window,
+        "dark-mode roster scroll viewport must paint windowBg on both "
+        "Base and Window so empty space under short Agent lists is not "
+        "a white hole");
 
     ProjectFixture fixture(sandbox, "palette");
     static_cast<void>(shell.open_project(fixture.project, std::nullopt));
@@ -2950,6 +2957,19 @@ void verify_compact_header_hierarchy(
             && !status->text().contains(QStringLiteral("presence:")),
         "the secondary line must read friendly role · Status, matching the "
         "Sidebar semantics without raw fact labels");
+    auto *status_row = required_child<QWidget>(
+        window, "lingtai_selected_agent_status_row");
+    auto *status_dot = required_child<QWidget>(
+        window, "lingtai_selected_agent_status_dot");
+    require(status_row->isVisible() && status_dot->isVisible()
+            && status->isVisible(),
+        "the conversation header must show the Sidebar-matching status row "
+        "under the agent name");
+    require(status_row->geometry().bottom() <= top_bar->height(),
+        "the header status line must fit inside the chat top bar, not clip");
+    require(status_dot->property("lingtai_status_color").value<QColor>().isValid(),
+        "the header status disc must carry the same lifecycle color as the "
+        "Sidebar row");
 
     // Header chrome no longer carries Start Agent or Request sleep; those
     // lifecycle actions remain available through `/cpr` and `/sleep`.
@@ -3368,6 +3388,37 @@ void verify_telegram_theme_reset(
             && !preset_owner->isVisible(),
         "returning to the Conversation page must restore the chat surface "
         "and hide the secondary page");
+
+    // 3b. A live dark→light switch while the chat is open must not leave the
+    // detail scroll viewport (and transparent header/margin chrome) on the
+    // stale dark application Base while the conversation repaints windowBg.
+    auto *detail_scroll = required_child<QScrollArea>(
+        window, "lingtai_agent_detail_scroll");
+    auto *top_bar = required_child<QWidget>(window, "lingtai_chat_top_bar");
+    style_hints->setColorScheme(Qt::ColorScheme::Dark);
+    QCoreApplication::processEvents();
+    style_hints->setColorScheme(Qt::ColorScheme::Light);
+    QCoreApplication::processEvents();
+    require(st::windowBg->c == QColor("#ffffff"),
+        "returning to light must restore Telegram's canonical light palette");
+    require(detail_scroll->viewport()->palette().color(QPalette::Base)
+            == st::windowBg->c,
+        "the detail scroll viewport must follow windowBg after a dark→light "
+        "switch so header/composer margins are not a stale dark band");
+    top_bar->repaint();
+    detail_scroll->viewport()->repaint();
+    QCoreApplication::processEvents();
+    require(color_close(top_bar->grab().toImage().pixelColor(6, 6),
+            st::windowBg->c),
+        "the chat header must sit on windowBg after a dark→light switch");
+    const auto viewport_image = detail_scroll->viewport()->grab().toImage();
+    require(color_close(viewport_image.pixelColor(
+            viewport_image.width() / 2,
+            viewport_image.height() - 4),
+            st::windowBg->c),
+        "composer-side detail margins must sit on windowBg after a "
+        "dark→light switch");
+
     conversation->viewport()->repaint();
     QCoreApplication::processEvents();
 
@@ -4054,17 +4105,10 @@ void verify_floating_composer_surface(
     require(!cleanup_error, "floating-composer fixtures must be removed");
 }
 
-// The R4 RED: the selected-Agent chat top bar must drop its secondary
-// `lingtai_selected_agent_key` metadata before any primary control when the
-// actual header width is constrained. A wide actual header shows the
-// presentation name, the secondary key, and the applicable primary controls
-// (Start for a stale target plus always-present Request sleep; Back only in
-// the narrow OneColumn detail) together without overlap; a constrained
-// OneColumn actual detail header keeps the presentation name and every
-// primary control visible while the secondary key hides first; returning to
-// wide restores the key. Current production keeps `lingtai_selected_agent_key`
-// visible at the constrained width, so this journey must fail exactly that
-// visibility, never fonts, icon substitution, or a hidden primary control.
+// The selected-Agent chat top bar keeps the Sidebar-matching Role · Status
+// line under the presentation name at every width: both lines elide inside
+// the identity column instead of hiding the status as a horizontal competitor.
+// Wide and narrow headers stay free of overlap and horizontal overflow.
 void verify_responsive_header_priority(
         lingtai::desktop::NativeShell &shell,
         const fs::path &sandbox) {
@@ -4076,6 +4120,10 @@ void verify_responsive_header_priority(
         window, "lingtai_selected_agent_presentation_name");
     auto *detail_key = required_child<QLabel>(
         window, "lingtai_selected_agent_key");
+    auto *status_row = required_child<QWidget>(
+        window, "lingtai_selected_agent_status_row");
+    auto *status_dot = required_child<QWidget>(
+        window, "lingtai_selected_agent_status_dot");
     auto *back_button = required_child<QPushButton>(
         window, "lingtai_agent_detail_back");
     auto *start_button = required_child<QPushButton>(
@@ -4121,8 +4169,7 @@ void verify_responsive_header_priority(
         }
     };
 
-    // Wide actual header: presentation name and secondary key beside the
-    // applicable primary controls, all visible without overlap.
+    // Wide actual header: presentation name with Role · Status under it.
     window.resize(1200, 800);
     QCoreApplication::processEvents();
     click_agent(shell, stale_key);
@@ -4130,24 +4177,29 @@ void verify_responsive_header_priority(
             == std::optional<fs::path>(stale_key),
         "the stale target must be selectable");
     QCoreApplication::processEvents();
-    require(presentation_name->isVisible() && detail_key->isVisible(),
+    require(presentation_name->isVisible() && detail_key->isVisible()
+            && status_row->isVisible() && status_dot->isVisible(),
         "a wide actual header must show the presentation name and the "
-        "secondary key together");
+        "status row together");
+    require(header_rect(detail_key).top()
+            >= header_rect(presentation_name).bottom(),
+        "status text must sit under the presentation name");
+    require(header_rect(status_dot).left() <= header_rect(detail_key).left(),
+        "the status disc must lead the status text, not float to the far right");
     require(!start_button->isVisible() && !sleep_button->isVisible(),
         "Start Agent and Request sleep must stay out of the selected-Agent header");
     require(!back_button->isVisible(),
         "Back must stay hidden in wide two-column mode");
     require_disjoint(
-        {presentation_name, detail_key});
+        {presentation_name, detail_key, status_dot});
 
-    // The validated 640x520 narrow render must already prioritize the primary
-    // identity and controls before the long directory-key metadata can wrap or
-    // make the vertical detail pane horizontally scrollable.
+    // Narrow width keeps status under the name and never overflows horizontally.
     window.resize(640, 520);
     QCoreApplication::processEvents();
     require(!detail_key->wordWrap(),
-        "secondary header metadata must stay single-line before fit priority "
-        "hides it");
+        "secondary header metadata must stay single-line and elide");
+    require(detail_key->isVisible() && status_row->isVisible(),
+        "narrow width must keep the status row under the name");
     require(detail_scroll->horizontalScrollBarPolicy()
             == Qt::ScrollBarAlwaysOff,
         "the selected-Agent detail pane is vertical-only at narrow widths");
@@ -4155,35 +4207,39 @@ void verify_responsive_header_priority(
             && !detail_scroll->horizontalScrollBar()->isVisible(),
         "the validated 640px narrow detail pane must not overflow horizontally");
 
-    // Minimum OneColumn actual detail header: the presentation name and every
-    // primary control stay visible while the secondary key remains hidden.
+    // Minimum OneColumn: name + status stay visible and elide; Back stays.
     window.resize(380, 480);
     QCoreApplication::processEvents();
     require(presentation_name->isVisible(),
         "a constrained actual header must keep the presentation name");
+    require(detail_key->isVisible() && status_row->isVisible(),
+        "a constrained actual header must keep Role · Status under the name "
+        "and elide instead of hiding");
+    require(header_rect(detail_key).top()
+            >= header_rect(presentation_name).bottom(),
+        "constrained status text must remain under the presentation name");
+    require(header_rect(status_dot).left() <= header_rect(detail_key).left(),
+        "constrained status disc must stay with the status text");
     require(back_button->isVisible(),
         "a constrained OneColumn actual detail header must keep Back");
     require(!start_button->isVisible() && !sleep_button->isVisible(),
         "a constrained actual header must keep Start Agent and Request sleep hidden");
-    require(!detail_key->isVisible(),
-        "a constrained actual header must hide the secondary key first, "
-        "before any primary control or the presentation name");
     require(detail_scroll->horizontalScrollBar()->maximum() == 0
             && !detail_scroll->horizontalScrollBar()->isVisible(),
         "the vertical Agent detail surface must not overflow horizontally at "
         "a valid narrow size");
 
-    // Returning to wide restores the secondary key beside the presentation
-    // name and the primary controls.
+    // Returning to wide keeps status under the presentation name.
     window.resize(1200, 800);
     QCoreApplication::processEvents();
-    require(presentation_name->isVisible() && detail_key->isVisible(),
-        "returning to wide must restore the secondary key");
+    require(presentation_name->isVisible() && detail_key->isVisible()
+            && status_row->isVisible(),
+        "returning to wide must keep the status row under the name");
     require(!start_button->isVisible() && !sleep_button->isVisible()
             && !back_button->isVisible(),
         "returning to wide must restore the same wide control set");
     require_disjoint(
-        {presentation_name, detail_key});
+        {presentation_name, detail_key, status_dot});
 
     // Wide selected-Agent workspace hierarchy: the content surface, the
     // active project route, and the Agent pages nav are the durable
@@ -4372,7 +4428,20 @@ void verify_kanban_page(
         "/kanban must clear the composer after local submission");
     require(kanban_page->isVisible(),
         "/kanban must reveal the agent properties page");
-    auto *kanban_name = required_child<QLabel>(window, "lingtai_kanban_name");
+    // Board load is async; wait for the warm/cache paint to produce the
+    // agent title rather than assuming a synchronous read_kanban_board.
+    QElapsedTimer board_wait;
+    board_wait.start();
+    QLabel *kanban_name = nullptr;
+    while (board_wait.elapsed() < 5000) {
+        kanban_name = window.findChild<QLabel *>(
+            QStringLiteral("lingtai_kanban_name"));
+        if (kanban_name) break;
+        QThread::msleep(20);
+        QCoreApplication::processEvents();
+    }
+    require(kanban_name != nullptr,
+        "/kanban must finish loading the agent properties board");
     const auto *kanban_name_before_tick = kanban_name;
     QElapsedTimer idle;
     idle.start();

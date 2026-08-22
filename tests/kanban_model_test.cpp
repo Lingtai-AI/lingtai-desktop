@@ -94,8 +94,8 @@ void verify_board_reads_network_sources(const fs::path &sandbox) {
             && board.network_tokens.output == 40
             && board.network_tokens.api_calls == 1,
         "network token totals come from the ledger");
-    require(board.running_daemons == 1 && board.total_mails == 1,
-        "daemon and inbox mail counts are included");
+    require(board.running_daemons == 1 && board.total_mails == 0,
+        "daemon counts are included; inbox mail totals are skipped");
     require(board.network_created == "2026-08-01T00:00:00Z",
         "admin created_at becomes network created");
 

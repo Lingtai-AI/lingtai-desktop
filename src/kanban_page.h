@@ -29,6 +29,7 @@ public:
     void set_board(
         const KanbanBoard &board,
         const std::optional<std::filesystem::path> &selected_key);
+    void set_loading(bool loading);
     void apply_chrome();
     void choose_agent(const QString &directory_key);
 
@@ -57,6 +58,7 @@ private:
     KanbanBoard board_;
     std::optional<std::filesystem::path> selected_key_;
     bool detail_open_ = false;
+    bool loading_ = false;
     QWidget *hero_host_ = nullptr;
     QWidget *hero_row_ = nullptr;
     QWidget *actions_ = nullptr;

@@ -4,6 +4,7 @@
 #include "ui/rp_widget.h"
 
 #include <QtCore/QString>
+#include <QtGui/QColor>
 
 #include <filesystem>
 #include <functional>
@@ -21,6 +22,9 @@ namespace lingtai::desktop {
 [[nodiscard]] QString friendly_agent_lifecycle_text(const AgentRow &item);
 [[nodiscard]] QString friendly_agent_presence_text(
     AgentPresenceKind presence);
+// Same “Role · Status” secondary line the roster paints under each name.
+[[nodiscard]] QString friendly_agent_status_summary(const AgentRow &item);
+[[nodiscard]] QColor agent_lifecycle_status_color(const AgentRow &item);
 
 // The virtual Agent rows surface. It is forward-declared here so AgentRoster
 // owns it through a typed pointer; the definition (row model, selected key,
@@ -65,6 +69,10 @@ public:
     // the project/Agent header in sync with the avatar-only compact state.
     void set_roster_width(int width);
     void set_project_display_name(const QString &name);
+    // Re-apply scroll/canvas Window+Base to `windowBg` after a system theme
+    // change. QScrollArea viewports paint with Base; leaving it on the Qt
+    // default produces a white hole under short Agent lists in dark mode.
+    void apply_chrome();
     // Keyboard focus: focuses the enabled row for `key` when present,
     // otherwise the first enabled (valid-manifest) row. The narrow OneColumn
     // Back path hands keyboard navigation back to the roster through this.

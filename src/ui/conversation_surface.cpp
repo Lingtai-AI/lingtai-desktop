@@ -15,6 +15,7 @@
 #include <QtGui/QColor>
 #include <QtGui/QFont>
 #include <QtGui/QFontMetricsF>
+#include <QtGui/QImage>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QMouseEvent>
 #include <QtGui/QPainter>
@@ -86,7 +87,7 @@ constexpr auto kEmptyAvatarGap = 10;
 constexpr auto kEmptyTitleGap = 6;
 constexpr auto kEmptyStateHeadroom = 28;
 constexpr auto kEmptyStateTitleSize = 15;
-constexpr auto kSelectAgentIllustrationSize = 72;
+constexpr auto kSelectAgentIllustrationSize = 96;
 constexpr auto kSelectAgentIllustrationGap = 14;
 constexpr auto kSelectAgentTitleSize = 17;
 // The leading lazy-history banner's vertical breathing room around the single
@@ -101,8 +102,13 @@ constexpr auto kDayBottomMargin = 14;
 // The day divider label rides on the first message frame of each calendar day;
 // paintEvent draws the centered rules in the gap above that frame.
 constexpr auto kDaySeparatorProperty = QTextFormat::UserProperty + 6;
-constexpr auto kParagraphBottomMargin = 13;
+constexpr auto kParagraphBottomMargin = 10;
+// Body reading uses 14px with a tight proportional line box (~2pt less
+// inter-line space than the prior 146% pair at this size).
+constexpr auto kBodyLineHeightPercent = 132;
 constexpr auto kListBottomMargin = 3;
+// Pull the first body block up under the Agent name/time header.
+constexpr auto kHeaderToBodyOverlap = 5;
 constexpr auto kCodeBlockProperty = QTextFormat::UserProperty + 4;
 // Direction is frame metadata, not body alignment: Human body text stays left
 // aligned while the frame's margins and painter keep the bubble on the right.
@@ -170,7 +176,8 @@ QTextBlockFormat message_block_format(
     format.setRightMargin(outgoing ? outer : inner);
     format.setTopMargin(kMessageTopMargin);
     format.setBottomMargin(0);
-    format.setLineHeight(160, QTextBlockFormat::ProportionalHeight);
+    format.setLineHeight(
+        kBodyLineHeightPercent, QTextBlockFormat::ProportionalHeight);
     format.setProperty(kMessageBlockProperty, true);
     return format;
 }
@@ -424,7 +431,7 @@ QTextCharFormat body_format(bool outgoing) {
     auto format = QTextCharFormat();
     format.setForeground(body_reading_color(outgoing));
     auto font = QApplication::font();
-    font.setPixelSize(16);
+    font.setPixelSize(14);
     font.setWeight(QFont::Normal);
     font.setStyleHint(QFont::SansSerif);
     format.setFont(font);
@@ -433,7 +440,7 @@ QTextCharFormat body_format(bool outgoing) {
 
 // The accepted safe-markdown character formats, each derived from the message
 // body's base format so the direction colors stay intact while the run becomes
-// visually distinct from the plain 16px body.
+// visually distinct from the plain 14px body.
 QTextCharFormat emphasized_text_format(const QTextCharFormat &base) {
     auto format = base;
     auto font = format.font();
@@ -603,7 +610,8 @@ void insert_markdown_body(
             cursor.insertBlock(continuation);
         }
         auto block = continuation;
-        block.setLineHeight(160, QTextBlockFormat::ProportionalHeight);
+        block.setLineHeight(
+            kBodyLineHeightPercent, QTextBlockFormat::ProportionalHeight);
         block.setTopMargin(0);
         block.setBottomMargin(0);
         if (paragraph_break) {
@@ -636,7 +644,8 @@ void insert_markdown_body(
             block.setLeftMargin(block.leftMargin() + 16);
             block.setTextIndent(-14);
             block.setBottomMargin(kListBottomMargin);
-            block.setLineHeight(150, QTextBlockFormat::ProportionalHeight);
+            block.setLineHeight(
+                kBodyLineHeightPercent, QTextBlockFormat::ProportionalHeight);
             cursor.setBlockFormat(block);
             if (ordered_match.hasMatch()) {
                 cursor.insertText(ordered_match.captured(1) + QChar(' '), base);
@@ -714,41 +723,37 @@ QTextCharFormat select_agent_title_format() {
     return format;
 }
 
-// Quiet line-art illustration for the no-selection empty state: two figures
-// with speech bubbles in a muted companion to the composer Send blue.
+// Product avatar for the no-selection empty state. The asset ships on a solid
+// black studio canvas; near-black pixels are cleared so the chat backdrop shows
+// through on both light and dark themes.
 QPixmap select_agent_illustration(int size) {
-    auto pixmap = QPixmap(size, size);
-    pixmap.fill(Qt::transparent);
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    auto ink = st::windowBgActive->c;
-    ink.setAlpha(160);
-    auto pen = QPen(ink, 2.2);
-    pen.setCapStyle(Qt::RoundCap);
-    pen.setJoinStyle(Qt::RoundJoin);
-    painter.setPen(pen);
-    painter.setBrush(Qt::NoBrush);
-
-    const auto s = qreal(size);
-    // Left figure.
-    painter.drawEllipse(QRectF(s * 0.18, s * 0.18, s * 0.22, s * 0.22));
-    painter.drawRoundedRect(
-        QRectF(s * 0.14, s * 0.44, s * 0.30, s * 0.34), s * 0.12, s * 0.12);
-    // Right figure.
-    painter.drawEllipse(QRectF(s * 0.58, s * 0.22, s * 0.22, s * 0.22));
-    painter.drawRoundedRect(
-        QRectF(s * 0.54, s * 0.48, s * 0.30, s * 0.34), s * 0.12, s * 0.12);
-    // Speech bubbles.
-    painter.drawRoundedRect(
-        QRectF(s * 0.34, s * 0.08, s * 0.22, s * 0.14), 4, 4);
-    painter.drawLine(
-        QPointF(s * 0.40, s * 0.22), QPointF(s * 0.36, s * 0.28));
-    painter.drawRoundedRect(
-        QRectF(s * 0.52, s * 0.34, s * 0.20, s * 0.12), 4, 4);
-    painter.drawLine(
-        QPointF(s * 0.62, s * 0.46), QPointF(s * 0.66, s * 0.52));
-    painter.end();
-    return pixmap;
+    static const auto source = []() -> QPixmap {
+        auto image = QImage(QStringLiteral(
+            ":/lingtai/conversation/select-agent-avatar.png"));
+        if (image.isNull()) {
+            return {};
+        }
+        image = image.convertToFormat(QImage::Format_ARGB32);
+        for (auto y = 0; y != image.height(); ++y) {
+            auto *line = reinterpret_cast<QRgb *>(image.scanLine(y));
+            for (auto x = 0; x != image.width(); ++x) {
+                const auto pixel = line[x];
+                if (qRed(pixel) < 18 && qGreen(pixel) < 18
+                        && qBlue(pixel) < 18) {
+                    line[x] = qRgba(0, 0, 0, 0);
+                }
+            }
+        }
+        return QPixmap::fromImage(std::move(image));
+    }();
+    if (source.isNull() || size <= 0) {
+        return {};
+    }
+    return source.scaled(
+        size,
+        size,
+        Qt::KeepAspectRatio,
+        Qt::SmoothTransformation);
 }
 
 // The small empty-state Agent avatar: a quiet muted circle carrying the
@@ -1351,10 +1356,11 @@ void ConversationSurface::rebuild_document() {
         }
         auto *frame = cursor.insertFrame(frame_format);
         cursor = frame->firstCursorPosition();
-        // The header block carries the whole-message lane format with no block
-        // bottom margin: the frame's bottom margin owns the outer sibling gap.
+        // The header block carries the whole-message lane format. A small
+        // negative bottom margin closes the Agent-name → body gap by 5pt
+        // without changing sender line metrics.
         auto header_format = block_format;
-        header_format.setBottomMargin(0);
+        header_format.setBottomMargin(-kHeaderToBodyOverlap);
         cursor.setBlockFormat(header_format);
         if (!outgoing && incoming_group_first) {
             cursor.insertText(them_, sender_format(outgoing));
@@ -1599,13 +1605,15 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
     if (select_agent_prompt_active_) {
         const auto illustration = select_agent_illustration(
             kSelectAgentIllustrationSize);
-        const auto x = (surface_viewport->width()
-            - kSelectAgentIllustrationSize) / 2;
-        const auto y = std::max(16,
-            int(document()->rootFrame()->frameFormat().topMargin())
-                - kSelectAgentIllustrationSize
-                - kSelectAgentIllustrationGap);
-        painter.drawPixmap(x, y, illustration);
+        if (!illustration.isNull()) {
+            const auto x = (surface_viewport->width()
+                - illustration.width()) / 2;
+            const auto y = std::max(16,
+                int(document()->rootFrame()->frameFormat().topMargin())
+                    - illustration.height()
+                    - kSelectAgentIllustrationGap);
+            painter.drawPixmap(x, y, illustration);
+        }
     }
 
     const auto *document_layout = document()->documentLayout();

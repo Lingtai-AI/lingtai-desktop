@@ -186,23 +186,6 @@ void append_fields(
     return names;
 }
 
-[[nodiscard]] int count_inbox_mail(int agent_fd) {
-    const auto mailbox = posix::open_directory_component(agent_fd, "mailbox");
-    if (mailbox.get() < 0) return 0;
-    const auto inbox = posix::open_directory_component(mailbox.get(), "inbox");
-    if (inbox.get() < 0) return 0;
-    auto count = 0;
-    for (const auto &name : list_directory_names(inbox.get())) {
-        if (!posix::safe_leaf(name)) continue;
-        const auto leaf = posix::open_directory_component(inbox.get(), name);
-        if (leaf.get() < 0) continue;
-        if (read_regular_file(leaf.get(), "message.json", kMaxJsonBytes)) {
-            ++count;
-        }
-    }
-    return count;
-}
-
 [[nodiscard]] KanbanDaemonCounts count_daemons(int agent_fd) {
     const auto daemons = posix::open_directory_component(agent_fd, "daemons");
     if (daemons.get() < 0) return {};
@@ -1206,12 +1189,12 @@ KanbanBoard read_kanban_board(
                 agent.mcp_names = mcp_names_from_init(init);
                 agent.daemons = count_daemons(agent_dir.get());
                 board.running_daemons += agent.daemons.running;
-                board.total_mails += count_inbox_mail(agent_dir.get());
+                // Inbox totals are intentionally skipped: Desktop kanban never
+                // renders total_mails, and a full inbox walk is O(messages).
+                // Matches TUI SkipMailEdges for the live board path.
                 auto spawned = read_avatar_edges(
                     agent_dir.get(), row.directory_key.string());
                 edges.insert(edges.end(), spawned.begin(), spawned.end());
-            } else {
-                board.total_mails += count_inbox_mail(agent_dir.get());
             }
             if (row.role == AgentRole::main && board.orchestrator_path.empty()) {
                 board.orchestrator_path = row.directory_path;

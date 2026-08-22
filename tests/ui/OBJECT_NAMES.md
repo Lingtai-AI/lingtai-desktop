@@ -46,9 +46,12 @@ test helpers that click the canvas by row index. Do not use screen coordinates.
 | `lingtai_agent_detail_scroll` | Detail scroll area |
 | `lingtai_agent_detail` | Detail column root |
 | `lingtai_chat_top_bar` | Selected agent header |
+| `lingtai_selected_agent_identity` | Name + status column |
 | `lingtai_selected_agent_avatar` | Avatar |
 | `lingtai_selected_agent_presentation_name` | Display name |
 | `lingtai_selected_agent_key` | Role / status line |
+| `lingtai_selected_agent_status_row` | Header status row (dot + text) |
+| `lingtai_selected_agent_status_dot` | Lifecycle status disc |
 | `lingtai_agent_detail_back` | Narrow-mode back |
 | `lingtai_selected_agent_start_agent` | Start agent |
 | `lingtai_selected_agent_request_sleep` | Request sleep |

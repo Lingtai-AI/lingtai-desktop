@@ -45,12 +45,13 @@ Entry point and composition root:
 - The shell retains two stable anchors for the selected-Agent chat top bar —
   `chat_top_bar_` (`lingtai_chat_top_bar`) and `selected_agent_key_`
   (`lingtai_selected_agent_key`) — so `recompute_layout`'s one responsive fit
-  measure (`update_top_bar_fit`, `native_shell.cpp:2091`) can derive the
-  actual detail width (body minus the actual chosen roster width, 8px handle,
-  and 1px separator in Normal mode; the body width in OneColumn detail),
-  measure the full natural top-bar row with the current key text, and hide
-  that secondary key first when it does not fit, restoring it as soon as it
-  fits again. Primary controls, fonts, and object names are untouched.
+  measure (`update_top_bar_fit` → `fit_selected_agent_chat_top_bar`) can derive
+  the actual detail width (body minus the actual chosen roster width, 8px
+  handle, and 1px separator in Normal mode; the body width in OneColumn
+  detail), allocate remaining width to the identity column
+  (`lingtai_selected_agent_identity`), and elide the presentation name plus
+  the Sidebar-matching Role · Status line under it. The status row is never
+  hidden for width; primary controls, fonts, and object names are untouched.
 - `crl_integration.cpp` — the owned parent `crl` update producer: exactly one
   `crl::on_main_update_requests()` returning `rpl::never<>()` (no update
   source in the bounded smoke).

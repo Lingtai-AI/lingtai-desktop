@@ -474,7 +474,7 @@ void verify_turn_rhythm() {
     // relationally from the detected rendered bubble bounds: the visible gap
     // between consecutive bubbles must be at least one body-pixel-size of
     // separation, not a screenshot coordinate.
-    constexpr double kBodyPixelSize = 16.0;
+    constexpr double kBodyPixelSize = 14.0;
     for (auto i = std::size_t{1}; i != message_frames.size(); ++i) {
         const auto gap = message_bubble_rect(*message_frames[i]).top()
             - message_bubble_rect(*message_frames[i - 1]).bottom();
@@ -544,15 +544,15 @@ void verify_typography(ConversationSurface &surface, const QString &them) {
             "conversation surface");
     }
 
-    // The reading-first message body scales to 16px Normal.
+    // The reading-first message body scales to 14px Normal.
     const auto &in_body = require_fragment(
         incoming_fragments, QStringLiteral("PR published, not merged."), true,
         "incoming body");
-    require_font(in_body, 16, QFont::Normal, "incoming body");
+    require_font(in_body, 14, QFont::Normal, "incoming body");
     const auto &out_body = require_fragment(
         outgoing_fragments, QStringLiteral("Thanks, reviewing tomorrow."), true,
         "outgoing body");
-    require_font(out_body, 16, QFont::Normal, "outgoing body");
+    require_font(out_body, 14, QFont::Normal, "outgoing body");
 
     const auto require_reading_line_height = [](const QTextFrame &frame,
             const char *direction) {
@@ -561,10 +561,10 @@ void verify_typography(ConversationSurface &surface, const QString &them) {
             if (!block.isValid()) continue;
             const auto format = block.blockFormat();
             if (format.lineHeightType() != QTextBlockFormat::ProportionalHeight
-                || qRound(format.lineHeight()) != 160) {
+                || qRound(format.lineHeight()) != 132) {
                 throw std::runtime_error(
                     std::string("the ") + direction
-                    + " message blocks must use 160% proportional line height "
+                    + " message blocks must use 132% proportional line height "
                       "after the reading font scales");
             }
         }
@@ -583,7 +583,7 @@ void verify_typography(ConversationSurface &surface, const QString &them) {
 // lane (symmetric 162px outer gutters), anchor at the perceptual ~1/3 of the
 // usable viewport, render in the quiet secondary tone (12px Normal,
 // st::msgServiceFg) and recompute all of that after a resize. The modern type
-// ladder (sender 15px DemiBold / metadata 13px Normal / body 16px
+// ladder (sender 15px DemiBold / metadata 13px Normal / body 14px
 // Normal) is asserted by verify_typography, while the existing opposite sender
 // anchors and the directional width-dependent inner slack stay covered by the
 // pre-existing responsive/content geometry tests. Fails on the exact base: the
@@ -840,7 +840,7 @@ void verify_empty_state_contract() {
 // distinct QTextCharFormat runs in the existing QTextDocument, raw HTML is
 // never interpreted as HTML, and no image or other resource enters the
 // document. Fails on the exact base: rebuild_document inserts the whole body
-// as one literal 16px Normal run, so '# Plan', '- **bold** item',
+// as one literal 14px Normal run, so '# Plan', '- **bold** item',
 // '[docs](https://example.com)', the backticks, '> note', and '<b>unsafe</b>'
 // all survive verbatim with no distinct formatted runs at all.
 //
@@ -940,17 +940,17 @@ void verify_markdown_safe_formatting() {
     }
 
     // Heading: every 'Plan' run (one per direction) is visually distinct from
-    // the 16px plain body (a larger size or an emphasized weight).
+    // the 14px plain body (a larger size or an emphasized weight).
     const auto heading = require_formatted(
         document, QStringLiteral("Plan"), "markdown heading");
     if (!std::all_of(heading.begin(), heading.end(),
             [](const QTextCharFormat &format) {
-                return format.font().pixelSize() > 16
+                return format.font().pixelSize() > 14
                     || format.font().weight() >= QFont::DemiBold;
             })) {
         throw std::runtime_error(
             "the '# Plan' heading must render as its own visually distinct "
-            "run (larger or emphasized) in both directions, not as 16px "
+            "run (larger or emphasized) in both directions, not as 14px "
             "plain body text");
     }
 
@@ -1457,13 +1457,13 @@ void verify_human_bubble_contract() {
             "Human body text must be left-aligned while asymmetric margins "
             "keep the content-sized bubble anchored on the right");
     }
-    if (first.body.font().pixelSize() < 15
-        || first.body.font().pixelSize() > 16
+    if (first.body.font().pixelSize() < 13
+        || first.body.font().pixelSize() > 14
         || first.body.font().weight() != QFont::Normal
         || first.block.lineHeightType() != QTextBlockFormat::ProportionalHeight
-        || first.block.lineHeight() < 150 || first.block.lineHeight() > 160) {
+        || first.block.lineHeight() < 125 || first.block.lineHeight() > 140) {
         throw std::runtime_error(
-            "Human body must share the 15-16px Normal and 1.5-1.6 reading "
+            "Human body must share the 13-14px Normal and ~1.32 reading "
             "typography used by Agent prose");
     }
     if (short_message.effective_width > 200) {
@@ -2139,18 +2139,18 @@ void verify_readable_semantic_body() {
 
     const auto prose_block = find_block(QStringLiteral("普通正文"));
     const auto prose = find_run(QStringLiteral("普通正文"));
-    require(prose.font().pixelSize() >= 15 && prose.font().pixelSize() <= 16
+    require(prose.font().pixelSize() >= 13 && prose.font().pixelSize() <= 14
             && prose.font().weight() == QFont::Normal
             && !prose.font().fixedPitch(),
         "ordinary Chinese/English prose must use the system sans body at "
-        "15-16px Normal/400 without synthetic bold");
+        "13-14px Normal/400 without synthetic bold");
     require(prose.foreground().color() == QColor(QStringLiteral("#26282B")),
         "light-palette body prose must use the softer #26282B reading tone");
     require(prose_block.blockFormat().lineHeightType()
                 == QTextBlockFormat::ProportionalHeight
-            && prose_block.blockFormat().lineHeight() >= 155
-            && prose_block.blockFormat().lineHeight() <= 165,
-        "ordinary body prose must use a 1.55-1.65 proportional line height");
+            && prose_block.blockFormat().lineHeight() >= 125
+            && prose_block.blockFormat().lineHeight() <= 140,
+        "ordinary body prose must use a ~1.32 proportional line height");
     const auto effective_width = surface.viewport()->width()
         - int(prose_block.blockFormat().leftMargin())
         - int(prose_block.blockFormat().rightMargin());
@@ -2167,9 +2167,9 @@ void verify_readable_semantic_body() {
     require(empty_blocks == 0,
         "blank Markdown paragraph delimiters must become controlled margins, "
         "not giant empty QTextBlocks");
-    require(prose_block.blockFormat().bottomMargin() >= 11
-            && prose_block.blockFormat().bottomMargin() <= 14,
-        "paragraph spacing must be about 0.8em (11-14px at this body size)");
+    require(prose_block.blockFormat().bottomMargin() >= 8
+            && prose_block.blockFormat().bottomMargin() <= 12,
+        "paragraph spacing must be about 0.7em (8-12px at this body size)");
 
     const auto list = find_block(QStringLiteral("first compact list item"));
     const auto numbered = find_block(QStringLiteral("second compact list item"));

@@ -34,6 +34,11 @@ namespace lingtai::desktop {
 class ConversationSurface;
 class KanbanPage;
 
+// Resize-fit for the selected-Agent chat top bar: keep the Sidebar-matching
+// Role · Status line under the name, allocate remaining width to the identity
+// column, and elide title + status text. Never hide the status row for width.
+void fit_selected_agent_chat_top_bar(QWidget *top_bar, int detail_width);
+
 // Refactors NativeShell's "selected agent detail" into a dedicated widget
 // (conversation + composer + secondary pages) so tests can instantiate/render
 // the detail area without constructing the whole shell.

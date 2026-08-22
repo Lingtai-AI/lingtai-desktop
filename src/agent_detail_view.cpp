@@ -16,11 +16,14 @@
 
 #include "preset_catalog_presentation.h"
 
+#include "ui/widgets/fields/input_field.h"
+
 #include <algorithm>
 #include <QtCore/QMargins>
 #include <QtCore/QPoint>
 #include <QtCore/QStringList>
 #include <QtCore/QTimer>
+#include <QtGui/QAbstractTextDocumentLayout>
 #include <QtGui/QFont>
 #include <QtGui/QFontMetrics>
 #include <QtGui/QGuiApplication>
@@ -29,6 +32,9 @@
 #include <QtGui/QPainterPath>
 #include <QtGui/QPen>
 #include <QtGui/QPalette>
+#include <QtGui/QResizeEvent>
+#include <QtGui/QTextBlock>
+#include <QtGui/QTextDocument>
 #include <QtWidgets/QFrame>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QListWidget>
@@ -50,6 +56,31 @@
 
 namespace lingtai::desktop {
 namespace {
+
+constexpr auto kChatTopBarHeight = 64;
+constexpr auto kHeaderStatusDotSize = 6;
+
+// Sidebar-matching status disc for the conversation header secondary line.
+class HeaderStatusDot final : public QWidget {
+public:
+    explicit HeaderStatusDot(QWidget *parent)
+    : QWidget(parent) {
+        setFixedSize(kHeaderStatusDotSize, kHeaderStatusDotSize);
+        setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        const auto color = property("lingtai_status_color").value<QColor>();
+        if (!color.isValid()) return;
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(color);
+        painter.drawEllipse(QRectF(rect()));
+    }
+};
 
 QLabel *make_label(
     QWidget *parent,
@@ -74,10 +105,118 @@ QLabel *make_label(
     return label;
 }
 
-class ComposerControls final : public Ui::RpWidget {
+// Composer growth: one centered line, two lines with the first nudged up, and
+// a themed scrollbar once content exceeds two visible lines.
+constexpr auto kComposerOneLineHeight = 40;
+constexpr auto kComposerVisibleLines = 2;
+constexpr auto kComposerTwoLinePad = 4;
+
+[[nodiscard]] QString css_rgba(const QColor &color) {
+    return QStringLiteral("rgba(%1,%2,%3,%4)")
+        .arg(color.red())
+        .arg(color.green())
+        .arg(color.blue())
+        .arg(color.alpha());
+}
+
+void apply_composer_scrollbar_style(QTextEdit *edit) {
+    if (!edit) return;
+    // Match Telegram's defaultScrollArea handle colors (scrollBarBg / scrollBg)
+    // with a slim overlay-style bar so the composer tracks the rest of the app.
+    edit->setStyleSheet(QStringLiteral(
+        "QTextEdit { background: transparent; }"
+        "QScrollBar:vertical {"
+        "  background: %1;"
+        "  width: 8px;"
+        "  margin: 4px 1px 4px 0;"
+        "  border-radius: 4px;"
+        "}"
+        "QScrollBar::handle:vertical {"
+        "  background: %2;"
+        "  min-height: 20px;"
+        "  border-radius: 4px;"
+        "}"
+        "QScrollBar::handle:vertical:hover { background: %3; }"
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {"
+        "  height: 0; width: 0; border: none; background: transparent;"
+        "}"
+        "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {"
+        "  background: transparent;"
+        "}")
+        .arg(css_rgba(st::scrollBg->c),
+            css_rgba(st::scrollBarBg->c),
+            css_rgba(st::scrollBarBgOver->c)));
+}
+
+[[nodiscard]] int composer_visual_line_count(Ui::InputField &field) {
+    const auto document = field.document();
+    static_cast<void>(document->documentLayout()->documentSize());
+    auto layout_lines = 0;
+    for (auto block = document->begin(); block.isValid(); block = block.next()) {
+        if (const auto *layout = block.layout()) {
+            layout_lines += std::max(1, layout->lineCount());
+        } else {
+            ++layout_lines;
+        }
+    }
+    // Prefer the richer of laid-out wrap count and explicit newline count so a
+    // just-inserted Shift+Enter is visible before the next layout pass.
+    const auto newline_lines = static_cast<int>(
+        field.getLastText().count(QChar('\n')) + 1);
+    return std::max({1, layout_lines, newline_lines});
+}
+
+[[nodiscard]] int composer_two_line_height(const QFontMetrics &metrics) {
+    return kComposerVisibleLines * metrics.lineSpacing()
+        + 2 * kComposerTwoLinePad;
+}
+
+void sync_composer_multiline_geometry(Ui::InputField &field) {
+    const auto metrics = QFontMetrics(field.font());
+    const auto line = std::max(1, metrics.lineSpacing());
+    const auto lines = composer_visual_line_count(field);
+    const auto two_line_height = std::max(
+        kComposerOneLineHeight + line,
+        composer_two_line_height(metrics));
+    const auto edit = field.rawTextEdit();
+
+    if (lines <= 1) {
+        const auto pad = std::max(0, (kComposerOneLineHeight - line) / 2);
+        field.setAdditionalMargins(QMargins(0, pad, 0, pad));
+        field.setMinHeight(kComposerOneLineHeight);
+        field.setMaxHeight(kComposerOneLineHeight);
+        edit->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        edit->verticalScrollBar()->setValue(0);
+        return;
+    }
+
+    // Two or more lines: drop the one-line centering pad so the first line
+    // moves up and two rows fit inside the capsule without clipping. Lock
+    // min=max so InputField's content-height autoupdate cannot shrink the
+    // capsule on two lines and then grow it again on the third.
+    field.setAdditionalMargins(QMargins(
+        0, kComposerTwoLinePad, 0, kComposerTwoLinePad));
+    field.setMinHeight(two_line_height);
+    field.setMaxHeight(two_line_height);
+    if (field.height() != two_line_height) {
+        field.resize(field.width(), two_line_height);
+    }
+    if (lines > kComposerVisibleLines) {
+        edit->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        edit->verticalScrollBar()->setValue(
+            edit->verticalScrollBar()->maximum());
+    } else {
+        edit->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        edit->verticalScrollBar()->setValue(0);
+    }
+}
+
+class ComposerControlsBorder final : public QWidget {
 public:
-    explicit ComposerControls(QWidget *parent)
-        : Ui::RpWidget(parent) {
+    explicit ComposerControlsBorder(QWidget *parent)
+        : QWidget(parent) {
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAttribute(Qt::WA_TranslucentBackground);
     }
 
 protected:
@@ -88,10 +227,47 @@ protected:
         // Cap the corner radius so a growing multi-line field stays a rounded
         // capsule instead of becoming a full stadium.
         const auto radius = std::min(26.0, outline.height() / 2.0);
+        painter.setBrush(Qt::NoBrush);
         painter.setPen(QPen(st::shadowFg->c, 1.0));
+        painter.drawRoundedRect(outline, radius, radius);
+    }
+};
+
+class ComposerControls final : public Ui::RpWidget {
+public:
+    explicit ComposerControls(QWidget *parent)
+        : Ui::RpWidget(parent)
+        , border_(new ComposerControlsBorder(this)) {
+        // Stroke must stay above the Send circle so multiline growth never
+        // punches a hole through the capsule outline.
+        border_->raise();
+    }
+
+    void raise_border() {
+        if (border_) {
+            border_->raise();
+        }
+    }
+
+protected:
+    void resizeEvent(QResizeEvent *event) override {
+        Ui::RpWidget::resizeEvent(event);
+        border_->setGeometry(rect());
+        border_->raise();
+    }
+
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const auto outline = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        const auto radius = std::min(26.0, outline.height() / 2.0);
+        painter.setPen(Qt::NoPen);
         painter.setBrush(st::windowBg->c);
         painter.drawRoundedRect(outline, radius, radius);
     }
+
+private:
+    ComposerControlsBorder *border_ = nullptr;
 };
 
 // A flat vector paperclip avoids platform-framed icons while keeping the
@@ -430,6 +606,90 @@ void refresh_slash_command_popup(QWidget *root, Ui::InputField *input) {
 
 } // namespace
 
+void fit_selected_agent_chat_top_bar(QWidget *top_bar, int detail_width) {
+    if (!top_bar || detail_width <= 0) return;
+    auto *presentation_name = top_bar->findChild<QLabel *>(
+        "lingtai_selected_agent_presentation_name");
+    auto *status_key = top_bar->findChild<QLabel *>(
+        "lingtai_selected_agent_key");
+    auto *status_row = top_bar->findChild<QWidget *>(
+        "lingtai_selected_agent_status_row");
+    auto *identity = top_bar->findChild<QWidget *>(
+        "lingtai_selected_agent_identity");
+    auto *start_status = top_bar->findChild<QLabel *>(
+        "lingtai_selected_agent_start_status");
+    auto *sleep_status = top_bar->findChild<QLabel *>(
+        "lingtai_selected_agent_sleep_status");
+    if (!presentation_name || !status_key || !status_row || !identity
+            || !start_status || !sleep_status) {
+        return;
+    }
+    const auto full_title = presentation_name->property(
+        "lingtai_full_text").toString();
+    if (full_title.isEmpty()) return;
+    auto full_status = status_key->property("lingtai_full_text").toString();
+    if (full_status.isEmpty()) {
+        full_status = status_key->text();
+        if (!full_status.isEmpty()) {
+            status_key->setProperty("lingtai_full_text", full_status);
+        }
+    }
+
+    // Status stays under the name at every width; only action captions may
+    // hide when they cannot fit their own bounded label.
+    status_row->setVisible(true);
+    status_key->setVisible(true);
+    start_status->setVisible(true);
+    sleep_status->setVisible(true);
+    const auto caption_fits = [](QLabel *status) {
+        if (status->text().isEmpty()) return true;
+        return QFontMetrics(status->font()).horizontalAdvance(status->text())
+            <= status->maximumWidth();
+    };
+    if (!caption_fits(start_status)) start_status->setVisible(false);
+    if (!caption_fits(sleep_status)) sleep_status->setVisible(false);
+
+    auto *top_layout = top_bar->layout();
+    if (!top_layout) return;
+
+    // Blank identity text while measuring sibling chrome so the name/status
+    // strings never inflate the top-bar size hint.
+    identity->setMinimumWidth(0);
+    identity->setMaximumWidth(QWIDGETSIZE_MAX);
+    presentation_name->setText(QString());
+    status_key->setText(QString());
+
+    const auto margins = top_layout->contentsMargins();
+    auto non_identity_width = margins.left() + margins.right();
+    auto visible_count = 0;
+    for (auto i = 0; i != top_layout->count(); ++i) {
+        auto *item = top_layout->itemAt(i);
+        auto *widget = item ? item->widget() : nullptr;
+        if (!widget || !widget->isVisible()) continue;
+        ++visible_count;
+        if (widget == identity) continue;
+        non_identity_width += widget->sizeHint().width();
+    }
+    if (visible_count > 1) {
+        non_identity_width += top_layout->spacing() * (visible_count - 1);
+    }
+
+    const auto available = std::max(1, detail_width - non_identity_width);
+    identity->setMaximumWidth(available);
+
+    auto *status_dot = top_bar->findChild<QWidget *>(
+        "lingtai_selected_agent_status_dot");
+    const auto dot_reserve = status_dot && status_dot->isVisible()
+        ? std::max(status_dot->width(), status_dot->sizeHint().width())
+            + (status_row->layout() ? status_row->layout()->spacing() : 6)
+        : 0;
+    const auto status_text_width = std::max(1, available - dot_reserve);
+    presentation_name->setText(QFontMetrics(presentation_name->font())
+        .elidedText(full_title, Qt::ElideRight, available));
+    status_key->setText(QFontMetrics(status_key->font())
+        .elidedText(full_status, Qt::ElideRight, status_text_width));
+}
+
 AgentDetailView::AgentDetailView(
     RuntimeOptions runtime_options,
     QScrollArea *outer_scroll,
@@ -507,13 +767,13 @@ AgentDetailView::AgentDetailView(
     detail_heading->hide();
     detail_layout->addWidget(detail_heading);
 
-    // One Telegram-like chat top bar: selected Agent identity and presence,
-    // plus the compact Start/Sleep controls and the narrow-mode Back control.
-    auto *top_bar = new QWidget(this);
+    // One Telegram-like chat top bar: selected Agent identity and the same
+    // Role · Status secondary line the Sidebar paints under each name.
+    auto *top_bar = new PaletteSurface(this, st::windowBg);
     top_bar->setObjectName("lingtai_chat_top_bar");
     top_bar->setAccessibleName(QStringLiteral("Selected Agent"));
     top_bar->setMinimumWidth(0);
-    top_bar->setFixedHeight(54);
+    top_bar->setFixedHeight(kChatTopBarHeight);
 
     auto *top_bar_layout = new QHBoxLayout(top_bar);
     top_bar_layout->setContentsMargins(12, 8, 12, 8);
@@ -524,28 +784,53 @@ AgentDetailView::AgentDetailView(
     selected_avatar->hide();
     top_bar_layout->addWidget(selected_avatar);
 
-    auto *identity_column = new QVBoxLayout;
+    // One identity column widget owns both title and status so resize fit
+    // allocates width to the column and elides each line — never hides the
+    // Sidebar-matching status row as if it were a horizontal competitor.
+    auto *identity = new QWidget(top_bar);
+    identity->setObjectName("lingtai_selected_agent_identity");
+    identity->setMinimumWidth(0);
+    identity->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    auto *identity_column = new QVBoxLayout(identity);
     identity_column->setContentsMargins(0, 0, 0, 0);
     identity_column->setSpacing(2);
 
     auto *presentation_name = make_label(
-        top_bar, QString(), "lingtai_selected_agent_presentation_name", 16,
+        identity, QString(), "lingtai_selected_agent_presentation_name", 16,
         QFont::DemiBold);
     presentation_name->setAccessibleName(
         QStringLiteral("Selected Agent presentation name"));
+    presentation_name->setWordWrap(false);
+    presentation_name->setMinimumWidth(0);
+    presentation_name->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     identity_column->addWidget(presentation_name);
 
+    auto *status_row = new QWidget(identity);
+    status_row->setObjectName("lingtai_selected_agent_status_row");
+    status_row->setAccessibleName(QStringLiteral("Selected Agent status"));
+    status_row->setMinimumWidth(0);
+    status_row->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    auto *status_row_layout = new QHBoxLayout(status_row);
+    status_row_layout->setContentsMargins(0, 0, 0, 0);
+    status_row_layout->setSpacing(6);
+    auto *status_dot = new HeaderStatusDot(status_row);
+    status_dot->setObjectName("lingtai_selected_agent_status_dot");
+    status_dot->setAccessibleName(QStringLiteral("Selected Agent status dot"));
+    status_row_layout->addWidget(status_dot, 0, Qt::AlignVCenter);
+
     auto *detail_key = make_label(
-        top_bar, QString(), "lingtai_selected_agent_key", 12);
+        status_row, QString(), "lingtai_selected_agent_key", 12);
     detail_key->setAccessibleName(
         QStringLiteral("Selected Agent status and role"));
     detail_key->setWordWrap(false);
-    detail_key->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    detail_key->setMinimumWidth(0);
+    detail_key->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     auto key_palette = detail_key->palette();
     key_palette.setColor(QPalette::WindowText, st::windowSubTextFg->c);
     detail_key->setPalette(key_palette);
-    identity_column->addWidget(detail_key);
-    top_bar_layout->addLayout(identity_column, 1);
+    status_row_layout->addWidget(detail_key, 1);
+    identity_column->addWidget(status_row);
+    top_bar_layout->addWidget(identity, 1);
 
     // Narrow-mode palette-owned Back control.
     detail_back_button_ = new PaletteActionButton(
@@ -700,28 +985,31 @@ AgentDetailView::AgentDetailView(
         auto result = st::defaultInputField;
         result.border = 0;
         result.borderActive = 0;
-        // Balanced vertical padding so wrapped lines stay readable as the
-        // field grows beyond the single-line capsule height.
-        result.textMargins = QMargins(0, 10, 0, 10);
+        // Vertical padding is owned by sync_composer_multiline_geometry():
+        // equal pads center one line; smaller pads let two lines fit cleanly.
+        result.textMargins = QMargins(0, 0, 0, 0);
         result.placeholderMargins = QMargins();
         result.placeholderScale = 0.0;
         result.placeholderShift = 0;
         return result;
     }();
 
-    // NoNewlines keeps Enter-to-send, but enables Qt word wrap (SingleLine
-    // forces QTextOption::NoWrap).
+    // MultiLine keeps Enter-to-send while Shift+Enter inserts a newline.
+    // Geometry: 1 line centered, 2 lines grown, 3+ capped with a scrollbar.
     auto *composer_input = new Ui::InputField(
         composer_controls,
         borderless_composer_input,
-        Ui::InputField::Mode::NoNewlines,
+        Ui::InputField::Mode::MultiLine,
         rpl::single(QStringLiteral("Message…")));
     composer_input_ = composer_input;
     composer_input->setObjectName("lingtai_composer_input");
     composer_input->setAccessibleName(QStringLiteral("Message"));
-    composer_input->setMinHeight(40);
-    composer_input->setMaxHeight(120);
+    composer_input->setSubmitSettings(Ui::InputField::SubmitSettings::Enter);
+    composer_input->setMinHeight(kComposerOneLineHeight);
+    composer_input->setMaxHeight(kComposerOneLineHeight);
     composer_input->setEnabled(false);
+    apply_composer_scrollbar_style(composer_input->rawTextEdit());
+    sync_composer_multiline_geometry(*composer_input);
 
     auto *attachment_button = new ComposerAttachmentButton(composer_controls);
     attachment_button->setObjectName("lingtai_composer_attachment_button");
@@ -750,16 +1038,36 @@ AgentDetailView::AgentDetailView(
     composer_action_row->addWidget(send_button, 0, Qt::AlignVCenter);
 
     const auto sync_composer_controls_height =
-        [composer_controls, composer_input] {
+        [composer_controls, composer_input, send_button, attachment_button] {
             const auto margins = composer_controls->layout()->contentsMargins();
-            const auto target = composer_input->height()
+            const auto content = std::max({
+                composer_input->height(),
+                send_button->height(),
+                attachment_button->height(),
+            });
+            const auto target = content
                 + margins.top() + margins.bottom();
             composer_controls->setFixedHeight(std::max(52, target));
+            composer_controls->raise_border();
         };
-    sync_composer_controls_height();
+    const auto sync_composer_multiline =
+        [composer_input, sync_composer_controls_height] {
+            sync_composer_multiline_geometry(*composer_input);
+            sync_composer_controls_height();
+        };
+    sync_composer_multiline();
     composer_input->heightChanges()
         | rpl::on_next([sync_composer_controls_height] {
+            // Height already decided by multiline geometry; only grow the
+            // capsule chrome around the field.
             sync_composer_controls_height();
+        }, composer_lifetime_);
+    composer_input->changes()
+        | rpl::on_next([sync_composer_multiline] {
+            sync_composer_multiline();
+            // Layout may settle after the change signal; defer one tick so
+            // wrapped visual line counts catch up with width.
+            QTimer::singleShot(0, sync_composer_multiline);
         }, composer_lifetime_);
 
     composer_layout->addWidget(composer_controls);
@@ -1004,6 +1312,8 @@ AgentDetailView::AgentDetailView(
                 return base::EventFilterResult::Continue;
             });
     }
+
+    refresh_chrome();
 }
 
 void AgentDetailView::set_page(AgentDetailPage page) {
@@ -1078,68 +1388,8 @@ void AgentDetailView::set_detail_width(int detail_width) {
         }
     }
 
-    if (chat_top_bar_ && selected_agent_key_) {
-        auto *presentation_name = chat_top_bar_->findChild<QLabel *>(
-            "lingtai_selected_agent_presentation_name");
-        auto *start_status = chat_top_bar_->findChild<QLabel *>(
-            "lingtai_selected_agent_start_status");
-        auto *sleep_status = chat_top_bar_->findChild<QLabel *>(
-            "lingtai_selected_agent_sleep_status");
-        if (presentation_name && start_status && sleep_status) {
-            const auto full = presentation_name->property(
-                "lingtai_full_text").toString();
-            if (!full.isEmpty()) {
-                // Restore full natural row: name unbounded, secondary captions
-                // visible, then shrink/elide deterministically.
-                presentation_name->setMaximumWidth(QWIDGETSIZE_MAX);
-                presentation_name->setText(full);
-                selected_agent_key_->setVisible(true);
-                start_status->setVisible(true);
-                sleep_status->setVisible(true);
-
-                const auto status_self_fits = [](QLabel *status) {
-                    if (status->text().isEmpty()) return true;
-                    return QFontMetrics(status->font()).horizontalAdvance(
-                        status->text()) <= status->maximumWidth();
-                };
-                if (!status_self_fits(start_status)) start_status->setVisible(false);
-                if (!status_self_fits(sleep_status)) sleep_status->setVisible(false);
-
-                if (chat_top_bar_->sizeHint().width() > detail_width) {
-                    selected_agent_key_->setVisible(false);
-                    if (chat_top_bar_->sizeHint().width() > detail_width) {
-                        start_status->setVisible(false);
-                        sleep_status->setVisible(false);
-                    }
-                }
-
-                // Measure non-name row with the name blanked so available
-                // pixels reflect only what needs eliding.
-                presentation_name->setMinimumWidth(0);
-                presentation_name->setMaximumWidth(0);
-                presentation_name->setText(QString());
-
-                auto *top_layout = chat_top_bar_->layout();
-                const auto margins = top_layout->contentsMargins();
-                auto non_name_width = margins.left() + margins.right();
-                auto visible_non_identity_items = 0;
-                for (auto i = 0; i != top_layout->count(); ++i) {
-                    auto *item = top_layout->itemAt(i);
-                    auto *widget = item ? item->widget() : nullptr;
-                    if (!widget || !widget->isVisible()) continue;
-                    non_name_width += item->sizeHint().width();
-                    ++visible_non_identity_items;
-                }
-                non_name_width += top_layout->spacing() * visible_non_identity_items;
-
-                const auto available = std::max(1, detail_width - non_name_width);
-                presentation_name->setMinimumWidth(available);
-                presentation_name->setMaximumWidth(available);
-                presentation_name->setText(
-                    QFontMetrics(presentation_name->font())
-                        .elidedText(full, Qt::ElideRight, available));
-            }
-        }
+    if (chat_top_bar_) {
+        fit_selected_agent_chat_top_bar(chat_top_bar_, detail_width);
     }
 
     if (kanban_page_) {
@@ -1207,6 +1457,46 @@ void AgentDetailView::scroll_conversation_to_bottom() {
 }
 
 void AgentDetailView::refresh_chrome() {
+    const auto bg = st::windowBg->c;
+    // QScrollArea viewports paint QPalette::Base. After a dark→light switch
+    // the detail viewport can keep the old application Base while surfaces
+    // that paint st::windowBg directly (conversation, composer pill) update,
+    // leaving dark bands under the transparent header and composer margins.
+    if (outer_scroll_) {
+        outer_scroll_->setFrameShape(QFrame::NoFrame);
+        outer_scroll_->setAutoFillBackground(false);
+        if (auto *viewport = outer_scroll_->viewport()) {
+            auto viewport_palette = viewport->palette();
+            viewport_palette.setColor(QPalette::Window, bg);
+            viewport_palette.setColor(QPalette::Base, bg);
+            viewport->setPalette(viewport_palette);
+            viewport->setAutoFillBackground(true);
+        }
+    }
+    auto self_palette = palette();
+    self_palette.setColor(QPalette::Window, bg);
+    self_palette.setColor(QPalette::Base, bg);
+    setPalette(self_palette);
+
+    if (auto *presentation_name = findChild<QLabel *>(
+            "lingtai_selected_agent_presentation_name")) {
+        auto name_palette = presentation_name->palette();
+        name_palette.setColor(QPalette::WindowText, st::windowFg->c);
+        presentation_name->setPalette(name_palette);
+    }
+    if (selected_agent_key_) {
+        auto key_palette = selected_agent_key_->palette();
+        key_palette.setColor(QPalette::WindowText, st::windowSubTextFg->c);
+        selected_agent_key_->setPalette(key_palette);
+    }
+    if (chat_top_bar_) chat_top_bar_->update();
+    if (composer_) composer_->update();
+    if (auto *controls = findChild<QWidget *>("lingtai_composer_controls")) {
+        controls->update();
+    }
+    if (pages_host_) pages_host_->update();
+    if (pages_nav_) pages_nav_->update();
+
     // Preset catalog chrome is stable except for theme/palette changes.
     if (pages_host_) {
         if (auto *catalog = findChild<QTreeWidget *>(

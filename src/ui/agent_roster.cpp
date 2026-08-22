@@ -685,30 +685,14 @@ QString row_facts(const AgentRow &item) {
 // Active`) from the TUI lifecycle resolver, not raw heartbeat presence.
 QString row_summary(const AgentRow &item) {
     const auto role = friendly_agent_role_text(item.role);
-    const auto state = friendly_agent_lifecycle_text(item);
     if (role.isEmpty()) {
         return row_facts(item);
     }
-    return QStringLiteral("%1 · %2").arg(role, state);
+    return friendly_agent_status_summary(item);
 }
 
 QColor lifecycle_status_color(const AgentRow &item) {
-    const auto state = QString::fromStdString(item.lifecycle_state).toLower();
-    if (state == QStringLiteral("active")) {
-        return avatar_fill_color();
-    }
-    if (state == QStringLiteral("suspended")
-        || state == QStringLiteral("stuck")) {
-        return QColor(QStringLiteral("#D97706"));
-    }
-    if (state == QStringLiteral("asleep")) {
-        return QColor(QStringLiteral("#64748B"));
-    }
-    if (state == QStringLiteral("idle")
-        || state == QStringLiteral("refreshing")) {
-        return QColor(QStringLiteral("#94A3B8"));
-    }
-    return st::windowSubTextFg->c;
+    return agent_lifecycle_status_color(item);
 }
 
 [[nodiscard]] bool is_lifecycle_active(const AgentRow &item) {
@@ -962,6 +946,32 @@ QString friendly_agent_lifecycle_text(const AgentRow &item) {
     auto text = QString::fromStdString(item.lifecycle_state).toLower();
     text[0] = text[0].toUpper();
     return text;
+}
+
+QString friendly_agent_status_summary(const AgentRow &item) {
+    const auto role = friendly_agent_role_text(item.role);
+    const auto state = friendly_agent_lifecycle_text(item);
+    if (role.isEmpty()) return state;
+    return QStringLiteral("%1 · %2").arg(role, state);
+}
+
+QColor agent_lifecycle_status_color(const AgentRow &item) {
+    const auto state = QString::fromStdString(item.lifecycle_state).toLower();
+    if (state == QStringLiteral("active")) {
+        return st::windowBgActive->c;
+    }
+    if (state == QStringLiteral("suspended")
+        || state == QStringLiteral("stuck")) {
+        return QColor(QStringLiteral("#D97706"));
+    }
+    if (state == QStringLiteral("asleep")) {
+        return QColor(QStringLiteral("#64748B"));
+    }
+    if (state == QStringLiteral("idle")
+        || state == QStringLiteral("refreshing")) {
+        return QColor(QStringLiteral("#94A3B8"));
+    }
+    return st::windowSubTextFg->c;
 }
 
 QString friendly_agent_presence_text(AgentPresenceKind presence) {
@@ -1379,26 +1389,55 @@ AgentRoster::AgentRoster(QWidget *parent)
     scroll_->setWidgetResizable(true);
     scroll_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     scroll_->setFrameShape(QFrame::NoFrame);
-    // The rows surface and its scroll viewport share the single-canvas
-    // `windowBg` base instead of forming an independent raised field.
-    auto viewport_palette = scroll_->viewport()->palette();
-    viewport_palette.setColor(QPalette::Window, st::windowBg->c);
-    scroll_->viewport()->setPalette(viewport_palette);
-    scroll_->viewport()->setAutoFillBackground(true);
     roster_layout->addWidget(scroll_, 1);
     canvas_ = new AgentRowsCanvas(scroll_);
     canvas_->setObjectName("lingtai_agent_roster_rows");
     canvas_->setAccessibleName(QStringLiteral("Agent roster rows"));
-    auto canvas_palette = canvas_->palette();
-    canvas_palette.setColor(QPalette::Window, st::windowBg->c);
-    canvas_->setPalette(canvas_palette);
-    canvas_->setAutoFillBackground(true);
     scroll_->setWidget(canvas_);
     layout->addWidget(roster, 1);
+    apply_chrome();
     update_narrow_mode();
 }
 
 AgentRoster::~AgentRoster() = default;
+
+void AgentRoster::apply_chrome() {
+    // Match KanbanPage::apply_chrome: scroll viewports paint QPalette::Base,
+    // not only Window. Short Agent lists leave empty viewport below the
+    // canvas; without Base=windowBg that hole stays the Qt light default.
+    const auto bg = st::windowBg->c;
+    auto roster_palette = palette();
+    roster_palette.setColor(QPalette::Window, bg);
+    roster_palette.setColor(QPalette::Base, bg);
+    setPalette(roster_palette);
+    setAutoFillBackground(true);
+    if (scroll_) {
+        scroll_->setFrameShape(QFrame::NoFrame);
+        scroll_->setAutoFillBackground(false);
+        if (auto *viewport = scroll_->viewport()) {
+            auto viewport_palette = viewport->palette();
+            viewport_palette.setColor(QPalette::Window, bg);
+            viewport_palette.setColor(QPalette::Base, bg);
+            viewport->setPalette(viewport_palette);
+            viewport->setAutoFillBackground(true);
+        }
+    }
+    if (canvas_) {
+        auto canvas_palette = canvas_->palette();
+        canvas_palette.setColor(QPalette::Window, bg);
+        canvas_palette.setColor(QPalette::Base, bg);
+        canvas_->setPalette(canvas_palette);
+        canvas_->setAutoFillBackground(true);
+    }
+    if (roster_state_) {
+        auto roster_state_palette = roster_state_->palette();
+        roster_state_palette.setColor(
+            QPalette::WindowText, st::windowSubTextFg->c);
+        roster_state_->setPalette(roster_state_palette);
+    }
+    update();
+    if (canvas_) canvas_->update();
+}
 
 void AgentRoster::paintEvent(QPaintEvent *) {
     QPainter painter(this);

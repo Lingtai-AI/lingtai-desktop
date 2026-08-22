@@ -92,6 +92,7 @@
 #include <algorithm>
 #include <array>
 #include <memory>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 
@@ -1846,7 +1847,15 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
     }
 
     kanban_page_ = detail->findChild<KanbanPage *>();
-    if (kanban_page_) secondary_pages_.push_back(kanban_page_);
+    if (kanban_page_) {
+        secondary_pages_.push_back(kanban_page_);
+        QObject::connect(kanban_page_, &KanbanPage::reload_requested, [this] {
+            if (selection_state_.active_project()) {
+                agents_ = project_agents(*selection_state_.active_project());
+            }
+            request_kanban_board(true);
+        });
+    }
 
     // Delegate all user actions + page transitions back into the shell,
     // keeping business logic and data reads here while the view owns the
@@ -1903,8 +1912,10 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
         }
         // Kanban is a full disk snapshot (token ledgers, sqlite, daemon runs)
         // plus a widget-tree rebuild. The 1s conversation timer must not
-        // refresh it: Reload and entering /kanban already do. Live refresh
-        // here stalls scrolling on large agents.
+        // rebuild the visible page: Reload and entering /kanban already do.
+        // Warm the session cache off the UI thread so a later /kanban opens
+        // from memory without freezing the chat.
+        maybe_warm_kanban_cache();
     });
     if (!runtime_options_.ui_test_mode) {
         activity_timer_->start();
@@ -2388,13 +2399,30 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
     recompute_layout(window_->body()->width());
 }
 
-NativeShell::~NativeShell() = default;
+NativeShell::~NativeShell() {
+    if (kanban_load_token_) {
+        kanban_load_token_->cancelled.store(true, std::memory_order_release);
+    }
+}
 
 void NativeShell::refresh_system_palette() {
     apply_system_palette();
     apply_titlebar_brand_palette(window_.get());
     apply_project_setup_palette(setup_route_);
     apply_preset_catalog_chrome(window_.get());
+    if (agent_roster_) agent_roster_->apply_chrome();
+    if (content_) {
+        auto palette = content_->palette();
+        palette.setColor(QPalette::Window, st::windowBg->c);
+        content_->setPalette(palette);
+        content_->update();
+    }
+    if (window_) {
+        auto palette = window_->palette();
+        palette.setColor(QPalette::Window, st::windowBg->c);
+        window_->setPalette(palette);
+        ApplyNativeWindowBackground(window_.get(), st::windowBg->c);
+    }
     if (auto *startup_heading = window_->findChild<QLabel *>(
             "lingtai_startup_heading")) {
         auto startup_palette = startup_heading->palette();
@@ -2845,6 +2873,7 @@ ProjectOpenOutcome NativeShell::open_project(
     reaction_store_.clear();
     conversation_unread_.clear();
     injected_mail_journal_.reset();
+    invalidate_kanban_cache();
     // A fresh open must never let a prior target's pending sleep or Start
     // observation surface under the newly opened project/selection.
     pending_sleep_observation_.reset();
@@ -2856,6 +2885,9 @@ ProjectOpenOutcome NativeShell::open_project(
     refresh_route();
     show_detail_page(AgentDetailPage::conversation);
     recompute_layout(window_->body()->width());
+    // Warm the kanban board in the background so the first /kanban after
+    // open does not wait on a cold disk snapshot.
+    request_kanban_board(false);
     return {
         .disposition = ProjectOpenDisposition::opened,
         .failure = ProjectPathFailure::none,
@@ -2955,6 +2987,16 @@ void NativeShell::render_roster() {
         presentation_name->setAccessibleDescription(QString());
         selected_avatar->set_agent_name(QString());
         selected_avatar->hide();
+        if (auto *status_dot = window_->findChild<QWidget *>(
+                "lingtai_selected_agent_status_dot")) {
+            status_dot->setProperty("lingtai_status_color", QVariant());
+            status_dot->update();
+            status_dot->hide();
+        }
+        if (auto *status_row = window_->findChild<QWidget *>(
+                "lingtai_selected_agent_status_row")) {
+            status_row->hide();
+        }
         manifest_identity->clear();
         manifest_llm->clear();
         manifest_capabilities->clear();
@@ -2987,13 +3029,20 @@ void NativeShell::render_roster() {
     presentation_name->setAccessibleDescription(title);
     selected_avatar->set_agent_name(title);
     selected_avatar->show();
-    const auto friendly_role = friendly_agent_role_text(detail_item->role);
-    const auto state = friendly_agent_lifecycle_text(*detail_item);
-    const auto role = friendly_role.isEmpty()
-        ? role_text(detail_item->role)
-        : friendly_role;
-    selected_key->setText(
-        QStringLiteral("%1 · %2").arg(role, state));
+    const auto status_summary = friendly_agent_status_summary(*detail_item);
+    selected_key->setText(status_summary);
+    selected_key->setProperty("lingtai_full_text", status_summary);
+    if (auto *status_dot = window_->findChild<QWidget *>(
+            "lingtai_selected_agent_status_dot")) {
+        status_dot->setProperty(
+            "lingtai_status_color", agent_lifecycle_status_color(*detail_item));
+        status_dot->update();
+        status_dot->setVisible(true);
+    }
+    if (auto *status_row = window_->findChild<QWidget *>(
+            "lingtai_selected_agent_status_row")) {
+        status_row->setVisible(true);
+    }
     if (identity) {
         manifest_identity->setText(QStringLiteral(
             "Manifest identity\naddress: %1\nagent ID: %2\nstate: %3")
@@ -3228,6 +3277,65 @@ void NativeShell::render_agent_preset_summary() {
     detail_view_->render_preset_summary(summary);
 }
 
+void NativeShell::invalidate_kanban_cache() {
+    ++kanban_load_generation_;
+    kanban_load_inflight_ = false;
+    kanban_warm_ticks_ = 0;
+    kanban_cache_.reset();
+    kanban_cache_root_.clear();
+}
+
+void NativeShell::apply_kanban_board(
+        std::uint64_t generation, KanbanBoard board) {
+    if (generation != kanban_load_generation_) return;
+    kanban_load_inflight_ = false;
+    kanban_cache_ = std::move(board);
+    if (selection_state_.active_project()) {
+        kanban_cache_root_ = selection_state_.active_project()->root();
+    }
+    if (current_detail_page_ != AgentDetailPage::kanban || !detail_view_) {
+        return;
+    }
+    detail_view_->render_kanban(
+        *kanban_cache_, selection_state_.selected_agent_directory_key());
+}
+
+void NativeShell::request_kanban_board(bool force) {
+    if (!selection_state_.active_project()) {
+        invalidate_kanban_cache();
+        if (detail_view_ && current_detail_page_ == AgentDetailPage::kanban) {
+            detail_view_->render_kanban({}, std::nullopt);
+        }
+        return;
+    }
+    if (kanban_load_inflight_ && !force) return;
+    if (force) ++kanban_load_generation_;
+    const auto generation = kanban_load_generation_;
+    kanban_load_inflight_ = true;
+
+    const auto attachment = *selection_state_.active_project();
+    const auto snapshot = agents_;
+    const auto token = kanban_load_token_;
+    std::thread([this, attachment, snapshot, generation, token]() {
+        auto board = read_kanban_board(attachment, snapshot);
+        QTimer::singleShot(0, qApp,
+            [this, token, generation, board = std::move(board)]() mutable {
+                if (!token || token->cancelled.load(std::memory_order_acquire)) {
+                    return;
+                }
+                apply_kanban_board(generation, std::move(board));
+            });
+    }).detach();
+}
+
+void NativeShell::maybe_warm_kanban_cache() {
+    if (!selection_state_.active_project()) return;
+    if (kanban_load_inflight_) return;
+    if (++kanban_warm_ticks_ < 10) return;
+    kanban_warm_ticks_ = 0;
+    request_kanban_board(false);
+}
+
 void NativeShell::render_kanban() {
     if (!detail_view_
         || current_detail_page_ != AgentDetailPage::kanban) {
@@ -3237,9 +3345,19 @@ void NativeShell::render_kanban() {
         detail_view_->render_kanban({}, std::nullopt);
         return;
     }
-    detail_view_->render_kanban(
-        read_kanban_board(*selection_state_.active_project(), agents_),
-        selection_state_.selected_agent_directory_key());
+    const auto root = selection_state_.active_project()->root();
+    if (kanban_cache_ && kanban_cache_root_ == root) {
+        // Warm cache hit: paint immediately and leave refresh to the idle
+        // warmer / Reload. A second read here would rebuild the widget tree
+        // as soon as the async result landed and freeze scrolling again.
+        detail_view_->render_kanban(
+            *kanban_cache_, selection_state_.selected_agent_directory_key());
+        return;
+    }
+    if (kanban_page_) {
+        kanban_page_->set_loading(true);
+    }
+    request_kanban_board(false);
 }
 
 void NativeShell::handle_kanban_agent_selected(const fs::path &directory_key) {
@@ -3706,87 +3824,12 @@ void NativeShell::recompute_layout(int body_width) {
 // so on every real resize and selection change): the actual detail/header
 // width is exactly what `recompute_layout` just derived -- in Normal mode the
 // body minus the actual chosen roster width, 8px drag handle, and 1px
-// separator; in OneColumn detail the full body width. The identity name keeps
-// its full title stored on the presentation-name label (a `lingtai_full_text`
-// dynamic property and the accessible description), so it can elide for the
-// current width while the full identity never leaves accessibility. The
-// complete row is first measured with the name unbounded and every secondary
-// element visible; if it does not fit, the secondary key hides first, then
-// both action status labels, while the one primary action, the icon-only
-// Request sleep secondary, and Back stay reachable. The remaining width is
-// then allocated to the name -- the actual detail width minus the row's
-// natural non-name width, clamped to at least one pixel -- and its visible
-// text becomes the right-elided full title. No timer/event framework or
-// persisted state; primary controls, the icon-only secondary, fonts, and
-// object names are never touched.
+// separator; in OneColumn detail the full body width. The identity column
+// keeps both the presentation title and the Sidebar-matching Role · Status
+// line; remaining width is allocated to that column and both lines elide.
+// Action captions may hide under pressure; the status row never does.
 void NativeShell::update_top_bar_fit(int detail_width) {
-    if (!chat_top_bar_ || !selected_agent_key_) return;
-    auto *presentation_name = chat_top_bar_->findChild<QLabel *>(
-        "lingtai_selected_agent_presentation_name");
-    auto *start_status = chat_top_bar_->findChild<QLabel *>(
-        "lingtai_selected_agent_start_status");
-    auto *sleep_status = chat_top_bar_->findChild<QLabel *>(
-        "lingtai_selected_agent_sleep_status");
-    if (!presentation_name || !start_status || !sleep_status) return;
-    const auto full = presentation_name->property(
-        "lingtai_full_text").toString();
-    if (full.isEmpty()) return;
-    // Restore the full natural row: the name is unbounded with its full
-    // title restored, and the secondary key plus both action captions show.
-    presentation_name->setMaximumWidth(QWIDGETSIZE_MAX);
-    presentation_name->setText(full);
-    selected_agent_key_->setVisible(true);
-    start_status->setVisible(true);
-    sleep_status->setVisible(true);
-    // Every nonempty Start/Sleep status must fit its own bounded label width
-    // before any primary identity space is consumed; one that cannot is
-    // hidden so a long read-out never clips inside its action row.
-    const auto status_self_fits = [](QLabel *status) {
-        if (status->text().isEmpty()) return true;
-        return QFontMetrics(status->font()).horizontalAdvance(status->text())
-            <= status->maximumWidth();
-    };
-    if (!status_self_fits(start_status)) start_status->setVisible(false);
-    if (!status_self_fits(sleep_status)) sleep_status->setVisible(false);
-    // Priority cascade: the secondary key hides first, then both action
-    // captions, so the Start/Sleep rows, pills, and Back stay reachable.
-    if (chat_top_bar_->sizeHint().width() > detail_width) {
-        selected_agent_key_->setVisible(false);
-        if (chat_top_bar_->sizeHint().width() > detail_width) {
-            start_status->setVisible(false);
-            sleep_status->setVisible(false);
-        }
-    }
-    // Measure the non-name row with the visible name text blanked (and its
-    // width clamped to zero), so the full presentation title never double
-    // counts into the row's size hint and collapses the derived allocation.
-    presentation_name->setMinimumWidth(0);
-    presentation_name->setMaximumWidth(0);
-    presentation_name->setText(QString());
-    // Measure every visible top-level widget. The vertically stacked
-    // identity layout has no widget and is skipped automatically; the avatar
-    // and actions all count against the title allocation.
-    auto *top_layout = chat_top_bar_->layout();
-    const auto margins = top_layout->contentsMargins();
-    auto non_name_width = margins.left() + margins.right();
-    auto visible_non_identity_items = 0;
-    for (auto i = 0; i != top_layout->count(); ++i) {
-        auto *item = top_layout->itemAt(i);
-        auto *widget = item ? item->widget() : nullptr;
-        if (!widget || !widget->isVisible()) continue;
-        non_name_width += item->sizeHint().width();
-        ++visible_non_identity_items;
-    }
-    non_name_width += top_layout->spacing() * visible_non_identity_items;
-    // Allocate every remaining pixel to the identity name: its maximum width
-    // is the actual detail width minus the row's natural non-name width, so
-    // the name never hides or overlaps; the visible text is the right-elided
-    // full title and the full identity stays on the property/description.
-    const auto available = std::max(1, detail_width - non_name_width);
-    presentation_name->setMinimumWidth(available);
-    presentation_name->setMaximumWidth(available);
-    presentation_name->setText(QFontMetrics(presentation_name->font())
-        .elidedText(full, Qt::ElideRight, available));
+    fit_selected_agent_chat_top_bar(chat_top_bar_, detail_width);
 }
 
 // The one full-width composer row, re-entered on every recompute (and so on

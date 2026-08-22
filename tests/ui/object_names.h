@@ -35,7 +35,10 @@ inline constexpr auto kPageNavConversation = "lingtai_agent_page_nav_conversatio
 inline constexpr auto kPageNavPresets = "lingtai_agent_page_nav_presets";
 
 inline constexpr auto kChatTopBar = "lingtai_chat_top_bar";
+inline constexpr auto kSelectedAgentIdentity = "lingtai_selected_agent_identity";
 inline constexpr auto kSelectedAgentKey = "lingtai_selected_agent_key";
+inline constexpr auto kSelectedAgentStatusRow = "lingtai_selected_agent_status_row";
+inline constexpr auto kSelectedAgentStatusDot = "lingtai_selected_agent_status_dot";
 inline constexpr auto kSelectedAgentPresentationName =
     "lingtai_selected_agent_presentation_name";
 inline constexpr auto kSelectedAgentConversation =

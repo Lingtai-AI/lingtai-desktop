@@ -147,6 +147,8 @@ struct KanbanBoard {
     int stuck = 0;
     int asleep = 0;
     int suspended = 0;
+    // Always 0 on the Desktop board path: inbox scanning is skipped (same
+    // rationale as TUI SkipMailEdges). Retained for shape compatibility.
     int total_mails = 0;
     int running_daemons = 0;
     std::string activity_status;
