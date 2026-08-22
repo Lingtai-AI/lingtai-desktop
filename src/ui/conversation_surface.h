@@ -1,5 +1,6 @@
 #pragma once
 
+#include "conversation_session.h"
 #include "direct_conversation_history.h"
 #include "message_reactions.h"
 
@@ -37,11 +38,32 @@ public:
     // no-op that preserves scroll, selection, and focus. The sender/direction
     // label shown for incoming rows is the caller-chosen presentation name.
     // Session reaction bags are keyed by message id and painted as Telegram-
-    // like in-bubble chips (receipts and peer reactions).
+    // like in-bubble chips (receipts and peer reactions). Optional session
+    // events from logs/events.jsonl are interleaved when verbose mode is on.
     void set_conversation(
         const QString &them,
         const std::vector<DirectConversationMessage> &messages,
-        const std::unordered_map<std::string, MessageReactions> &reactions = {});
+        const std::unordered_map<std::string, MessageReactions> &reactions = {},
+        const std::vector<ConversationSessionEntry> &session_events = {});
+
+    [[nodiscard]] ConversationVerboseLevel verbose_level() const noexcept {
+        return verbose_level_;
+    }
+
+    [[nodiscard]] bool has_session_events() const noexcept {
+        return !last_session_events_.empty();
+    }
+
+    // Cycles off → thinking → extended → off (TUI ctrl+o parity) and rebuilds.
+    ConversationVerboseLevel cycle_verbose_level();
+
+    // Updates interleaved session events without re-reading mail or resetting
+    // the lazy history window. Used when verbose detail is toggled.
+    void apply_session_events(
+        const std::vector<ConversationSessionEntry> &session_events);
+
+    // Re-apply theme-dependent char formats after palette changes.
+    void refresh_chrome();
 
     // One plain centered state for the selection/no-route/empty cases.
     void set_plain_state(const QString &text);
@@ -55,6 +77,9 @@ public:
     // as a new-day separator is included instead of a stale scrollbar maximum.
     void scroll_to_bottom();
 
+signals:
+    void verbose_level_changed(ConversationVerboseLevel level);
+
 protected:
     // Fills the viewport with the chat backdrop, paints the rounded message
     // bubbles behind the text, then lets the document layout draw the text.
@@ -66,31 +91,42 @@ protected:
     // Qt does not send a resize because sizeHint kept the stale width.
     void showEvent(QShowEvent *event) override;
     // Ctrl+U at the top reveals the next older page of the cached history.
+    // Ctrl+O / Cmd+O cycles verbose LLM detail levels.
     void keyPressEvent(QKeyEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     void reflow_to_viewport();
     void rebuild_document();
+    void schedule_rebuild_document();
     void rebuild_empty_state();
     void rebuild_select_agent_prompt();
     void reveal_older();
     void scroll_to_bottom_now();
     void update_hovered_message(const QPoint &viewport_pos);
     void clear_hovered_message();
+    [[nodiscard]] int history_page_size() const noexcept;
+    [[nodiscard]] bool same_core_content(
+        const std::vector<DirectConversationMessage> &messages,
+        const std::unordered_map<std::string, MessageReactions> &reactions) const;
+    [[nodiscard]] bool same_session_events(
+        const std::vector<ConversationSessionEntry> &session_events) const;
     [[nodiscard]] bool same_content(
         const std::vector<DirectConversationMessage> &messages,
-        const std::unordered_map<std::string, MessageReactions> &reactions)
-        const;
+        const std::unordered_map<std::string, MessageReactions> &reactions,
+        const std::vector<ConversationSessionEntry> &session_events) const;
 
     // The render-time history window reveals the cached rows in fixed pages:
     // initially only the chronological tail is materialized and each reveal
     // brings in one more page of older rows.
     static constexpr int kHistoryPageSize = 100;
+    static constexpr int kVerboseHistoryPageSize = 40;
 
     QString them_;
     std::vector<DirectConversationMessage> last_messages_;
     std::unordered_map<std::string, MessageReactions> last_reactions_;
+    std::vector<ConversationSessionEntry> last_session_events_;
+    ConversationVerboseLevel verbose_level_ = ConversationVerboseLevel::off;
     QString last_plain_state_;
     QString select_agent_main_name_;
     QString hovered_message_id_;
@@ -104,9 +140,12 @@ private:
     // being rebuilt. Ignore that nested reflow instead of recursively clearing
     // and appending into the same document.
     bool rebuild_in_progress_ = false;
+    bool rebuild_scheduled_ = false;
     // Cancels a deferred bottom pin when the human scrolls away or a rebuild
     // restores a non-bottom position before the queued pass runs.
     int scroll_pin_generation_ = 0;
+    ConversationVerboseLevel last_rendered_verbose_level_
+        = ConversationVerboseLevel::off;
 };
 
 } // namespace lingtai::desktop

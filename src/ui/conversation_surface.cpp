@@ -1,6 +1,7 @@
 #include "ui/conversation_surface.h"
 
 #include "base/basic_types.h"
+#include "conversation_session.h"
 #include "styles/palette.h"
 
 #include <QtCore/QEvent>
@@ -38,6 +39,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <utility>
 
 namespace lingtai::desktop {
@@ -115,6 +117,9 @@ constexpr auto kCodeBlockProperty = QTextFormat::UserProperty + 4;
 constexpr auto kMessageOutgoingProperty = QTextFormat::UserProperty + 5;
 constexpr auto kMessageIdProperty = QTextFormat::UserProperty + 8;
 constexpr auto kMessageReactionsProperty = QTextFormat::UserProperty + 9;
+// Marks LLM-detail frames so paintEvent never draws a Human/Agent bubble
+// around them (they share the root sibling list with message frames).
+constexpr auto kVerboseFrameProperty = QTextFormat::UserProperty + 10;
 
 // The symmetric gutter of the centered reading column for a viewport: fixed
 // 12px edge gutters until the column max, then a shared share of the excess.
@@ -252,6 +257,294 @@ QTextCharFormat secondary_format() {
     font.setWeight(QFont::Normal);
     format.setFont(font);
     return format;
+}
+
+QTextCharFormat verbose_thinking_format() {
+    auto format = QTextCharFormat();
+    format.setForeground(st::historyTextInFg->c);
+    auto font = format.font();
+    font.setPixelSize(12);
+    font.setWeight(QFont::Normal);
+    font.setItalic(true);
+    format.setFont(font);
+    return format;
+}
+
+QTextCharFormat verbose_tool_format() {
+    auto format = QTextCharFormat();
+    format.setForeground(st::windowActiveTextFg->c);
+    auto font = format.font();
+    font.setPixelSize(12);
+    font.setWeight(QFont::Normal);
+    format.setFont(font);
+    return format;
+}
+
+QTextCharFormat verbose_footer_format() {
+    return secondary_format();
+}
+
+QTextBlockFormat verbose_block_format(int viewport_width) {
+    auto format = QTextBlockFormat();
+    format.setAlignment(Qt::AlignLeft);
+    const auto gutter = reading_column_margins(viewport_width);
+    format.setLeftMargin(gutter + kMessageAvatarDiameter + kMessageAvatarGap);
+    format.setRightMargin(gutter);
+    format.setTopMargin(1);
+    format.setBottomMargin(1);
+    return format;
+}
+
+// Cursor that can insert a new root-level sibling frame. Document End and
+// root->lastCursorPosition() often sit *inside* the last child frame, so
+// insertBlock/insertFrame would nest and Human bubbles paint beside verbose
+// text on the same row.
+[[nodiscard]] QTextCursor root_append_cursor(QTextDocument *document) {
+    auto *root = document->rootFrame();
+    QTextCursor cursor(document);
+    cursor.movePosition(QTextCursor::End);
+    // Walk out of any nested frames until the cursor is in the root.
+    for (int guard = 0; guard < 8; ++guard) {
+        auto *frame = cursor.currentFrame();
+        if (!frame || frame == root) {
+            break;
+        }
+        const auto after = frame->lastPosition() + 1;
+        if (after > cursor.position()) {
+            cursor.setPosition(after);
+            continue;
+        }
+        // Already at the frame end character — step into the parent.
+        auto *parent = frame->parentFrame();
+        if (!parent) {
+            break;
+        }
+        cursor = QTextCursor(parent);
+        cursor.setPosition(frame->lastPosition() + 1);
+    }
+    if (cursor.currentFrame() != root) {
+        cursor = root->lastCursorPosition();
+    }
+    return cursor;
+}
+
+[[nodiscard]] QTextFrameFormat verbose_frame_format() {
+    auto format = QTextFrameFormat();
+    format.setBorder(0);
+    format.setPadding(0);
+    format.setMargin(0);
+    format.setBottomMargin(2);
+    format.setBackground(Qt::transparent);
+    format.setProperty(kVerboseFrameProperty, true);
+    return format;
+}
+
+// Insert one verbose line as its own root sibling frame so it never shares a
+// QTextFrame with a Human/Agent message (which caused side-by-side overlap).
+void insert_verbose_line(
+        QTextDocument *document,
+        int viewport_width,
+        const QTextCharFormat &format,
+        const QString &text,
+        int bottom_margin = 1) {
+    if (text.isEmpty()) {
+        return;
+    }
+    auto cursor = root_append_cursor(document);
+    auto frame_format = verbose_frame_format();
+    frame_format.setBottomMargin(bottom_margin);
+    auto *frame = cursor.insertFrame(frame_format);
+    cursor = frame->firstCursorPosition();
+    auto block = verbose_block_format(viewport_width);
+    cursor.setBlockFormat(block);
+    cursor.insertText(text, format);
+}
+
+[[nodiscard]] int timestamp_compare(
+        const std::string &left, const std::string &right) {
+    const auto parsed_left = QDateTime::fromString(
+        QString::fromStdString(left), Qt::ISODate);
+    const auto parsed_right = QDateTime::fromString(
+        QString::fromStdString(right), Qt::ISODate);
+    if (parsed_left.isValid() && parsed_right.isValid()) {
+        if (parsed_left == parsed_right) {
+            return 0;
+        }
+        return parsed_left < parsed_right ? -1 : 1;
+    }
+    if (left == right) {
+        return 0;
+    }
+    return left < right ? -1 : 1;
+}
+
+QString format_verbose_tool_timestamp(const std::string &raw) {
+    if (raw.empty()) {
+        return {};
+    }
+    const auto parsed = QDateTime::fromString(
+        QString::fromStdString(raw), Qt::ISODate);
+    if (!parsed.isValid()) {
+        return {};
+    }
+    return parsed.toLocalTime().toString(QStringLiteral("HH:mm"));
+}
+
+constexpr int kMaxVerboseRenderLines = 36;
+
+struct VerboseRenderState final {
+    std::size_t event_index = 0;
+    std::optional<SessionTokenUsage> pending_usage;
+    std::string pending_group;
+    const ConversationSessionEntry *prev_visible = nullptr;
+    int rendered_lines = 0;
+    bool render_capped = false;
+};
+
+void flush_verbose_token_footer(
+        QTextCursor &cursor,
+        int viewport_width,
+        VerboseRenderState &state) {
+    if (!state.pending_usage.has_value()) {
+        return;
+    }
+    const auto footer = format_token_usage_footer(*state.pending_usage);
+    state.pending_usage.reset();
+    state.pending_group.clear();
+    if (footer.empty()) {
+        return;
+    }
+    insert_verbose_line(
+        cursor.document(),
+        viewport_width,
+        verbose_footer_format(),
+        QStringLiteral("• %1").arg(QString::fromStdString(footer)),
+        6);
+}
+
+void append_verbose_separator(
+        QTextCursor &cursor, int viewport_width) {
+    insert_verbose_line(
+        cursor.document(),
+        viewport_width,
+        secondary_format(),
+        QStringLiteral("  %1").arg(QString(24, QChar(0x2508))),
+        4);
+}
+
+void insert_verbose_text(
+        QTextCursor &cursor,
+        int viewport_width,
+        const QTextCharFormat &format,
+        const QString &text) {
+    auto normalized = text;
+    normalized.replace(QStringLiteral("\r\n"), QString(QChar::LineSeparator));
+    normalized.replace(QChar::LineFeed, QString(QChar::LineSeparator));
+    normalized.replace(QChar::CarriageReturn, QString(QChar::LineSeparator));
+    const auto lines = normalized.split(QChar::LineSeparator);
+    for (int index = 0; index != lines.size(); ++index) {
+        if (lines[index].isEmpty()) {
+            continue;
+        }
+        insert_verbose_line(
+            cursor.document(), viewport_width, format, lines[index]);
+    }
+}
+
+void append_verbose_event_line(
+        QTextCursor &cursor,
+        int viewport_width,
+        const ConversationSessionEntry &entry,
+        ConversationVerboseLevel level,
+        VerboseRenderState &state) {
+    if (entry.type == "llm_response") {
+        if (entry.token_usage.has_value()
+                && level != ConversationVerboseLevel::off) {
+            if (!state.pending_group.empty()
+                    && state.pending_group != entry.api_call_id) {
+                flush_verbose_token_footer(cursor, viewport_width, state);
+            }
+            state.pending_usage = entry.token_usage;
+            state.pending_group = entry.api_call_id;
+        }
+        return;
+    }
+    if (!conversation_verbose_event_visible(entry, level)) {
+        return;
+    }
+    if (state.rendered_lines >= kMaxVerboseRenderLines) {
+        state.render_capped = true;
+        return;
+    }
+    if (state.pending_usage.has_value()) {
+        const auto grouped = entry.type == "thinking"
+            || entry.type == "diary"
+            || entry.type == "text_input"
+            || entry.type == "text_output"
+            || entry.type == "tool_call"
+            || entry.type == "tool_result";
+        if (!grouped || entry.api_call_id != state.pending_group) {
+            flush_verbose_token_footer(cursor, viewport_width, state);
+        }
+    }
+    if (conversation_api_group_separator_before(state.prev_visible, entry)
+            && level == ConversationVerboseLevel::extended) {
+        append_verbose_separator(cursor, viewport_width);
+    }
+
+    const auto body = conversation_verbose_event_body(entry, level);
+    const auto is_tool = entry.type == "tool_call" || entry.type == "tool_result";
+    auto line = QString::fromStdString(body);
+    if (is_tool) {
+        line = QStringLiteral("[%1] %2")
+            .arg(QString::fromStdString(entry.type))
+            .arg(line);
+        const auto stamp = format_verbose_tool_timestamp(entry.timestamp);
+        if (!stamp.isEmpty()) {
+            line = stamp + QStringLiteral(" ") + line;
+        }
+    }
+
+    if (entry.type == "tool_call" && !entry.reasoning.empty()) {
+        insert_verbose_text(
+            cursor,
+            viewport_width,
+            verbose_thinking_format(),
+            QStringLiteral("[Reasoning] %1")
+                .arg(QString::fromStdString(entry.reasoning)));
+    }
+    insert_verbose_text(
+        cursor,
+        viewport_width,
+        is_tool ? verbose_tool_format() : verbose_thinking_format(),
+        QStringLiteral("• %1").arg(line));
+
+    ++state.rendered_lines;
+    state.prev_visible = &entry;
+}
+
+void append_verbose_events_until(
+        QTextCursor &cursor,
+        int viewport_width,
+        const std::vector<ConversationSessionEntry> &events,
+        ConversationVerboseLevel level,
+        VerboseRenderState &state,
+        const std::optional<std::string> &until_timestamp) {
+    if (level == ConversationVerboseLevel::off) {
+        return;
+    }
+    while (state.event_index < events.size()) {
+        if (state.render_capped) {
+            break;
+        }
+        const auto &entry = events[state.event_index];
+        if (until_timestamp.has_value()
+                && timestamp_compare(entry.timestamp, *until_timestamp) > 0) {
+            break;
+        }
+        append_verbose_event_line(cursor, viewport_width, entry, level, state);
+        ++state.event_index;
+    }
 }
 
 // Message timestamps are the legible secondary rung of the reading surface.
@@ -1112,7 +1405,7 @@ void ConversationSurface::set_select_agent_prompt(const QString &main_agent_name
     update();
 }
 
-bool ConversationSurface::same_content(
+bool ConversationSurface::same_core_content(
         const std::vector<DirectConversationMessage> &messages,
         const std::unordered_map<std::string, MessageReactions> &reactions)
         const {
@@ -1148,33 +1441,145 @@ bool ConversationSurface::same_content(
     return true;
 }
 
+bool ConversationSurface::same_session_events(
+        const std::vector<ConversationSessionEntry> &session_events) const {
+    if (last_session_events_.size() != session_events.size()) {
+        return false;
+    }
+    for (auto index = std::size_t{0}; index != session_events.size(); ++index) {
+        const auto &before = last_session_events_[index];
+        const auto &after = session_events[index];
+        if (before.timestamp != after.timestamp
+            || before.type != after.type
+            || before.body != after.body
+            || before.api_call_id != after.api_call_id
+            || before.reasoning != after.reasoning
+            || before.token_usage.has_value() != after.token_usage.has_value()) {
+            return false;
+        }
+        if (before.token_usage.has_value()
+            && (before.token_usage->input != after.token_usage->input
+                || before.token_usage->output != after.token_usage->output
+                || before.token_usage->cached != after.token_usage->cached
+                || before.token_usage->api_duration_ms
+                    != after.token_usage->api_duration_ms
+                || before.token_usage->estimated != after.token_usage->estimated)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool ConversationSurface::same_content(
+        const std::vector<DirectConversationMessage> &messages,
+        const std::unordered_map<std::string, MessageReactions> &reactions,
+        const std::vector<ConversationSessionEntry> &session_events)
+        const {
+    return same_core_content(messages, reactions)
+        && same_session_events(session_events);
+}
+
 void ConversationSurface::set_conversation(
         const QString &them,
         const std::vector<DirectConversationMessage> &messages,
-        const std::unordered_map<std::string, MessageReactions> &reactions) {
-    if (them == them_ && same_content(messages, reactions)) {
+        const std::unordered_map<std::string, MessageReactions> &reactions,
+        const std::vector<ConversationSessionEntry> &session_events) {
+    if (them == them_ && same_content(messages, reactions, session_events)
+            && verbose_level_ == last_rendered_verbose_level_) {
         return;
     }
+    const auto core_unchanged = them == them_
+        && same_core_content(messages, reactions);
     them_ = them;
     last_messages_ = messages;
     last_reactions_ = reactions;
+    last_session_events_ = session_events;
     last_plain_state_.clear();
     select_agent_prompt_active_ = false;
     select_agent_main_name_.clear();
     empty_state_active_ = messages.empty();
-    // Reset the render-time window to the initial chronological tail whenever
-    // the conversation identity or content is replaced: nothing is paged in
-    // beyond what the fresh cache naturally reveals.
-    history_offset_ = int(messages.size() > std::size_t(kHistoryPageSize)
-        ? messages.size() - std::size_t(kHistoryPageSize)
-        : std::size_t{0});
+    if (!core_unchanged) {
+        // Reset the render-time window to the initial chronological tail
+        // whenever the conversation identity or mail content is replaced.
+        const auto page = history_page_size();
+        history_offset_ = int(messages.size() > std::size_t(page)
+            ? messages.size() - std::size_t(page)
+            : std::size_t{0});
+    }
     clear_hovered_message();
     if (messages.empty()) {
         rebuild_empty_state();
     } else {
-        rebuild_document();
+        schedule_rebuild_document();
     }
+    last_rendered_verbose_level_ = verbose_level_;
     last_layout_width_ = int(viewport()->width() / 8) * 8;
+}
+
+void ConversationSurface::apply_session_events(
+        const std::vector<ConversationSessionEntry> &session_events) {
+    if (same_session_events(session_events)
+            && verbose_level_ == last_rendered_verbose_level_) {
+        return;
+    }
+    last_session_events_ = session_events;
+    if (last_messages_.empty()) {
+        last_rendered_verbose_level_ = verbose_level_;
+        return;
+    }
+    if (verbose_level_ != ConversationVerboseLevel::off) {
+        const auto page = history_page_size();
+        const auto min_offset = int(
+            last_messages_.size() > std::size_t(page)
+                ? last_messages_.size() - std::size_t(page)
+                : std::size_t{0});
+        if (history_offset_ < min_offset) {
+            history_offset_ = min_offset;
+        }
+    }
+    schedule_rebuild_document();
+    last_rendered_verbose_level_ = verbose_level_;
+    last_layout_width_ = int(viewport()->width() / 8) * 8;
+}
+
+ConversationVerboseLevel ConversationSurface::cycle_verbose_level() {
+    verbose_level_ = cycle_conversation_verbose_level(verbose_level_);
+    emit verbose_level_changed(verbose_level_);
+    return verbose_level_;
+}
+
+void ConversationSurface::refresh_chrome() {
+    if (last_messages_.empty() || rebuild_in_progress_) {
+        update();
+        return;
+    }
+    last_layout_width_ = -1;
+    schedule_rebuild_document();
+}
+
+int ConversationSurface::history_page_size() const noexcept {
+    return verbose_level_ == ConversationVerboseLevel::off
+        ? kHistoryPageSize
+        : kVerboseHistoryPageSize;
+}
+
+void ConversationSurface::schedule_rebuild_document() {
+    if (rebuild_scheduled_) {
+        return;
+    }
+    rebuild_scheduled_ = true;
+    // Coalesce activity-timer + async session loads into one layout pass.
+    QTimer::singleShot(50, this, [this] {
+        rebuild_scheduled_ = false;
+        if (last_messages_.empty()) {
+            return;
+        }
+        if (rebuild_in_progress_) {
+            schedule_rebuild_document();
+            return;
+        }
+        rebuild_document();
+    });
 }
 
 void ConversationSurface::rebuild_document() {
@@ -1249,9 +1654,35 @@ void ConversationSurface::rebuild_document() {
     };
     std::vector<PendingMessageWidth> pending_widths;
 
+    VerboseRenderState verbose_state;
+    if (verbose_level_ != ConversationVerboseLevel::off
+            && !last_session_events_.empty()
+            && visible_begin < last_messages_.size()) {
+        const auto &first_visible = last_messages_[visible_begin].timestamp;
+        while (verbose_state.event_index < last_session_events_.size()
+                && timestamp_compare(
+                    last_session_events_[verbose_state.event_index].timestamp,
+                    first_visible) < 0) {
+            ++verbose_state.event_index;
+        }
+    }
     QString previous_day;
     for (auto index = visible_begin; index != visible_end; ++index) {
         const auto &message = last_messages_[index];
+        if (verbose_level_ != ConversationVerboseLevel::off
+                && !last_session_events_.empty()) {
+            auto verbose_cursor = QTextCursor(document);
+            append_verbose_events_until(
+                verbose_cursor,
+                viewport_width,
+                last_session_events_,
+                verbose_level_,
+                verbose_state,
+                message.timestamp);
+            // Keep pending token footers with their API group — do not flush
+            // before every mail row (that duplicated footers and forced extra
+            // layout work on each message).
+        }
         const auto outgoing = message.outgoing;
         // The renderer-only presentation (HH:mm time, yyyy/MM/dd day) is
         // computed once per visible message and shared by the incoming header,
@@ -1297,12 +1728,9 @@ void ConversationSurface::rebuild_document() {
         // the real frame decide line breaks before any content-sized shrink.
         const auto block_format = message_block_format(
             outgoing, viewport_width, lane_max);
-        // A fresh document-end cursor places every message as its own direct
-        // sibling QTextFrame under the root frame, never nested. The frame is
-        // transparent with no border, padding, or margin, so only the first
-        // block's own alignment and margins shape the message lane.
-        auto cursor = QTextCursor(document);
-        cursor.movePosition(QTextCursor::End);
+        // Append after every prior child frame at the root — never nest inside
+        // the previous message by using document End while still in that frame.
+        auto cursor = root_append_cursor(document);
         auto frame_format = QTextFrameFormat();
         frame_format.setBorder(0);
         frame_format.setPadding(0);
@@ -1410,6 +1838,28 @@ void ConversationSurface::rebuild_document() {
             block_format.leftMargin(),
             block_format.rightMargin(),
         });
+    }
+
+    if (verbose_level_ != ConversationVerboseLevel::off
+            && !last_session_events_.empty()) {
+        auto verbose_cursor = QTextCursor(document);
+        append_verbose_events_until(
+            verbose_cursor,
+            viewport_width,
+            last_session_events_,
+            verbose_level_,
+            verbose_state,
+            std::nullopt);
+        flush_verbose_token_footer(
+            verbose_cursor, viewport_width, verbose_state);
+    }
+    if (verbose_state.render_capped) {
+        insert_verbose_line(
+            document,
+            viewport_width,
+            secondary_format(),
+            QStringLiteral("▲ older LLM details hidden — ctrl+u for history"),
+            8);
     }
 
     // Stage two reads the real QTextLayouts just created above, equivalent to
@@ -1540,7 +1990,7 @@ void ConversationSurface::rebuild_empty_state() {
 void ConversationSurface::reveal_older() {
     // Page one more older slice of the cached history into the render-time
     // window, clamped so the offset never goes below zero (the full stream).
-    history_offset_ = std::max(0, history_offset_ - kHistoryPageSize);
+    history_offset_ = std::max(0, history_offset_ - history_page_size());
 
     // Rebuild with the wider window, then restore the previously first-visible
     // message's viewport Y. Revealing rows at the top grows the document by
@@ -1619,6 +2069,14 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
     const auto *document_layout = document()->documentLayout();
     const auto message_frames = document()->rootFrame()->childFrames();
     for (auto *frame : message_frames) {
+        // Verbose LLM-detail frames are root siblings too; never paint a
+        // message bubble from their text bounds or they sit beside Human rows.
+        if (frame->frameFormat().property(kVerboseFrameProperty).toBool()) {
+            continue;
+        }
+        if (!frame->frameFormat().hasProperty(kMessageIdProperty)) {
+            continue;
+        }
         // Each sibling message frame carries its own advancing document
         // origin, while the blocks' QTextLayout positions stay relative to
         // that frame. Translate every line by both the block layout position
@@ -1895,6 +2353,19 @@ void ConversationSurface::showEvent(QShowEvent *event) {
 }
 
 void ConversationSurface::keyPressEvent(QKeyEvent *event) {
+    // Ctrl+O / Cmd+O cycles verbose LLM detail (TUI ctrl+o parity).
+    if ((event->modifiers() & Qt::ControlModifier) != 0
+            && event->key() == Qt::Key_O) {
+        cycle_verbose_level();
+        event->accept();
+        return;
+    }
+    if ((event->modifiers() & Qt::MetaModifier) != 0
+            && event->key() == Qt::Key_O) {
+        cycle_verbose_level();
+        event->accept();
+        return;
+    }
     // Ctrl+U reveals the next older page, but only while the window is pinned
     // to the very top and older rows remain hidden. Everywhere else the
     // inherited text-edit key handling (scrolling, selection, copy) stays.

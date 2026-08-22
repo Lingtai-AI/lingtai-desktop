@@ -4,7 +4,9 @@
 #include "agent_launch.h"
 #include "agent_projection.h"
 #include "agent_sleep.h"
+#include "conversation_session.h"
 #include "conversation_unread.h"
+#include "direct_conversation_route.h"
 #include "injected_mail_journal.h"
 #include "kanban_model.h"
 #include "message_reactions.h"
@@ -133,6 +135,16 @@ private:
     void render_roster();
     void refresh_unseen_badges();
     void render_conversation();
+    void invalidate_session_events_cache();
+    [[nodiscard]] const std::vector<ConversationSessionEntry> &
+        cached_session_events_for(
+            const DirectConversationRoute &route,
+            bool force_reload = false);
+    void request_session_events(bool force);
+    void apply_session_events(
+        std::uint64_t generation,
+        std::vector<ConversationSessionEntry> entries);
+    void handle_conversation_verbose_changed(ConversationVerboseLevel level);
     // Reapplies the generated light or canonical Telegram Night palette after
     // the host appearance changes, then refreshes palette-backed descendants.
     void refresh_system_palette();
@@ -324,6 +336,23 @@ private:
     };
     std::shared_ptr<KanbanLoadToken> kanban_load_token_
         = std::make_shared<KanbanLoadToken>();
+
+    struct SessionEventsCache final {
+        std::filesystem::path project_root;
+        std::filesystem::path agent_key;
+        std::time_t mtime = 0;
+        std::int64_t size = 0;
+        std::vector<ConversationSessionEntry> entries;
+    };
+    SessionEventsCache session_events_cache_;
+    bool session_events_force_reload_ = false;
+    std::uint64_t session_events_load_generation_ = 0;
+    bool session_events_load_inflight_ = false;
+    struct SessionEventsLoadToken {
+        std::atomic<bool> cancelled{false};
+    };
+    std::shared_ptr<SessionEventsLoadToken> session_events_load_token_
+        = std::make_shared<SessionEventsLoadToken>();
 };
 
 } // namespace lingtai::desktop

@@ -281,7 +281,8 @@ add_library(lingtai_desktop_conversation STATIC
     src/direct_conversation_history.cpp
     src/message_reactions.cpp
     src/injected_mail_journal.cpp
-    src/conversation_unread.cpp)
+    src/conversation_unread.cpp
+    src/conversation_session.cpp)
 init_target(lingtai_desktop_conversation)
 target_include_directories(lingtai_desktop_conversation PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src")
@@ -423,6 +424,14 @@ target_compile_options(lingtai_conversation_unread_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_conversation_unread_test PRIVATE
     lingtai_desktop_conversation)
+add_executable(lingtai_conversation_session_test
+    tests/conversation_session_test.cpp)
+init_target(lingtai_conversation_session_test)
+target_compile_options(lingtai_conversation_session_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_conversation_session_test PRIVATE
+    lingtai_desktop_conversation)
+add_test(NAME conversation_session COMMAND lingtai_conversation_session_test)
 add_executable(lingtai_direct_mail_publisher_test
     tests/direct_mail_publisher_test.cpp)
 init_target(lingtai_direct_mail_publisher_test)
@@ -818,6 +827,7 @@ target_compile_options(lingtai_conversation_surface_typography_test PRIVATE
     $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-deprecated-this-capture>
     $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-unused-parameter>)
 target_link_libraries(lingtai_conversation_surface_typography_test PRIVATE
+    lingtai_desktop_conversation
     desktop-app::lib_ui
     Qt6::Widgets Qt6::Gui Qt6::Core)
 add_test(NAME conversation_surface_typography
@@ -839,6 +849,7 @@ set(LINGTAI_UNIT_TESTS
     direct_conversation_history
     message_reactions
     conversation_unread
+    conversation_session
     direct_mail_publisher
     agent_preset_summary
     kanban_model

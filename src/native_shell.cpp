@@ -7,6 +7,7 @@
 #include "agent_prompt_actions.h"
 #include "agent_sleep.h"
 #include "direct_conversation_history.h"
+#include "conversation_session.h"
 #include "conversation_unread.h"
 #include "direct_mail_publisher.h"
 #include "message_reactions.h"
@@ -1820,6 +1821,13 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
     auto *detail = new AgentDetailView(runtime_options_, detail_scroll);
     detail_scroll->setWidget(detail);
     detail_view_ = detail;
+    QObject::connect(
+        detail_view_,
+        &AgentDetailView::conversation_verbose_changed,
+        detail_view_,
+        [this](ConversationVerboseLevel level) {
+            handle_conversation_verbose_changed(level);
+        });
 
     // Re-derive stable pointers/vectors until NativeShell delegates fully
     // to AgentDetailView in follow-up plan steps.
@@ -2402,6 +2410,10 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
 NativeShell::~NativeShell() {
     if (kanban_load_token_) {
         kanban_load_token_->cancelled.store(true, std::memory_order_release);
+    }
+    if (session_events_load_token_) {
+        session_events_load_token_->cancelled.store(
+            true, std::memory_order_release);
     }
 }
 
@@ -3163,6 +3175,177 @@ void NativeShell::refresh_unseen_badges() {
     agent_roster_->set_unseen_counts(std::move(counts));
 }
 
+void NativeShell::invalidate_session_events_cache() {
+    session_events_cache_ = {};
+    session_events_force_reload_ = false;
+}
+
+const std::vector<ConversationSessionEntry> &
+NativeShell::cached_session_events_for(
+        const DirectConversationRoute &route,
+        bool force_reload) {
+    static const auto kEmpty = std::vector<ConversationSessionEntry>{};
+    if (detail_view_->conversation_verbose_level()
+            == ConversationVerboseLevel::off) {
+        return kEmpty;
+    }
+    const auto stat = conversation_session_log_stat(
+        route.project_root, route.target_directory_key);
+    if (!stat.present) {
+        session_events_cache_ = {};
+        return kEmpty;
+    }
+    const auto same_agent =
+        session_events_cache_.project_root == route.project_root
+        && session_events_cache_.agent_key == route.target_directory_key;
+    const auto cache_fresh = same_agent
+        && !force_reload
+        && !session_events_force_reload_
+        && session_events_cache_.mtime == stat.mtime
+        && session_events_cache_.size == stat.size;
+    if (cache_fresh) {
+        return session_events_cache_.entries;
+    }
+
+    // Never parse events.jsonl on the UI thread. Serve the last snapshot for
+    // this Agent (if any) and refresh off-thread; a growing log used to stall
+    // the 1s activity timer on every tick in Thinking/Extended mode.
+    if (!same_agent) {
+        session_events_cache_ = {};
+        session_events_cache_.project_root = route.project_root;
+        session_events_cache_.agent_key = route.target_directory_key;
+    }
+    session_events_cache_.mtime = stat.mtime;
+    session_events_cache_.size = stat.size;
+    session_events_force_reload_ = false;
+    request_session_events(force_reload || !same_agent);
+    return session_events_cache_.entries;
+}
+
+void NativeShell::request_session_events(bool force) {
+    if (!detail_view_) {
+        return;
+    }
+    if (!selection_state_.active_project()
+        || !selection_state_.selected_agent_directory_key()) {
+        return;
+    }
+    const auto route = resolve_direct_conversation_route(
+        *selection_state_.active_project(), agents_,
+        selection_state_.selected_agent_directory_key());
+    if (!route) {
+        return;
+    }
+    if (session_events_load_inflight_ && !force) {
+        return;
+    }
+    if (force) {
+        ++session_events_load_generation_;
+    }
+    const auto generation = session_events_load_generation_;
+    session_events_load_inflight_ = true;
+
+    const auto project_root = route->project_root;
+    const auto agent_key = route->target_directory_key;
+    const auto token = session_events_load_token_;
+    std::thread([this, project_root, agent_key, generation, token]() {
+        auto entries = read_conversation_session_events(
+            project_root, agent_key);
+        QTimer::singleShot(0, qApp,
+            [this, token, generation, project_root, agent_key,
+                entries = std::move(entries)]() mutable {
+                if (!token
+                    || token->cancelled.load(std::memory_order_acquire)) {
+                    return;
+                }
+                apply_session_events(generation, std::move(entries));
+            });
+    }).detach();
+}
+
+void NativeShell::apply_session_events(
+        std::uint64_t generation,
+        std::vector<ConversationSessionEntry> entries) {
+    session_events_load_inflight_ = false;
+    if (generation != session_events_load_generation_) {
+        return;
+    }
+    if (!detail_view_) {
+        return;
+    }
+    if (detail_view_->conversation_verbose_level()
+            == ConversationVerboseLevel::off) {
+        detail_view_->set_conversation_detail_loading(false);
+        return;
+    }
+    if (selection_state_.active_project()
+        && selection_state_.selected_agent_directory_key()) {
+        const auto route = resolve_direct_conversation_route(
+            *selection_state_.active_project(), agents_,
+            selection_state_.selected_agent_directory_key());
+        if (route) {
+            const auto stat = conversation_session_log_stat(
+                route->project_root, route->target_directory_key);
+            session_events_cache_.project_root = route->project_root;
+            session_events_cache_.agent_key = route->target_directory_key;
+            session_events_cache_.mtime = stat.mtime;
+            session_events_cache_.size = stat.size;
+            session_events_cache_.entries = entries;
+            session_events_force_reload_ = false;
+        }
+    }
+    detail_view_->set_conversation_detail_loading(false);
+    detail_view_->apply_conversation_session_events(entries);
+}
+
+void NativeShell::handle_conversation_verbose_changed(
+        ConversationVerboseLevel level) {
+    if (!detail_view_) {
+        return;
+    }
+
+    if (level == ConversationVerboseLevel::off) {
+        session_events_cache_.entries.clear();
+        detail_view_->set_conversation_detail_loading(false);
+        detail_view_->apply_conversation_session_events({});
+        return;
+    }
+
+    if (!selection_state_.active_project()
+        || !selection_state_.selected_agent_directory_key()) {
+        return;
+    }
+    const auto route = resolve_direct_conversation_route(
+        *selection_state_.active_project(), agents_,
+        selection_state_.selected_agent_directory_key());
+    if (!route) {
+        return;
+    }
+
+    const auto stat = conversation_session_log_stat(
+        route->project_root, route->target_directory_key);
+    if (!stat.present) {
+        return;
+    }
+
+    const auto cache_hit = !session_events_force_reload_
+        && session_events_cache_.project_root == route->project_root
+        && session_events_cache_.agent_key == route->target_directory_key
+        && session_events_cache_.mtime == stat.mtime
+        && session_events_cache_.size == stat.size
+        && !session_events_cache_.entries.empty();
+    if (cache_hit) {
+        detail_view_->set_conversation_detail_loading(false);
+        detail_view_->apply_conversation_session_events(
+            session_events_cache_.entries);
+        return;
+    }
+
+    detail_view_->set_conversation_detail_loading(true);
+    detail_view_->apply_conversation_session_events({});
+    request_session_events(true);
+}
+
 void NativeShell::render_conversation() {
     if (!detail_view_) return;
 
@@ -3233,17 +3416,25 @@ void NativeShell::render_conversation() {
             : QStringLiteral("%1 skipped").arg(history.skipped);
     }
 
+    const auto session_log_present = conversation_session_log_present(
+        route->project_root, route->target_directory_key);
+    const auto &session_events = cached_session_events_for(*route);
+
     detail_view_->render_conversation(
         them, history, compact,
         /*selection_present=*/true,
         /*conversation_route_available=*/true,
-        reaction_store_.all());
+        reaction_store_.all(),
+        QString(),
+        session_events,
+        session_log_present);
 }
 
 // Called only when the selected target actually changes (a fresh project open
 // or a successful Agent selection), never on an ordinary conversation
 // refresh, so a just-set receipt is never wiped by its own refresh.
 void NativeShell::reset_composer() {
+    invalidate_session_events_cache();
     if (auto *input = static_cast<Ui::InputField *>(
             window_->findChild<QObject *>("lingtai_composer_input"))) {
         input->clear();

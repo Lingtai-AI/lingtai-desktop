@@ -1,12 +1,14 @@
 #pragma once
 
 #include "agent_preset_summary.h"
+#include "conversation_session.h"
 #include "direct_conversation_history.h"
 #include "kanban_model.h"
 #include "message_reactions.h"
 #include "native_shell.h" // for AgentDetailPage enum
 #include "runtime_options.h"
 
+#include "ui/palette_action_button.h"
 #include "ui/rp_widget.h"
 
 #include <QtWidgets/QLabel>
@@ -73,7 +75,18 @@ public:
         bool selection_present,
         bool conversation_route_available,
         const std::unordered_map<std::string, MessageReactions> &reactions = {},
-        const QString &main_agent_name = {});
+        const QString &main_agent_name = {},
+        const std::vector<ConversationSessionEntry> &session_events = {},
+        bool session_log_present = false);
+
+    [[nodiscard]] ConversationVerboseLevel conversation_verbose_level() const;
+
+    // Rebuilds verbose interleaves from freshly loaded session events without
+    // replacing the cached mail rows.
+    void apply_conversation_session_events(
+        const std::vector<ConversationSessionEntry> &session_events);
+
+    void set_conversation_detail_loading(bool loading);
 
     void scroll_conversation_to_bottom();
 
@@ -93,6 +106,9 @@ signals:
     void back_requested();
     void start_requested();
     void sleep_requested();
+
+    // Reload session events when verbose detail is toggled on.
+    void conversation_verbose_changed(ConversationVerboseLevel level);
 
     // View-owned page switching.
     void page_changed(AgentDetailPage previous, AgentDetailPage current);
@@ -121,6 +137,7 @@ private:
     Ui::RoundButton *composer_send_button_ = nullptr;
     QLabel *composer_status_ = nullptr;
     QLabel *conversation_state_ = nullptr;
+    PaletteActionButton *conversation_detail_button_ = nullptr;
     ConversationSurface *conversation_surface_ = nullptr;
 
     Ui::RpWidget *pages_host_ = nullptr;
@@ -140,6 +157,12 @@ private:
 
     // Stubs: detailed implementations move in follow-up plan steps.
     void refresh_composer_enablement(bool composer_eligible);
+    void refresh_conversation_state_hint();
+    void refresh_conversation_detail_button();
+
+    QString last_compact_state_;
+    bool session_log_present_ = false;
+    bool conversation_route_available_ = false;
 };
 
 } // namespace lingtai::desktop

@@ -1,5 +1,6 @@
 #include "agent_detail_view.h"
 
+#include "conversation_session.h"
 #include "kanban_page.h"
 
 #include "slash_command.h"
@@ -754,6 +755,11 @@ AgentDetailView::AgentDetailView(
         auto *conversation = new ConversationSurface(this);
         conversation->setObjectName("lingtai_selected_agent_conversation");
         conversation_surface_ = conversation;
+        connect(conversation, &ConversationSurface::verbose_level_changed,
+            this, [this](ConversationVerboseLevel level) {
+                refresh_conversation_state_hint();
+                emit conversation_verbose_changed(level);
+            });
         detail_layout->addWidget(conversation, 1);
 
         return;
@@ -899,6 +905,30 @@ AgentDetailView::AgentDetailView(
 
     sleep_row->hide();
     top_bar_layout->addWidget(sleep_row);
+
+    conversation_detail_button_ = new PaletteActionButton(
+        top_bar, QStringLiteral("Details"));
+    conversation_detail_button_->setObjectName("lingtai_conversation_detail_toggle");
+    conversation_detail_button_->setAccessibleName(
+        QStringLiteral("Conversation LLM details"));
+    conversation_detail_button_->setAccessibleDescription(QStringLiteral(
+        "Cycles LLM detail levels: off, compact thinking and tools, then "
+        "extended tool bodies."));
+    conversation_detail_button_->hide();
+    conversation_detail_button_->setMinimumWidth(
+        conversation_detail_button_->sizeHint().width());
+    top_bar_layout->addWidget(
+        conversation_detail_button_, 0, Qt::AlignVCenter | Qt::AlignRight);
+    QObject::connect(
+        conversation_detail_button_,
+        &QPushButton::clicked,
+        this,
+        [this] {
+            if (conversation_surface_) {
+                conversation_surface_->cycle_verbose_level();
+            }
+        });
+
     detail_layout->addWidget(top_bar);
 
     // Retained once for the whole view lifecycle: responsive fit uses them.
@@ -960,6 +990,11 @@ AgentDetailView::AgentDetailView(
     conversation->setMinimumWidth(0);
     conversation->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
     conversation_surface_ = conversation;
+    connect(conversation, &ConversationSurface::verbose_level_changed,
+        this, [this](ConversationVerboseLevel level) {
+            refresh_conversation_state_hint();
+            emit conversation_verbose_changed(level);
+        });
     detail_layout->addWidget(conversation, 1);
 
     // Composer lane.
@@ -1421,7 +1456,9 @@ void AgentDetailView::render_conversation(
     bool selection_present,
     bool conversation_route_available,
     const std::unordered_map<std::string, MessageReactions> &reactions,
-    const QString &main_agent_name) {
+    const QString &main_agent_name,
+    const std::vector<ConversationSessionEntry> &session_events,
+    bool session_log_present) {
     const auto composer_eligible = selection_present
         && conversation_route_available;
     refresh_composer_enablement(composer_eligible);
@@ -1430,6 +1467,10 @@ void AgentDetailView::render_conversation(
     if (!selection_present) {
         conversation_surface_->set_select_agent_prompt(main_agent_name);
         conversation_state_->setText(QString());
+        last_compact_state_.clear();
+        session_log_present_ = false;
+        conversation_route_available_ = false;
+        refresh_conversation_detail_button();
         return;
     }
 
@@ -1437,17 +1478,83 @@ void AgentDetailView::render_conversation(
         conversation_surface_->set_plain_state(
             QStringLiteral("No conversation is available for this selection."));
         conversation_state_->setText(QString());
+        last_compact_state_.clear();
+        session_log_present_ = false;
+        conversation_route_available_ = false;
+        refresh_conversation_detail_button();
         return;
     }
 
+    last_compact_state_ = compact_state;
+    session_log_present_ = session_log_present;
+    conversation_route_available_ = true;
     if (history.messages.empty()) {
         conversation_surface_->set_plain_state(
             QStringLiteral("No messages yet."));
     } else {
         conversation_surface_->set_conversation(
-            them, history.messages, reactions);
+            them, history.messages, reactions, session_events);
     }
-    conversation_state_->setText(compact_state);
+    refresh_conversation_state_hint();
+}
+
+ConversationVerboseLevel AgentDetailView::conversation_verbose_level() const {
+    if (!conversation_surface_) {
+        return ConversationVerboseLevel::off;
+    }
+    return conversation_surface_->verbose_level();
+}
+
+void AgentDetailView::apply_conversation_session_events(
+        const std::vector<ConversationSessionEntry> &session_events) {
+    if (!conversation_surface_) {
+        return;
+    }
+    conversation_surface_->apply_session_events(session_events);
+}
+
+void AgentDetailView::set_conversation_detail_loading(bool loading) {
+    if (!conversation_detail_button_) {
+        return;
+    }
+    conversation_detail_button_->setEnabled(!loading);
+    if (loading) {
+        conversation_detail_button_->setText(QStringLiteral("Loading…"));
+        conversation_detail_button_->show();
+        return;
+    }
+    refresh_conversation_detail_button();
+}
+
+void AgentDetailView::refresh_conversation_detail_button() {
+    if (!conversation_detail_button_ || !conversation_surface_) {
+        return;
+    }
+    if (!conversation_route_available_) {
+        conversation_detail_button_->hide();
+        return;
+    }
+    conversation_detail_button_->show();
+    switch (conversation_surface_->verbose_level()) {
+    case ConversationVerboseLevel::off:
+        conversation_detail_button_->setText(QStringLiteral("Details"));
+        break;
+    case ConversationVerboseLevel::thinking:
+        conversation_detail_button_->setText(QStringLiteral("Thinking"));
+        break;
+    case ConversationVerboseLevel::extended:
+        conversation_detail_button_->setText(QStringLiteral("Extended"));
+        break;
+    }
+    conversation_detail_button_->update();
+}
+
+void AgentDetailView::refresh_conversation_state_hint() {
+    if (!conversation_state_) {
+        return;
+    }
+    conversation_state_->setText(last_compact_state_);
+    refresh_conversation_detail_button();
 }
 
 void AgentDetailView::scroll_conversation_to_bottom() {
@@ -1507,6 +1614,10 @@ void AgentDetailView::refresh_chrome() {
     if (kanban_page_) {
         kanban_page_->apply_chrome();
     }
+    if (conversation_surface_) {
+        conversation_surface_->refresh_chrome();
+    }
+    refresh_conversation_detail_button();
 }
 
 void AgentDetailView::render_preset_summary(
