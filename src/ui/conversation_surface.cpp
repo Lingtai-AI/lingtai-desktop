@@ -261,7 +261,9 @@ QTextCharFormat secondary_format() {
 
 QTextCharFormat verbose_thinking_format() {
     auto format = QTextCharFormat();
-    format.setForeground(st::historyTextInFg->c);
+    // Same theme-aware body ink as Agent prose (light #26282B / dark
+    // historyTextInFg), not a raw palette peek that can diverge on theme swap.
+    format.setForeground(body_reading_color(false));
     auto font = format.font();
     font.setPixelSize(12);
     font.setWeight(QFont::Normal);
@@ -272,6 +274,7 @@ QTextCharFormat verbose_thinking_format() {
 
 QTextCharFormat verbose_tool_format() {
     auto format = QTextCharFormat();
+    // Link/online blue: light #168acd, night palette #6ab3f3.
     format.setForeground(st::windowActiveTextFg->c);
     auto font = format.font();
     font.setPixelSize(12);
@@ -281,6 +284,7 @@ QTextCharFormat verbose_tool_format() {
 }
 
 QTextCharFormat verbose_footer_format() {
+    // Muted secondary: light #8A8F98, dark msgServiceFg (#708499).
     return secondary_format();
 }
 
