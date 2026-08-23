@@ -15,6 +15,7 @@
 #include <QtGui/QAbstractTextDocumentLayout>
 #include <QtGui/QColor>
 #include <QtGui/QFont>
+#include <QtGui/QFontDatabase>
 #include <QtGui/QFontMetricsF>
 #include <QtGui/QImage>
 #include <QtGui/QKeyEvent>
@@ -22,6 +23,7 @@
 #include <QtGui/QPainter>
 #include <QtGui/QPaintEvent>
 #include <QtGui/QPalette>
+#include <QtGui/QPen>
 #include <QtGui/QPixmap>
 #include <QtGui/QResizeEvent>
 #include <QtGui/QShowEvent>
@@ -41,6 +43,7 @@
 #include <cmath>
 #include <optional>
 #include <utility>
+#include <vector>
 
 namespace lingtai::desktop {
 namespace {
@@ -758,18 +761,46 @@ QTextCharFormat heading_text_format(const QTextCharFormat &base) {
 }
 
 QColor code_surface_color() {
+    // Distinct from windowBg / Human bubble so fenced and inline code read as
+    // chrome, not as the surrounding message canvas. Light and dark both use
+    // opaque elevated fills (not a faint white wash) so the panel stays clear
+    // on night `#17212b` the same way `#E4E7EB` does on light.
     return st::windowBg->c.lightness() >= 128
-        ? QColor(QStringLiteral("#F1F3F5"))
-        : QColor(255, 255, 255, 24);
+        ? QColor(QStringLiteral("#E4E7EB"))
+        : QColor(QStringLiteral("#242F3D"));
+}
+
+QColor code_surface_border_color() {
+    return st::windowBg->c.lightness() >= 128
+        ? QColor(QStringLiteral("#C5CAD3"))
+        : QColor(QStringLiteral("#3D4A5C"));
+}
+
+QFont code_font(const QFont &base) {
+    // Style hints alone often keep the body family (e.g. Open Sans) on macOS;
+    // pin the system fixed font so fenced/inline code is visibly monospace.
+    auto font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+    const auto size = base.pixelSize() > 0 ? base.pixelSize() : 14;
+    font.setPixelSize(std::max(12, size - 1));
+    font.setWeight(QFont::Normal);
+    font.setFixedPitch(true);
+    font.setStyleHint(QFont::Monospace, QFont::PreferDefault);
+    return font;
 }
 
 QTextCharFormat code_text_format(const QTextCharFormat &base) {
     auto format = base;
-    auto font = format.font();
-    font.setFixedPitch(true);
-    font.setStyleHint(QFont::Monospace);
-    format.setFont(font);
+    format.setFont(code_font(base.font()));
     format.setBackground(code_surface_color());
+    return format;
+}
+
+// Fenced lines rely on paintEvent for the rounded panel; keep the char run
+// transparent so glyph ink does not fight a mismatched per-glyph wash.
+QTextCharFormat fenced_code_text_format(const QTextCharFormat &base) {
+    auto format = base;
+    format.setFont(code_font(base.font()));
+    format.setBackground(Qt::transparent);
     return format;
 }
 
@@ -799,6 +830,7 @@ void insert_markdown_body(
     const auto bold = emphasized_text_format(base);
     const auto heading = heading_text_format(base);
     const auto code = code_text_format(base);
+    const auto fenced_code = fenced_code_text_format(base);
     const auto quote = quote_text_format(base);
     const QRegularExpression technical(
         QStringLiteral(R"((\.[A-Za-z0-9_-]+(?:[/.][A-Za-z0-9_.-]+)+|[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+){2,}|--[A-Za-z0-9-]+))"));
@@ -922,16 +954,16 @@ void insert_markdown_body(
         const auto ordered_match = ordered.match(line);
         if (in_code_fence) {
             block.setAlignment(Qt::AlignLeft);
-            block.setLeftMargin(block.leftMargin() + 8);
-            block.setRightMargin(block.rightMargin() + 8);
-            block.setTopMargin(4);
-            block.setBottomMargin(4);
+            block.setLeftMargin(block.leftMargin() + 10);
+            block.setRightMargin(block.rightMargin() + 10);
+            block.setTopMargin(5);
+            block.setBottomMargin(5);
             // Keep a nonempty semantic brush on the block for document/a11y
             // inspection, but let paintEvent own the visible rounded surface.
             block.setBackground(QColor(0, 0, 0, 1));
             block.setProperty(kCodeBlockProperty, true);
             cursor.setBlockFormat(block);
-            cursor.insertText(line, code);
+            cursor.insertText(line, fenced_code);
         } else if (heading_match.hasMatch()) {
             block.setAlignment(Qt::AlignLeft);
             block.setTopMargin(6);
@@ -2112,7 +2144,11 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
             .topLeft();
         QTextBlock first_valid_block;
         auto text_bounds = QRectF();
-        auto code_bounds = QRectF();
+        // Contiguous fenced runs only — never unite across prose, or the panel
+        // swallows intervening body text and fails to hug each fence.
+        std::vector<QRectF> code_runs;
+        auto current_code_run = QRectF();
+        auto in_code_run = false;
         for (auto block = frame->begin(); !block.atEnd();
              ++block) {
             const auto current_block = block.currentBlock();
@@ -2121,9 +2157,11 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
             }
             const auto *block_layout = current_block.layout();
             auto block_bounds = QRectF();
+            // Prefer the full line rect over naturalTextRect so short fence
+            // lines still share one panel width with longer neighbors.
             for (auto i = 0; i != block_layout->lineCount(); ++i) {
                 const auto line = block_layout->lineAt(i);
-                const auto line_bounds = line.naturalTextRect()
+                const auto line_bounds = line.rect()
                     .translated(block_layout->position())
                     .translated(frame_origin);
                 block_bounds = block_bounds.isNull()
@@ -2135,23 +2173,46 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
             }
             if (current_block.blockFormat()
                     .property(kCodeBlockProperty).toBool()) {
-                code_bounds = code_bounds.isNull()
+                current_code_run = current_code_run.isNull()
                     ? block_bounds
-                    : code_bounds.united(block_bounds);
+                    : current_code_run.united(block_bounds);
+                in_code_run = true;
+            } else if (in_code_run) {
+                code_runs.push_back(current_code_run);
+                current_code_run = QRectF();
+                in_code_run = false;
             }
             if (!first_valid_block.isValid()) {
                 first_valid_block = current_block;
             }
-            text_bounds = text_bounds.isNull()
+            // Human-bubble geometry still needs glyph-tight bounds so the
+            // bubble does not grow with unused wrap slack.
+            auto glyph_bounds = QRectF();
+            for (auto i = 0; i != block_layout->lineCount(); ++i) {
+                const auto line = block_layout->lineAt(i);
+                const auto line_bounds = line.naturalTextRect()
+                    .translated(block_layout->position())
+                    .translated(frame_origin);
+                glyph_bounds = glyph_bounds.isNull()
+                    ? line_bounds
+                    : glyph_bounds.united(line_bounds);
+            }
+            const auto &for_text = glyph_bounds.isNull()
                 ? block_bounds
-                : text_bounds.united(block_bounds);
+                : glyph_bounds;
+            text_bounds = text_bounds.isNull()
+                ? for_text
+                : text_bounds.united(for_text);
+        }
+        if (in_code_run) {
+            code_runs.push_back(current_code_run);
         }
         if (text_bounds.isNull() || !first_valid_block.isValid()) {
             continue;
         }
         text_bounds.translate(-h_offset, -v_offset);
-        if (!code_bounds.isNull()) {
-            code_bounds.translate(-h_offset, -v_offset);
+        for (auto &run : code_runs) {
+            run.translate(-h_offset, -v_offset);
         }
         const auto outgoing = frame->frameFormat()
             .property(kMessageOutgoingProperty)
@@ -2287,17 +2348,18 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
                 }
             }
         }
-        // Only fenced code gets a separate low-contrast rounded surface;
+        // Only fenced code gets a separate rounded surface per contiguous run;
         // ordinary paragraphs remain on the single Conversation canvas.
-        if (!code_bounds.isNull()) {
-            const auto code_surface = code_bounds.adjusted(-6, -4, 6, 4);
-            if (code_surface.intersects(QRectF(event->rect()))) {
-                painter.save();
-                painter.setPen(Qt::NoPen);
-                painter.setBrush(code_surface_color());
-                painter.drawRoundedRect(code_surface, 6, 6);
-                painter.restore();
+        for (const auto &code_bounds : code_runs) {
+            const auto code_surface = code_bounds.adjusted(-8, -6, 8, 6);
+            if (!code_surface.intersects(QRectF(event->rect()))) {
+                continue;
             }
+            painter.save();
+            painter.setPen(QPen(code_surface_border_color(), 1.0));
+            painter.setBrush(code_surface_color());
+            painter.drawRoundedRect(code_surface, 8, 8);
+            painter.restore();
         }
     }
     // Glyph-tight selection wash sits above bubbles and below Qt's text draw,

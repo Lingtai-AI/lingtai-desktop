@@ -396,13 +396,13 @@ public:
         card_layout->addWidget(open_action_);
 
         open_new_window_action_ = new ProjectMenuAction(
-            QStringLiteral("Open in new window"),
+            QStringLiteral("Open new project in new window"),
             ProjectMenuGlyph::window,
             card);
         open_new_window_action_->setObjectName(
             "lingtai_open_project_new_window_menu_action");
         open_new_window_action_->setAccessibleName(
-            QStringLiteral("Open in new window"));
+            QStringLiteral("Open new project in new window"));
         card_layout->addWidget(open_new_window_action_);
 
         root->addWidget(card);
@@ -421,13 +421,8 @@ public:
         return open_new_window_action_;
     }
 
-    void present(
-            const QString &path_text,
-            const QString &project_display_name) {
+    void present(const QString &path_text) {
         full_path_ = path_text;
-        project_name_ = project_display_name.isEmpty()
-            ? QStringLiteral("project")
-            : project_display_name;
         apply_palette();
         relayout_to_anchor();
         show();
@@ -570,24 +565,10 @@ private:
         path_label_->setAccessibleName(full_path_);
         path_label_->setAccessibleDescription(full_path_);
 
-        const auto action_text_width = content_width
-            - 2 * kProjectMenuShadow
-            - 2 * kProjectMenuCardPad
-            - 2 * kProjectMenuRowInset
-            - (kProjectMenuContentPad - kProjectMenuRowInset)
-            - kProjectMenuIconBox
-            - kProjectMenuIconTextGap
-            - kProjectMenuContentPad;
-        const auto action_metrics = QFontMetrics(open_new_window_action_->font());
-        const auto preferred = QStringLiteral("Open %1 in new window")
-            .arg(project_name_);
-        const auto short_label = QStringLiteral("Open in new window");
-        const auto use_short =
-            action_metrics.horizontalAdvance(preferred) > action_text_width;
         open_new_window_action_->setText(
-            use_short ? short_label : preferred);
+            QStringLiteral("Open new project in new window"));
         open_new_window_action_->setAccessibleName(
-            use_short ? short_label : preferred);
+            QStringLiteral("Open new project in new window"));
 
         const auto outer_width = content_width + 2 * kProjectMenuShadow;
         adjustSize();
@@ -621,7 +602,6 @@ private:
     ProjectMenuAction *open_action_ = nullptr;
     ProjectMenuAction *open_new_window_action_ = nullptr;
     QString full_path_;
-    QString project_name_;
 };
 
 // The presentation row set: the shared snapshot keeps the human pseudo-agent
@@ -1356,10 +1336,8 @@ AgentRoster::AgentRoster(QWidget *parent)
             open_new_window_button->click();
         });
     QObject::connect(selector, &QPushButton::clicked,
-        [this, selector_menu, project_root] {
-            selector_menu->present(
-                project_root->text(),
-                project_display_name_);
+        [selector_menu, project_root] {
+            selector_menu->present(project_root->text());
         });
 
     auto *roster = new Ui::RpWidget(this);

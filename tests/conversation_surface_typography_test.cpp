@@ -997,11 +997,13 @@ void verify_markdown_safe_formatting() {
         "fenced cpp code");
     if (!std::all_of(code_block.begin(), code_block.end(),
             [](const QTextCharFormat &format) {
-                return format.font().fixedPitch();
+                return format.font().fixedPitch()
+                    && (format.background().style() == Qt::NoBrush
+                        || format.background().color().alpha() == 0);
             })) {
         throw std::runtime_error(
-            "the fenced cpp code block must render in a fixed-pitch font in "
-            "both directions with the fence markers absent");
+            "the fenced cpp code block must render in a fixed-pitch font with "
+            "no per-glyph wash (paint owns the panel) in both directions");
     }
 
     // Blockquote: '> note' appears as plain quote text without the '>'
@@ -2208,8 +2210,12 @@ void verify_readable_semantic_body() {
     const auto code_run = find_run(
         QStringLiteral("lingtai-agent commands --help"));
     require(code_run.font().fixedPitch()
-            && code_block.blockFormat().background().style() != Qt::NoBrush,
-        "fenced code must own a fixed-pitch low-contrast code surface");
+            && code_run.font().family() != prose.font().family()
+            && code_block.blockFormat().background().style() != Qt::NoBrush
+            && (code_run.background().style() == Qt::NoBrush
+                || code_run.background().color().alpha() == 0),
+        "fenced code must use a distinct monospace family on a semantic "
+        "block surface (paint owns the visible panel; char wash stays clear)");
 
     const auto sender = find_run(QStringLiteral("codex"));
     const auto time = find_run(QStringLiteral(" · 12:00"));
