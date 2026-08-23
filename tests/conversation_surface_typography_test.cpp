@@ -111,10 +111,12 @@ void require_hierarchy(
         int author_size,
         int body_size,
         int timestamp_size) {
-    if (!(body_size > author_size && author_size > timestamp_size)) {
+    // Sender stays slightly larger than body (identity emphasis); metadata is
+    // the quietest rung. Weight, not size inversion, carries the hierarchy.
+    if (!(author_size >= body_size && body_size > timestamp_size)) {
         throw std::runtime_error(
             std::string("the ") + direction
-            + " message must read body > semibold sender > metadata by size "
+            + " message must read semibold sender >= body > metadata by size "
               "while sender weight preserves identity emphasis (sender "
             + std::to_string(author_size) + "px, body "
             + std::to_string(body_size) + "px, timestamp "
@@ -2213,7 +2215,7 @@ void verify_readable_semantic_body() {
     const auto time = find_run(QStringLiteral(" · 12:00"));
     require(sender.font().pixelSize() >= 14 && sender.font().pixelSize() <= 15
             && sender.font().weight() == QFont::DemiBold,
-        "the sender line must stay 14-15px semibold below the body hierarchy");
+        "the sender line must stay 14-15px semibold above the body size rung");
     require(time.font().pixelSize() >= 12 && time.font().pixelSize() <= 13
             && time.font().weight() == QFont::Normal
             && time.foreground().color() == QColor(QStringLiteral("#8A8F98")),

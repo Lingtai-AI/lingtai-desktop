@@ -2459,7 +2459,7 @@ void NativeShell::refresh_system_palette() {
     // settles. Do not also call render_conversation() here — that would rebuild
     // twice (refresh_chrome already rebuilds with the cached rows).
     const auto generation = ++palette_refresh_generation_;
-    QTimer::singleShot(50, window_.get(), [this, generation] {
+    QTimer::singleShot(0, window_.get(), [this, generation] {
         if (generation != palette_refresh_generation_) {
             return;
         }

@@ -581,8 +581,9 @@ void verify_dark_application_palette_inheritance(const fs::path &sandbox) {
         "dark application ButtonText role must reach the open affordance");
     require(project_selector->palette().color(QPalette::Button) == button_surface,
         "dark application Button role must reach the project selector");
-    require(roster_scroll->palette().color(QPalette::Base) == text_surface,
-        "dark application Base role must reach the roster scroll surface");
+    require(roster_scroll->palette().color(QPalette::Base) == token_window,
+        "roster scroll Base must follow windowBg (not the Qt application Base) "
+        "so the Agent list canvas stays theme-matched");
     auto *viewport = roster_scroll->viewport();
     require(viewport != nullptr
             && viewport->palette().color(QPalette::Base) == token_window
@@ -2981,12 +2982,21 @@ void verify_compact_header_hierarchy(
         "Start Agent must not appear in the selected-Agent header");
     auto visible_caption_actions = 0;
     for (auto *button : top_bar->findChildren<QPushButton *>()) {
-        if (button->isVisible() && !button->text().isEmpty()) {
-            ++visible_caption_actions;
+        if (!button->isVisible() || button->text().isEmpty()) {
+            continue;
         }
+        // Details cycles LLM verbose levels; Back is the narrow-mode history
+        // return. Neither is a lifecycle caption action.
+        const auto name = button->objectName();
+        if (name == QStringLiteral("lingtai_conversation_detail_toggle")
+                || name == QStringLiteral("lingtai_agent_detail_back")) {
+            continue;
+        }
+        ++visible_caption_actions;
     }
     require(visible_caption_actions == 0,
-        "the compact header must show no caption-carrying action buttons");
+        "the compact header must show no lifecycle caption actions "
+        "(Start Agent / similar); Details and Back are allowed");
 
     auto *sleep = required_child<QPushButton>(
         window, "lingtai_selected_agent_request_sleep");
@@ -3483,7 +3493,7 @@ void verify_telegram_theme_reset(
         surface_image.width() / 2,
         surface_image.width()));
     const auto incoming_avatar = trace_from_bounds(bounds_for_color(
-        st::dialogsNameFg->c,
+        st::windowBgActive->c,
         0,
         surface_image.width() / 2));
     require(outgoing.min_y >= 0,
