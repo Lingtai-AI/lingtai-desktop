@@ -2418,6 +2418,13 @@ NativeShell::~NativeShell() {
 }
 
 void NativeShell::refresh_system_palette() {
+    // setPalette / style updates emit ApplicationPaletteChange, which would
+    // re-enter here and stack full conversation rebuilds (100% CPU freeze).
+    if (refreshing_system_palette_) {
+        return;
+    }
+    refreshing_system_palette_ = true;
+
     apply_system_palette();
     apply_titlebar_brand_palette(window_.get());
     apply_project_setup_palette(setup_route_);
@@ -2445,12 +2452,24 @@ void NativeShell::refresh_system_palette() {
             "lingtai_slash_command_popup")) {
         apply_slash_popup_palette(popup);
     }
-    if (detail_view_) detail_view_->refresh_chrome();
-    render_conversation();
-    window_->update();
-    for (auto *widget : window_->findChildren<QWidget *>()) {
-        widget->update();
-    }
+
+    refreshing_system_palette_ = false;
+
+    // Defer the heavy conversation document rebuild until the palette storm
+    // settles. Do not also call render_conversation() here — that would rebuild
+    // twice (refresh_chrome already rebuilds with the cached rows).
+    const auto generation = ++palette_refresh_generation_;
+    QTimer::singleShot(50, window_.get(), [this, generation] {
+        if (generation != palette_refresh_generation_) {
+            return;
+        }
+        if (detail_view_) {
+            detail_view_->refresh_chrome();
+        }
+        if (window_) {
+            window_->update();
+        }
+    });
 }
 
 void NativeShell::show() {

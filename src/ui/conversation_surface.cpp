@@ -109,8 +109,10 @@ constexpr auto kParagraphBottomMargin = 10;
 // inter-line space than the prior 146% pair at this size).
 constexpr auto kBodyLineHeightPercent = 132;
 constexpr auto kListBottomMargin = 3;
-// Pull the first body block up under the Agent name/time header.
-constexpr auto kHeaderToBodyOverlap = 5;
+// Pull the first body block up under the Agent name/time header. 25 closes
+// more of the name→body gap without colliding with the 15px sender line;
+// inter-message frame margins still own message spacing.
+constexpr auto kHeaderToBodyOverlap = 25;
 constexpr auto kCodeBlockProperty = QTextFormat::UserProperty + 4;
 // Direction is frame metadata, not body alignment: Human body text stays left
 // aligned while the frame's margins and painter keep the bubble on the right.
@@ -1514,7 +1516,7 @@ void ConversationSurface::set_conversation(
     if (messages.empty()) {
         rebuild_empty_state();
     } else {
-        schedule_rebuild_document();
+        rebuild_document();
     }
     last_rendered_verbose_level_ = verbose_level_;
     last_layout_width_ = int(viewport()->width() / 8) * 8;
@@ -1541,6 +1543,9 @@ void ConversationSurface::apply_session_events(
             history_offset_ = min_offset;
         }
     }
+    // Coalesce only when a rebuild is already running (activity timer + async
+    // session load). Otherwise rebuild immediately so the UI and widget tests
+    // see frames without waiting on a debounce timer.
     schedule_rebuild_document();
     last_rendered_verbose_level_ = verbose_level_;
     last_layout_width_ = int(viewport()->width() / 8) * 8;
@@ -1558,7 +1563,21 @@ void ConversationSurface::refresh_chrome() {
         return;
     }
     last_layout_width_ = -1;
-    schedule_rebuild_document();
+    // Theme refreshes can arrive in a burst; coalesce into one deferred rebuild
+    // instead of synchronously laying out every message + verbose frame on the
+    // UI thread (that froze LingTai at 100% CPU).
+    if (rebuild_scheduled_) {
+        return;
+    }
+    rebuild_scheduled_ = true;
+    QTimer::singleShot(0, this, [this] {
+        rebuild_scheduled_ = false;
+        if (last_messages_.empty() || rebuild_in_progress_) {
+            update();
+            return;
+        }
+        rebuild_document();
+    });
 }
 
 int ConversationSurface::history_page_size() const noexcept {
@@ -1568,26 +1587,20 @@ int ConversationSurface::history_page_size() const noexcept {
 }
 
 void ConversationSurface::schedule_rebuild_document() {
+    if (rebuild_in_progress_) {
+        rebuild_scheduled_ = true;
+        return;
+    }
     if (rebuild_scheduled_) {
         return;
     }
-    rebuild_scheduled_ = true;
-    // Coalesce activity-timer + async session loads into one layout pass.
-    QTimer::singleShot(50, this, [this] {
-        rebuild_scheduled_ = false;
-        if (last_messages_.empty()) {
-            return;
-        }
-        if (rebuild_in_progress_) {
-            schedule_rebuild_document();
-            return;
-        }
-        rebuild_document();
-    });
+    // Prefer an immediate rebuild; only defer when coalescing a burst.
+    rebuild_document();
 }
 
 void ConversationSurface::rebuild_document() {
     if (rebuild_in_progress_) {
+        rebuild_scheduled_ = true;
         return;
     }
     rebuild_in_progress_ = true;
@@ -1788,9 +1801,9 @@ void ConversationSurface::rebuild_document() {
         }
         auto *frame = cursor.insertFrame(frame_format);
         cursor = frame->firstCursorPosition();
-        // The header block carries the whole-message lane format. A small
-        // negative bottom margin closes the Agent-name → body gap by 5pt
-        // without changing sender line metrics.
+        // The header block carries the whole-message lane format. A negative
+        // bottom margin closes the Agent-name → body gap by kHeaderToBodyOverlap
+        // without changing sender line metrics or inter-message frame gaps.
         auto header_format = block_format;
         header_format.setBottomMargin(-kHeaderToBodyOverlap);
         cursor.setBlockFormat(header_format);
@@ -1927,6 +1940,14 @@ void ConversationSurface::rebuild_document() {
     }
 
     rebuild_in_progress_ = false;
+    if (rebuild_scheduled_) {
+        rebuild_scheduled_ = false;
+        QTimer::singleShot(0, this, [this] {
+            if (!last_messages_.empty() && !rebuild_in_progress_) {
+                rebuild_document();
+            }
+        });
+    }
 }
 
 void ConversationSurface::rebuild_select_agent_prompt() {

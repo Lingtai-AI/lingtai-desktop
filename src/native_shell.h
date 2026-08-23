@@ -353,6 +353,11 @@ private:
     };
     std::shared_ptr<SessionEventsLoadToken> session_events_load_token_
         = std::make_shared<SessionEventsLoadToken>();
+
+    // Appearance/palette storms re-enter through ApplicationPaletteChange while
+    // setPalette runs; never nest a second refresh or a sync conversation rebuild.
+    bool refreshing_system_palette_ = false;
+    std::uint64_t palette_refresh_generation_ = 0;
 };
 
 } // namespace lingtai::desktop
