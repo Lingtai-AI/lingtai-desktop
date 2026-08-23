@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(lingtai_desktop LANGUAGES C CXX OBJC OBJCXX)
+project(lingtai_desktop VERSION 0.1.3 LANGUAGES C CXX OBJC OBJCXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -711,8 +711,8 @@ set_target_properties(lingtai_desktop_smoke PROPERTIES
     MACOSX_BUNDLE_BUNDLE_NAME "LingTai"
     MACOSX_BUNDLE_GUI_IDENTIFIER "ai.lingtai.desktop"
     MACOSX_BUNDLE_ICON_FILE AppIcon.icns
-    MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0"
-    MACOSX_BUNDLE_BUNDLE_VERSION "1"
+    MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+    MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_PATCH}"
     MACOSX_BUNDLE_INFO_STRING "LingTai Desktop")
 target_link_libraries(lingtai_desktop_smoke PRIVATE
     lingtai_desktop_native_shell
