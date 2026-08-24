@@ -287,7 +287,8 @@ target_link_libraries(lingtai_desktop_native_shell PRIVATE
 
 # The one current conversation owner: it turns an already-accepted route into
 # the direct rows the selected-Agent surface renders. It reads the human's own
-# mailbox and nothing else, and it owns no presentation.
+# mailbox and descriptor-validates attachment metadata through the shared
+# classifier owner; it reads no attachment content and owns no presentation.
 add_library(lingtai_desktop_conversation STATIC
     src/direct_conversation_history.cpp
     src/message_reactions.cpp
@@ -301,7 +302,8 @@ target_compile_options(lingtai_desktop_conversation PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_desktop_conversation
     PUBLIC lingtai_desktop_direct_route
-    PRIVATE Qt6::Core lingtai_desktop_posix_primitives)
+    PRIVATE Qt6::Core lingtai_desktop_attachment_selection
+        lingtai_desktop_posix_primitives)
 
 # The one current publisher owner: it turns an already-accepted route and a
 # validated body and optional accepted attachment facts into one exclusively

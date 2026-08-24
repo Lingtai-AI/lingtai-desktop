@@ -44,6 +44,8 @@ struct Envelope {
     std::optional<std::string> sole_recipient;
     bool carbon_copied = false;
     std::optional<std::string> identity_agent_id;
+    std::vector<std::string> attachment_hints;
+    std::size_t skipped_attachments = 0;
 };
 
 enum class Membership { incoming, outgoing, absent };
@@ -105,6 +107,24 @@ enum class Membership { incoming, outgoing, absent };
         envelope.identity_agent_id = string_field(
             identity.toObject(), "agent_id");
     }
+    const auto attachments = object.value(QLatin1StringView("attachments"));
+    if (!attachments.isUndefined()) {
+        if (!attachments.isArray()) {
+            ++envelope.skipped_attachments;
+        } else {
+            const auto array = attachments.toArray();
+            envelope.attachment_hints.reserve(
+                static_cast<std::size_t>(array.size()));
+            for (const auto &attachment : array) {
+                if (attachment.isString()) {
+                    envelope.attachment_hints.push_back(
+                        attachment.toString().toStdString());
+                } else {
+                    ++envelope.skipped_attachments;
+                }
+            }
+        }
+    }
     return envelope;
 }
 
@@ -153,6 +173,53 @@ enum class Membership { incoming, outgoing, absent };
     // after its size is taken still cannot be read past the limit.
     bytes.resize(total);
     return true;
+}
+
+// Serialized attachment parents are protocol hints only. Each final basename
+// is validated as one safe leaf, then opened under this already-open entry's
+// own attachments directory. Metadata is retained only after fstat succeeds
+// on that opened regular file; content is never read.
+void project_attachments(
+        int entry_fd,
+        const fs::path &entry_path,
+        const Envelope &envelope,
+        DirectConversationMessage &message,
+        DirectConversationHistory &history) {
+    history.skipped_attachments += envelope.skipped_attachments;
+    if (envelope.attachment_hints.empty()) return;
+
+    const auto directory = posix::open_directory_component(
+        entry_fd, "attachments");
+    if (directory.get() < 0) {
+        history.skipped_attachments += envelope.attachment_hints.size();
+        return;
+    }
+    message.attachments.reserve(envelope.attachment_hints.size());
+    for (const auto &hint : envelope.attachment_hints) {
+        const auto basename = fs::path(hint).filename();
+        if (!posix::safe_leaf(basename)) {
+            ++history.skipped_attachments;
+            continue;
+        }
+        const auto file = posix::open_regular_file_component(
+            directory.get(), basename);
+        if (file.get() < 0) {
+            ++history.skipped_attachments;
+            continue;
+        }
+        struct stat opened {};
+        if (::fstat(file.get(), &opened) != 0 || opened.st_size < 0) {
+            ++history.skipped_attachments;
+            continue;
+        }
+        const auto display_filename = basename.string();
+        message.attachments.push_back({
+            (entry_path / "attachments" / basename).lexically_normal(),
+            display_filename,
+            static_cast<std::uint64_t>(opened.st_size),
+            classify_attachment_media_kind(display_filename),
+        });
+    }
 }
 
 // One folder contributes its immediate <entry>/message.json files, opened
@@ -211,8 +278,13 @@ void read_folder(
         // The entry directory basename is the stable, displayed message ID.
         const auto outgoing = membership == Membership::outgoing;
         if (outgoing && !outgoing_ids.insert(name).second) continue;
-        history.messages.push_back({name, outgoing,
-            envelope->timestamp, envelope->subject, envelope->text});
+        DirectConversationMessage message{name, outgoing,
+            envelope->timestamp, envelope->subject, envelope->text, {}};
+        const auto entry_path = route.project_root / ".lingtai"
+            / route.human_directory_key / "mailbox" / folder_name / name;
+        project_attachments(entry_dir.get(), entry_path,
+            *envelope, message, history);
+        history.messages.push_back(std::move(message));
     }
 }
 

@@ -75,8 +75,8 @@ bounded no-emission parent `crl` update producer the smoke needs.
   (`src/project_attachment.h:34`) and `attach_project`
   (`src/project_attachment.h:59`): canonical-root containment seam.
 - `src/attachment_selection.{h,cpp}` — `preflight_attachments`: read-only
-  canonical source metadata, deterministic media classification, duplicate
-  detection, and ordered 25 MiB / 100 MiB limit application.
+  canonical source metadata, shared deterministic media classification,
+  duplicate detection, and ordered 25 MiB / 100 MiB limit application.
 - `src/agent_projection.{h,cpp}` — `project_agents`
   (`src/agent_projection.h:89`): one composite `.lingtai` scan returning
   `AgentSnapshot`/`AgentRow`.
@@ -87,7 +87,8 @@ bounded no-emission parent `crl` update producer the smoke needs.
   and `DirectConversationRoute` (`src/direct_conversation_route.h:23`): pure
   route resolution, no filesystem, no link edge to discovery.
 - `src/direct_conversation_history.{h,cpp}` — `read_direct_conversation`
-  (`src/direct_conversation_history.h:41`): read-only mailbox rows.
+  (`src/direct_conversation_history.h`): read-only mailbox rows plus ordered,
+  current-entry-rooted attachment metadata and attachment-skip accounting.
 - `src/direct_mail_publisher.{h,cpp}` — `send_direct_mail`
   (`src/direct_mail_publisher.h`): one atomically published exclusive human
   outbox leaf with optional private attachment copies.

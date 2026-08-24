@@ -10,6 +10,7 @@
 #include <string>
 #include <system_error>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #if !defined(_WIN32)
@@ -23,6 +24,7 @@ using lingtai::desktop::AttachmentRejectionReason;
 using lingtai::desktop::AttachmentSelectionResult;
 using lingtai::desktop::kAttachmentPerFileLimitBytes;
 using lingtai::desktop::kAttachmentTotalLimitBytes;
+using lingtai::desktop::classify_attachment_media_kind;
 using lingtai::desktop::preflight_attachments;
 
 namespace {
@@ -75,6 +77,13 @@ std::vector<TreeEntry> tree_snapshot(const fs::path &root) {
 }
 
 void verify_metadata_order_and_classification(const fs::path &sandbox) {
+    expect(classify_attachment_media_kind("photo.JPEG")
+                == AttachmentMediaKind::image
+            && classify_attachment_media_kind("photo.heic")
+                == AttachmentMediaKind::image
+            && classify_attachment_media_kind("archive")
+                == AttachmentMediaKind::file,
+        "the shared filename classifier is deterministic and case-insensitive");
     const auto first = sandbox / "first.PnG";
     const auto second = sandbox / "archive.unknown";
     write_file(first, "image-bytes");
@@ -219,6 +228,8 @@ void verify_limits_and_no_mutation(const fs::path &sandbox) {
 
 int main(int argc, char **argv) {
     static_assert(noexcept(preflight_attachments({})));
+    static_assert(noexcept(classify_attachment_media_kind(
+        std::declval<const fs::path &>())));
     static_assert(std::is_same_v<decltype(preflight_attachments({})),
         AttachmentSelectionResult>);
     static_assert(kAttachmentPerFileLimitBytes == 25ULL * 1024ULL * 1024ULL);

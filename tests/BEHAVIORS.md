@@ -70,7 +70,8 @@ Qt plugin path set and an 8 s watchdog.
   (`:94-128`).
 - `attachment_selection` proves ordered regular-file acceptance with canonical
   source, display name, exact size and accepted-byte accounting; conservative
-  case-insensitive image classification; canonical duplicate, missing,
+  case-insensitive image classification through its shared public pure owner;
+  canonical duplicate, missing,
   directory, FIFO, and practical unreadable rejections; inclusive 25 MiB and
   cumulative 100 MiB boundaries; rejected-file budget behavior; and a
   type/size-identical fixture tree after preflight
@@ -99,9 +100,14 @@ Qt plugin path set and an 8 s watchdog.
   incoming+outgoing render from `message` (never the misleading `body`) in
   timestamp order; exact envelope membership (scalar `to`, mismatched
   incoming `agent_id` absent, another conversation's mail absent); outbox/
-  sent collapse preferring `sent`; one generic skipped count per bad
-  neighbor with no valid neighbor hidden; and an intermediate symlink never
-  exposing an outside mailbox (`direct_conversation_history_test.cpp:113-264`).
+  sent collapse preferring `sent`; text-only compatibility; current-entry
+  rooting for inbox, sent, and pre-pickup outbox attachment metadata; exact
+  opened sizes without outgoing limits; shared media classification; ordered
+  duplicates; independent bad-attachment accounting with message/good-sibling
+  survival; malicious serialized-parent containment; symlinked directory/file
+  and non-regular rejection; no-write snapshots; one generic skipped count per
+  bad neighbor with no valid neighbor hidden; and an intermediate symlink never
+  exposing an outside mailbox (`direct_conversation_history_test.cpp`).
 - `direct_mail_publisher` proves the text-only envelope remains field-compatible
   and attachment-free; attachment-only and mixed publication use exact private
   copies, deterministic extension-preserving duplicate names, and final human

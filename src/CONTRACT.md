@@ -50,7 +50,8 @@ Reads (no writes, no durable state):
 - `parse_slash_command(raw_text)` → `std::optional<SlashCommand>`
   (`slash_command.h`) — classification only; support and effects remain outside.
 - `read_direct_conversation(route)` → `DirectConversationHistory`
-  (`direct_conversation_history.h`).
+  (`direct_conversation_history.h`) — text rows plus ordered, descriptor-
+  validated attachment metadata and independent attachment-skip accounting.
 - `read_agent_preset_summary(attachment, key)` → `AgentPresetSummary`
   (`agent_preset_summary.h`).
 - `preflight_attachments(selected_paths)` → `AttachmentSelectionResult`
@@ -88,7 +89,8 @@ caller proposes typed transitions only; the model performs no reads.
 - Attachment selection (`attachment_selection.h`) is a separate Qt-independent
   local-file adapter. It canonicalizes and opens selected sources, measures the
   opened regular files, retains their device/inode identities, deduplicates
-  those identities, classifies a small explicit image-extension set, and
+  those identities, owns the shared pure filename classifier for the small
+  explicit image-extension set, and
   applies the 25 MiB per-file and 100 MiB cumulative limits in caller order. A
   publisher must revalidate later because these facts do not close the
   time-of-check/time-of-use gap.
@@ -112,7 +114,10 @@ caller proposes typed transitions only; the model performs no reads.
    writes. Attachment selection instead canonicalizes an arbitrary caller-
    selected local path and verifies the opened descriptor; it is not a
    project-tree walk. A missing/unreadable/unsafe source reduces to a coarse
-   state; one bad sibling never hides a healthy neighbor.
+   state; one bad sibling never hides a healthy neighbor. Conversation
+   attachment paths discard serialized parents, root the validated basename
+   under the current entry, and remain observations rather than later action
+   authorization.
 3. **Publishers/launchers own side effects.** Only `send_direct_mail`,
    `request_agent_sleep`, `start_agent`, and `ProjectBootstrapRunner` write or
    launch. Direct mail `queued` means only that the complete human outbox leaf

@@ -160,6 +160,9 @@ its code.
   25 MiB per-file and 100 MiB cumulative limits are applied in input order;
   rejection consumes no cumulative budget, so a later smaller file can still
   fit.
+- `classify_attachment_media_kind` is the one shared, filesystem-free owner of
+  the case-insensitive `.gif`/`.heic`/`.jpeg`/`.jpg`/`.png`/`.webp` filename
+  classification used by both selection and history projection.
 - Missing, non-regular, unreadable, oversized, over-total, duplicate, and other
   local failures remain distinct typed rejections carrying the rejected input.
   Preflight performs no write or copy, catches failures at its public boundary,
@@ -198,6 +201,14 @@ its code.
   the entry ID as tie-break; markup is never interpreted. This is the TUI
   functional boundary: delivery, replies, and unread state are neither read
   nor inferred.
+- `read_direct_conversation` also projects read-only attachment metadata without
+  changing that text presentation: it ignores every serialized parent, accepts
+  only a safe final basename opened beneath the current inbox/sent/outbox
+  entry's own real `attachments` directory, measures the opened regular file by
+  `fstat`, preserves valid JSON order and duplicates, and reads no content.
+  Missing/malformed/unsafe/symlinked/non-regular attachment entries increment
+  `skipped_attachments`, never `skipped`, so the message and good siblings
+  survive. These local paths are observations only; open/reveal must revalidate.
 
 ## Dashboard sections
 

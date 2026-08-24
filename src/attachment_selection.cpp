@@ -33,22 +33,6 @@ struct SourceIdentity {
     return AttachmentRejectionReason::local_failure;
 }
 
-[[nodiscard]] AttachmentMediaKind classify_media_kind(
-        const fs::path &display_path) {
-    auto extension = display_path.extension().string();
-    std::transform(extension.begin(), extension.end(), extension.begin(),
-        [](unsigned char character) {
-            return static_cast<char>(std::tolower(character));
-        });
-    static constexpr std::array<const char *, 6> kImageExtensions = {
-        ".gif", ".heic", ".jpeg", ".jpg", ".png", ".webp",
-    };
-    return std::find(kImageExtensions.begin(), kImageExtensions.end(), extension)
-            != kImageExtensions.end()
-        ? AttachmentMediaKind::image
-        : AttachmentMediaKind::file;
-}
-
 void reject(
         AttachmentSelectionResult &result,
         const fs::path &input_path,
@@ -58,6 +42,26 @@ void reject(
 }
 
 } // namespace
+
+AttachmentMediaKind classify_attachment_media_kind(
+        const fs::path &display_path) noexcept {
+    try {
+        auto extension = display_path.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+            [](unsigned char character) {
+                return static_cast<char>(std::tolower(character));
+            });
+        static constexpr std::array<const char *, 6> kImageExtensions = {
+            ".gif", ".heic", ".jpeg", ".jpg", ".png", ".webp",
+        };
+        return std::find(kImageExtensions.begin(), kImageExtensions.end(),
+                   extension) != kImageExtensions.end()
+            ? AttachmentMediaKind::image
+            : AttachmentMediaKind::file;
+    } catch (...) {
+        return AttachmentMediaKind::file;
+    }
+}
 
 AttachmentSelectionResult preflight_attachments(
         const std::vector<fs::path> &selected_paths) noexcept {
@@ -132,7 +136,7 @@ AttachmentSelectionResult preflight_attachments(
                 source_path,
                 selected_path.filename().string(),
                 byte_size,
-                classify_media_kind(selected_path),
+                classify_attachment_media_kind(selected_path),
                 static_cast<std::uint64_t>(status.st_dev),
                 static_cast<std::uint64_t>(status.st_ino),
             });

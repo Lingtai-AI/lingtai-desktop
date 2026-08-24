@@ -1,5 +1,7 @@
 #include "direct_conversation_history.h"
 
+#include "attachment_selection.h"
+
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -9,13 +11,18 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <sys/stat.h>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace {
 
 namespace fs = std::filesystem;
+using lingtai::desktop::AttachmentMediaKind;
 using lingtai::desktop::DirectConversationHistory;
 using lingtai::desktop::DirectConversationRoute;
+using lingtai::desktop::classify_attachment_media_kind;
 using lingtai::desktop::read_direct_conversation;
 
 void require(bool condition, const std::string &message) {
@@ -81,9 +88,15 @@ std::string envelope(
         + R"(","body":"MISLEADING LEGACY BODY FIELD")"
         + R"(,"type":"normal","mode":"peer")" + identity
         + R"(,"_mailbox_id":"ignored-in-favour-of-directory-name")"
-        + R"(,"attachments":["../escape/should-never-be-touched"])"
         + R"(,")" + std::string(timestamp_key) + R"(":")"
         + std::string(timestamp) + R"("})";
+}
+
+std::string with_attachments(std::string message, std::string_view value) {
+    require(!message.empty() && message.back() == '}',
+        "fixture envelope must be an object");
+    message.pop_back();
+    return message + R"(,"attachments":)" + std::string(value) + "}";
 }
 
 DirectConversationRoute route_for(const fs::path &project_root) {
@@ -192,6 +205,149 @@ void verify_outbox_and_sent_collapse(const fs::path &sandbox) {
     require(history.skipped == 0,
         "a collapsed duplicate is not an error, and a pending outbox entry "
         "orders on its own deliver_at rather than being dropped");
+    require(history.messages[0].attachments.empty()
+            && history.skipped_attachments == 0,
+        "text-only collapse remains attachment-free with no attachment skips");
+}
+
+void verify_attachment_projection_and_current_entry_rooting(
+        const fs::path &sandbox) {
+    const auto project = sandbox / "attachment-projection";
+    const auto mailbox = mailbox_of(project);
+    const auto incoming = mailbox / "inbox" / "incoming-attachments";
+    write_file(incoming / "attachments" / "photo.PNG", "image-bytes");
+    write_file(incoming / "attachments" / "report.pdf", "report");
+    write_file(incoming / "message.json", with_attachments(
+        envelope("telegram-bot", "human", "Incoming files", "See both.",
+            "received_at", "2026-08-07T09:00:00Z"),
+        R"(["/future/sent/photo.PNG","nested/report.pdf","report.pdf"])"));
+
+    const auto sent = mailbox / "sent" / "sent-attachment";
+    write_file(sent / "attachments" / "notes.txt", "sent-notes");
+    write_file(sent / "message.json", with_attachments(
+        envelope("human", "telegram-bot", "Sent file", "Sent text.",
+            "sent_at", "2026-08-07T09:01:00Z"),
+        R"(["/already/sent/notes.txt"])"));
+
+    const auto pending = mailbox / "outbox" / "pending-attachment";
+    write_file(pending / "attachments" / "pending.webp", "webp");
+    write_file(pending / "message.json", with_attachments(
+        envelope("human", "telegram-bot", "Pending file", "Pending text.",
+            "deliver_at", "2026-08-07T09:02:00Z"),
+        R"(["/project/.lingtai/human/mailbox/sent/pending-attachment/attachments/pending.webp"])"));
+
+    const auto large = incoming / "attachments" / "large.bin";
+    write_file(large, "x");
+    std::error_code resize_error;
+    fs::resize_file(large,
+        lingtai::desktop::kAttachmentPerFileLimitBytes + 1, resize_error);
+    require(!resize_error, "large history attachment fixture must be resized");
+    auto incoming_json = read_file(incoming / "message.json");
+    incoming_json.pop_back();
+    incoming_json.insert(incoming_json.size() - 1,
+        R"(,"/somewhere/large.bin")");
+    incoming_json.push_back('}');
+    write_file(incoming / "message.json", incoming_json);
+
+    const auto history = read_direct_conversation(route_for(project));
+    require(ids_of(history) == std::vector<std::string>{
+                "incoming-attachments", "sent-attachment", "pending-attachment"},
+        "incoming, sent, and pending attachment rows retain history ordering");
+    require(history.skipped == 0 && history.skipped_attachments == 0,
+        "all valid attachment metadata projects without skips");
+
+    const auto &incoming_message = history.messages[0];
+    require(incoming_message.attachments.size() == 4,
+        "every valid incoming attachment, including a duplicate, is retained");
+    require(incoming_message.attachments[0].display_filename == "photo.PNG"
+            && incoming_message.attachments[1].display_filename == "report.pdf"
+            && incoming_message.attachments[2].display_filename == "report.pdf"
+            && incoming_message.attachments[3].display_filename == "large.bin",
+        "attachment JSON order and duplicate names are preserved");
+    require(incoming_message.attachments[0].local_path
+            == (incoming / "attachments" / "photo.PNG").lexically_normal()
+            && incoming_message.attachments[1].local_path
+            == (incoming / "attachments" / "report.pdf").lexically_normal(),
+        "serialized parents are discarded and paths root under this inbox entry");
+    require(incoming_message.attachments[0].byte_size == 11
+            && incoming_message.attachments[1].byte_size == 6
+            && incoming_message.attachments[3].byte_size
+                == lingtai::desktop::kAttachmentPerFileLimitBytes + 1,
+        "history reports opened-file sizes exactly and applies no send limits");
+    require(incoming_message.attachments[0].media_kind
+                == AttachmentMediaKind::image
+            && incoming_message.attachments[0].media_kind
+                == classify_attachment_media_kind("photo.PNG")
+            && incoming_message.attachments[1].media_kind
+                == classify_attachment_media_kind("report.pdf"),
+        "history shares Commit 1's deterministic media classifier");
+
+    require(history.messages[1].attachments.size() == 1
+            && history.messages[1].attachments[0].local_path
+                == (sent / "attachments" / "notes.txt").lexically_normal(),
+        "sent metadata roots under the current sent entry");
+    require(history.messages[2].attachments.size() == 1
+            && history.messages[2].attachments[0].local_path
+                == (pending / "attachments" / "pending.webp").lexically_normal(),
+        "pre-pickup JSON naming future sent bytes roots to current outbox");
+}
+
+void verify_bad_attachments_preserve_messages_and_stay_contained(
+        const fs::path &sandbox) {
+    const auto project = sandbox / "bad-attachments";
+    const auto outside = sandbox / "bad-attachments-outside";
+    const auto mailbox = mailbox_of(project);
+    const auto mixed = mailbox / "inbox" / "mixed";
+    write_file(mixed / "attachments" / "good.txt", "good");
+    write_file(outside / "outside.txt", "outside-secret");
+    std::error_code error;
+    fs::create_symlink(outside / "outside.txt",
+        mixed / "attachments" / "symlink.txt", error);
+    require(!error, "symlinked attachment fixture must be created");
+    fs::create_directory(mixed / "attachments" / "folder", error);
+    require(!error, "directory attachment fixture must be created");
+    require(::mkfifo((mixed / "attachments" / "pipe").c_str(), 0600) == 0,
+        "FIFO attachment fixture must be created");
+    write_file(mixed / "message.json", with_attachments(
+        envelope("telegram-bot", "human", "Mixed", "Text survives.",
+            "received_at", "2026-08-07T10:00:00Z"),
+        R"(["good.txt","missing.txt","/","..",17,"symlink.txt","folder","pipe","../../outside/outside.txt"])"));
+
+    const auto symlinked_directory = mailbox / "inbox" / "symlinked-directory";
+    write_file(symlinked_directory / "message.json", with_attachments(
+        envelope("telegram-bot", "human", "Linked directory",
+            "This text also survives.", "received_at",
+            "2026-08-07T10:01:00Z"), R"(["outside.txt"])"));
+    fs::create_directory_symlink(outside,
+        symlinked_directory / "attachments", error);
+    require(!error, "symlinked attachments directory fixture must be created");
+
+    write_file(mailbox / "inbox" / "malformed-field" / "message.json",
+        with_attachments(envelope("telegram-bot", "human", "Malformed field",
+            "Malformed metadata does not hide me.", "received_at",
+            "2026-08-07T10:02:00Z"), R"({"not":"an array"})"));
+
+    const auto project_before = tree_snapshot(project);
+    const auto outside_before = tree_snapshot(outside);
+    const auto history = read_direct_conversation(route_for(project));
+    require(tree_snapshot(project) == project_before
+            && tree_snapshot(outside) == outside_before,
+        "attachment projection must write neither mailbox nor outside bytes");
+    require(ids_of(history) == std::vector<std::string>{
+                "mixed", "symlinked-directory", "malformed-field"},
+        "bad attachment metadata never hides otherwise valid message text");
+    require(history.skipped == 0,
+        "bad attachments never increment skipped-message accounting");
+    require(history.skipped_attachments == 10,
+        "each bad array element and each malformed field is observable");
+    require(history.messages[0].text == "Text survives."
+            && history.messages[0].attachments.size() == 1
+            && history.messages[0].attachments[0].display_filename == "good.txt",
+        "one good sibling survives missing, unsafe, non-string, linked, and "
+        "non-regular attachment entries");
+    require(history.messages[1].attachments.empty()
+            && history.messages[2].attachments.empty(),
+        "symlinked directories and malformed fields fail closed per message");
 }
 
 // One bad neighbor is counted generically and never hides a valid neighbor.
@@ -266,6 +422,11 @@ void verify_intermediate_symlink_no_outside_read(const fs::path &sandbox) {
 } // namespace
 
 int main(int argc, char **argv) {
+    static_assert(noexcept(read_direct_conversation(
+        std::declval<const DirectConversationRoute &>())));
+    static_assert(std::is_same_v<decltype(read_direct_conversation(
+        std::declval<const DirectConversationRoute &>())),
+        DirectConversationHistory>);
     if (argc < 2) {
         std::cerr << "usage: " << argv[0] << " <sandbox>\n";
         return 2;
@@ -281,6 +442,8 @@ int main(int argc, char **argv) {
         verify_incoming_and_outgoing_pair(sandbox);
         verify_exact_direct_membership(sandbox);
         verify_outbox_and_sent_collapse(sandbox);
+        verify_attachment_projection_and_current_entry_rooting(sandbox);
+        verify_bad_attachments_preserve_messages_and_stay_contained(sandbox);
         verify_bad_neighbors_are_skipped(sandbox);
         verify_intermediate_symlink_no_outside_read(sandbox);
 

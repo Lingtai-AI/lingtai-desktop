@@ -64,8 +64,9 @@ Domain models (pure, Qt-light state/derivation owners):
   relative path.
 - `attachment_selection.{h,cpp}` — Qt-independent selected-file preflight:
   canonical/opened regular-file facts, stable source metadata, filesystem-
-  identity deduplication, conservative image classification, ordered limits,
-  and typed local rejections. It owns no UI, copy, or publication authority.
+  identity deduplication, the shared pure conservative filename classifier,
+  ordered limits, and typed local rejections. It owns no UI, copy, or
+  publication authority.
 - `workspace_selection.{h,cpp}` — C1 model: the sole owner of the optional
   accepted active project and optional selected Agent directory key, and the
   sole same-root/root-switch transition owner.
@@ -86,7 +87,8 @@ Domain readers/projections (stateless, read-only, one source each):
   classification matching the TUI leading-slash / first-ASCII-space boundary;
   owns no dispatch, widget, filesystem access, or side effect.
 - `direct_conversation_history.{h,cpp}` — `read_direct_conversation`: reads
-  the human's own `mailbox` `inbox`/`sent`/`outbox` `message.json` rows.
+  the human's own `mailbox` `inbox`/`sent`/`outbox` `message.json` rows and
+  descriptor-validates ordered attachment metadata under each current entry.
 - `agent_preset_summary.{h,cpp}` — `read_agent_preset_summary`: reads the
   kernel-published `system/manifest.resolved.json` v1 envelope plus an
   `init.json` mtime staleness comparison.
@@ -142,6 +144,8 @@ keeps the parent summary):
   `workspace_selection` do not (pure `std::filesystem`/state), while
   `attachment_selection` opens arbitrary caller-selected absolute sources
   directly because it is not anchored in a project tree.
+- `direct_conversation_history` → `attachment_selection`: only the shared pure
+  filename media classifier; history applies no outgoing selection limits.
 - CMake link edges are the structural enforcement: `lingtai_desktop_direct_route`
   links only `lingtai_desktop_core` (a second discovery read is structurally
   impossible), and `lingtai_desktop_agent_launch` links only

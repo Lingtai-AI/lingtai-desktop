@@ -55,7 +55,7 @@ touches a real Agent or project, and none depends on a network or provider.
   Containment seam: canonical roots, typed failures, symlink/no-escape rules.
 - `tests/attachment_selection_test.cpp` — `attachment_selection` ctest.
   Qt-free direct-file metadata, typed local rejection, deduplication, ordered
-  size limits, accounting, and no-mutation proof.
+  size limits, shared classifier, accounting, and no-mutation proof.
 - `tests/workspace_selection_test.cpp` — `workspace_selection` ctest. C1
   model: activation/selection/clear transitions, no-write proof.
 - `tests/agent_projection_test.cpp` — `agent_projection` ctest. The one
@@ -65,7 +65,9 @@ touches a real Agent or project, and none depends on a network or provider.
 - `tests/slash_command_test.cpp` — `slash_command` ctest. Pure TUI-shaped
   command classification; no Qt, filesystem, project fixture, or side effect.
 - `tests/direct_conversation_history_test.cpp` — `direct_conversation_history`
-  ctest. Read-only mailbox rows, membership, order, collapse, no-write.
+  ctest. Read-only mailbox rows and attachment metadata, descriptor-relative
+  containment, independent skip accounting, membership, order, collapse, and
+  no-write proof.
 - `tests/direct_mail_publisher_test.cpp` — `direct_mail_publisher` ctest.
   Atomic text/attachment outbox leaf, revalidation, limits, final sent paths,
   naming, private byte copies, typed failures, rollback, and containment.

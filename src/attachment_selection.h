@@ -15,6 +15,11 @@ inline constexpr std::uint64_t kAttachmentTotalLimitBytes =
 
 enum class AttachmentMediaKind { image, file };
 
+// Shared deterministic filename-only classification. This makes no claim
+// about file content and performs no filesystem access.
+[[nodiscard]] AttachmentMediaKind classify_attachment_media_kind(
+    const std::filesystem::path &display_path) noexcept;
+
 enum class AttachmentRejectionReason {
     missing,
     not_regular,
