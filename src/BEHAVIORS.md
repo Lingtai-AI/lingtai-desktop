@@ -97,7 +97,10 @@ its code.
 - A one-second view-scoped `QTimer` (the only poller) re-invokes the same
   stateless readers for conversation and Presets, and
   keeps the Request-sleep / Start-Agent button states honest; it never
-  carries a cursor or offset.
+  carries a cursor or offset. On an ordinary active-project tick, each valid
+  non-human Agent conversation is read once: the selected history observed for
+  unread catch-up is moved into the selected conversation render instead of
+  being projected again in the same tick.
 - Roster state label: `Roster unavailable` when the scan is not complete,
   `No Agents found — scan complete`, or `N Agent(s) — scan complete`.
 
@@ -217,7 +220,9 @@ its code.
   `message` field), chronological by the kernel's timestamp precedence with
   the entry ID as tie-break; markup is never interpreted. This is the TUI
   functional boundary: delivery, replies, and unread state are neither read
-  nor inferred.
+  nor inferred. Its render-time tail window retains every older slice already
+  revealed when the same conversation grows, so an unchanged or append tick
+  never collapses that view back to the initial tail.
 - `read_direct_conversation` also projects read-only attachment metadata without
   changing that text presentation: it ignores every serialized parent, accepts
   only a safe final basename opened beneath the current inbox/sent/outbox

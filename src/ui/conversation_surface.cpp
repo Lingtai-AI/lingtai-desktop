@@ -1671,6 +1671,9 @@ void ConversationSurface::set_conversation(
     disarm_attachment_action();
     const auto core_unchanged = them == them_
         && same_core_content(messages, reactions);
+    const auto same_conversation_nonshrinking = !last_messages_.empty()
+        && them == them_
+        && messages.size() >= last_messages_.size();
     them_ = them;
     last_messages_ = messages;
     last_reactions_ = reactions;
@@ -1691,9 +1694,11 @@ void ConversationSurface::set_conversation(
         : QStringLiteral("The current direct conversation, read-only. "
               "Attachments in message order: %1")
               .arg(attachment_names.join(QStringLiteral(", "))));
-    if (!core_unchanged) {
+    if (!core_unchanged && !same_conversation_nonshrinking) {
         // Reset the render-time window to the initial chronological tail
-        // whenever the conversation identity or mail content is replaced.
+        // when the conversation changes or rows disappear. An append keeps
+        // every older slice the human already revealed without adding a
+        // second history cursor or truncating the cached model.
         const auto page = history_page_size();
         history_offset_ = int(messages.size() > std::size_t(page)
             ? messages.size() - std::size_t(page)

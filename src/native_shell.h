@@ -140,8 +140,10 @@ private:
     [[nodiscard]] bool in_project_setup() const;
     void refresh_route();
     void render_roster();
-    void refresh_unseen_badges();
-    void render_conversation();
+    [[nodiscard]] std::optional<DirectConversationHistory>
+        refresh_unseen_badges();
+    void render_conversation(
+        std::optional<DirectConversationHistory> history = std::nullopt);
     void invalidate_session_events_cache();
     [[nodiscard]] const std::vector<ConversationSessionEntry> &
         cached_session_events_for(

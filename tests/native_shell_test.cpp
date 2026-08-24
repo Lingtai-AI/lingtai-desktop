@@ -21,6 +21,7 @@
 #include <QtCore/QCoreApplication>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QEventLoop>
+#include <QtCore/QMetaObject>
 #include <QtCore/QRegularExpression>
 #include <QtCore/QString>
 #include <QtCore/QThread>
@@ -66,12 +67,17 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdarg>
+#include <dlfcn.h>
 #include <filesystem>
+#include <fcntl.h>
 #include <fstream>
 #include <functional>
 #include <iostream>
 #include <iterator>
+#include <limits.h>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -79,6 +85,44 @@
 #include <sys/stat.h>
 #include <type_traits>
 #include <vector>
+
+#ifdef __APPLE__
+namespace {
+
+std::mutex mailbox_open_mutex;
+bool mailbox_open_counting = false;
+std::map<std::string, int> mailbox_message_opens;
+
+} // namespace
+
+extern "C" int openat(
+        int parent_fd, const char *path, int flags, ...) {
+    using OpenAt = int (*)(int, const char *, int, ...);
+    static const auto real_openat = reinterpret_cast<OpenAt>(
+        dlsym(RTLD_NEXT, "openat"));
+
+    if (path && std::string_view(path) == "message.json") {
+        char parent_path[PATH_MAX] = {};
+        if (::fcntl(parent_fd, F_GETPATH, parent_path) == 0) {
+            const auto full_path = (std::filesystem::path(parent_path) / path)
+                .lexically_normal().string();
+            const auto lock = std::lock_guard(mailbox_open_mutex);
+            if (mailbox_open_counting) {
+                ++mailbox_message_opens[full_path];
+            }
+        }
+    }
+
+    if ((flags & O_CREAT) != 0) {
+        va_list args;
+        va_start(args, flags);
+        const auto mode = static_cast<mode_t>(va_arg(args, int));
+        va_end(args);
+        return real_openat(parent_fd, path, flags, mode);
+    }
+    return real_openat(parent_fd, path, flags);
+}
+#endif
 
 namespace {
 
@@ -1305,6 +1349,59 @@ void verify_selected_agent_conversation(
         "the compact state must show the skipped count without a message "
         "total");
 
+#ifdef __APPLE__
+    // Exercise the ordinary one-second composition seam deterministically.
+    // Every valid Agent route scans these same human mailbox entries, so with
+    // exactly two valid non-human Agents each message.json must be opened
+    // exactly twice: once for the selected conversation and once for the
+    // sibling's unread badge. Any duplicate selected projection increases
+    // every count above two.
+    auto activity_timers = std::vector<QTimer *>();
+    for (auto *timer : window.findChildren<QTimer *>()) {
+        if (timer->interval() == 1000 && timer->isActive()) {
+            activity_timers.push_back(timer);
+        }
+    }
+    require(activity_timers.size() == 1,
+        "the selected conversation must have exactly one active one-second "
+        "view timer");
+    auto *activity_timer = activity_timers.front();
+    activity_timer->stop();
+    {
+        const auto lock = std::lock_guard(mailbox_open_mutex);
+        mailbox_message_opens.clear();
+        mailbox_open_counting = true;
+    }
+    require(QMetaObject::invokeMethod(
+                activity_timer, "timeout", Qt::DirectConnection),
+        "the ordinary one-second timer seam must be invokable");
+    auto observed_opens = std::map<std::string, int>();
+    {
+        const auto lock = std::lock_guard(mailbox_open_mutex);
+        mailbox_open_counting = false;
+        observed_opens = mailbox_message_opens;
+    }
+    activity_timer->start();
+
+    const auto expected_entries = std::array{
+        incoming_entry / "message.json",
+        mailbox / "sent" / "20260807T190000-aa01" / "message.json",
+        mailbox / "inbox" / "20260807T185000-zz99" / "message.json",
+        mailbox / "inbox" / "20260807T185500-bad0" / "message.json",
+    };
+    require(observed_opens.size() == expected_entries.size(),
+        "one ordinary tick must inspect exactly the four fixture mailbox "
+        "entries; observed " + std::to_string(observed_opens.size()));
+    for (const auto &entry : expected_entries) {
+        const auto found = observed_opens.find(entry.lexically_normal().string());
+        require(found != observed_opens.end() && found->second == 2,
+            "one ordinary tick must read the selected mailbox at most once "
+            "and each sibling mailbox once; observed "
+            + std::to_string(found == observed_opens.end() ? 0 : found->second)
+            + " reads of " + entry.filename().string());
+    }
+#endif
+
     // The UI-to-shell boundary carries presentation-time identity, but the
     // shell resolves the current route and entry again before invoking only
     // the injected external action. No test launches Finder or another app.
@@ -1434,7 +1531,7 @@ void verify_selected_agent_conversation(
     // vacuously true. Each filler message contributes several wrapped lines
     // via embedded newlines, so a small count already exceeds any plausible
     // panel height.
-    for (auto index = 0; index != 120; ++index) {
+    for (auto index = 0; index != 220; ++index) {
         const auto minute = 10 + index / 60;
         const auto second = index % 60;
         const auto timestamp = QStringLiteral("2026-08-07T19:%1:%2Z")
@@ -1460,10 +1557,30 @@ void verify_selected_agent_conversation(
         "the filler fixture must render through the same one-second view "
         "timer before the pane-overflow assertions below are meaningful");
 
+    // Re-enter the target once so the 220-row fixture starts from the normal
+    // initial tail window; the subsequent Ctrl+U and timer appends then prove
+    // that an already expanded window is retained without any reselection.
+    click_agent(shell, "issue-643");
+    click_agent(shell, "telegram-bot");
+
     auto *conversation_scrollbar = surface->verticalScrollBar();
     require(conversation_scrollbar->maximum() > 0,
         "the fixture must genuinely overflow the pane, or the bottom-follow "
         "assertions below would be vacuous");
+
+    // Reveal the cached older slice before either append. An ordinary tick
+    // must keep that expanded render-time window; append refreshes may grow it
+    // but must not collapse it back to the initial tail.
+    require(surface->toPlainText().contains(QStringLiteral("older — ctrl+u")),
+        "the overflow fixture must begin with hidden cached history");
+    conversation_scrollbar->setValue(conversation_scrollbar->minimum());
+    QKeyEvent reveal_older(
+        QEvent::KeyPress, Qt::Key_U, Qt::ControlModifier);
+    QCoreApplication::sendEvent(surface, &reveal_older);
+    QCoreApplication::processEvents();
+    require(surface->toPlainText().contains(
+                QStringLiteral("▲ 22 older — ctrl+u to load")),
+        "Ctrl+U must retain the expanded partial-history window");
 
     // Establish the human at the bottom with an active selection, matching
     // Ted's exact acceptance state before the reply below arrives.
@@ -1509,6 +1626,9 @@ void verify_selected_agent_conversation(
     require(surface->toPlainText().contains(QStringLiteral("Yes, awake now.")),
         "a new incoming direct reply appended with no reselection must "
         "become visible through the real one-second view timer");
+    require(surface->toPlainText().contains(
+                QStringLiteral("▲ 22 older — ctrl+u to load")),
+        "an append tick must not collapse already revealed older history");
     require(conversation_scrollbar->value() == conversation_scrollbar->maximum(),
         "the newly arrived reply must be visible: the pane must follow the "
         "bottom when the human was already there, not leave the reply below "
@@ -1538,6 +1658,9 @@ void verify_selected_agent_conversation(
                 QStringLiteral("Scrolled-up reply text.")),
         "a scrolled-up append must still surface through the real one-second "
         "view timer");
+    require(surface->toPlainText().contains(
+                QStringLiteral("▲ 22 older — ctrl+u to load")),
+        "a scrolled-up append must not shrink the revealed history window");
     require(conversation_scrollbar->value() == scrolled_value,
         "a scrolled-up append must preserve the prior non-bottom position");
     const auto after_reply = tree_snapshot(project);

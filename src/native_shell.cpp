@@ -1960,11 +1960,12 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
     activity_timer_ = new QTimer(body);
     activity_timer_->setInterval(1000);
     QObject::connect(activity_timer_, &QTimer::timeout, [this] {
-        render_conversation();
         render_agent_preset_summary();
         if (pending_sleep_observation_) {
+            render_conversation();
             tick_agent_sleep_observation();
         } else if (pending_start_observation_) {
+            render_conversation();
             tick_agent_start_observation();
         } else if (selection_state_.active_project()) {
             // No click-armed observation is pending. Rerun the same stateless
@@ -1973,6 +1974,8 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
             // eligibility stay current without reselection.
             agents_ = project_agents(*selection_state_.active_project());
             render_roster();
+        } else {
+            render_conversation();
         }
         // Kanban is a full disk snapshot (token ledgers, sqlite, daemon runs)
         // plus a widget-tree rebuild. The 1s conversation timer must not
@@ -3064,7 +3067,7 @@ void NativeShell::render_roster() {
     // row identity intact.
     agent_roster_->set_rows(
         agents_, selection_state_.selected_agent_directory_key());
-    refresh_unseen_badges();
+    auto selected_history = refresh_unseen_badges();
 
     const auto selected = selection_state_.selected_agent_directory_key();
     const AgentRow *detail_item = nullptr;
@@ -3100,7 +3103,7 @@ void NativeShell::render_roster() {
         status_context->clear();
         selected_facts->setText(QStringLiteral(
             "Choose a valid manifest row to inspect its detail."));
-        render_conversation();
+        render_conversation(std::move(selected_history));
         render_agent_preset_summary();
         render_agent_sleep_status();
         render_agent_start_status();
@@ -3208,7 +3211,7 @@ void NativeShell::render_roster() {
     selected_facts->setText(QStringLiteral("manifest: %1\nrole: %2\npresence: %3")
         .arg(manifest_text(detail_item->manifest_kind),
             role_text(detail_item->role), presence_text(detail_item->presence)));
-    render_conversation();
+    render_conversation(std::move(selected_history));
     render_agent_preset_summary();
     render_agent_sleep_status();
     render_agent_start_status();
@@ -3218,16 +3221,18 @@ void NativeShell::render_roster() {
     // boundaries clear the label themselves.
 }
 
-void NativeShell::refresh_unseen_badges() {
+std::optional<DirectConversationHistory>
+NativeShell::refresh_unseen_badges() {
     if (!agent_roster_ || !selection_state_.active_project()) {
         if (agent_roster_) {
             agent_roster_->set_unseen_counts({});
         }
-        return;
+        return std::nullopt;
     }
     const auto &attachment = *selection_state_.active_project();
     const auto selected = selection_state_.selected_agent_directory_key();
     auto counts = std::unordered_map<std::string, int>{};
+    auto selected_history = std::optional<DirectConversationHistory>();
     for (const auto &item : agents_.items) {
         if (item.role == AgentRole::human
             || item.manifest_kind != AgentManifestKind::valid) {
@@ -3239,9 +3244,10 @@ void NativeShell::refresh_unseen_badges() {
             continue;
         }
         const auto key = path_text(item.directory_key).toStdString();
-        const auto history = read_direct_conversation(*route);
+        auto history = read_direct_conversation(*route);
         if (selected && *selected == item.directory_key) {
             conversation_unread_.catch_up(key, history);
+            selected_history = std::move(history);
             continue;
         }
         if (!conversation_unread_.has_cursor(key)) {
@@ -3257,6 +3263,7 @@ void NativeShell::refresh_unseen_badges() {
         }
     }
     agent_roster_->set_unseen_counts(std::move(counts));
+    return selected_history;
 }
 
 void NativeShell::invalidate_session_events_cache() {
@@ -3430,7 +3437,8 @@ void NativeShell::handle_conversation_verbose_changed(
     request_session_events(true);
 }
 
-void NativeShell::render_conversation() {
+void NativeShell::render_conversation(
+        std::optional<DirectConversationHistory> history) {
     if (!detail_view_) return;
 
     const bool selection_present = selection_state_.active_project()
@@ -3476,11 +3484,13 @@ void NativeShell::render_conversation() {
         return;
     }
 
-    const auto history = read_direct_conversation(*route);
+    if (!history) {
+        history = read_direct_conversation(*route);
+    }
     injected_mail_journal_.poll(
         route->project_root, route->target_directory_key);
     sync_seen_from_injected(reaction_store_, injected_mail_journal_.ids());
-    sync_receipts_from_history(reaction_store_, history.messages);
+    sync_receipts_from_history(reaction_store_, history->messages);
     const auto *presentation_name = window_->findChild<QLabel *>(
         "lingtai_selected_agent_presentation_name");
     // Sender identity always comes from the stored full title, never the
@@ -3495,10 +3505,10 @@ void NativeShell::render_conversation() {
     // Keep only non-count diagnostics under the conversation (e.g. skipped
     // malformed mail). Message totals are visible in the thread itself.
     auto compact = QString();
-    if (history.skipped > 0) {
-        compact = history.skipped == 1
+    if (history->skipped > 0) {
+        compact = history->skipped == 1
             ? QStringLiteral("1 skipped")
-            : QStringLiteral("%1 skipped").arg(history.skipped);
+            : QStringLiteral("%1 skipped").arg(history->skipped);
     }
 
     const auto session_log_present = conversation_session_log_present(
@@ -3506,7 +3516,7 @@ void NativeShell::render_conversation() {
     const auto &session_events = cached_session_events_for(*route);
 
     detail_view_->render_conversation(
-        them, history, compact,
+        them, *history, compact,
         /*selection_present=*/true,
         /*conversation_route_available=*/true,
         reaction_store_.all(),

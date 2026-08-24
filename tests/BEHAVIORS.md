@@ -151,6 +151,11 @@ Qt plugin path set and an 8 s watchdog.
   assert the exact intended in-fixture mutations
   (`verify_composer_send_behavior`, `verify_request_sleep_action`,
   `verify_first_project_bootstrap`).
+- The direct-conversation journey invokes the real ordinary one-second timer
+  seam and observes actual `message.json` opens: with one selected Agent and
+  one valid sibling, every fixture entry is opened exactly twice total, while
+  append-without-reselection, bottom-follow, scrolled-up position, and a
+  Ctrl+U-expanded older-history window all remain intact.
 - `verify_composer_send_behavior` additionally proves the injected picker
   cancel path; ordered file/image cards; descriptor-revalidated bounded
   thumbnail fallback for replaced, symlinked, invalid, and absurd-header
