@@ -107,7 +107,10 @@ Domain readers/projections (stateless, read-only, one source each):
   and three fixed folder leaves; `read_direct_mailbox_snapshot` scans each
   entry once and classifies it across every current Agent route; and
   `DirectMailboxSnapshotIndex` owns deterministic single-flight, generation,
-  stale-result, and in-scan-change decisions. `read_direct_conversation`
+  stale-result, in-scan-change, stable per-history revisions, and exact
+  worker-classified append lineage decisions. Accepted snapshots are shared
+  immutably so the synchronous UI render borrows a short-lived history view
+  instead of copying it. `read_direct_conversation`
   remains the one-route compatibility projection.
 - `direct_conversation_attachment_actions.{h,cpp}` — fresh action-time
   current-route/current-entry resolver and no-follow regular-file identity

@@ -29,6 +29,9 @@ struct SessionTokenUsage {
     std::int64_t cached = 0;
     std::int64_t api_duration_ms = 0;
     bool estimated = false;
+
+    friend bool operator==(const SessionTokenUsage &,
+        const SessionTokenUsage &) = default;
 };
 
 // One parsed events.jsonl row the conversation verbose stream may render.
@@ -39,7 +42,17 @@ struct ConversationSessionEntry {
     std::string api_call_id;
     std::string reasoning;
     std::optional<SessionTokenUsage> token_usage;
+
+    friend bool operator==(const ConversationSessionEntry &,
+        const ConversationSessionEntry &) = default;
 };
+
+// Completion-side semantic revision helper. Equality work runs only when the
+// background session reader returns, never on an unchanged one-second render.
+[[nodiscard]] bool advance_conversation_session_revision(
+    const std::vector<ConversationSessionEntry> &before,
+    const std::vector<ConversationSessionEntry> &after,
+    std::uint64_t &revision) noexcept;
 
 // Token footer text (TUI mail.token_usage_footer parity).
 [[nodiscard]] std::string format_token_usage_footer(

@@ -172,7 +172,7 @@ void test_injected_mail_journal_tails_only_new_lines() {
 
     InjectedMailJournal journal;
     journal.poll(root, "worker");
-    expect(journal.ids().empty(),
+    expect(journal.ids().empty() && journal.revision() == 0,
         "first poll skips bytes already in events.jsonl");
 
     {
@@ -180,17 +180,41 @@ void test_injected_mail_journal_tails_only_new_lines() {
         out << R"({"type":"notification_block_injected","_meta":{"agent_meta":{"notifications":{"persistent":{"email":{"email_ids":["new"]}}}}}})" << '\n';
     }
     journal.poll(root, "worker");
-    expect(journal.ids().count("new") == 1 && journal.ids().count("old") == 0,
-        "later polls collect only newly appended injected mail ids");
+    const auto seen_revision = journal.revision();
+    journal.poll(root, "worker");
+    expect(journal.ids().count("new") == 1 && journal.ids().count("old") == 0
+            && seen_revision == 1 && journal.revision() == seen_revision,
+        "later polls collect only newly appended ids and idle polls are "
+        "revision-idempotent");
+    journal.reset();
+    expect(journal.ids().empty() && journal.revision() == seen_revision + 1,
+        "resetting visible injected ids advances revision once");
     fs::remove_all(root);
 }
 
 void test_session_clear() {
     MessageReactionStore store;
-    store.set_receipt("m1", ReceiptStage::received);
-    store.upsert_peer_reaction("m2", ReactionId{"🎉"}, "alpha");
+    const auto empty_revision = store.revision();
     store.clear();
-    expect(store.all().empty(), "clear drops the whole session map");
+    expect(store.revision() == empty_revision,
+        "clear-on-empty is revision-idempotent");
+    store.set_receipt("m1", ReceiptStage::received);
+    const auto received_revision = store.revision();
+    store.set_receipt("m1", ReceiptStage::received);
+    store.set_receipt("m1", ReceiptStage::none);
+    expect(store.revision() == received_revision,
+        "duplicate/downgrade receipt calls do not advance revision");
+    store.set_receipt("m1", ReceiptStage::seen);
+    expect(store.revision() == received_revision + 1,
+        "a real receipt upgrade advances revision once");
+    store.upsert_peer_reaction("m2", ReactionId{"🎉"}, "alpha");
+    const auto reaction_revision = store.revision();
+    store.upsert_peer_reaction("m2", ReactionId{"🎉"}, "alpha");
+    expect(store.revision() == reaction_revision,
+        "a duplicate peer reaction is revision-idempotent");
+    store.clear();
+    expect(store.all().empty() && store.revision() == reaction_revision + 1,
+        "a real clear drops the map and advances revision once");
 }
 
 } // namespace

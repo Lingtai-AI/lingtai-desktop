@@ -3,6 +3,7 @@
 #include "direct_conversation_history.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -69,6 +70,7 @@ public:
     [[nodiscard]] MessageReactions get(const std::string &message_id) const;
     [[nodiscard]] const std::unordered_map<std::string, MessageReactions> &
         all() const noexcept { return by_message_; }
+    [[nodiscard]] std::uint64_t revision() const noexcept { return revision_; }
 
     // Monotonic system receipt on a Human message: received → seen → replied.
     void set_receipt(const std::string &message_id, ReceiptStage stage);
@@ -82,6 +84,7 @@ public:
 
 private:
     std::unordered_map<std::string, MessageReactions> by_message_;
+    std::uint64_t revision_ = 0;
 };
 
 // Upgrades existing receipts to replied when a later inbound message exists.

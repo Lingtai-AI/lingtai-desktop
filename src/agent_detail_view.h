@@ -83,7 +83,8 @@ public:
         const std::unordered_map<std::string, MessageReactions> &reactions = {},
         const QString &main_agent_name = {},
         const std::vector<ConversationSessionEntry> &session_events = {},
-        bool session_log_present = false);
+        bool session_log_present = false,
+        std::optional<ConversationPresentationRevision> revision = std::nullopt);
 
     [[nodiscard]] ConversationVerboseLevel conversation_verbose_level() const;
 

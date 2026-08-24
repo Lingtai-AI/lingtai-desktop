@@ -21,6 +21,7 @@ namespace {
 namespace fs = std::filesystem;
 using lingtai::desktop::AttachmentMediaKind;
 using lingtai::desktop::DirectConversationHistory;
+using lingtai::desktop::DirectConversationMessage;
 using lingtai::desktop::DirectConversationRoute;
 using lingtai::desktop::DirectMailboxDirectoryFingerprint;
 using lingtai::desktop::DirectMailboxFingerprint;
@@ -576,6 +577,110 @@ void verify_generation_single_flight_and_retry(const fs::path &sandbox) {
         "reset/destruction state must discard a late worker result safely");
 }
 
+DirectConversationMessage revision_message(
+        std::string id, std::string timestamp, std::string text) {
+    return {std::move(id), false, std::move(timestamp), {}, std::move(text),
+        {}, "inbox"};
+}
+
+void verify_per_history_revisions_and_append_lineage(const fs::path &sandbox) {
+    auto request = DirectMailboxRequest{{
+        {"selected", route_for(sandbox / "revision")},
+        {"other", route_for(sandbox / "revision")},
+    }};
+    auto index = DirectMailboxSnapshotIndex();
+    const auto first_job = index.request(request, fingerprint(20));
+    require(first_job.has_value(), "initial revision generation must launch");
+    auto first_snapshot = DirectMailboxSnapshot();
+    first_snapshot.histories["selected"].messages.push_back(
+        revision_message("s1", "1", "selected"));
+    first_snapshot.histories["other"].messages.push_back(
+        revision_message("o1", "1", "other"));
+    DirectMailboxSnapshotIndex::classify(*first_job, first_snapshot);
+    require(index.complete(*first_job, std::move(first_snapshot), fingerprint(20))
+            .accepted,
+        "initial revision snapshot must be accepted");
+    const auto selected_revision =
+        index.current()->revisions.at("selected").revision;
+    require(selected_revision != 0,
+        "an accepted selected history must receive a stable revision");
+    require(!index.request(request, fingerprint(20))
+            && index.current()->revisions.at("selected").revision
+                == selected_revision,
+        "an unchanged request/current snapshot must retain its revision");
+
+    const auto other_job = index.request(request, fingerprint(21));
+    require(other_job.has_value(), "another-Agent append must launch");
+    auto other_snapshot = DirectMailboxSnapshot();
+    other_snapshot.histories["selected"].messages.push_back(
+        revision_message("s1", "1", "selected"));
+    other_snapshot.histories["other"].messages = {
+        revision_message("o1", "1", "other"),
+        revision_message("o2", "2", "other append")};
+    DirectMailboxSnapshotIndex::classify(*other_job, other_snapshot);
+    require(index.complete(*other_job, std::move(other_snapshot), fingerprint(21))
+            .accepted
+            && index.current()->revisions.at("selected").revision
+                == selected_revision,
+        "mail affecting only another Agent must not invalidate selected history");
+
+    const auto append_job = index.request(request, fingerprint(22));
+    auto appended = *index.current();
+    appended.histories["selected"].messages.push_back(
+        revision_message("s2", "2", "selected append"));
+    DirectMailboxSnapshotIndex::classify(*append_job, appended);
+    require(index.complete(*append_job, std::move(appended), fingerprint(22))
+            .accepted,
+        "selected append must be accepted");
+    const auto append_revision = index.current()->revisions.at("selected");
+    require(append_revision.revision != selected_revision
+            && append_revision.append_from_revision == selected_revision
+            && append_revision.append_from == 1,
+        "a pure selected append must carry exact parent revision and boundary");
+
+    const auto baseline = *index.current();
+    const auto reject_append = [&](DirectConversationHistory changed,
+            std::string_view reason) {
+        auto job = DirectMailboxSnapshotIndex::Job{
+            1, request, fingerprint(23),
+            std::make_shared<const DirectMailboxSnapshot>(baseline)};
+        auto candidate = baseline;
+        candidate.histories["selected"] = std::move(changed);
+        DirectMailboxSnapshotIndex::classify(job, candidate);
+        const auto metadata = candidate.revisions.find("selected");
+        require(metadata == candidate.revisions.end()
+                || metadata->second.append_from_revision == 0,
+            std::string(reason));
+    };
+    auto replacement = baseline.histories.at("selected");
+    replacement.messages[1].text = "same-size replacement";
+    reject_append(replacement, "same-size replacement must not claim append");
+    auto prefix_edit = baseline.histories.at("selected");
+    prefix_edit.messages[0].text = "prefix edit";
+    prefix_edit.messages.push_back(revision_message("s3", "3", "suffix"));
+    reject_append(prefix_edit, "prefix edit plus growth must not claim append");
+    auto attachment_edit = baseline.histories.at("selected");
+    attachment_edit.messages[0].attachments.push_back({
+        sandbox / "changed", "changed", 1, AttachmentMediaKind::file, 1, 2});
+    attachment_edit.messages.push_back(
+        revision_message("s3", "3", "suffix"));
+    reject_append(attachment_edit,
+        "attachment identity/metadata change must not claim append");
+    auto reordered = baseline.histories.at("selected");
+    std::swap(reordered.messages[0], reordered.messages[1]);
+    reordered.messages.push_back(revision_message("s3", "3", "suffix"));
+    reject_append(reordered, "reorder plus growth must not claim append");
+    auto shrunk = baseline.histories.at("selected");
+    shrunk.messages.pop_back();
+    reject_append(shrunk, "shrink must not claim append");
+    auto diagnostic_change = baseline.histories.at("selected");
+    ++diagnostic_change.skipped_attachments;
+    diagnostic_change.messages.push_back(
+        revision_message("s3", "3", "suffix"));
+    reject_append(diagnostic_change,
+        "skipped diagnostics plus growth must not claim append");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -605,6 +710,7 @@ int main(int argc, char **argv) {
         verify_intermediate_symlink_no_outside_read(sandbox);
         verify_shared_multi_route_projection(sandbox);
         verify_generation_single_flight_and_retry(sandbox);
+        verify_per_history_revisions_and_append_lineage(sandbox);
 
         fs::remove_all(sandbox, error);
         require(!error, "sandbox must be removed");

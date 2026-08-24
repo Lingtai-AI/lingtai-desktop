@@ -25,6 +25,7 @@ public:
     [[nodiscard]] const std::unordered_set<std::string> &ids() const noexcept {
         return ids_;
     }
+    [[nodiscard]] std::uint64_t revision() const noexcept { return revision_; }
 
 private:
     bool anchored_ = false;
@@ -32,6 +33,7 @@ private:
     off_t offset_ = 0;
     std::string carry_;
     std::unordered_set<std::string> ids_;
+    std::uint64_t revision_ = 0;
 };
 
 } // namespace lingtai::desktop

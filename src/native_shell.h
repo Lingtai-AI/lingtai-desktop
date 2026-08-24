@@ -156,10 +156,17 @@ private:
         DirectMailboxSnapshot snapshot,
         DirectMailboxFingerprint fingerprint_after);
     void invalidate_mailbox_snapshot();
-    [[nodiscard]] std::optional<DirectConversationHistory>
-        refresh_unseen_badges();
+    struct SelectedConversationView final {
+        // Borrowed from the current immutable snapshot and consumed only by
+        // the synchronous render call; never retained across snapshot swaps.
+        const DirectConversationHistory *history = nullptr;
+        DirectMailboxSnapshot::HistoryRevision revision;
+        bool snapshot_ready = false;
+    };
+    [[nodiscard]] SelectedConversationView refresh_unseen_badges();
     void render_conversation(
-        std::optional<DirectConversationHistory> history = std::nullopt);
+        std::optional<SelectedConversationView> history = std::nullopt);
+    void clear_session_events_cache();
     void invalidate_session_events_cache();
     [[nodiscard]] const std::vector<ConversationSessionEntry> &
         cached_session_events_for(
@@ -394,12 +401,37 @@ private:
     SessionEventsCache session_events_cache_;
     bool session_events_force_reload_ = false;
     std::uint64_t session_events_load_generation_ = 0;
+    std::uint64_t session_events_revision_ = 0;
     bool session_events_load_inflight_ = false;
     struct SessionEventsLoadToken {
         std::atomic<bool> cancelled{false};
     };
     std::shared_ptr<SessionEventsLoadToken> session_events_load_token_
         = std::make_shared<SessionEventsLoadToken>();
+
+    struct ConversationRenderKey final {
+        std::uint64_t selection = 0;
+        std::string route;
+        QString them;
+        QString compact;
+        std::uint64_t history = 0;
+        std::uint64_t reactions = 0;
+        std::uint64_t injected = 0;
+        std::uint64_t session_events = 0;
+        std::time_t session_mtime = 0;
+        std::int64_t session_size = 0;
+        bool snapshot_ready = false;
+        bool session_present = false;
+        bool session_loading = false;
+        ConversationVerboseLevel verbose = ConversationVerboseLevel::off;
+
+        friend bool operator==(
+            const ConversationRenderKey &, const ConversationRenderKey &)
+            = default;
+    };
+    std::optional<ConversationRenderKey> conversation_render_key_;
+    std::uint64_t receipts_history_revision_ = 0;
+    std::uint64_t seen_injected_revision_ = 0;
 
     // Appearance/palette storms re-enter through ApplicationPaletteChange while
     // setPalette runs; never nest a second refresh or a sync conversation rebuild.

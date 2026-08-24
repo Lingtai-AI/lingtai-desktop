@@ -486,7 +486,19 @@ DirectMailboxSnapshotIndex::Completion DirectMailboxSnapshotIndex::complete(
         && job.fingerprint == fingerprint_after) {
         current_request_ = job.request;
         current_fingerprint_ = fingerprint_after;
-        current_snapshot_ = std::move(snapshot);
+        for (auto &[key, history] : snapshot.histories) {
+            static_cast<void>(history);
+            auto &metadata = snapshot.revisions[key];
+            if (metadata.revision == 0) {
+                metadata.revision = ++next_history_revision_;
+            } else if (metadata.append_from_revision != 0) {
+                const auto previous = metadata.revision;
+                metadata.revision = ++next_history_revision_;
+                metadata.append_from_revision = previous;
+            }
+        }
+        current_snapshot_ = std::make_shared<const DirectMailboxSnapshot>(
+            std::move(snapshot));
         completion.accepted = true;
     }
     completion.follow_up = launch_if_needed();
@@ -506,7 +518,7 @@ const DirectMailboxSnapshot *DirectMailboxSnapshotIndex::current()
         || *desired_request_ != *current_request_) {
         return nullptr;
     }
-    return current_snapshot_ ? &*current_snapshot_ : nullptr;
+    return current_snapshot_.get();
 }
 
 bool DirectMailboxSnapshotIndex::inflight() const noexcept {
@@ -523,7 +535,41 @@ DirectMailboxSnapshotIndex::launch_if_needed() {
     }
     inflight_ = true;
     running_generation_ = desired_generation_;
-    return Job{running_generation_, *desired_request_, desired_fingerprint_};
+    return Job{running_generation_, *desired_request_, desired_fingerprint_,
+        current_snapshot_};
+}
+
+void DirectMailboxSnapshotIndex::classify(
+        const Job &job, DirectMailboxSnapshot &snapshot) noexcept {
+    snapshot.revisions.clear();
+    if (!job.previous_snapshot) return;
+    for (const auto &[key, after] : snapshot.histories) {
+        const auto before_found = job.previous_snapshot->histories.find(key);
+        const auto revision_found = job.previous_snapshot->revisions.find(key);
+        if (before_found == job.previous_snapshot->histories.end()
+                || revision_found == job.previous_snapshot->revisions.end()) {
+            continue;
+        }
+        const auto &before = before_found->second;
+        const auto previous_revision = revision_found->second.revision;
+        if (after == before) {
+            snapshot.revisions[key].revision = previous_revision;
+            continue;
+        }
+        const auto diagnostics_same = after.skipped == before.skipped
+            && after.skipped_attachments == before.skipped_attachments;
+        const auto exact_prefix = diagnostics_same
+            && after.messages.size() > before.messages.size()
+            && std::equal(before.messages.begin(), before.messages.end(),
+                after.messages.begin());
+        if (exact_prefix) {
+            snapshot.revisions[key] = {
+                .revision = previous_revision,
+                .append_from_revision = previous_revision,
+                .append_from = before.messages.size(),
+            };
+        }
+    }
 }
 
 } // namespace lingtai::desktop

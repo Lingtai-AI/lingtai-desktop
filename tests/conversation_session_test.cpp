@@ -9,6 +9,7 @@ namespace {
 using lingtai::desktop::ConversationSessionEntry;
 using lingtai::desktop::ConversationVerboseLevel;
 using lingtai::desktop::SessionTokenUsage;
+using lingtai::desktop::advance_conversation_session_revision;
 using lingtai::desktop::conversation_api_group_separator_before;
 using lingtai::desktop::conversation_verbose_event_body;
 using lingtai::desktop::conversation_verbose_event_visible;
@@ -141,6 +142,28 @@ void verify_group_separator() {
         "llm_response with usage is retained for footers");
 }
 
+void verify_session_revision_idempotence() {
+    auto revision = std::uint64_t{0};
+    auto entries = std::vector<ConversationSessionEntry>();
+    require(!advance_conversation_session_revision(entries, entries, revision)
+            && revision == 0,
+        "an identical session result must not advance presentation revision");
+    auto changed = entries;
+    changed.push_back({.timestamp = "1", .type = "thinking", .body = "work"});
+    require(advance_conversation_session_revision(entries, changed, revision)
+            && revision == 1,
+        "a real session-event result must advance revision exactly once");
+    require(!advance_conversation_session_revision(changed, changed, revision)
+            && revision == 1,
+        "a duplicate completed result must be revision-idempotent");
+    require(advance_conversation_session_revision(changed, {}, revision)
+            && revision == 2,
+        "a real session clear must advance revision");
+    require(!advance_conversation_session_revision({}, {}, revision)
+            && revision == 2,
+        "a repeated empty session clear must remain revision-idempotent");
+}
+
 } // namespace
 
 int main() {
@@ -151,6 +174,7 @@ int main() {
         verify_parse_thinking_and_tool();
         verify_verbose_body_levels();
         verify_group_separator();
+        verify_session_revision_idempotence();
         std::cout << "conversation_session_test: ok\n";
         return 0;
     } catch (const std::exception &error) {

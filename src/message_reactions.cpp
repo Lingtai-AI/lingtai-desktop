@@ -97,7 +97,9 @@ std::string reaction_glyph(const ReactionId &id) {
 }
 
 void MessageReactionStore::clear() noexcept {
+    if (by_message_.empty()) return;
     by_message_.clear();
+    ++revision_;
 }
 
 MessageReactions MessageReactionStore::get(
@@ -113,8 +115,9 @@ void MessageReactionStore::set_receipt(
 
     auto &bag = by_message_[message_id];
     const auto current = highest_receipt(bag);
-    if (receipt_rank(stage) < receipt_rank(current)) return;
+    if (receipt_rank(stage) <= receipt_rank(current)) return;
     ensure_receipt_first(bag, stage);
+    ++revision_;
 }
 
 void MessageReactionStore::upsert_peer_reaction(
@@ -138,6 +141,7 @@ void MessageReactionStore::upsert_peer_reaction(
             return;
         }
         ++entry.count;
+        ++revision_;
         return;
     }
 
@@ -148,6 +152,7 @@ void MessageReactionStore::upsert_peer_reaction(
     peer.source = ReactionSource::peer;
     peer.reactor = reactor_key;
     bag.list.push_back(std::move(peer));
+    ++revision_;
 }
 
 void sync_receipts_from_history(

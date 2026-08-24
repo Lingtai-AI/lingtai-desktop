@@ -116,6 +116,15 @@ its code.
 
 ## Open / refresh
 
+- An unchanged selected conversation is revision-gated before receipt-history
+  scans, full message/reaction/session equality, detail-state mutation, or
+  `QTextDocument` mutation. A worker-proven direct append from the currently
+  presented revision keeps the complete indexed history, copies only the new
+  presentation suffix, retains existing message frames and the Ctrl+U window,
+  and follows the bottom only when the viewport was already there. Revision
+  gaps, replacement/reorder/shrink, or independent presentation changes use a
+  complete rebuild.
+
 - `open_project` attaches the selected directory, requires a real, safe,
   contained `.lingtai` directory, projects one `AgentSnapshot`, and activates
   C1 — preserving the selected Agent only when the canonical root is

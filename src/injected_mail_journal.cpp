@@ -91,11 +91,13 @@ void collect_injected_mail_ids_from_event_json(
 }
 
 void InjectedMailJournal::reset() noexcept {
+    const auto changed = !ids_.empty();
     anchored_ = false;
     inode_ = 0;
     offset_ = 0;
     carry_.clear();
     ids_.clear();
+    if (changed) ++revision_;
 }
 
 void InjectedMailJournal::poll(
@@ -159,6 +161,7 @@ void InjectedMailJournal::poll(
     auto text = std::move(carry_);
     text.append(chunk);
     carry_.clear();
+    const auto ids_before = ids_.size();
     std::size_t line_start = 0;
     for (std::size_t index = 0; index != text.size(); ++index) {
         if (text[index] != '\n') continue;
@@ -170,6 +173,7 @@ void InjectedMailJournal::poll(
     if (line_start < text.size()) {
         carry_ = text.substr(line_start);
     }
+    if (ids_.size() != ids_before) ++revision_;
 }
 
 } // namespace lingtai::desktop

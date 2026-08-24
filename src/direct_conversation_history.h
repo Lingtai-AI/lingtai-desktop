@@ -8,6 +8,7 @@
 #include <array>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -24,6 +25,9 @@ struct DirectConversationAttachment {
     AttachmentMediaKind media_kind = AttachmentMediaKind::file;
     std::uint64_t device_id = 0;
     std::uint64_t inode_id = 0;
+
+    friend bool operator==(const DirectConversationAttachment &,
+        const DirectConversationAttachment &) = default;
 };
 
 // One accepted direct message, already reduced to exactly what the selected-
@@ -45,6 +49,9 @@ struct DirectConversationMessage {
     // id and re-walk it descriptor-relative; it is never itself trusted as an
     // authorization or persisted outside this observation.
     std::string mailbox_folder;
+
+    friend bool operator==(const DirectConversationMessage &,
+        const DirectConversationMessage &) = default;
 };
 
 // A message.json larger than this is rejected unread; a conversation entry has
@@ -60,6 +67,22 @@ struct DirectConversationHistory {
     // Invalid attachment elements/fields are counted independently and never
     // turn an otherwise valid envelope into a skipped message.
     std::size_t skipped_attachments = 0;
+
+    friend bool operator==(const DirectConversationHistory &,
+        const DirectConversationHistory &) = default;
+};
+
+// Independent identities consumed by the presentation layer. History append
+// lineage is accepted only when append_from_history names its current parent.
+struct ConversationPresentationRevision {
+    std::uint64_t history = 0;
+    std::uint64_t append_from_history = 0;
+    std::size_t append_from = 0;
+    std::uint64_t reactions = 0;
+    std::uint64_t session_events = 0;
+
+    friend bool operator==(const ConversationPresentationRevision &,
+        const ConversationPresentationRevision &) = default;
 };
 
 // Reads only the immediate `inbox`, `outbox`, and `sent` entries under
@@ -115,6 +138,12 @@ struct DirectMailboxFingerprint {
 
 struct DirectMailboxSnapshot {
     std::map<std::string, DirectConversationHistory> histories;
+    struct HistoryRevision {
+        std::uint64_t revision = 0;
+        std::uint64_t append_from_revision = 0;
+        std::size_t append_from = 0;
+    };
+    std::map<std::string, HistoryRevision> revisions;
 };
 
 // Opens only the fixed mailbox path and three fixed folder leaves. It never
@@ -140,6 +169,9 @@ public:
         std::uint64_t generation = 0;
         DirectMailboxRequest request;
         DirectMailboxFingerprint fingerprint;
+        // Immutable accepted baseline. The worker uses it for collision-free
+        // structural comparison; the UI thread never scans complete histories.
+        std::shared_ptr<const DirectMailboxSnapshot> previous_snapshot;
     };
     struct Completion {
         bool accepted = false;
@@ -157,6 +189,11 @@ public:
     [[nodiscard]] const DirectMailboxSnapshot *current() const noexcept;
     [[nodiscard]] bool inflight() const noexcept;
 
+    // Worker-side exact classification. Unchanged rows retain their accepted
+    // revision; only an exact old sequence prefix may claim append lineage.
+    static void classify(
+        const Job &job, DirectMailboxSnapshot &snapshot) noexcept;
+
 private:
     [[nodiscard]] std::optional<Job> launch_if_needed();
 
@@ -164,7 +201,8 @@ private:
     DirectMailboxFingerprint desired_fingerprint_;
     std::optional<DirectMailboxRequest> current_request_;
     DirectMailboxFingerprint current_fingerprint_;
-    std::optional<DirectMailboxSnapshot> current_snapshot_;
+    std::shared_ptr<const DirectMailboxSnapshot> current_snapshot_;
+    std::uint64_t next_history_revision_ = 0;
     std::uint64_t desired_generation_ = 0;
     std::uint64_t running_generation_ = 0;
     bool inflight_ = false;

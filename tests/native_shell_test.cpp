@@ -1229,6 +1229,23 @@ std::string conversation_envelope(
         + R"("})";
 }
 
+std::string conversation_envelope_without_attachments(
+        std::string_view from,
+        std::string_view to,
+        std::string_view subject,
+        std::string_view message,
+        std::string_view timestamp_key,
+        std::string_view timestamp) {
+    auto result = conversation_envelope(
+        from, to, subject, message, timestamp_key, timestamp);
+    const auto invalid = std::string(R"("attachments":["never-touched.bin"])");
+    const auto found = result.find(invalid);
+    require(found != std::string::npos,
+        "conversation fixture attachment field must be replaceable");
+    result.replace(found, invalid.size(), R"("attachments":[])");
+    return result;
+}
+
 // The visible product slice: opening a real project and selecting an Agent must
 // show that Agent's current direct conversation as read-only plain text.
 void verify_selected_agent_conversation(
@@ -1295,15 +1312,24 @@ void verify_selected_agent_conversation(
         R"({"agent_id":"20260101-000000-h001","agent_name":"Ted",)"
         R"("address":"human","state":"active"})");
     const auto target = project / ".lingtai" / "telegram-bot";
-    write_file(target / ".agent.json",
+    const auto target_manifest = std::string(
         R"({"admin":{},"agent_id":"20260712-191609-d0c8",)"
         R"("agent_name":"telegram-bot","nickname":"Telegram Bot",)"
         R"("address":"telegram-bot","state":"active"})");
+    write_file(target / ".agent.json", target_manifest);
+    const auto session_log = target / "logs" / "events.jsonl";
+    write_file(session_log,
+        R"({"type":"thinking","timestamp":"2026-08-08T00:10:00Z","text":"verbose sentinel must disappear","api_call_id":"review-fix"})"
+        "\n");
     // A second Agent in the same project: a valid route with no mail at all.
     const auto quiet = project / ".lingtai" / "issue-643";
     write_file(quiet / ".agent.json",
         R"({"admin":{},"agent_id":"20260712-191610-q001",)"
         R"("agent_name":"issue-643","address":"issue-643","state":"active"})");
+    const auto badge_peer = project / ".lingtai" / "badge-peer";
+    write_file(badge_peer / ".agent.json",
+        R"({"admin":{},"agent_id":"20260712-191611-b001",)"
+        R"("agent_name":"badge-peer","address":"badge-peer","state":"active"})");
     const auto incoming_entry = mailbox / "inbox" / "20260807T184852-0d13";
     const auto report = incoming_entry / "attachments" / "risk-report.txt";
     write_file(report, "Risk remains bounded.\n");
@@ -1338,6 +1364,18 @@ void verify_selected_agent_conversation(
     require(shell.selection_state().selected_agent_directory_key()
                 == std::optional<fs::path>("telegram-bot"),
         "the target Agent must be selectable");
+
+    const auto initial_conversation_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while ((!surface->toPlainText().contains(
+                QStringLiteral("PR published, not merged."))
+            || !surface->toPlainText().contains(
+                QStringLiteral("Thanks, reviewing tomorrow.")))
+            && std::chrono::steady_clock::now()
+                < initial_conversation_deadline) {
+        QThread::msleep(20);
+        QCoreApplication::processEvents();
+    }
 
     const auto conversation = surface->toPlainText();
     const auto incoming = conversation.indexOf(
@@ -1414,6 +1452,46 @@ void verify_selected_agent_conversation(
             + std::to_string(found == observed_opens.end() ? 0 : found->second)
             + " reads of " + entry.filename().string());
     }
+
+    // A transient invalid selected manifest renders the distinct no-route
+    // state. Restoring the exact prior bytes must recover the keyed full
+    // conversation through the ordinary timer path, without reselection.
+    auto *route_composer_input = static_cast<Ui::InputField *>(
+        window.findChild<QObject *>("lingtai_composer_input"));
+    require(route_composer_input != nullptr && route_composer_input->isEnabled(),
+        "the valid selected route must begin with an enabled composer");
+    write_file(target / ".agent.json", R"({"agent_id":)");
+    require(QMetaObject::invokeMethod(
+                activity_timer, "timeout", Qt::DirectConnection),
+        "the route-loss fixture must drive the ordinary timer path");
+    require(surface->toPlainText()
+                == QStringLiteral(
+                    "No conversation is available for this selection.")
+            && !route_composer_input->isEnabled()
+            && shell.selection_state().selected_agent_directory_key()
+                == std::optional<fs::path>("telegram-bot"),
+        "an invalid selected manifest must show no-route state, disable the "
+        "composer, and preserve selection");
+
+    write_file(target / ".agent.json", target_manifest);
+    const auto route_restore_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!surface->toPlainText().contains(
+                QStringLiteral("PR published, not merged."))
+            && std::chrono::steady_clock::now() < route_restore_deadline) {
+        require(QMetaObject::invokeMethod(
+                    activity_timer, "timeout", Qt::DirectConnection),
+            "the route-restore fixture must drive the ordinary timer path");
+        QCoreApplication::processEvents();
+        QThread::msleep(20);
+    }
+    require(surface->toPlainText().contains(
+                QStringLiteral("PR published, not merged."))
+            && route_composer_input->isEnabled()
+            && shell.selection_state().selected_agent_directory_key()
+                == std::optional<fs::path>("telegram-bot"),
+        "byte-identical manifest restoration must recover conversation and "
+        "composer without reselection");
 
     // A changed fixed-count folder fingerprint schedules exactly one shared
     // worker generation. The direct timer call itself still opens nothing;
@@ -1642,6 +1720,12 @@ void verify_selected_agent_conversation(
     // that an already expanded window is retained without any reselection.
     click_agent(shell, "issue-643");
     click_agent(shell, "telegram-bot");
+    composer_input->setText(QStringLiteral("draft must survive"));
+    auto *conversation_detail = required_child<lingtai::desktop::AgentDetailView>(
+        window, "lingtai_agent_detail");
+    conversation_detail->merge_pending_attachments({report});
+    require(conversation_detail->pending_attachments().size() == 1,
+        "timer preservation fixture must establish one pending attachment");
 
     auto *conversation_scrollbar = surface->verticalScrollBar();
     require(conversation_scrollbar->maximum() > 0,
@@ -1676,24 +1760,56 @@ void verify_selected_agent_conversation(
     require(established_value == established_max && established_value > 0,
         "the human must be established at the bottom of a genuinely "
         "overflowing pane before the append below");
+    // Drain layout/document notifications caused by the explicit Ctrl+U
+    // reveal itself. The counter below then covers only the subsequent real
+    // ambient timer interval.
+    QCoreApplication::processEvents();
+    conversation_scrollbar->setValue(conversation_scrollbar->maximum());
+    const auto settled_value = conversation_scrollbar->value();
+    const auto settled_max = conversation_scrollbar->maximum();
+    const auto retained_frames = surface->document()->rootFrame()->childFrames();
+    require(!retained_frames.isEmpty(),
+        "the real timer fixture must expose retained message frames");
+    auto *retained_first_frame = retained_frames.front();
+    const auto retained_first_block = retained_first_frame->begin().currentBlock();
+    auto idle_document_changes = 0;
+    const auto document_connection = QObject::connect(surface->document(),
+        &QTextDocument::contentsChange,
+        [&idle_document_changes](int, int, int) { ++idle_document_changes; });
 
     // A single cheap idle tick with unchanged content must not reset the
     // viewport or destroy the selection.
     QThread::msleep(1200);
     QCoreApplication::processEvents();
-    require(conversation_scrollbar->value() == established_value
-            && conversation_scrollbar->maximum() == established_max,
+    require(conversation_scrollbar->value() == settled_value
+            && conversation_scrollbar->maximum() == settled_max,
         "an idle one-second tick with unchanged content must not move the "
         "scroll position");
     require(surface->textCursor().hasSelection(),
         "an idle one-second tick with unchanged content must not clear the "
         "human's text selection");
+    const auto idle_frame_same =
+        surface->document()->rootFrame()->childFrames().front()
+            == retained_first_frame;
+    const auto idle_block_valid = retained_first_block.isValid();
+    const auto idle_draft_same = composer_input->getLastText()
+        == QStringLiteral("draft must survive");
+    require(idle_document_changes == 0 && idle_frame_same
+            && idle_block_valid && idle_draft_same
+            && conversation_detail->pending_attachments().size() == 1,
+        "the real unchanged timer path must mutate no document content/frame "
+        "and must preserve the composer draft (changes="
+        + std::to_string(idle_document_changes)
+        + ", frame=" + std::to_string(idle_frame_same)
+        + ", block=" + std::to_string(idle_block_valid)
+        + ", draft=" + std::to_string(idle_draft_same) + ")");
 
     // A new real incoming direct Agent reply, appended after the initial
     // conversation already rendered, with no reselection: only the real
     // one-second view timer can surface it in the message pane.
     write_file(mailbox / "inbox" / "20260807T193000-nr01" / "message.json",
-        conversation_envelope("telegram-bot", "human", "Re: \xe5\x9c\xa8\xe5\x90\x97",
+        conversation_envelope_without_attachments(
+            "telegram-bot", "human", "Re: \xe5\x9c\xa8\xe5\x90\x97",
             "\xe5\x9c\xa8\xe5\x90\x97\xef\xbc\x9f Yes, awake now.", "received_at",
             "2026-08-07T19:30:00Z"));
     const auto reply_deadline =
@@ -1713,6 +1829,11 @@ void verify_selected_agent_conversation(
         "the newly arrived reply must be visible: the pane must follow the "
         "bottom when the human was already there, not leave the reply below "
         "the fold");
+    require(surface->document()->rootFrame()->childFrames().front()
+            == retained_first_frame
+            && retained_first_block.isValid(),
+        "the real timer append must retain pre-existing message frame/block "
+        "identity instead of clearing the document");
 
     // A human scrolled above the bottom before a real append must keep that
     // exact non-bottom position: only a human already at the bottom follows
@@ -1724,7 +1845,8 @@ void verify_selected_agent_conversation(
         "the human must be established above the bottom before the "
         "scrolled-up append");
     write_file(mailbox / "inbox" / "20260807T193100-sc01" / "message.json",
-        conversation_envelope("telegram-bot", "human", "Re: scrolled up",
+        conversation_envelope_without_attachments(
+            "telegram-bot", "human", "Re: scrolled up",
             "Scrolled-up reply text.", "received_at", "2026-08-07T19:31:00Z"));
     const auto scrolled_deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(3);
@@ -1743,6 +1865,83 @@ void verify_selected_agent_conversation(
         "a scrolled-up append must not shrink the revealed history window");
     require(conversation_scrollbar->value() == scrolled_value,
         "a scrolled-up append must preserve the prior non-bottom position");
+
+    // Mail for another Agent advances only that history/badge. The selected
+    // history revision and retained document must remain untouched.
+    auto *roster = static_cast<lingtai::desktop::AgentRoster *>(
+        window.findChild<QWidget *>("lingtai_desktop_sidebar"));
+    require(roster != nullptr, "the real roster must exist for badge proof");
+    const auto selected_document_revision = surface->document()->revision();
+    const auto selected_text = surface->toPlainText();
+    write_file(mailbox / "inbox" / "20260807T193200-other" / "message.json",
+        conversation_envelope_without_attachments(
+            "badge-peer", "human", "Other Agent",
+            "Only the other Agent changed.", "received_at",
+            "2026-08-07T19:32:00Z"));
+    const auto other_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (roster->unseen_count("badge-peer") != 1
+            && std::chrono::steady_clock::now() < other_deadline) {
+        QThread::msleep(50);
+        QCoreApplication::processEvents();
+    }
+    require(roster->unseen_count("badge-peer") == 1
+            && surface->document()->revision() == selected_document_revision
+            && surface->toPlainText() == selected_text
+            && surface->document()->rootFrame()->childFrames().front()
+                == retained_first_frame
+            && conversation_scrollbar->value() == scrolled_value
+            && composer_input->getLastText()
+                == QStringLiteral("draft must survive")
+            && conversation_detail->pending_attachments().size() == 1,
+        "another-Agent append must update its unread badge without invalidating "
+        "the selected conversation document or anchor");
+    QObject::disconnect(document_connection);
+
+    // A real verbose cache that becomes absent on the same selected route
+    // must remove its frames. Equal history/reaction revisions must not let
+    // the presentation gate retain stale session detail.
+    auto *detail_toggle = required_child<QPushButton>(
+        window, "lingtai_conversation_detail_toggle");
+    require(detail_toggle->isEnabled(),
+        "the real verbose fixture detail toggle must be enabled");
+    detail_toggle->click();
+    require(conversation_detail->conversation_verbose_level()
+            == lingtai::desktop::ConversationVerboseLevel::thinking,
+        "the real verbose fixture must enter Thinking detail");
+    const auto verbose_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!surface->toPlainText().contains(
+                QStringLiteral("verbose sentinel must disappear"))
+            && std::chrono::steady_clock::now() < verbose_deadline) {
+        QThread::msleep(20);
+        QCoreApplication::processEvents();
+    }
+    require(surface->toPlainText().contains(
+                QStringLiteral("verbose sentinel must disappear")),
+        "the real verbose fixture must first render its cached session event");
+    require(QMetaObject::invokeMethod(
+                activity_timer, "timeout", Qt::DirectConnection),
+        "the verbose fixture must synchronize through the ordinary timer path");
+    QCoreApplication::processEvents();
+    require(surface->toPlainText().contains(
+                QStringLiteral("verbose sentinel must disappear")),
+        "the synchronized verbose timer render must retain the live event");
+    std::error_code remove_log_error;
+    require(fs::remove(session_log, remove_log_error) && !remove_log_error,
+        "the session log disappearance fixture must remove events.jsonl");
+    const auto disappearance_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (surface->toPlainText().contains(
+                QStringLiteral("verbose sentinel must disappear"))
+            && std::chrono::steady_clock::now() < disappearance_deadline) {
+        QThread::msleep(50);
+        QCoreApplication::processEvents();
+    }
+    require(!surface->toPlainText().contains(
+                QStringLiteral("verbose sentinel must disappear")),
+        "an absent session log must clear stale verbose frames on the same "
+        "selected route");
     const auto after_reply = tree_snapshot(project);
 
     // A valid route whose Agent has no mail is an ordinary empty conversation.

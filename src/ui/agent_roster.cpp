@@ -1018,6 +1018,11 @@ public:
         update();
     }
 
+    [[nodiscard]] int unseen_count(const std::string &agent_key) const noexcept {
+        const auto found = unseen_counts_.find(agent_key);
+        return found == unseen_counts_.end() ? 0 : found->second;
+    }
+
     void set_row_click_handler(
             std::function<void(const std::filesystem::path &)> handler) {
         row_click_handler_ = std::move(handler);
@@ -1451,6 +1456,10 @@ void AgentRoster::set_row_click_handler(RowClickHandler handler) {
 
 void AgentRoster::set_unseen_counts(std::unordered_map<std::string, int> counts) {
     canvas_->set_unseen_counts(std::move(counts));
+}
+
+int AgentRoster::unseen_count(const std::string &agent_key) const noexcept {
+    return canvas_->unseen_count(agent_key);
 }
 
 void AgentRoster::update_state_label(const AgentSnapshot &snapshot) {

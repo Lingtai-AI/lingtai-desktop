@@ -6,6 +6,7 @@
 #include "message_reactions.h"
 
 #include <QtCore/QPoint>
+#include <QtCore/QStringList>
 #include <QtWidgets/QTextEdit>
 
 #include <cstddef>
@@ -47,6 +48,15 @@ public:
         const std::vector<DirectConversationMessage> &messages,
         const std::unordered_map<std::string, MessageReactions> &reactions = {},
         const std::vector<ConversationSessionEntry> &session_events = {});
+
+    // Revision-gated production path. A suffix is incremental only when its
+    // exact worker-proven parent is the revision currently presented.
+    void set_conversation(
+        const QString &them,
+        const std::vector<DirectConversationMessage> &messages,
+        const std::unordered_map<std::string, MessageReactions> &reactions,
+        const std::vector<ConversationSessionEntry> &session_events,
+        const ConversationPresentationRevision &revision);
 
     [[nodiscard]] ConversationVerboseLevel verbose_level() const noexcept {
         return verbose_level_;
@@ -109,6 +119,11 @@ private:
     void rebuild_select_agent_prompt();
     void reveal_older();
     void scroll_to_bottom_now();
+    [[nodiscard]] bool append_conversation_suffix(
+        const QString &them,
+        const std::vector<DirectConversationMessage> &messages,
+        const std::unordered_map<std::string, MessageReactions> &reactions,
+        std::size_t append_from);
     void update_hovered_message(const QPoint &viewport_pos);
     void clear_hovered_message();
     void disarm_attachment_action();
@@ -133,6 +148,9 @@ private:
     std::vector<DirectConversationMessage> last_messages_;
     std::unordered_map<std::string, MessageReactions> last_reactions_;
     std::vector<ConversationSessionEntry> last_session_events_;
+    ConversationPresentationRevision presentation_revision_;
+    bool presentation_revision_valid_ = false;
+    QStringList accessible_attachment_names_;
     ConversationVerboseLevel verbose_level_ = ConversationVerboseLevel::off;
     QString last_plain_state_;
     QString select_agent_main_name_;

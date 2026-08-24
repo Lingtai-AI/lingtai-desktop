@@ -1538,7 +1538,8 @@ void AgentDetailView::render_conversation(
     const std::unordered_map<std::string, MessageReactions> &reactions,
     const QString &main_agent_name,
     const std::vector<ConversationSessionEntry> &session_events,
-    bool session_log_present) {
+    bool session_log_present,
+    std::optional<ConversationPresentationRevision> revision) {
     const auto composer_eligible = selection_present
         && conversation_route_available;
     refresh_composer_enablement(composer_eligible);
@@ -1572,8 +1573,13 @@ void AgentDetailView::render_conversation(
         conversation_surface_->set_plain_state(
             QStringLiteral("No messages yet."));
     } else {
-        conversation_surface_->set_conversation(
-            them, history.messages, reactions, session_events);
+        if (revision) {
+            conversation_surface_->set_conversation(
+                them, history.messages, reactions, session_events, *revision);
+        } else {
+            conversation_surface_->set_conversation(
+                them, history.messages, reactions, session_events);
+        }
     }
     refresh_conversation_state_hint();
 }

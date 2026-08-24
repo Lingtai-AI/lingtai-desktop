@@ -102,6 +102,10 @@ caller proposes typed transitions only; the model performs no reads.
 `DirectMailboxSnapshotIndex` (`direct_conversation_history.h`) is the only
 owner of mailbox single-flight/generation acceptance. It performs no reads or
 threading; `NativeShell` supplies fingerprints/results and runs accepted jobs.
+The worker proves unchanged histories and exact append prefixes structurally;
+the index assigns stable accepted per-history revisions. A render may borrow
+the current immutable snapshot only for its synchronous call stack and never
+retain that pointer across snapshot acceptance.
 `KanbanSnapshotIndex` is the corresponding Kanban source/index owner;
 `NativeShell` alone owns its low-priority worker, generation acceptance,
 coalescing, and stale-while-revalidate presentation.

@@ -3073,6 +3073,9 @@ void NativeShell::render_roster() {
         || !status_context || !selected_facts) {
         return;
     }
+    const auto set_label_text = [](QLabel *label, const QString &text) {
+        if (label->text() != text) label->setText(text);
+    };
 
     // The persistent left column owns the roster rows and their state label;
     // it rebuilds its row tree only when the visible model actually changed,
@@ -3093,8 +3096,8 @@ void NativeShell::render_roster() {
     }
 
     if (!detail_item) {
-        selected_key->setText(QString());
-        presentation_name->clear();
+        set_label_text(selected_key, QString());
+        set_label_text(presentation_name, QString());
         presentation_name->setProperty("lingtai_full_text", QString());
         presentation_name->setAccessibleDescription(QString());
         selected_avatar->set_agent_name(QString());
@@ -3109,12 +3112,12 @@ void NativeShell::render_roster() {
                 "lingtai_selected_agent_status_row")) {
             status_row->hide();
         }
-        manifest_identity->clear();
-        manifest_llm->clear();
-        manifest_capabilities->clear();
-        status_activity->clear();
-        status_context->clear();
-        selected_facts->setText(QStringLiteral(
+        set_label_text(manifest_identity, QString());
+        set_label_text(manifest_llm, QString());
+        set_label_text(manifest_capabilities, QString());
+        set_label_text(status_activity, QString());
+        set_label_text(status_context, QString());
+        set_label_text(selected_facts, QStringLiteral(
             "Choose a valid manifest row to inspect its detail."));
         render_conversation(std::move(selected_history));
         render_agent_preset_summary();
@@ -3133,7 +3136,7 @@ void NativeShell::render_roster() {
         : identity && identity->true_name
             ? QString::fromStdString(*identity->true_name)
             : key;
-    presentation_name->setText(title);
+    set_label_text(presentation_name, title);
     // The full presentation title is retained on the label itself (a dynamic
     // property and the accessible description) so the responsive top-bar fit
     // can elide only the visible text without ever losing the identity.
@@ -3142,7 +3145,7 @@ void NativeShell::render_roster() {
     selected_avatar->set_agent_name(title);
     selected_avatar->show();
     const auto status_summary = friendly_agent_status_summary(*detail_item);
-    selected_key->setText(status_summary);
+    set_label_text(selected_key, status_summary);
     selected_key->setProperty("lingtai_full_text", status_summary);
     if (auto *status_dot = window_->findChild<QWidget *>(
             "lingtai_selected_agent_status_dot")) {
@@ -3156,31 +3159,33 @@ void NativeShell::render_roster() {
         status_row->setVisible(true);
     }
     if (identity) {
-        manifest_identity->setText(QStringLiteral(
+        set_label_text(manifest_identity, QStringLiteral(
             "Manifest identity\naddress: %1\nagent ID: %2\nstate: %3")
             .arg(value_text(identity->address),
                 value_text(identity->agent_id), value_text(identity->state)));
-        manifest_llm->setText(QStringLiteral(
+        set_label_text(manifest_llm, QStringLiteral(
             "Manifest live LLM\nprovider: %1\nmodel: %2\nbase URL: %3\n"
             "API compatibility: %4\ncontext limit: %5")
             .arg(value_text(identity->llm.provider), value_text(identity->llm.model),
                 value_text(identity->llm.base_url),
                 value_text(identity->llm.api_compat),
                 value_text(identity->llm.context_limit)));
-        manifest_capabilities->setText(QStringLiteral(
+        set_label_text(manifest_capabilities, QStringLiteral(
             "Manifest capabilities\ndisplay names: %1")
             .arg(joined_names(identity->capabilities.display_names)));
     } else {
-        manifest_identity->setText(QStringLiteral("Manifest identity unavailable"));
-        manifest_llm->setText(QStringLiteral("Manifest live LLM unavailable"));
-        manifest_capabilities->setText(
+        set_label_text(manifest_identity,
+            QStringLiteral("Manifest identity unavailable"));
+        set_label_text(manifest_llm,
+            QStringLiteral("Manifest live LLM unavailable"));
+        set_label_text(manifest_capabilities,
             QStringLiteral("Manifest capabilities unavailable"));
     }
     if (detail_item->status) {
         const auto &status = *detail_item->status;
         const auto active = status.active_turn
             ? &*status.active_turn : nullptr;
-        status_activity->setText(QStringLiteral(
+        set_label_text(status_activity, QStringLiteral(
             "Status activity\nstate: %1\nrunning: %2\nPID: %3\n"
             "state changed at: %4\nlast progress at: %5\n"
             "no progress seconds: %6\nactive turn kind: %7\n"
@@ -3198,7 +3203,7 @@ void NativeShell::render_roster() {
                        : QStringLiteral("unavailable")));
         if (status.context) {
             const auto &context = *status.context;
-            status_context->setText(QStringLiteral(
+            set_label_text(status_context, QStringLiteral(
                 "Status context (source values)\nwindow size: %1\n"
                 "system tokens: %2\ntools tokens: %3\nhistory tokens: %4\n"
                 "total tokens: %5\nusage_percent (source usage_pct): %6\n"
@@ -3212,16 +3217,17 @@ void NativeShell::render_roster() {
                     value_text(context.fixed_tokens),
                     value_text(context.growing_tokens)));
         } else {
-            status_context->setText(QStringLiteral(
+            set_label_text(status_context, QStringLiteral(
                 "Status context unavailable (no valid positive window projected)"));
         }
     } else {
-        status_activity->setText(QStringLiteral(
+        set_label_text(status_activity, QStringLiteral(
             "Status activity unavailable from status source"));
-        status_context->setText(QStringLiteral(
+        set_label_text(status_context, QStringLiteral(
             "Status context unavailable (no valid positive window projected)"));
     }
-    selected_facts->setText(QStringLiteral("manifest: %1\nrole: %2\npresence: %3")
+    set_label_text(selected_facts,
+        QStringLiteral("manifest: %1\nrole: %2\npresence: %3")
         .arg(manifest_text(detail_item->manifest_kind),
             role_text(detail_item->role), presence_text(detail_item->presence)));
     render_conversation(std::move(selected_history));
@@ -3270,6 +3276,7 @@ void NativeShell::start_mailbox_snapshot_job(
     const auto token = mailbox_load_token_;
     std::thread([this, token, job = std::move(job)]() mutable {
         auto snapshot = read_direct_mailbox_snapshot(job.request);
+        DirectMailboxSnapshotIndex::classify(job, snapshot);
         auto fingerprint_after = direct_mailbox_fingerprint(job.request);
         if (!token
             || token->cancelled.load(std::memory_order_acquire)
@@ -3306,22 +3313,25 @@ void NativeShell::apply_mailbox_snapshot_job(
 
 void NativeShell::invalidate_mailbox_snapshot() {
     mailbox_snapshot_index_.reset();
+    conversation_render_key_.reset();
+    receipts_history_revision_ = 0;
     if (agent_roster_) agent_roster_->set_unseen_counts({});
 }
 
-std::optional<DirectConversationHistory>
+NativeShell::SelectedConversationView
 NativeShell::refresh_unseen_badges() {
     if (!agent_roster_ || !selection_state_.active_project()) {
         if (agent_roster_) {
             agent_roster_->set_unseen_counts({});
         }
-        return std::nullopt;
+        return {};
     }
     request_mailbox_snapshot();
     const auto *snapshot = mailbox_snapshot_index_.current();
     const auto selected = selection_state_.selected_agent_directory_key();
     auto counts = std::unordered_map<std::string, int>{};
-    auto selected_history = std::optional<DirectConversationHistory>();
+    auto selected_history = SelectedConversationView();
+    selected_history.snapshot_ready = snapshot != nullptr;
     for (const auto &item : agents_.items) {
         if (item.role == AgentRole::human
             || item.manifest_kind != AgentManifestKind::valid) {
@@ -3333,7 +3343,7 @@ NativeShell::refresh_unseen_badges() {
                 // An initial async generation has not completed yet. Pass an
                 // explicit empty value so rendering never falls back to a
                 // synchronous mailbox scan on this UI call stack.
-                selected_history = DirectConversationHistory();
+                selected_history.snapshot_ready = false;
             }
             continue;
         }
@@ -3342,7 +3352,11 @@ NativeShell::refresh_unseen_badges() {
         const auto &history = found->second;
         if (selected && *selected == item.directory_key) {
             conversation_unread_.catch_up(key, history);
-            selected_history = history;
+            selected_history.history = &history;
+            const auto revision = snapshot->revisions.find(key);
+            if (revision != snapshot->revisions.end()) {
+                selected_history.revision = revision->second;
+            }
             continue;
         }
         if (!conversation_unread_.has_cursor(key)) {
@@ -3361,9 +3375,17 @@ NativeShell::refresh_unseen_badges() {
     return selected_history;
 }
 
-void NativeShell::invalidate_session_events_cache() {
+void NativeShell::clear_session_events_cache() {
+    static const auto kEmpty = std::vector<ConversationSessionEntry>();
+    static_cast<void>(advance_conversation_session_revision(
+        session_events_cache_.entries, kEmpty, session_events_revision_));
     session_events_cache_ = {};
+}
+
+void NativeShell::invalidate_session_events_cache() {
+    clear_session_events_cache();
     session_events_force_reload_ = false;
+    conversation_render_key_.reset();
 }
 
 const std::vector<ConversationSessionEntry> &
@@ -3378,7 +3400,7 @@ NativeShell::cached_session_events_for(
     const auto stat = conversation_session_log_stat(
         route.project_root, route.target_directory_key);
     if (!stat.present) {
-        session_events_cache_ = {};
+        clear_session_events_cache();
         return kEmpty;
     }
     const auto same_agent =
@@ -3397,7 +3419,7 @@ NativeShell::cached_session_events_for(
     // this Agent (if any) and refresh off-thread; a growing log used to stall
     // the 1s activity timer on every tick in Thinking/Extended mode.
     if (!same_agent) {
-        session_events_cache_ = {};
+        clear_session_events_cache();
         session_events_cache_.project_root = route.project_root;
         session_events_cache_.agent_key = route.target_directory_key;
     }
@@ -3470,6 +3492,20 @@ void NativeShell::apply_session_events(
             *selection_state_.active_project(), agents_,
             selection_state_.selected_agent_directory_key());
         if (route) {
+            const auto same_cache_route =
+                session_events_cache_.project_root == route->project_root
+                && session_events_cache_.agent_key
+                    == route->target_directory_key;
+            if (!same_cache_route) {
+                static const auto kEmptySessionEvents =
+                    std::vector<ConversationSessionEntry>();
+                static_cast<void>(advance_conversation_session_revision(
+                    kEmptySessionEvents, entries, session_events_revision_));
+            } else {
+                static_cast<void>(advance_conversation_session_revision(
+                    session_events_cache_.entries, entries,
+                    session_events_revision_));
+            }
             const auto stat = conversation_session_log_stat(
                 route->project_root, route->target_directory_key);
             session_events_cache_.project_root = route->project_root;
@@ -3491,7 +3527,7 @@ void NativeShell::handle_conversation_verbose_changed(
     }
 
     if (level == ConversationVerboseLevel::off) {
-        session_events_cache_.entries.clear();
+        clear_session_events_cache();
         detail_view_->set_conversation_detail_loading(false);
         detail_view_->apply_conversation_session_events({});
         return;
@@ -3533,7 +3569,7 @@ void NativeShell::handle_conversation_verbose_changed(
 }
 
 void NativeShell::render_conversation(
-        std::optional<DirectConversationHistory> history) {
+        std::optional<SelectedConversationView> selected_view) {
     if (!detail_view_) return;
 
     const bool selection_present = selection_state_.active_project()
@@ -3555,6 +3591,7 @@ void NativeShell::render_conversation(
     }
 
     if (!selection_present) {
+        conversation_render_key_.reset();
         DirectConversationHistory empty;
         detail_view_->render_conversation(
             QString(), empty, QString(),
@@ -3570,6 +3607,7 @@ void NativeShell::render_conversation(
         selection_state_.selected_agent_directory_key());
     const bool route_available = route.has_value();
     if (!route_available) {
+        conversation_render_key_.reset();
         detail_view_->clear_pending_attachments();
         DirectConversationHistory empty;
         detail_view_->render_conversation(
@@ -3579,21 +3617,37 @@ void NativeShell::render_conversation(
         return;
     }
 
-    if (!history) {
+    if (!selected_view) {
         request_mailbox_snapshot();
+        auto view = SelectedConversationView();
         if (const auto *snapshot = mailbox_snapshot_index_.current()) {
+            view.snapshot_ready = true;
             const auto found = snapshot->histories.find(
                 route->target_directory_key.generic_string());
             if (found != snapshot->histories.end()) {
-                history = found->second;
+                view.history = &found->second;
+                const auto revision = snapshot->revisions.find(
+                    route->target_directory_key.generic_string());
+                if (revision != snapshot->revisions.end()) {
+                    view.revision = revision->second;
+                }
             }
         }
-        if (!history) history = DirectConversationHistory();
+        selected_view = view;
     }
+    static const auto kEmptyHistory = DirectConversationHistory();
+    const auto &history = selected_view->history
+        ? *selected_view->history : kEmptyHistory;
     injected_mail_journal_.poll(
         route->project_root, route->target_directory_key);
-    sync_seen_from_injected(reaction_store_, injected_mail_journal_.ids());
-    sync_receipts_from_history(reaction_store_, history->messages);
+    if (seen_injected_revision_ != injected_mail_journal_.revision()) {
+        sync_seen_from_injected(reaction_store_, injected_mail_journal_.ids());
+        seen_injected_revision_ = injected_mail_journal_.revision();
+    }
+    if (receipts_history_revision_ != selected_view->revision.revision) {
+        sync_receipts_from_history(reaction_store_, history.messages);
+        receipts_history_revision_ = selected_view->revision.revision;
+    }
     const auto *presentation_name = window_->findChild<QLabel *>(
         "lingtai_selected_agent_presentation_name");
     // Sender identity always comes from the stored full title, never the
@@ -3608,24 +3662,53 @@ void NativeShell::render_conversation(
     // Keep only non-count diagnostics under the conversation (e.g. skipped
     // malformed mail). Message totals are visible in the thread itself.
     auto compact = QString();
-    if (history->skipped > 0) {
-        compact = history->skipped == 1
+    if (history.skipped > 0) {
+        compact = history.skipped == 1
             ? QStringLiteral("1 skipped")
-            : QStringLiteral("%1 skipped").arg(history->skipped);
+            : QStringLiteral("%1 skipped").arg(history.skipped);
     }
 
-    const auto session_log_present = conversation_session_log_present(
+    const auto session_stat = conversation_session_log_stat(
         route->project_root, route->target_directory_key);
+    const auto session_log_present = session_stat.present;
+    const auto render_key = ConversationRenderKey{
+        .selection = selection_generation_,
+        .route = route->target_directory_key.generic_string(),
+        .them = them,
+        .compact = compact,
+        .history = selected_view->revision.revision,
+        .reactions = reaction_store_.revision(),
+        .injected = injected_mail_journal_.revision(),
+        .session_events = session_events_revision_,
+        .session_mtime = session_stat.mtime,
+        .session_size = session_stat.size,
+        .snapshot_ready = selected_view->snapshot_ready,
+        .session_present = session_stat.present,
+        .session_loading = session_events_load_inflight_,
+        .verbose = detail_view_->conversation_verbose_level(),
+    };
+    if (conversation_render_key_ && *conversation_render_key_ == render_key) {
+        return;
+    }
     const auto &session_events = cached_session_events_for(*route);
 
     detail_view_->render_conversation(
-        them, *history, compact,
+        them, history, compact,
         /*selection_present=*/true,
         /*conversation_route_available=*/true,
         reaction_store_.all(),
         QString(),
         session_events,
-        session_log_present);
+        session_log_present,
+        ConversationPresentationRevision{
+            .history = selected_view->revision.revision,
+            .append_from_history =
+                selected_view->revision.append_from_revision,
+            .append_from = selected_view->revision.append_from,
+            .reactions = reaction_store_.revision(),
+            .session_events = session_events_revision_,
+        });
+    conversation_render_key_ = render_key;
 }
 
 // Called only when the selected target actually changes (a fresh project open

@@ -34,6 +34,7 @@
 #include <QtGui/QTextCharFormat>
 #include <QtGui/QTextCursor>
 #include <QtGui/QTextDocument>
+#include <QtGui/QTextDocumentFragment>
 #include <QtGui/QTextFormat>
 #include <QtGui/QTextFrame>
 #include <QtGui/QTextImageFormat>
@@ -1509,6 +1510,8 @@ void ConversationSurface::set_plain_state(const QString &text) {
     last_plain_state_ = text;
     last_messages_.clear();
     last_reactions_.clear();
+    presentation_revision_valid_ = false;
+    accessible_attachment_names_.clear();
     setAccessibleDescription(QStringLiteral(
         "The current direct conversation, read-only."));
     // A plain (selection/no-route/empty) state has no lazy history, so the
@@ -1551,6 +1554,8 @@ void ConversationSurface::set_select_agent_prompt(const QString &main_agent_name
     them_.clear();
     last_messages_.clear();
     last_reactions_.clear();
+    presentation_revision_valid_ = false;
+    accessible_attachment_names_.clear();
     history_offset_ = 0;
     last_plain_state_ = text;
     setPlainText(text);
@@ -1694,6 +1699,7 @@ void ConversationSurface::set_conversation(
         : QStringLiteral("The current direct conversation, read-only. "
               "Attachments in message order: %1")
               .arg(attachment_names.join(QStringLiteral(", "))));
+    accessible_attachment_names_ = attachment_names;
     if (!core_unchanged && !same_conversation_nonshrinking) {
         // Reset the render-time window to the initial chronological tail
         // when the conversation changes or rows disappear. An append keeps
@@ -1712,6 +1718,157 @@ void ConversationSurface::set_conversation(
     }
     last_rendered_verbose_level_ = verbose_level_;
     last_layout_width_ = int(viewport()->width() / 8) * 8;
+}
+
+void ConversationSurface::set_conversation(
+        const QString &them,
+        const std::vector<DirectConversationMessage> &messages,
+        const std::unordered_map<std::string, MessageReactions> &reactions,
+        const std::vector<ConversationSessionEntry> &session_events,
+        const ConversationPresentationRevision &revision) {
+    if (presentation_revision_valid_
+            && them == them_
+            && revision == presentation_revision_
+            && verbose_level_ == last_rendered_verbose_level_) {
+        return;
+    }
+    const auto pure_append = presentation_revision_valid_
+        && them == them_
+        && verbose_level_ == ConversationVerboseLevel::off
+        && last_rendered_verbose_level_ == ConversationVerboseLevel::off
+        && revision.append_from_history == presentation_revision_.history
+        && revision.append_from == last_messages_.size()
+        && revision.reactions == presentation_revision_.reactions
+        && revision.session_events == presentation_revision_.session_events
+        && session_events.empty()
+        && messages.size() > revision.append_from;
+    if (pure_append && append_conversation_suffix(
+            them, messages, reactions, revision.append_from)) {
+        presentation_revision_ = revision;
+        presentation_revision_valid_ = true;
+        return;
+    }
+
+    // Any revision gap or incompatible presentation input uses the established
+    // complete rebuild. The deep comparison here is reached only for a real
+    // independent change, never for an ambient unchanged tick.
+    presentation_revision_valid_ = false;
+    set_conversation(them, messages, reactions, session_events);
+    presentation_revision_ = revision;
+    presentation_revision_valid_ = true;
+}
+
+bool ConversationSurface::append_conversation_suffix(
+        const QString &them,
+        const std::vector<DirectConversationMessage> &messages,
+        const std::unordered_map<std::string, MessageReactions> &reactions,
+        std::size_t append_from) {
+    if (append_from == 0 || append_from != last_messages_.size()
+            || append_from >= messages.size() || rebuild_in_progress_) {
+        return false;
+    }
+
+    // Build only one boundary seed plus the proven new suffix with the same
+    // renderer, then transplant each suffix frame into the retained document.
+    // The seed gives the first appended row exact day/group continuity without
+    // copying or rescanning the complete authoritative history.
+    auto suffix_messages = std::vector<DirectConversationMessage>();
+    suffix_messages.reserve(messages.size() - append_from + 1);
+    suffix_messages.push_back(messages[append_from - 1]);
+    suffix_messages.insert(suffix_messages.end(),
+        messages.begin() + static_cast<std::ptrdiff_t>(append_from),
+        messages.end());
+    auto suffix_reactions = std::unordered_map<std::string, MessageReactions>();
+    for (const auto &message : suffix_messages) {
+        const auto found = reactions.find(message.id);
+        if (found != reactions.end()) {
+            suffix_reactions.emplace(found->first, found->second);
+        }
+    }
+
+    ConversationSurface suffix_surface;
+    suffix_surface.setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    suffix_surface.setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    suffix_surface.resize(
+        viewport()->width() + 2 * suffix_surface.frameWidth(),
+        std::max(64, viewport()->height()));
+    suffix_surface.set_conversation(
+        them, suffix_messages, suffix_reactions, {});
+    const auto source_frames =
+        suffix_surface.document()->rootFrame()->childFrames();
+    if (source_frames.size() != static_cast<qsizetype>(suffix_messages.size())) {
+        return false;
+    }
+
+    auto *scrollbar = verticalScrollBar();
+    const auto previous_scroll = scrollbar->value();
+    const auto was_at_bottom = previous_scroll >= scrollbar->maximum();
+    const auto old_frames = document()->rootFrame()->childFrames();
+    if (old_frames.isEmpty()) return false;
+
+    // Install image resources before the copied fragments reference them.
+    for (auto index = append_from; index != messages.size(); ++index) {
+        for (auto attachment_index = std::size_t{0};
+                attachment_index != messages[index].attachments.size();
+                ++attachment_index) {
+            const auto resource = QUrl(QStringLiteral(
+                "lingtai-attachment-thumbnail://%1/%2")
+                .arg(QString::fromStdString(messages[index].id))
+                .arg(attachment_index));
+            const auto value = suffix_surface.document()->resource(
+                QTextDocument::ImageResource, resource);
+            if (value.isValid()) {
+                document()->addResource(
+                    QTextDocument::ImageResource, resource, value);
+            }
+        }
+    }
+
+    rebuild_in_progress_ = true;
+    auto prior_format = old_frames.back()->frameFormat();
+    prior_format.setBottomMargin(
+        source_frames.front()->frameFormat().bottomMargin());
+    old_frames.back()->setFrameFormat(prior_format);
+
+    for (auto source_index = qsizetype{1};
+            source_index != source_frames.size(); ++source_index) {
+        auto *source = source_frames[source_index];
+        auto target_cursor = root_append_cursor(document());
+        auto *target = target_cursor.insertFrame(source->frameFormat());
+        auto source_cursor = source->firstCursorPosition();
+        source_cursor.setPosition(
+            source->lastPosition(), QTextCursor::KeepAnchor);
+        auto target_content = target->firstCursorPosition();
+        target_content.insertFragment(QTextDocumentFragment(source_cursor));
+    }
+    last_messages_.insert(last_messages_.end(),
+        messages.begin() + static_cast<std::ptrdiff_t>(append_from),
+        messages.end());
+    for (auto index = append_from; index != messages.size(); ++index) {
+        for (const auto &attachment : messages[index].attachments) {
+            accessible_attachment_names_.push_back(
+                QString::fromStdString(attachment.display_filename));
+        }
+    }
+    setAccessibleDescription(accessible_attachment_names_.isEmpty()
+        ? QStringLiteral("The current direct conversation, read-only.")
+        : QStringLiteral("The current direct conversation, read-only. "
+              "Attachments in message order: %1")
+              .arg(accessible_attachment_names_.join(QStringLiteral(", "))));
+    empty_state_active_ = false;
+    last_plain_state_.clear();
+    clear_hovered_message();
+    document()->documentLayout()->documentSize();
+    rebuild_in_progress_ = false;
+    if (was_at_bottom) {
+        scroll_to_bottom();
+    } else {
+        ++scroll_pin_generation_;
+        scrollbar->setValue(std::min(previous_scroll, scrollbar->maximum()));
+    }
+    last_rendered_verbose_level_ = verbose_level_;
+    last_layout_width_ = int(viewport()->width() / 8) * 8;
+    return true;
 }
 
 void ConversationSurface::apply_session_events(

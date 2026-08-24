@@ -2480,6 +2480,141 @@ void verify_message_attachment_presentation() {
         "selection drag ending over an action must preserve QTextEdit selection");
 }
 
+void verify_revision_noop_and_incremental_append() {
+    const auto ensure = [](bool condition, const char *message) {
+        if (!condition) throw std::runtime_error(message);
+    };
+    ConversationSurface surface;
+    surface.setAttribute(Qt::WA_DontShowOnScreen);
+    surface.resize(520, 220);
+    surface.show();
+    QCoreApplication::processEvents();
+
+    auto messages = std::vector<DirectConversationMessage>();
+    for (auto index = 0; index != 205; ++index) {
+        messages.push_back({
+            .id = "revision-" + std::to_string(index),
+            .outgoing = index % 3 == 0,
+            .timestamp = "2026-08-07T19:"
+                + std::to_string(10 + index / 60) + ":00Z",
+            .text = "body " + std::to_string(index)
+                + "\nsecond line\nthird line",
+            .mailbox_folder = index % 3 == 0 ? "sent" : "inbox",
+        });
+    }
+    auto revision = ConversationPresentationRevision{
+        .history = 10, .reactions = 20, .session_events = 30};
+    surface.set_conversation(
+        QStringLiteral("Agent"), messages, {}, {}, revision);
+    auto *bar = surface.verticalScrollBar();
+    ensure(bar->maximum() > 0,
+        "revision fixture must genuinely overflow the viewport");
+    bar->setValue(bar->minimum());
+    QKeyEvent reveal(QEvent::KeyPress, Qt::Key_U, Qt::ControlModifier);
+    QCoreApplication::sendEvent(&surface, &reveal);
+    QCoreApplication::processEvents();
+    ensure(surface.toPlainText().contains(
+            QStringLiteral("▲ 5 older — ctrl+u to load")),
+        "Ctrl+U must establish the expanded 200-row window");
+
+    auto cursor = surface.textCursor();
+    cursor.movePosition(QTextCursor::Start);
+    cursor.movePosition(QTextCursor::Down, QTextCursor::KeepAnchor, 2);
+    surface.setTextCursor(cursor);
+    surface.setFocus();
+    QCoreApplication::processEvents();
+    const auto focus_before = surface.hasFocus();
+    const auto scroll_before = bar->value();
+    const auto revision_before = surface.document()->revision();
+    const auto frames_before = surface.document()->rootFrame()->childFrames();
+    auto *first_frame = frames_before.front();
+    const auto first_block = first_frame->begin().currentBlock();
+    auto content_changes = 0;
+    const auto connection = QObject::connect(surface.document(),
+        &QTextDocument::contentsChange,
+        [&content_changes](int, int, int) { ++content_changes; });
+
+    auto impossible_same_revision_change = messages;
+    impossible_same_revision_change.front().text =
+        "must not be inspected on an accepted unchanged revision";
+    surface.set_conversation(QStringLiteral("Agent"),
+        impossible_same_revision_change, {}, {}, revision);
+    ensure(content_changes == 0
+            && surface.document()->revision() == revision_before
+            && surface.document()->rootFrame()->childFrames().front()
+                == first_frame
+            && first_block.isValid()
+            && surface.textCursor().hasSelection()
+            && surface.hasFocus() == focus_before
+            && bar->value() == scroll_before
+            && surface.toPlainText().contains(QStringLiteral("body 5")),
+        "same independent revisions must be an O(1) document no-op");
+
+    bar->setValue(bar->maximum());
+    messages.push_back({
+        .id = "revision-new-day",
+        .outgoing = false,
+        .timestamp = "2026-08-08T00:01:00Z",
+        .text = "new-day suffix",
+        .mailbox_folder = "inbox",
+    });
+    auto append_revision = ConversationPresentationRevision{
+        .history = 11,
+        .append_from_history = 10,
+        .append_from = 205,
+        .reactions = 20,
+        .session_events = 30,
+    };
+    surface.set_conversation(QStringLiteral("Agent"),
+        messages, {}, {}, append_revision);
+    QCoreApplication::processEvents();
+    auto frames_after = surface.document()->rootFrame()->childFrames();
+    ensure(frames_after.size() == frames_before.size() + 1
+            && frames_after.front() == first_frame
+            && first_block.isValid()
+            && surface.toPlainText().count(QStringLiteral("new-day suffix")) == 1
+            && surface.toPlainText().contains(
+                QStringLiteral("▲ 5 older — ctrl+u to load"))
+            && bar->value() == bar->maximum(),
+        "proven append must retain old frames/window and follow true new bottom");
+
+    bar->setValue(std::max(1, bar->maximum() / 3));
+    const auto scrolled_value = bar->value();
+    messages.push_back({
+        .id = "revision-scrolled",
+        .outgoing = true,
+        .timestamp = "2026-08-08T00:02:00Z",
+        .text = "scrolled suffix",
+        .mailbox_folder = "sent",
+    });
+    const auto second_append = ConversationPresentationRevision{
+        .history = 12,
+        .append_from_history = 11,
+        .append_from = 206,
+        .reactions = 20,
+        .session_events = 30,
+    };
+    surface.set_conversation(
+        QStringLiteral("Agent"), messages, {}, {}, second_append);
+    QCoreApplication::processEvents();
+    ensure(surface.document()->rootFrame()->childFrames().front() == first_frame
+            && bar->value() == scrolled_value
+            && surface.toPlainText().count(
+                QStringLiteral("scrolled suffix")) == 1,
+        "append while scrolled up must retain the prior viewport and frames");
+
+    auto replacement = messages;
+    replacement[10].text = "replacement path";
+    const auto before_replacement_changes = content_changes;
+    surface.set_conversation(QStringLiteral("Agent"), replacement, {}, {},
+        ConversationPresentationRevision{
+            .history = 13, .reactions = 20, .session_events = 30});
+    ensure(content_changes > before_replacement_changes
+            && surface.toPlainText().contains(QStringLiteral("replacement path")),
+        "a replacement/revision gap must fall back to a complete rebuild");
+    QObject::disconnect(connection);
+}
+
 } // namespace
 
 int run_typography_test(int argc, char **argv) {
@@ -2563,6 +2698,7 @@ int run_typography_test(int argc, char **argv) {
         verify_outgoing_body_first_and_external_time();
         verify_new_day_append_scrolls_to_bottom();
         verify_message_attachment_presentation();
+        verify_revision_noop_and_incremental_append();
         std::cout << "conversation surface typography: OK\n";
         return 0;
     } catch (const std::exception &error) {

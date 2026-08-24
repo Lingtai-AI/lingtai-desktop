@@ -176,7 +176,16 @@ Qt plugin path set and an 8 s watchdog.
   generation opens none; after an append the timer's UI thread opens none and
   one shared worker opens every fixture entry exactly once even with multiple
   valid Agent routes. Append-without-reselection, bottom-follow, scrolled-up
-  position, and a Ctrl+U-expanded older-history window all remain intact.
+  position, and a Ctrl+U-expanded older-history window all remain intact. It
+  also observes zero `QTextDocument::contentsChange` notifications on the idle
+  tick and stable pre-existing frame/block identity across the real append.
+- Focused history tests prove stable/unrelated per-Agent revisions, exact append
+  ancestry, and rejection of replacement, prefix edit, attachment change,
+  reorder, and shrink. Reaction/session tests prove real semantic revision
+  advances and duplicate/downgrade/empty operations remain idempotent. The real
+  conversation surface proves revision no-op, suffix-only frame retention,
+  new-day bottom follow, scrolled anchor retention, Ctrl+U retention, and safe
+  full replacement on a revision gap.
 - `verify_composer_send_behavior` additionally proves the injected picker
   cancel path; ordered file/image cards; descriptor-revalidated bounded
   thumbnail fallback for replaced, symlinked, invalid, and absurd-header

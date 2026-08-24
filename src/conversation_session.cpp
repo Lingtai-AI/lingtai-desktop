@@ -18,6 +18,16 @@
 #include <unistd.h>
 
 namespace lingtai::desktop {
+
+bool advance_conversation_session_revision(
+        const std::vector<ConversationSessionEntry> &before,
+        const std::vector<ConversationSessionEntry> &after,
+        std::uint64_t &revision) noexcept {
+    if (before == after) return false;
+    ++revision;
+    return true;
+}
+
 namespace {
 
 namespace posix = posix_internal;
