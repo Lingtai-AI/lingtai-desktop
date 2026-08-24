@@ -54,7 +54,7 @@ constexpr auto kMessageTopMargin = 4;
 // One readable rhythm inside a same-Agent group and a larger break between
 // groups. The current frame's bottom margin owns the gap to its next sibling.
 constexpr auto kWithinGroupBottomMargin = 0;
-constexpr auto kBetweenGroupBottomMargin = 28;
+constexpr auto kBetweenGroupBottomMargin = 22;
 constexpr qint64 kSameAgentGroupMaxSeconds = 5 * 60;
 constexpr auto kMessageRatio = 0.72;
 constexpr auto kHumanMessageRatio = 0.60;
@@ -75,9 +75,10 @@ constexpr auto kReactionRowTopGap = 6;
 constexpr auto kReactionRowBottomInset = 6;
 constexpr auto kReactionRowSideInset = 8;
 // The Human timestamp sits below the bubble with a small quiet gap; the frame
-// reserves enough bottom space for the 12px metadata line and this padding.
+// reserves enough bottom space for the 12px metadata line and the break to
+// the next turn (~22% tighter than the prior 36px rhythm).
 constexpr auto kTimestampGap = 4;
-constexpr auto kHumanMessageBottomMargin = 36;
+constexpr auto kHumanMessageBottomMargin = 28;
 constexpr auto kMessageAvatarDiameter = 34;
 constexpr auto kMessageAvatarGap = 8;
 constexpr auto kMessageBlockProperty = QTextFormat::UserProperty + 1;
@@ -112,10 +113,11 @@ constexpr auto kParagraphBottomMargin = 10;
 // inter-line space than the prior 146% pair at this size).
 constexpr auto kBodyLineHeightPercent = 132;
 constexpr auto kListBottomMargin = 3;
-// Pull the first body block up under the Agent name/time header. 25 closes
-// more of the name→body gap without colliding with the 15px sender line;
-// inter-message frame margins still own message spacing.
-constexpr auto kHeaderToBodyOverlap = 25;
+// Pull the first body block up under the Agent name/time header. 31 closes
+// ~25% more of the name→body gap so the header and body read as one message,
+// without colliding with the 15px sender line; inter-message frame margins
+// still own message spacing.
+constexpr auto kHeaderToBodyOverlap = 31;
 constexpr auto kCodeBlockProperty = QTextFormat::UserProperty + 4;
 // Direction is frame metadata, not body alignment: Human body text stays left
 // aligned while the frame's margins and painter keep the bubble on the right.
@@ -1988,6 +1990,16 @@ void ConversationSurface::rebuild_select_agent_prompt() {
     }
     apply_plain_state_formatting(
         document(), viewport()->width(), viewport()->height());
+    // apply_plain_state_formatting paints the whole document in secondary
+    // Normal — re-assert the title and illustration headroom every rebuild,
+    // including height-only / same-quantum width reflows that otherwise leave
+    // "Select an agent" looking like body copy.
+    auto frame_format = document()->rootFrame()->frameFormat();
+    frame_format.setTopMargin(std::max(
+        frame_format.topMargin(),
+        qreal(kSelectAgentIllustrationSize + kSelectAgentIllustrationGap
+            + kEmptyStateHeadroom)));
+    document()->rootFrame()->setFrameFormat(frame_format);
     auto cursor = QTextCursor(document());
     cursor.movePosition(QTextCursor::Start);
     cursor.movePosition(QTextCursor::EndOfBlock, QTextCursor::KeepAnchor);
@@ -2397,15 +2409,25 @@ void ConversationSurface::reflow_to_viewport() {
         last_layout_width_ = -1;
         return;
     }
-    if (!last_plain_state_.isEmpty()) {
-        apply_plain_state_formatting(
-            document(), viewport_width, viewport()->height());
-    }
     // Quantize the viewport/layout width so a live resize only reflows when
     // the bound meaningfully changes. This follows the full layout width, not
     // just the capped message width: on a very wide pane the centered reading
     // column's outer gutters keep moving after the message cap stops.
     const auto width = int(viewport_width / 8) * 8;
+    if (select_agent_prompt_active_) {
+        // Always rebuild: apply_plain_state_formatting wipes char formats, so
+        // an early return on an unchanged width quantum would leave the title
+        // stuck in secondary Normal instead of DemiBold.
+        last_layout_width_ = width;
+        if (!rebuild_in_progress_) {
+            rebuild_select_agent_prompt();
+        }
+        return;
+    }
+    if (!last_plain_state_.isEmpty()) {
+        apply_plain_state_formatting(
+            document(), viewport_width, viewport()->height());
+    }
     if (width == last_layout_width_) {
         return;
     }
@@ -2413,9 +2435,7 @@ void ConversationSurface::reflow_to_viewport() {
     if (rebuild_in_progress_) {
         return;
     }
-    if (select_agent_prompt_active_) {
-        rebuild_select_agent_prompt();
-    } else if (empty_state_active_) {
+    if (empty_state_active_) {
         rebuild_empty_state();
     } else if (!last_messages_.empty()) {
         // A resize reflows the already-materialized render-time window; it
