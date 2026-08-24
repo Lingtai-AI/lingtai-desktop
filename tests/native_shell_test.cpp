@@ -83,6 +83,7 @@
 #include <string>
 #include <string_view>
 #include <sys/stat.h>
+#include <thread>
 #include <type_traits>
 #include <vector>
 
@@ -92,6 +93,8 @@ namespace {
 std::mutex mailbox_open_mutex;
 bool mailbox_open_counting = false;
 std::map<std::string, int> mailbox_message_opens;
+std::thread::id mailbox_ui_thread;
+std::map<std::string, int> mailbox_ui_thread_message_opens;
 
 } // namespace
 
@@ -109,6 +112,9 @@ extern "C" int openat(
             const auto lock = std::lock_guard(mailbox_open_mutex);
             if (mailbox_open_counting) {
                 ++mailbox_message_opens[full_path];
+                if (std::this_thread::get_id() == mailbox_ui_thread) {
+                    ++mailbox_ui_thread_message_opens[full_path];
+                }
             }
         }
     }
@@ -1227,6 +1233,10 @@ std::string conversation_envelope(
 void verify_selected_agent_conversation(
         lingtai::desktop::NativeShell &shell,
         const fs::path &sandbox) {
+    std::error_code stale_fixture_error;
+    fs::remove_all(sandbox, stale_fixture_error);
+    require(!stale_fixture_error,
+        "a stale conversation fixture must be removable before setup");
     auto &window = shell.window();
     auto *heading = required_child<QLabel>(
         window, "lingtai_selected_agent_conversation_heading");
@@ -1316,7 +1326,7 @@ void verify_selected_agent_conversation(
 
     // Every fixture byte is on disk by this point, so the one comparison at the
     // end of this path covers opening, selecting, and reselecting.
-    const auto fixture_before = tree_snapshot(project);
+    auto fixture_before = tree_snapshot(project);
     const auto open_outcome = shell.open_project(project, std::nullopt);
     require(open_outcome.disposition != ProjectOpenDisposition::failed,
         "the conversation fixture project must open");
@@ -1351,11 +1361,8 @@ void verify_selected_agent_conversation(
 
 #ifdef __APPLE__
     // Exercise the ordinary one-second composition seam deterministically.
-    // Every valid Agent route scans these same human mailbox entries, so with
-    // exactly two valid non-human Agents each message.json must be opened
-    // exactly twice: once for the selected conversation and once for the
-    // sibling's unread badge. Any duplicate selected projection increases
-    // every count above two.
+    // The completed shared generation makes an unchanged ordinary tick a
+    // fixed-count fingerprint only: no message.json may open on this stack.
     auto activity_timers = std::vector<QTimer *>();
     for (auto *timer : window.findChildren<QTimer *>()) {
         if (timer->interval() == 1000 && timer->isActive()) {
@@ -1370,16 +1377,20 @@ void verify_selected_agent_conversation(
     {
         const auto lock = std::lock_guard(mailbox_open_mutex);
         mailbox_message_opens.clear();
+        mailbox_ui_thread_message_opens.clear();
+        mailbox_ui_thread = std::this_thread::get_id();
         mailbox_open_counting = true;
     }
     require(QMetaObject::invokeMethod(
                 activity_timer, "timeout", Qt::DirectConnection),
         "the ordinary one-second timer seam must be invokable");
     auto observed_opens = std::map<std::string, int>();
+    auto observed_ui_opens = std::map<std::string, int>();
     {
         const auto lock = std::lock_guard(mailbox_open_mutex);
         mailbox_open_counting = false;
         observed_opens = mailbox_message_opens;
+        observed_ui_opens = mailbox_ui_thread_message_opens;
     }
     activity_timer->start();
 
@@ -1389,17 +1400,85 @@ void verify_selected_agent_conversation(
         mailbox / "inbox" / "20260807T185000-zz99" / "message.json",
         mailbox / "inbox" / "20260807T185500-bad0" / "message.json",
     };
-    require(observed_opens.size() == expected_entries.size(),
-        "one ordinary tick must inspect exactly the four fixture mailbox "
-        "entries; observed " + std::to_string(observed_opens.size()));
+    require(observed_ui_opens.empty(),
+        "one ordinary UI-thread tick must not open any mailbox message; "
+        "observed " + std::to_string(observed_ui_opens.size()));
+    require(observed_opens.empty(),
+        "an unchanged completed generation must perform no full scan");
     for (const auto &entry : expected_entries) {
         const auto found = observed_opens.find(entry.lexically_normal().string());
-        require(found != observed_opens.end() && found->second == 2,
-            "one ordinary tick must read the selected mailbox at most once "
-            "and each sibling mailbox once; observed "
+        require(found == observed_opens.end(),
+            "one ordinary UI-thread tick must perform only fixed-count "
+            "mailbox fingerprint work; observed "
             + std::to_string(found == observed_opens.end() ? 0 : found->second)
             + " reads of " + entry.filename().string());
     }
+
+    // A changed fixed-count folder fingerprint schedules exactly one shared
+    // worker generation. The direct timer call itself still opens nothing;
+    // the worker opens every old/new entry exactly once even with two routes.
+    activity_timer->stop();
+    require(tree_snapshot(project) == fixture_before,
+        "opening, selecting, and an unchanged tick must remain read-only");
+    const auto new_unrouted =
+        mailbox / "inbox" / "20260807T185700-new0" / "message.json";
+    write_file(new_unrouted,
+        conversation_envelope("unrouted", "human", "Unrouted",
+            "STILL SHOULD NOT APPEAR", "received_at",
+            "2026-08-07T18:57:00Z"));
+    fixture_before = tree_snapshot(project);
+    {
+        const auto lock = std::lock_guard(mailbox_open_mutex);
+        mailbox_message_opens.clear();
+        mailbox_ui_thread_message_opens.clear();
+        mailbox_ui_thread = std::this_thread::get_id();
+        mailbox_open_counting = true;
+    }
+    require(QMetaObject::invokeMethod(
+                activity_timer, "timeout", Qt::DirectConnection),
+        "a changed ordinary tick must remain directly invokable");
+    const auto scan_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    for (;;) {
+        {
+            const auto lock = std::lock_guard(mailbox_open_mutex);
+            if (mailbox_message_opens.size() == expected_entries.size() + 1) {
+                break;
+            }
+        }
+        auto observed_size = std::size_t();
+        {
+            const auto lock = std::lock_guard(mailbox_open_mutex);
+            observed_size = mailbox_message_opens.size();
+        }
+        require(std::chrono::steady_clock::now() < scan_deadline,
+            "the shared changed generation must complete within the test "
+            "bound; observed " + std::to_string(observed_size)
+            + " distinct message paths");
+        QThread::msleep(10);
+        QCoreApplication::processEvents();
+    }
+    {
+        const auto lock = std::lock_guard(mailbox_open_mutex);
+        mailbox_open_counting = false;
+        observed_opens = mailbox_message_opens;
+        observed_ui_opens = mailbox_ui_thread_message_opens;
+    }
+    require(observed_ui_opens.empty(),
+        "a changed UI tick must schedule, never execute, the mailbox scan");
+    auto shared_entries = std::vector<fs::path>(
+        expected_entries.begin(), expected_entries.end());
+    shared_entries.push_back(new_unrouted);
+    require(observed_opens.size() == shared_entries.size(),
+        "one shared generation must inspect every fixture entry once");
+    for (const auto &entry : shared_entries) {
+        const auto found = observed_opens.find(entry.lexically_normal().string());
+        require(found != observed_opens.end() && found->second == 1,
+            "multiple Agent routes must share one parse; observed "
+            + std::to_string(found == observed_opens.end() ? 0 : found->second)
+            + " opens of " + entry.filename().string());
+    }
+    activity_timer->start();
 #endif
 
     // The UI-to-shell boundary carries presentation-time identity, but the
@@ -2139,9 +2218,17 @@ void verify_composer_send_behavior(
     require(status->text().isEmpty(),
         "a successful send attaches a receipt to the bubble instead of a "
         "composer Queued label");
+    const auto send_render_deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!surface->toPlainText().contains(
+                QStringLiteral("Ted, the slice is complete."))
+            && std::chrono::steady_clock::now() < send_render_deadline) {
+        QThread::msleep(20);
+        QCoreApplication::processEvents();
+    }
     require(surface->toPlainText().contains(
                 QStringLiteral("Ted, the slice is complete.")),
-        "a successful send must refresh the conversation to show the new row");
+        "a successful send must refresh the shared snapshot and show the new row");
     require(fs::exists(outbox), "a successful send must create the outbox folder");
     require(outbox_entry_count() == outbox_before_success + 1,
         "exactly one leaf must be created by the one successful send");

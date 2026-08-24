@@ -2467,6 +2467,9 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
 }
 
 NativeShell::~NativeShell() {
+    if (mailbox_load_token_) {
+        mailbox_load_token_->cancelled.store(true, std::memory_order_release);
+    }
     if (kanban_load_token_) {
         kanban_load_token_->cancelled.store(true, std::memory_order_release);
     }
@@ -2947,6 +2950,9 @@ ProjectOpenOutcome NativeShell::open_project(
         selected_key = selection_state_.selected_agent_directory_key();
     }
 
+    // Invalidate before changing C1 truth so neither a completed old-project
+    // snapshot nor a late old worker can surface under the new route.
+    invalidate_mailbox_snapshot();
     selection_state_.activate_project(std::move(*attached.attachment));
     selection_state_.clear_agent_selection();
     bump_lifecycle_generation();
@@ -2958,6 +2964,9 @@ ProjectOpenOutcome NativeShell::open_project(
         ->setText(path_text(canonical_root));
     agent_roster_->set_project_display_name(QString::fromStdString(
         canonical_root.filename().string()));
+    reaction_store_.clear();
+    conversation_unread_.clear();
+    injected_mail_journal_.reset();
     render_roster();
     auto *selection_error = window_->findChild<QLabel *>(
         "lingtai_agent_selection_error");
@@ -2969,9 +2978,6 @@ ProjectOpenOutcome NativeShell::open_project(
     open_error->setAccessibleName(QString());
     open_error_surface_->hide();
     reset_composer();
-    reaction_store_.clear();
-    conversation_unread_.clear();
-    injected_mail_journal_.reset();
     invalidate_kanban_cache();
     // A fresh open must never let a prior target's pending sleep or Start
     // observation surface under the newly opened project/selection.
@@ -3221,6 +3227,81 @@ void NativeShell::render_roster() {
     // boundaries clear the label themselves.
 }
 
+DirectMailboxRequest NativeShell::mailbox_request() const {
+    auto request = DirectMailboxRequest();
+    if (!selection_state_.active_project()) return request;
+    const auto &attachment = *selection_state_.active_project();
+    for (const auto &item : agents_.items) {
+        if (item.role == AgentRole::human
+            || item.manifest_kind != AgentManifestKind::valid) {
+            continue;
+        }
+        const auto route = resolve_direct_conversation_route(
+            attachment, agents_, item.directory_key);
+        if (!route) continue;
+        request.routes.push_back({
+            item.directory_key.generic_string(), std::move(*route)});
+    }
+    return request;
+}
+
+void NativeShell::request_mailbox_snapshot() {
+    auto request = mailbox_request();
+    if (request.routes.empty()) {
+        mailbox_snapshot_index_.reset();
+        return;
+    }
+    const auto fingerprint = direct_mailbox_fingerprint(request);
+    auto job = mailbox_snapshot_index_.request(std::move(request), fingerprint);
+    if (job) {
+        start_mailbox_snapshot_job(std::move(*job));
+    }
+}
+
+void NativeShell::start_mailbox_snapshot_job(
+        DirectMailboxSnapshotIndex::Job job) {
+    const auto token = mailbox_load_token_;
+    std::thread([this, token, job = std::move(job)]() mutable {
+        auto snapshot = read_direct_mailbox_snapshot(job.request);
+        auto fingerprint_after = direct_mailbox_fingerprint(job.request);
+        if (!token
+            || token->cancelled.load(std::memory_order_acquire)
+            || !qApp) {
+            return;
+        }
+        QTimer::singleShot(0, qApp,
+            [this, token, job = std::move(job),
+                snapshot = std::move(snapshot),
+                fingerprint_after]() mutable {
+                if (!token
+                    || token->cancelled.load(std::memory_order_acquire)) {
+                    return;
+                }
+                apply_mailbox_snapshot_job(std::move(job),
+                    std::move(snapshot), fingerprint_after);
+            });
+    }).detach();
+}
+
+void NativeShell::apply_mailbox_snapshot_job(
+        DirectMailboxSnapshotIndex::Job job,
+        DirectMailboxSnapshot snapshot,
+        DirectMailboxFingerprint fingerprint_after) {
+    auto completion = mailbox_snapshot_index_.complete(
+        job, std::move(snapshot), fingerprint_after);
+    if (completion.follow_up) {
+        start_mailbox_snapshot_job(std::move(*completion.follow_up));
+    }
+    if (completion.accepted) {
+        render_roster();
+    }
+}
+
+void NativeShell::invalidate_mailbox_snapshot() {
+    mailbox_snapshot_index_.reset();
+    if (agent_roster_) agent_roster_->set_unseen_counts({});
+}
+
 std::optional<DirectConversationHistory>
 NativeShell::refresh_unseen_badges() {
     if (!agent_roster_ || !selection_state_.active_project()) {
@@ -3229,7 +3310,8 @@ NativeShell::refresh_unseen_badges() {
         }
         return std::nullopt;
     }
-    const auto &attachment = *selection_state_.active_project();
+    request_mailbox_snapshot();
+    const auto *snapshot = mailbox_snapshot_index_.current();
     const auto selected = selection_state_.selected_agent_directory_key();
     auto counts = std::unordered_map<std::string, int>{};
     auto selected_history = std::optional<DirectConversationHistory>();
@@ -3238,16 +3320,22 @@ NativeShell::refresh_unseen_badges() {
             || item.manifest_kind != AgentManifestKind::valid) {
             continue;
         }
-        const auto route = resolve_direct_conversation_route(
-            attachment, agents_, item.directory_key);
-        if (!route) {
+        const auto key = item.directory_key.generic_string();
+        if (!snapshot) {
+            if (selected && *selected == item.directory_key) {
+                // An initial async generation has not completed yet. Pass an
+                // explicit empty value so rendering never falls back to a
+                // synchronous mailbox scan on this UI call stack.
+                selected_history = DirectConversationHistory();
+            }
             continue;
         }
-        const auto key = path_text(item.directory_key).toStdString();
-        auto history = read_direct_conversation(*route);
+        const auto found = snapshot->histories.find(key);
+        if (found == snapshot->histories.end()) continue;
+        const auto &history = found->second;
         if (selected && *selected == item.directory_key) {
             conversation_unread_.catch_up(key, history);
-            selected_history = std::move(history);
+            selected_history = history;
             continue;
         }
         if (!conversation_unread_.has_cursor(key)) {
@@ -3485,7 +3573,15 @@ void NativeShell::render_conversation(
     }
 
     if (!history) {
-        history = read_direct_conversation(*route);
+        request_mailbox_snapshot();
+        if (const auto *snapshot = mailbox_snapshot_index_.current()) {
+            const auto found = snapshot->histories.find(
+                route->target_directory_key.generic_string());
+            if (found != snapshot->histories.end()) {
+                history = found->second;
+            }
+        }
+        if (!history) history = DirectConversationHistory();
     }
     injected_mail_journal_.poll(
         route->project_root, route->target_directory_key);

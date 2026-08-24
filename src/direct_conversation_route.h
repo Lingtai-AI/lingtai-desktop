@@ -13,6 +13,9 @@ class ProjectAttachment;
 // Unknown manifest fields and raw manifest JSON are never retained here.
 struct HumanSenderIdentity {
     std::optional<std::string> agent_id, true_name, nickname, address, state;
+
+    friend bool operator==(
+        const HumanSenderIdentity &, const HumanSenderIdentity &) = default;
 };
 
 // One resolved current direct conversation route: the canonical project root
@@ -26,6 +29,10 @@ struct DirectConversationRoute {
     std::filesystem::path human_directory_key, target_directory_key;
     std::string human_address, target_address;
     HumanSenderIdentity human_identity;
+
+    friend bool operator==(
+        const DirectConversationRoute &, const DirectConversationRoute &)
+        = default;
 };
 
 // Consumes one already-produced accepted Agent snapshot, the accepted

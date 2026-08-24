@@ -8,6 +8,7 @@
 #include <QtCore/QJsonValue>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cstddef>
 #include <dirent.h>
@@ -230,109 +231,299 @@ void project_attachments(
 // resolved by anything but this single descriptor-relative step. A missing
 // folder is simply no rows; an unsafe or unreadable folder or entry is one
 // generic skip, and never hides its valid neighbors.
-void read_folder(
+void increment_all_skips(DirectMailboxSnapshot &snapshot) {
+    for (auto &[key, history] : snapshot.histories) {
+        static_cast<void>(key);
+        ++history.skipped;
+    }
+}
+
+void read_folder_shared(
         int mailbox_fd,
         const char *folder_name,
-        const DirectConversationRoute &route,
-        DirectConversationHistory &history,
-        std::set<std::string> &outgoing_ids) {
+        const DirectMailboxRequest &request,
+        DirectMailboxSnapshot &snapshot,
+        std::vector<std::set<std::string>> &outgoing_ids) {
     const auto folder = posix::open_directory_component(mailbox_fd, folder_name);
     if (folder.get() < 0) {
         // A missing folder is simply no rows; a symlink, a non-directory, or
         // any other open failure at this single leaf is one generic skip.
-        if (errno != ENOENT) ++history.skipped;
+        if (errno != ENOENT) increment_all_skips(snapshot);
         return;
     }
     const auto duplicate = ::dup(folder.get());
-    if (duplicate < 0) { ++history.skipped; return; }
+    if (duplicate < 0) {
+        increment_all_skips(snapshot);
+        return;
+    }
     posix::DirectoryStream stream(::fdopendir(duplicate));
     if (!stream.get()) {
         ::close(duplicate);
-        ++history.skipped;
+        increment_all_skips(snapshot);
         return;
     }
     for (;;) {
         errno = 0;
         const auto raw_entry = ::readdir(stream.get());
         if (!raw_entry) {
-            if (errno != 0) ++history.skipped;
+            if (errno != 0) increment_all_skips(snapshot);
             break;
         }
         const auto name = std::string(raw_entry->d_name);
         if (name == "." || name == "..") continue;
         const auto entry_dir = posix::open_directory_component(folder.get(), name);
         if (entry_dir.get() < 0) {
-            ++history.skipped;
+            increment_all_skips(snapshot);
             continue;
         }
         auto bytes = std::string();
         if (!read_message_at(entry_dir.get(), bytes)) {
-            ++history.skipped;
+            increment_all_skips(snapshot);
             continue;
         }
         const auto envelope = parse_envelope(bytes);
         if (!envelope) {
-            ++history.skipped;
+            increment_all_skips(snapshot);
             continue;
         }
-        const auto membership = membership_of(*envelope, route);
-        if (membership == Membership::absent) continue;
-        // The entry directory basename is the stable, displayed message ID.
-        const auto outgoing = membership == Membership::outgoing;
-        if (outgoing && !outgoing_ids.insert(name).second) continue;
-        DirectConversationMessage message{name, outgoing,
-            envelope->timestamp, envelope->subject, envelope->text, {}, {}};
-        message.mailbox_folder = folder_name;
-        const auto entry_path = route.project_root / ".lingtai"
-            / route.human_directory_key / "mailbox" / folder_name / name;
-        project_attachments(entry_dir.get(), entry_path,
-            *envelope, message, history);
-        history.messages.push_back(std::move(message));
+        for (std::size_t index = 0; index != request.routes.size(); ++index) {
+            const auto &snapshot_route = request.routes[index];
+            const auto membership = membership_of(
+                *envelope, snapshot_route.route);
+            if (membership == Membership::absent) continue;
+            const auto outgoing = membership == Membership::outgoing;
+            if (outgoing && !outgoing_ids[index].insert(name).second) continue;
+            DirectConversationMessage message{name, outgoing,
+                envelope->timestamp, envelope->subject, envelope->text, {}, {}};
+            message.mailbox_folder = folder_name;
+            const auto &route = snapshot_route.route;
+            const auto entry_path = route.project_root / ".lingtai"
+                / route.human_directory_key / "mailbox" / folder_name / name;
+            auto &history = snapshot.histories.at(snapshot_route.agent_key);
+            project_attachments(entry_dir.get(), entry_path,
+                *envelope, message, history);
+            history.messages.push_back(std::move(message));
+        }
     }
+}
+
+[[nodiscard]] bool valid_request(const DirectMailboxRequest &request) {
+    if (request.routes.empty()) return false;
+    const auto &first = request.routes.front().route;
+    const auto &key = first.human_directory_key;
+    if (key.empty() || key.has_root_path() || !key.parent_path().empty()
+        || key == "." || key == "..") {
+        return false;
+    }
+    auto keys = std::set<std::string>();
+    for (const auto &item : request.routes) {
+        if (item.agent_key.empty() || !keys.insert(item.agent_key).second
+            || item.route.project_root != first.project_root
+            || item.route.human_directory_key != key) {
+            return false;
+        }
+    }
+    return true;
+}
+
+struct OpenMailbox {
+    posix::FileDescriptor root, lingtai, human, mailbox;
+};
+
+[[nodiscard]] OpenMailbox open_mailbox(const DirectMailboxRequest &request) {
+    OpenMailbox opened;
+    if (!valid_request(request)) return opened;
+    const auto &route = request.routes.front().route;
+    opened.root = posix::open_root_directory(route.project_root);
+    if (opened.root.get() < 0) return opened;
+    opened.lingtai = posix::open_directory_component(
+        opened.root.get(), ".lingtai");
+    if (opened.lingtai.get() < 0) return opened;
+    opened.human = posix::open_directory_component(
+        opened.lingtai.get(), route.human_directory_key);
+    if (opened.human.get() < 0) return opened;
+    opened.mailbox = posix::open_directory_component(
+        opened.human.get(), "mailbox");
+    return opened;
+}
+
+[[nodiscard]] DirectMailboxDirectoryFingerprint fingerprint_of(
+        int parent_fd, const char *leaf) {
+    const auto directory = posix::open_directory_component(parent_fd, leaf);
+    if (directory.get() < 0) {
+        return {.state = errno == ENOENT ? 0 : 2};
+    }
+    struct stat status {};
+    if (::fstat(directory.get(), &status) != 0) return {.state = 2};
+#ifdef __APPLE__
+    const auto seconds = status.st_mtimespec.tv_sec;
+    const auto nanoseconds = status.st_mtimespec.tv_nsec;
+#else
+    const auto seconds = status.st_mtim.tv_sec;
+    const auto nanoseconds = status.st_mtim.tv_nsec;
+#endif
+    return {
+        .state = 1,
+        .device_id = static_cast<std::uint64_t>(status.st_dev),
+        .inode_id = static_cast<std::uint64_t>(status.st_ino),
+        .byte_size = static_cast<std::uint64_t>(status.st_size),
+        .link_count = static_cast<std::uint64_t>(status.st_nlink),
+        .modified_seconds = static_cast<std::int64_t>(seconds),
+        .modified_nanoseconds = static_cast<std::int64_t>(nanoseconds),
+    };
+}
+
+[[nodiscard]] DirectMailboxDirectoryFingerprint fingerprint_opened(int fd) {
+    if (fd < 0) return {.state = 2};
+    struct stat status {};
+    if (::fstat(fd, &status) != 0) return {.state = 2};
+#ifdef __APPLE__
+    const auto seconds = status.st_mtimespec.tv_sec;
+    const auto nanoseconds = status.st_mtimespec.tv_nsec;
+#else
+    const auto seconds = status.st_mtim.tv_sec;
+    const auto nanoseconds = status.st_mtim.tv_nsec;
+#endif
+    return {
+        .state = 1,
+        .device_id = static_cast<std::uint64_t>(status.st_dev),
+        .inode_id = static_cast<std::uint64_t>(status.st_ino),
+        .byte_size = static_cast<std::uint64_t>(status.st_size),
+        .link_count = static_cast<std::uint64_t>(status.st_nlink),
+        .modified_seconds = static_cast<std::int64_t>(seconds),
+        .modified_nanoseconds = static_cast<std::int64_t>(nanoseconds),
+    };
 }
 
 } // namespace
 
 DirectConversationHistory read_direct_conversation(
         const DirectConversationRoute &route) noexcept {
-    DirectConversationHistory history;
-    try {
-        // Paths derive only from the accepted canonical root and the accepted
-        // human directory key, which must stay one relative component.
-        const auto &key = route.human_directory_key;
-        if (key.empty() || key.has_root_path()
-            || !key.parent_path().empty()
-            || key == "." || key == "..") {
-            return {};
-        }
-        // Anchored, descriptor-relative walk: every component from the
-        // project root down to the mailbox is opened no-follow, one leaf at
-        // a time, so no intermediate `.lingtai`, human-directory, or
-        // `mailbox` symlink can redirect this read outside the project.
-        const auto root = posix::open_root_directory(
-            route.project_root);
-        if (root.get() < 0) return {};
-        const auto lingtai = posix::open_directory_component(root.get(), ".lingtai");
-        if (lingtai.get() < 0) return {};
-        const auto human = posix::open_directory_component(lingtai.get(), key);
-        if (human.get() < 0) return {};
-        const auto mailbox = posix::open_directory_component(human.get(), "mailbox");
-        if (mailbox.get() < 0) return {};
+    auto request = DirectMailboxRequest{{{"selected", route}}};
+    auto snapshot = read_direct_mailbox_snapshot(request);
+    const auto found = snapshot.histories.find("selected");
+    return found != snapshot.histories.end()
+        ? std::move(found->second) : DirectConversationHistory{};
+}
 
-        auto outgoing_ids = std::set<std::string>();
-        for (const auto *folder : kFolders)
-            read_folder(mailbox.get(), folder, route, history, outgoing_ids);
-        // Chronological, with the directory ID as the deterministic tie-break.
-        std::ranges::sort(history.messages, [](const auto &a, const auto &b) {
-            return a.timestamp != b.timestamp
-                ? a.timestamp < b.timestamp : a.id < b.id;
-        });
+DirectMailboxFingerprint direct_mailbox_fingerprint(
+        const DirectMailboxRequest &request) noexcept {
+    try {
+        auto result = DirectMailboxFingerprint();
+        auto opened = open_mailbox(request);
+        result.mailbox = fingerprint_opened(opened.mailbox.get());
+        if (opened.mailbox.get() < 0) return result;
+        for (std::size_t i = 0; i != std::size(kFolders); ++i) {
+            result.folders[i] = fingerprint_of(
+                opened.mailbox.get(), kFolders[i]);
+        }
+        return result;
     } catch (...) {
-        // Only row allocation can throw here. Show nothing rather than a
-        // partial conversation that looks complete.
         return {};
     }
-    return history;
+}
+
+DirectMailboxSnapshot read_direct_mailbox_snapshot(
+        const DirectMailboxRequest &request) noexcept {
+    auto snapshot = DirectMailboxSnapshot();
+    try {
+        if (!valid_request(request)) return snapshot;
+        for (const auto &item : request.routes) {
+            snapshot.histories.emplace(
+                item.agent_key, DirectConversationHistory{});
+        }
+        auto opened = open_mailbox(request);
+        if (opened.mailbox.get() < 0) return snapshot;
+        auto outgoing_ids =
+            std::vector<std::set<std::string>>(request.routes.size());
+        for (const auto *folder : kFolders) {
+            read_folder_shared(opened.mailbox.get(), folder, request,
+                snapshot, outgoing_ids);
+        }
+        for (auto &[key, history] : snapshot.histories) {
+            static_cast<void>(key);
+            std::ranges::sort(history.messages, [](const auto &a, const auto &b) {
+                return a.timestamp != b.timestamp
+                    ? a.timestamp < b.timestamp : a.id < b.id;
+            });
+        }
+    } catch (...) {
+        return {};
+    }
+    return snapshot;
+}
+
+std::optional<DirectMailboxSnapshotIndex::Job>
+DirectMailboxSnapshotIndex::request(
+        DirectMailboxRequest request,
+        DirectMailboxFingerprint fingerprint) {
+    if (!desired_request_ || *desired_request_ != request
+        || desired_fingerprint_ != fingerprint) {
+        desired_request_ = std::move(request);
+        desired_fingerprint_ = fingerprint;
+        ++desired_generation_;
+    }
+    return launch_if_needed();
+}
+
+DirectMailboxSnapshotIndex::Completion DirectMailboxSnapshotIndex::complete(
+        const Job &job,
+        DirectMailboxSnapshot snapshot,
+        DirectMailboxFingerprint fingerprint_after) {
+    auto completion = Completion();
+    if (!inflight_ || job.generation != running_generation_) {
+        return completion;
+    }
+    inflight_ = false;
+    if (job.fingerprint != fingerprint_after
+        && desired_request_ && *desired_request_ == job.request) {
+        desired_fingerprint_ = fingerprint_after;
+        ++desired_generation_;
+    }
+    if (desired_request_ && job.generation == desired_generation_
+        && *desired_request_ == job.request
+        && desired_fingerprint_ == fingerprint_after
+        && job.fingerprint == fingerprint_after) {
+        current_request_ = job.request;
+        current_fingerprint_ = fingerprint_after;
+        current_snapshot_ = std::move(snapshot);
+        completion.accepted = true;
+    }
+    completion.follow_up = launch_if_needed();
+    return completion;
+}
+
+void DirectMailboxSnapshotIndex::reset() noexcept {
+    desired_request_.reset();
+    current_request_.reset();
+    current_snapshot_.reset();
+    ++desired_generation_;
+}
+
+const DirectMailboxSnapshot *DirectMailboxSnapshotIndex::current()
+        const noexcept {
+    if (!desired_request_ || !current_request_
+        || *desired_request_ != *current_request_) {
+        return nullptr;
+    }
+    return current_snapshot_ ? &*current_snapshot_ : nullptr;
+}
+
+bool DirectMailboxSnapshotIndex::inflight() const noexcept {
+    return inflight_;
+}
+
+std::optional<DirectMailboxSnapshotIndex::Job>
+DirectMailboxSnapshotIndex::launch_if_needed() {
+    if (inflight_ || !desired_request_) return std::nullopt;
+    if (current_request_ && current_snapshot_
+        && *current_request_ == *desired_request_
+        && current_fingerprint_ == desired_fingerprint_) {
+        return std::nullopt;
+    }
+    inflight_ = true;
+    running_generation_ = desired_generation_;
+    return Job{running_generation_, *desired_request_, desired_fingerprint_};
 }
 
 } // namespace lingtai::desktop

@@ -107,7 +107,11 @@ Qt plugin path set and an 8 s watchdog.
   survival; malicious serialized-parent containment; symlinked directory/file
   and non-regular rejection; no-write snapshots; one generic skipped count per
   bad neighbor with no valid neighbor hidden; and an intermediate symlink never
-  exposing an outside mailbox (`direct_conversation_history_test.cpp`).
+  exposing an outside mailbox. It also proves one shared scan classifies busy,
+  sparse, and empty routes while retaining per-route dedupe/skip/attachment
+  semantics, and pins the index's single-flight, stale project/route rejection,
+  in-scan mutation follow-up, unchanged-tick, and reset/late-result behavior
+  (`direct_conversation_history_test.cpp`).
 - `direct_conversation_attachment_actions` proves success only for the freshly
   reopened current-entry regular file and rejects missing, replaced, symlinked,
   non-regular, escaping, or device/inode/size-mismatched requests before any
@@ -152,10 +156,11 @@ Qt plugin path set and an 8 s watchdog.
   (`verify_composer_send_behavior`, `verify_request_sleep_action`,
   `verify_first_project_bootstrap`).
 - The direct-conversation journey invokes the real ordinary one-second timer
-  seam and observes actual `message.json` opens: with one selected Agent and
-  one valid sibling, every fixture entry is opened exactly twice total, while
-  append-without-reselection, bottom-follow, scrolled-up position, and a
-  Ctrl+U-expanded older-history window all remain intact.
+  seam and observes actual `message.json` opens: an unchanged completed
+  generation opens none; after an append the timer's UI thread opens none and
+  one shared worker opens every fixture entry exactly once even with multiple
+  valid Agent routes. Append-without-reselection, bottom-follow, scrolled-up
+  position, and a Ctrl+U-expanded older-history window all remain intact.
 - `verify_composer_send_behavior` additionally proves the injected picker
   cancel path; ordered file/image cards; descriptor-revalidated bounded
   thumbnail fallback for replaced, symlinked, invalid, and absurd-header

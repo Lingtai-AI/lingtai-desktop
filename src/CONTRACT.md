@@ -35,9 +35,10 @@ Obligations and prohibitions for agents working in `src/`:
 ## Port
 
 The boundary an external caller (mainly `NativeShell` and `main.cpp`) uses is
-a small set of free functions and two small value objects. Every read
-function is `noexcept`, stateless, and returns one snapshot; every
-side-effecting function returns one coarse result enum.
+a small set of free functions and small value objects. Every filesystem read
+function is `noexcept`, stateless, and returns one observation; the mailbox
+index is an explicit in-memory generation state machine; every side-effecting
+function returns one coarse result enum.
 
 Reads (no writes, no durable state):
 
@@ -53,6 +54,11 @@ Reads (no writes, no durable state):
   (`direct_conversation_history.h`) — text rows plus ordered, descriptor-
   validated attachment metadata (including device/inode identity and current
   mailbox folder) and independent attachment-skip accounting.
+- `direct_mailbox_fingerprint(request)` → `DirectMailboxFingerprint` and
+  `read_direct_mailbox_snapshot(request)` → `DirectMailboxSnapshot`
+  (`direct_conversation_history.h`) — respectively a fixed-count folder
+  observation with no entry enumeration, and one shared scan that parses each
+  entry once before classifying it across all requested routes.
 - `revalidate_direct_conversation_attachment(route, request)` → optional
   current path (`direct_conversation_attachment_actions.h`) — refreshes the
   current message entry, descriptor-walks its current `attachments/` directory
@@ -82,9 +88,12 @@ bounded side-effect scope):
   (`project_bootstrap.h`) — delegates the entire project scaffold/config
   boundary to the TUI headless surface.
 
-State model (`workspace_selection.h`): `WorkspaceSelectionState` is the only
+State models: `WorkspaceSelectionState` (`workspace_selection.h`) is the only
 owner of the accepted active project and the selected Agent directory key. A
 caller proposes typed transitions only; the model performs no reads.
+`DirectMailboxSnapshotIndex` (`direct_conversation_history.h`) is the only
+owner of mailbox single-flight/generation acceptance. It performs no reads or
+threading; `NativeShell` supplies fingerprints/results and runs accepted jobs.
 
 ## Adapters
 
@@ -113,7 +122,7 @@ caller proposes typed transitions only; the model performs no reads.
 
 1. **One source of ownership per behavior.** Roster truth lives only in
    `WorkspaceSelectionState` + the sole `agents_` snapshot; conversation rows
-   only in `read_direct_conversation`;
+   only in the `direct_conversation_history` shared projection/index;
    Presets only in `read_agent_preset_summary`. No second owner exists.
 2. **Readers read.** Every project-tree reader opens its source one no-follow
    leaf at a time through `posix_internal`, bounds the actual read, and never

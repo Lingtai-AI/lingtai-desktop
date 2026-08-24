@@ -28,6 +28,10 @@ Entry point and composition root:
   composer's local slash-command/publisher dispatch, the one-second refresh
   timer, and the two
   click-armed pending observations.
+  It also owns the `DirectMailboxSnapshotIndex` generation state and its
+  cancellation token: the timer performs only a fixed-count mailbox-folder
+  fingerprint, while one detached worker reads a shared all-route snapshot
+  and posts a current-generation result back to the UI thread.
   The roster column is separated from the content pane by one semantic 8px
   drag handle (`lingtai_roster_resize_handle`, distinct from the one-pixel
   `Ui::PlainShadow` `lingtai_roster_separator` that follows it) whose drags
@@ -98,9 +102,13 @@ Domain readers/projections (stateless, read-only, one source each):
 - `slash_command.{h,cpp}` — `parse_slash_command`: pure composer-text
   classification matching the TUI leading-slash / first-ASCII-space boundary;
   owns no dispatch, widget, filesystem access, or side effect.
-- `direct_conversation_history.{h,cpp}` — `read_direct_conversation`: reads
-  the human's own `mailbox` `inbox`/`sent`/`outbox` `message.json` rows and
-  descriptor-validates ordered attachment metadata under each current entry.
+- `direct_conversation_history.{h,cpp}` — the descriptor-safe mailbox
+  projection owner: `direct_mailbox_fingerprint` observes only the mailbox
+  and three fixed folder leaves; `read_direct_mailbox_snapshot` scans each
+  entry once and classifies it across every current Agent route; and
+  `DirectMailboxSnapshotIndex` owns deterministic single-flight, generation,
+  stale-result, and in-scan-change decisions. `read_direct_conversation`
+  remains the one-route compatibility projection.
 - `direct_conversation_attachment_actions.{h,cpp}` — fresh action-time
   current-route/current-entry resolver and no-follow regular-file identity
   revalidation. It returns only the freshly reconstructed path and launches
@@ -144,7 +152,8 @@ keeps the parent summary):
   in smoke mode consumes `smoke_ready()` and emits the ordered markers.
 - `NativeShell` → readers/owners: the shell is the sole caller of
   `project_agents`, `resolve_direct_conversation_route`,
-  `parse_slash_command`, `read_direct_conversation`, `send_direct_mail`,
+  `parse_slash_command`, the shared mailbox fingerprint/snapshot projection,
+  `send_direct_mail`,
   `read_agent_preset_summary`,
   `request_agent_sleep` + the baseline/observe pair, `start_agent`, and the
   `ProjectBootstrapRunner` calls. The click handlers rerun `project_agents`

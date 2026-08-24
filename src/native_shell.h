@@ -140,6 +140,14 @@ private:
     [[nodiscard]] bool in_project_setup() const;
     void refresh_route();
     void render_roster();
+    [[nodiscard]] DirectMailboxRequest mailbox_request() const;
+    void request_mailbox_snapshot();
+    void start_mailbox_snapshot_job(DirectMailboxSnapshotIndex::Job job);
+    void apply_mailbox_snapshot_job(
+        DirectMailboxSnapshotIndex::Job job,
+        DirectMailboxSnapshot snapshot,
+        DirectMailboxFingerprint fingerprint_after);
+    void invalidate_mailbox_snapshot();
     [[nodiscard]] std::optional<DirectConversationHistory>
         refresh_unseen_badges();
     void render_conversation(
@@ -282,6 +290,15 @@ private:
     MessageReactionStore reaction_store_;
     ConversationUnreadState conversation_unread_;
     InjectedMailJournal injected_mail_journal_;
+    // One complete shared human-mailbox projection for all current Agent
+    // routes. The UI thread performs only fixed-count fingerprints; the
+    // descriptor scan and JSON parse run in one detached single-flight job.
+    DirectMailboxSnapshotIndex mailbox_snapshot_index_;
+    struct MailboxLoadToken {
+        std::atomic<bool> cancelled{false};
+    };
+    std::shared_ptr<MailboxLoadToken> mailbox_load_token_
+        = std::make_shared<MailboxLoadToken>();
     OpenProjectRequestHandler open_project_request_handler_;
     OpenProjectRequestHandler open_project_in_new_window_request_handler_;
     AttachmentPicker attachment_picker_;

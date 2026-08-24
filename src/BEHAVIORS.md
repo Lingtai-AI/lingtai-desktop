@@ -94,13 +94,17 @@ its code.
   unchanged and the key is still valid. Failed opens keep the prior
   project/roster/selection and show a transient `lingtai_project_open_error`
   message.
-- A one-second view-scoped `QTimer` (the only poller) re-invokes the same
-  stateless readers for conversation and Presets, and
-  keeps the Request-sleep / Start-Agent button states honest; it never
-  carries a cursor or offset. On an ordinary active-project tick, each valid
-  non-human Agent conversation is read once: the selected history observed for
-  unread catch-up is moved into the selected conversation render instead of
-  being projected again in the same tick.
+- A one-second view-scoped `QTimer` (the only poller) performs a fixed-count,
+  descriptor-relative fingerprint of the human mailbox and its
+  `inbox`/`sent`/`outbox` leaves, re-invokes the Presets reader, and keeps the
+  Request-sleep / Start-Agent button states honest. An unchanged mailbox
+  opens no `message.json`. A changed fingerprint schedules at most one shared
+  worker generation; that worker opens and parses each mailbox entry once,
+  classifies it across all current Agent routes, and posts only a stable,
+  current-project/current-route-set result to the UI thread. A mutation during
+  the scan schedules one follow-up generation; stale results are discarded.
+  The most recent completed same-route snapshot remains renderable while its
+  replacement is in flight, and project/route switches never reuse it.
 - Roster state label: `Roster unavailable` when the scan is not complete,
   `No Agents found — scan complete`, or `N Agent(s) — scan complete`.
 

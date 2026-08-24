@@ -66,8 +66,9 @@ touches a real Agent or project, and none depends on a network or provider.
   command classification; no Qt, filesystem, project fixture, or side effect.
 - `tests/direct_conversation_history_test.cpp` — `direct_conversation_history`
   ctest. Read-only mailbox rows and attachment metadata, descriptor-relative
-  containment, independent skip accounting, membership, order, collapse, and
-  no-write proof.
+  containment, shared multi-route one-parse projection, fixed-count
+  fingerprints, deterministic generation/race/reset state, independent skip
+  accounting, membership, order, collapse, and no-write proof.
 - `tests/direct_conversation_attachment_actions_test.cpp` —
   `direct_conversation_attachment_actions` ctest. Fresh current-message-entry
   lookup, descriptor-relative no-follow reopen, identity match, and mutation /

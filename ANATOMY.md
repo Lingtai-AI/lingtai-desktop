@@ -66,7 +66,8 @@ bounded no-emission parent `crl` update producer the smoke needs.
   one C5-owned composition: `WorkspaceSelectionState` C1 truth, the 260px
   `AgentRoster` column, the `ConversationSurface` chat, the one secondary
   read-only page (`AgentDetailPage`, `src/native_shell.h:53-60`), the
-  one-second view-scoped `QTimer`, and the sleep/start pending observations
+  one-second view-scoped `QTimer`, its shared off-thread mailbox snapshot
+  generation/index, and the sleep/start pending observations
   (`src/native_shell.h:149-164`). Route into `src/ANATOMY.md`.
 - `src/workspace_selection.{h,cpp}` — `WorkspaceSelectionState`
   (`src/workspace_selection.h:20`), the sole active-project/selected-Agent
@@ -86,9 +87,10 @@ bounded no-emission parent `crl` update producer the smoke needs.
 - `src/direct_conversation_route.{h,cpp}` — `resolve_direct_conversation_route`
   and `DirectConversationRoute` (`src/direct_conversation_route.h:23`): pure
   route resolution, no filesystem, no link edge to discovery.
-- `src/direct_conversation_history.{h,cpp}` — `read_direct_conversation`
-  (`src/direct_conversation_history.h`): read-only mailbox rows plus ordered,
-  current-entry-rooted attachment metadata and attachment-skip accounting.
+- `src/direct_conversation_history.{h,cpp}` — fixed-count mailbox fingerprint,
+  shared all-route snapshot reader/index, and the one-route
+  `read_direct_conversation` compatibility projection: read-only mailbox rows
+  plus ordered, current-entry-rooted attachment metadata and skip accounting.
 - `src/direct_conversation_attachment_actions.{h,cpp}` — fresh current-route,
   current-message-entry no-follow attachment revalidation for Open/Reveal;
   returns a path only after identity match and launches nothing.

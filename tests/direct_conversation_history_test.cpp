@@ -22,8 +22,16 @@ namespace fs = std::filesystem;
 using lingtai::desktop::AttachmentMediaKind;
 using lingtai::desktop::DirectConversationHistory;
 using lingtai::desktop::DirectConversationRoute;
+using lingtai::desktop::DirectMailboxDirectoryFingerprint;
+using lingtai::desktop::DirectMailboxFingerprint;
+using lingtai::desktop::DirectMailboxRequest;
+using lingtai::desktop::DirectMailboxRoute;
+using lingtai::desktop::DirectMailboxSnapshot;
+using lingtai::desktop::DirectMailboxSnapshotIndex;
 using lingtai::desktop::classify_attachment_media_kind;
+using lingtai::desktop::direct_mailbox_fingerprint;
 using lingtai::desktop::read_direct_conversation;
+using lingtai::desktop::read_direct_mailbox_snapshot;
 
 void require(bool condition, const std::string &message) {
     if (!condition) throw std::runtime_error(message);
@@ -107,6 +115,17 @@ DirectConversationRoute route_for(const fs::path &project_root) {
     route.target_address = "telegram-bot";
     route.project_root = project_root;
     route.target_agent_id = "20260712-191609-d0c8";
+    return route;
+}
+
+DirectConversationRoute route_for_target(
+        const fs::path &project_root,
+        std::string target,
+        std::string agent_id) {
+    auto route = route_for(project_root);
+    route.target_directory_key = target;
+    route.target_address = std::move(target);
+    route.target_agent_id = std::move(agent_id);
     return route;
 }
 
@@ -419,6 +438,144 @@ void verify_intermediate_symlink_no_outside_read(const fs::path &sandbox) {
         "symlink must never be accepted into the conversation");
 }
 
+void verify_shared_multi_route_projection(const fs::path &sandbox) {
+    const auto project = sandbox / "shared";
+    const auto mailbox = mailbox_of(project);
+    const auto telegram_entry =
+        mailbox / "inbox" / "20260807T180000-t001";
+    write_file(telegram_entry / "attachments" / "report.txt", "bounded\n");
+    write_file(telegram_entry / "message.json", with_attachments(
+        envelope("telegram-bot", "human", "Telegram", "many matches",
+            "received_at", "2026-08-07T18:00:00Z",
+            "20260712-191609-d0c8"),
+        R"(["report.txt","missing.txt",7])"));
+    write_file(mailbox / "inbox" / "20260807T180100-c001" / "message.json",
+        envelope("codex", "human", "Codex", "one match", "received_at",
+            "2026-08-07T18:01:00Z"));
+    write_file(mailbox / "inbox" / "20260807T180200-cc01" / "message.json",
+        R"({"from":"telegram-bot","to":["human"],"cc":["codex"],)"
+        R"("message":"copied","received_at":"2026-08-07T18:02:00Z"})");
+    const auto outgoing = envelope("human", "telegram-bot", "Reply",
+        "sent once", "sent_at", "2026-08-07T18:03:00Z");
+    write_file(mailbox / "sent" / "20260807T180300-o001" / "message.json",
+        outgoing);
+    write_file(mailbox / "outbox" / "20260807T180300-o001" / "message.json",
+        outgoing);
+    write_file(mailbox / "inbox" / "20260807T180400-bad1" / "message.json",
+        R"({"from":)");
+
+    auto request = DirectMailboxRequest{{
+        {"telegram-bot", route_for_target(project, "telegram-bot",
+            "20260712-191609-d0c8")},
+        {"codex", route_for_target(project, "codex", "codex-id")},
+        {"quiet", route_for_target(project, "quiet", "quiet-id")},
+    }};
+    const auto before = tree_snapshot(project);
+    const auto snapshot = read_direct_mailbox_snapshot(request);
+    require(tree_snapshot(project) == before,
+        "a shared mailbox projection must remain read-only");
+    require(snapshot.histories.size() == 3,
+        "every current route must receive a complete history");
+    require(ids_of(snapshot.histories.at("telegram-bot"))
+            == std::vector<std::string>{
+                "20260807T180000-t001", "20260807T180300-o001"},
+        "the busy route must retain incoming plus deduplicated outgoing mail");
+    require(ids_of(snapshot.histories.at("codex"))
+            == std::vector<std::string>{"20260807T180100-c001"},
+        "a sibling route must retain only its exact direct mail");
+    require(snapshot.histories.at("quiet").messages.empty(),
+        "a sibling with no matches must still receive an empty history");
+    for (const auto &[key, history] : snapshot.histories) {
+        static_cast<void>(key);
+        require(history.skipped == 1,
+            "one malformed shared entry must count once for every route");
+    }
+    const auto &telegram = snapshot.histories.at("telegram-bot");
+    require(telegram.messages.front().attachments.size() == 1
+            && telegram.skipped_attachments == 2,
+        "attachment projection and independent skips must survive sharing");
+    require(snapshot.histories.at("codex").skipped_attachments == 0
+            && snapshot.histories.at("quiet").skipped_attachments == 0,
+        "attachment skips must stay on the owning conversation only");
+
+    const auto fingerprint_before = direct_mailbox_fingerprint(request);
+    write_file(mailbox / "inbox" / "20260807T180500-new1" / "message.json",
+        envelope("quiet", "human", "Fresh", "arrived", "received_at",
+            "2026-08-07T18:05:00Z"));
+    const auto fingerprint_after = direct_mailbox_fingerprint(request);
+    require(fingerprint_before != fingerprint_after,
+        "a fixed-count folder fingerprint must detect an appended entry");
+}
+
+DirectMailboxFingerprint fingerprint(std::uint64_t inode) {
+    auto result = DirectMailboxFingerprint();
+    result.mailbox = DirectMailboxDirectoryFingerprint{
+        .state = 1, .device_id = 7, .inode_id = 11};
+    result.folders[0] = DirectMailboxDirectoryFingerprint{
+        .state = 1, .device_id = 7, .inode_id = inode};
+    return result;
+}
+
+void verify_generation_single_flight_and_retry(const fs::path &sandbox) {
+    const auto project_a = sandbox / "generation-a";
+    const auto project_b = sandbox / "generation-b";
+    auto request_a = DirectMailboxRequest{{{"a", route_for(project_a)}}};
+    auto request_b = DirectMailboxRequest{{{"b", route_for(project_b)}}};
+    auto index = DirectMailboxSnapshotIndex();
+
+    const auto first = index.request(request_a, fingerprint(1));
+    require(first && index.inflight(),
+        "the first desired snapshot must launch one generation");
+    require(!index.request(request_a, fingerprint(1)),
+        "an unchanged request while inflight must remain single-flight");
+    require(!index.request(request_b, fingerprint(2)),
+        "a route/project change while inflight must queue, not overlap");
+
+    auto stale_snapshot = DirectMailboxSnapshot();
+    stale_snapshot.histories["a"].messages.push_back(
+        {"stale", false, "1", {}, "old project", {}, "inbox"});
+    const auto stale = index.complete(
+        *first, std::move(stale_snapshot), fingerprint(1));
+    require(!stale.accepted && stale.follow_up
+            && stale.follow_up->request == request_b,
+        "a stale project generation must not publish and must launch current");
+
+    auto current_snapshot = DirectMailboxSnapshot();
+    current_snapshot.histories["b"].messages.push_back(
+        {"current", false, "2", {}, "new project", {}, "inbox"});
+    const auto current = index.complete(*stale.follow_up,
+        std::move(current_snapshot), fingerprint(2));
+    require(current.accepted && !current.follow_up && index.current()
+            && index.current()->histories.contains("b")
+            && !index.current()->histories.contains("a"),
+        "only the current project generation may become visible");
+    require(!index.request(request_b, fingerprint(2)),
+        "an unchanged completed tick must launch no new full scan");
+
+    const auto mutation_job = index.request(request_b, fingerprint(3));
+    require(mutation_job.has_value(),
+        "a changed folder fingerprint must launch one fresh generation");
+    const auto mutation = index.complete(
+        *mutation_job, DirectMailboxSnapshot(), fingerprint(4));
+    require(!mutation.accepted && mutation.follow_up
+            && mutation.follow_up->fingerprint == fingerprint(4),
+        "an in-scan append must reject the torn snapshot and retry freshness");
+    const auto fresh = index.complete(*mutation.follow_up,
+        DirectMailboxSnapshot(), fingerprint(4));
+    require(fresh.accepted && !fresh.follow_up,
+        "the stable follow-up generation must replace the stale attempt");
+
+    const auto teardown_job = index.request(request_b, fingerprint(5));
+    require(teardown_job.has_value(),
+        "a final changed fingerprint must launch");
+    index.reset();
+    const auto after_reset = index.complete(
+        *teardown_job, DirectMailboxSnapshot(), fingerprint(5));
+    require(!after_reset.accepted && !after_reset.follow_up
+            && !index.current(),
+        "reset/destruction state must discard a late worker result safely");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -446,6 +603,8 @@ int main(int argc, char **argv) {
         verify_bad_attachments_preserve_messages_and_stay_contained(sandbox);
         verify_bad_neighbors_are_skipped(sandbox);
         verify_intermediate_symlink_no_outside_read(sandbox);
+        verify_shared_multi_route_projection(sandbox);
+        verify_generation_single_flight_and_retry(sandbox);
 
         fs::remove_all(sandbox, error);
         require(!error, "sandbox must be removed");
