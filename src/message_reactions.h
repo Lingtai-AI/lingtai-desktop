@@ -2,6 +2,7 @@
 
 #include "direct_conversation_history.h"
 
+#include <cstddef>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -85,10 +86,13 @@ private:
 
 // Upgrades existing receipts to replied when a later inbound message exists.
 // Does not invent received/seen from history alone (session-only received
-// comes from a successful local send).
+// comes from a successful local send). inspected_messages is an optional
+// deterministic work counter: one history row inspected by the reverse pass
+// contributes one.
 void sync_receipts_from_history(
     MessageReactionStore &store,
-    const std::vector<DirectConversationMessage> &messages);
+    const std::vector<DirectConversationMessage> &messages,
+    std::size_t *inspected_messages = nullptr);
 
 // Upgrades an existing received receipt to seen when that mailbox id was
 // named in a committed notification_block_injected email lane. Does not

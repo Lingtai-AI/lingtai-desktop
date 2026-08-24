@@ -152,18 +152,18 @@ void MessageReactionStore::upsert_peer_reaction(
 
 void sync_receipts_from_history(
         MessageReactionStore &store,
-        const std::vector<DirectConversationMessage> &messages) {
-    for (auto index = std::size_t{0}; index != messages.size(); ++index) {
-        const auto &message = messages[index];
-        if (!message.outgoing || message.id.empty()) continue;
-        auto has_later_inbound = false;
-        for (auto after = index + 1; after != messages.size(); ++after) {
-            if (!messages[after].outgoing) {
-                has_later_inbound = true;
-                break;
-            }
+        const std::vector<DirectConversationMessage> &messages,
+        std::size_t *inspected_messages) {
+    if (inspected_messages) *inspected_messages = 0;
+    auto has_later_inbound = false;
+    for (auto cursor = messages.rbegin(); cursor != messages.rend(); ++cursor) {
+        if (inspected_messages) ++*inspected_messages;
+        const auto &message = *cursor;
+        if (!message.outgoing) {
+            has_later_inbound = true;
+            continue;
         }
-        if (!has_later_inbound) continue;
+        if (!has_later_inbound || message.id.empty()) continue;
         const auto existing = store.get(message.id);
         if (highest_receipt(existing) == ReceiptStage::none) {
             // No session send receipt yet — do not invent received/seen from

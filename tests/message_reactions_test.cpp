@@ -71,25 +71,56 @@ void test_peer_reactions_allowed() {
         "two distinct peer reactors share one emoji count");
 }
 
-void test_history_upgrade_only_existing_receipts() {
+void test_history_receipt_reconciliation_is_linear_and_preserves_semantics() {
     MessageReactionStore store;
-    std::vector<DirectConversationMessage> messages = {
-        {.id = "out-1", .outgoing = true, .text = "hello"},
-        {.id = "in-1", .outgoing = false, .text = "hi"},
-        {.id = "out-2", .outgoing = true, .text = "again"},
-    };
+    std::vector<DirectConversationMessage> messages;
+    constexpr auto kWorstPatternOutgoing = std::size_t{2048};
+    messages.reserve(kWorstPatternOutgoing + 6);
+    for (auto index = std::size_t{0}; index != kWorstPatternOutgoing; ++index) {
+        messages.push_back({
+            .id = "prefix-" + std::to_string(index),
+            .outgoing = true,
+            .text = "prefix",
+        });
+        if (index % 2 == 0) {
+            store.set_receipt(messages.back().id, ReceiptStage::received);
+        }
+    }
+    store.set_receipt("prefix-0", ReceiptStage::replied);
+    messages.push_back({.id = "in-1", .outgoing = false, .text = "reply"});
+    messages.push_back({.id = "between", .outgoing = true, .text = "again"});
+    store.set_receipt("between", ReceiptStage::seen);
+    messages.push_back({.id = "", .outgoing = true, .text = "empty id"});
+    messages.push_back({.id = "in-2", .outgoing = false, .text = "reply again"});
+    messages.push_back({.id = "tail", .outgoing = true, .text = "last"});
+    store.set_receipt("tail", ReceiptStage::received);
 
-    sync_receipts_from_history(store, messages);
-    expect(store.get("out-1").empty() && store.get("out-2").empty(),
-        "history alone must not invent receipts");
+    std::vector<std::string> order_before;
+    order_before.reserve(messages.size());
+    for (const auto &message : messages) order_before.push_back(message.id);
 
-    store.set_receipt("out-1", ReceiptStage::received);
-    sync_receipts_from_history(store, messages);
-    expect(store.get("out-1").list.size() == 1
-            && store.get("out-1").list[0].id.key == "receipt.replied",
-        "a later inbound upgrades an existing receipt to replied");
-    expect(store.get("out-2").empty(),
-        "outgoing without a later inbound stays without a invented receipt");
+    auto inspected_messages = std::size_t{0};
+    sync_receipts_from_history(store, messages, &inspected_messages);
+
+    expect(inspected_messages == messages.size(),
+        "history receipt reconciliation inspects each message exactly once");
+    expect(store.get("prefix-0").list[0].id.key == "receipt.replied",
+        "an already replied receipt remains replied");
+    expect(store.get("prefix-2").list[0].id.key == "receipt.replied",
+        "an eligible existing receipt is upgraded to replied");
+    expect(store.get("prefix-1").empty(),
+        "an eligible message without a receipt stays without one");
+    expect(store.get("between").list[0].id.key == "receipt.replied",
+        "alternating boundaries upgrade an outgoing before the next inbound");
+    expect(store.get("").empty(), "an empty message id is ignored");
+    expect(store.get("tail").list[0].id.key == "receipt.received",
+        "an outgoing after the last inbound is not upgraded");
+
+    std::vector<std::string> order_after;
+    order_after.reserve(messages.size());
+    for (const auto &message : messages) order_after.push_back(message.id);
+    expect(order_after == order_before,
+        "history receipt reconciliation preserves message order");
 }
 
 void test_seen_from_injected_ids_only_existing_receipts() {
@@ -167,7 +198,7 @@ void test_session_clear() {
 int main() {
     test_receipt_monotonic();
     test_peer_reactions_allowed();
-    test_history_upgrade_only_existing_receipts();
+    test_history_receipt_reconciliation_is_linear_and_preserves_semantics();
     test_seen_from_injected_ids_only_existing_receipts();
     test_injected_mail_ids_from_persistent_lane();
     test_injected_mail_journal_tails_only_new_lines();
