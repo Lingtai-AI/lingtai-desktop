@@ -154,16 +154,30 @@ its code.
 - `preflight_attachments` is the UI-independent direct-file selection model:
   each selected path is canonicalized, opened nonblocking, and measured from
   the opened regular file; accepted metadata retains that canonical source,
-  the selected leaf display name, exact bytes, and a conservative
-  case-insensitive image/file classification. Equivalent filesystem sources
-  are rejected after their first occurrence. The inclusive 25 MiB per-file
-  and 100 MiB cumulative limits are applied in input order; rejection consumes
-  no cumulative budget, so a later smaller file can still fit.
+  the selected leaf display name, exact bytes, device/inode identity, and a
+  conservative case-insensitive image/file classification. Equivalent
+  filesystem sources are rejected after their first occurrence. The inclusive
+  25 MiB per-file and 100 MiB cumulative limits are applied in input order;
+  rejection consumes no cumulative budget, so a later smaller file can still
+  fit.
 - Missing, non-regular, unreadable, oversized, over-total, duplicate, and other
   local failures remain distinct typed rejections carrying the rejected input.
   Preflight performs no write or copy, catches failures at its public boundary,
-  and does not authorize publication. The existing text-only publisher and
-  envelope remain unchanged; a later attachment publisher must revalidate.
+  and does not authorize publication.
+- `send_direct_mail` keeps the two-argument text-only call and exact envelope
+  (no `attachments` field). With accepted attachments it permits empty text,
+  reopens each canonical source read-only/no-follow, checks regular-file
+  device/inode identity and current size, reapplies per-file/cumulative limits,
+  and copies from that same validated descriptor. Safe duplicate basenames use
+  `stem-1.ext`, `stem-2.ext`, and so on. Private copies live temporarily under
+  the owned outbox leaf, while the JSON array names their final absolute human
+  `sent/<id>/attachments/<name>` paths.
+- The publisher closes every copy before atomically publishing `message.json`
+  last. Any source, name, limit, destination, copy, payload, or publish failure
+  returns a typed reason (plus attachment index/source when applicable), never
+  returns a message id, and removes only that call's exclusive leaf. `queued`
+  means the complete outbox leaf exists; it does not mean kernel pickup or
+  delivery. Empty text with no attachments writes nothing.
 
 - The composer is one vendored single-line `InputField` plus an explicit
   `Send` `RoundButton`, enabled only when a direct route resolves for the

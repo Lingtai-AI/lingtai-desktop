@@ -67,7 +67,8 @@ touches a real Agent or project, and none depends on a network or provider.
 - `tests/direct_conversation_history_test.cpp` — `direct_conversation_history`
   ctest. Read-only mailbox rows, membership, order, collapse, no-write.
 - `tests/direct_mail_publisher_test.cpp` — `direct_mail_publisher` ctest.
-  One exclusive outbox leaf, schema, nonoverwrite, fail-closed containment.
+  Atomic text/attachment outbox leaf, revalidation, limits, final sent paths,
+  naming, private byte copies, typed failures, rollback, and containment.
 - `tests/agent_preset_summary_test.cpp` — `agent_preset_summary` ctest.
   `resolved`/`stale`/`unavailable` projection of the selected Agent's
   `manifest.resolved.json`.

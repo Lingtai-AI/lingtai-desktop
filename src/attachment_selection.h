@@ -30,6 +30,11 @@ struct AcceptedAttachment {
     std::string display_filename;
     std::uint64_t byte_size = 0;
     AttachmentMediaKind media_kind = AttachmentMediaKind::file;
+    // Identity of the descriptor measured during preflight. Publication
+    // compares these facts after reopening the canonical source so a
+    // same-sized replacement cannot inherit stale acceptance.
+    std::uint64_t device_id = 0;
+    std::uint64_t inode_id = 0;
 };
 
 struct RejectedAttachment {

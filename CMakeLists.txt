@@ -304,8 +304,9 @@ target_link_libraries(lingtai_desktop_conversation
     PRIVATE Qt6::Core lingtai_desktop_posix_primitives)
 
 # The one current publisher owner: it turns an already-accepted route and a
-# validated plain-text body into one exclusively created human outbox leaf. It
-# writes only that leaf and never the target inbox or human sent.
+# validated body and optional accepted attachment facts into one exclusively
+# created human outbox leaf. It writes only that leaf and never the target
+# inbox or human sent.
 add_library(lingtai_desktop_mail_publisher STATIC
     src/direct_mail_publisher.cpp)
 init_target(lingtai_desktop_mail_publisher)
@@ -314,7 +315,7 @@ target_include_directories(lingtai_desktop_mail_publisher PUBLIC
 target_compile_options(lingtai_desktop_mail_publisher PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_desktop_mail_publisher
-    PUBLIC lingtai_desktop_direct_route
+    PUBLIC lingtai_desktop_direct_route lingtai_desktop_attachment_selection
     PRIVATE Qt6::Core lingtai_desktop_posix_primitives)
 
 # The one Presets summary reader owner: it turns the selected Agent's own

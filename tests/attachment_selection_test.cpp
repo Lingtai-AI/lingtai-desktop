@@ -89,6 +89,14 @@ void verify_metadata_order_and_classification(const fs::path &sandbox) {
             "display filename preserves the selected leaf name");
         expect(result.accepted[0].byte_size == 11,
             "exact first-file size is retained");
+        struct stat opened {};
+        expect(::stat(first.c_str(), &opened) == 0,
+            "accepted fixture identity can be inspected");
+        expect(result.accepted[0].device_id
+                    == static_cast<std::uint64_t>(opened.st_dev)
+                && result.accepted[0].inode_id
+                    == static_cast<std::uint64_t>(opened.st_ino),
+            "opened source device and inode identity are retained");
         expect(result.accepted[0].media_kind == AttachmentMediaKind::image,
             "image extension matching is case-insensitive");
         expect(result.accepted[1].display_filename == "archive.unknown",

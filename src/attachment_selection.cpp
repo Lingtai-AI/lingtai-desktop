@@ -133,6 +133,8 @@ AttachmentSelectionResult preflight_attachments(
                 selected_path.filename().string(),
                 byte_size,
                 classify_media_kind(selected_path),
+                static_cast<std::uint64_t>(status.st_dev),
+                static_cast<std::uint64_t>(status.st_ino),
             });
             result.accepted_bytes += byte_size;
         }

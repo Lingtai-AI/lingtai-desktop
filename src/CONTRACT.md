@@ -55,14 +55,16 @@ Reads (no writes, no durable state):
   (`agent_preset_summary.h`).
 - `preflight_attachments(selected_paths)` → `AttachmentSelectionResult`
   (`attachment_selection.h`) — current canonical source paths, display names,
-  sizes, media kinds, accepted-byte accounting, and ordered typed rejections.
-  It writes nothing and is never publication authorization.
+  sizes, device/inode identities, media kinds, accepted-byte accounting, and
+  ordered typed rejections. It writes nothing and is never publication
+  authorization.
 
 Side-effecting operations (the only writers/launchers; each owns one explicit
 bounded side-effect scope):
 
-- `send_direct_mail(route, text)` → `DirectMailSendResult`
-  (`direct_mail_publisher.h`) — one human `outbox/<id>` leaf.
+- `send_direct_mail(route, text, attachments = {})` → `DirectMailSendOutcome`
+  (`direct_mail_publisher.h`) — one atomic human `outbox/<id>` leaf, with
+  typed local failure facts and optional copied attachments.
 - `request_agent_sleep(attachment, key)` → `AgentSleepRequestResult`,
   plus `capture_agent_sleep_event_baseline` / `observe_agent_sleep_received`
   (`agent_sleep.h`) — one `.sleep` marker.
@@ -85,10 +87,11 @@ caller proposes typed transitions only; the model performs no reads.
   walks the project tree.
 - Attachment selection (`attachment_selection.h`) is a separate Qt-independent
   local-file adapter. It canonicalizes and opens selected sources, measures the
-  opened regular files, deduplicates their filesystem identities, classifies a
-  small explicit image-extension set, and applies the 25 MiB per-file and
-  100 MiB cumulative limits in caller order. A publisher must revalidate later
-  because these facts do not close the time-of-check/time-of-use gap.
+  opened regular files, retains their device/inode identities, deduplicates
+  those identities, classifies a small explicit image-extension set, and
+  applies the 25 MiB per-file and 100 MiB cumulative limits in caller order. A
+  publisher must revalidate later because these facts do not close the
+  time-of-check/time-of-use gap.
 - `posix_internal` (`posix_descriptor_primitives.h`) is the shared filesystem
   adapter seam: descriptor ownership, no-follow one-leaf opens, and `safe_leaf`
   validation. It is internal, links nothing, and carries no domain policy.
@@ -112,8 +115,9 @@ caller proposes typed transitions only; the model performs no reads.
    state; one bad sibling never hides a healthy neighbor.
 3. **Publishers/launchers own side effects.** Only `send_direct_mail`,
    `request_agent_sleep`, `start_agent`, and `ProjectBootstrapRunner` write or
-   launch. They never claim target acceptance, queueing, liveness, or
-   lifecycle from the local write/start alone.
+   launch. Direct mail `queued` means only that the complete human outbox leaf
+   was published; none claims kernel pickup, target acceptance, delivery,
+   liveness, or lifecycle from the local write/start alone.
 4. **The shell composes.** `NativeShell` composes the widgets, dialog, and
    timer, re-derives visible routes from C1 truth, and proposes transitions
    through the model. It also owns the composer-local dispatch after calling

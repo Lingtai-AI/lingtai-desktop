@@ -89,7 +89,8 @@ bounded no-emission parent `crl` update producer the smoke needs.
 - `src/direct_conversation_history.{h,cpp}` — `read_direct_conversation`
   (`src/direct_conversation_history.h:41`): read-only mailbox rows.
 - `src/direct_mail_publisher.{h,cpp}` — `send_direct_mail`
-  (`src/direct_mail_publisher.h:22`): one exclusive human outbox leaf.
+  (`src/direct_mail_publisher.h`): one atomically published exclusive human
+  outbox leaf with optional private attachment copies.
 - `src/agent_preset_summary.{h,cpp}` — `read_agent_preset_summary`
   (`src/agent_preset_summary.h:67`): stateless read-only
   `system/manifest.resolved.json` policy/effective projection.

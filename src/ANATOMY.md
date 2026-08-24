@@ -93,8 +93,10 @@ Domain readers/projections (stateless, read-only, one source each):
 
 Direct-operation/side-effect owners (the only writers/launchers):
 
-- `direct_mail_publisher.{h,cpp}` — `send_direct_mail`: exclusively creates
-  one human `outbox/<id>` leaf and writes a temp-then-renamed `message.json`.
+- `direct_mail_publisher.{h,cpp}` — `send_direct_mail`: revalidates accepted
+  local-file identity/size/limits, exclusively creates one human
+  `outbox/<id>` leaf, privately copies optional attachments, and publishes the
+  temp-then-renamed `message.json` last; failures roll back that owned leaf.
 - `agent_sleep.{h,cpp}` — `request_agent_sleep`: creates/truncates one
   `.sleep` marker; plus the best-effort `sleep_received` baseline/observe pair.
 - `agent_launch.{h,cpp}` — `start_agent`: one detached, shell-free

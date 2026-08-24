@@ -102,11 +102,14 @@ Qt plugin path set and an 8 s watchdog.
   sent collapse preferring `sent`; one generic skipped count per bad
   neighbor with no valid neighbor hidden; and an intermediate symlink never
   exposing an outside mailbox (`direct_conversation_history_test.cpp:113-264`).
-- `direct_mail_publisher` proves the one exclusive outbox leaf: fresh
-  `YYYYMMDDTHHMMSS-xxxx` id, exactly `message.json` with the current schema
-  fields, pre-existing content untouched, a fresh id per send, and a blocked
-  or symlinked outbox failing closed with no outside write
-  (`direct_mail_publisher_test.cpp:91-207`).
+- `direct_mail_publisher` proves the text-only envelope remains field-compatible
+  and attachment-free; attachment-only and mixed publication use exact private
+  copies, deterministic extension-preserving duplicate names, and final human
+  sent paths while bytes remain in outbox before pickup. It also pins source
+  identity/type/size/access and forged-limit revalidation, structured failure
+  facts, both-empty no-write, owned-leaf rollback (including a forced
+  destination failure), fresh ids/nonoverwrite, and symlinked-route containment
+  (`direct_mail_publisher_test.cpp`).
 - `agent_preset_summary` proves `resolved` (exact ordered allowed refs with
   independent active/default badges, narrow active-effective fields,
   optional `context_limit` omission still resolved), `stale` (supported
