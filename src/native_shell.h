@@ -7,6 +7,7 @@
 #include "conversation_session.h"
 #include "conversation_unread.h"
 #include "direct_conversation_route.h"
+#include "direct_conversation_attachment_actions.h"
 #include "injected_mail_journal.h"
 #include "kanban_model.h"
 #include "message_reactions.h"
@@ -81,6 +82,8 @@ public:
     using OpenProjectRequestHandler = std::function<void()>;
     using AttachmentPicker =
         std::function<std::vector<std::filesystem::path>()>;
+    using AttachmentExternalAction =
+        std::function<bool(const std::filesystem::path &, bool reveal)>;
 
     explicit NativeShell(RuntimeOptions runtime_options = {});
     ~NativeShell();
@@ -94,6 +97,7 @@ public:
     void set_open_project_in_new_window_request_handler(
         OpenProjectRequestHandler handler);
     void set_attachment_picker(AttachmentPicker picker);
+    void set_attachment_external_action(AttachmentExternalAction action);
     void request_new_project_at(const std::filesystem::path &destination);
     // The one Desktop-configured TUI executable for explicit first-project
     // bootstrap: the shipped `lingtai-tui` or a focused test fixture. It is
@@ -163,6 +167,8 @@ private:
     void handle_kanban_agent_selected(const std::filesystem::path &directory_key);
     void reset_composer();
     void handle_attachment_selection();
+    void handle_attachment_action(
+        const DirectConversationAttachmentRequest &request, bool reveal);
     void handle_send_message();
     void handle_agent_selection(const std::filesystem::path &directory_key);
     // The one selected-Agent lifecycle slash owner for `/suspend`, `/clear`,
@@ -277,6 +283,7 @@ private:
     OpenProjectRequestHandler open_project_request_handler_;
     OpenProjectRequestHandler open_project_in_new_window_request_handler_;
     AttachmentPicker attachment_picker_;
+    AttachmentExternalAction attachment_external_action_;
     std::filesystem::path agent_start_fallback_python_;
     // One narrow injectable dependency: the configured TUI executable used by
     // the explicit New Project flow and the selected-Agent lifecycle commands.

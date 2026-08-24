@@ -168,3 +168,13 @@ offset by the current scroll so bubbles stay aligned with text; finally
   It follows the full layout width rather than the capped message width because
   a wide pane's centered column outer gutters keep moving after the message cap
   stops (`conversation_surface.cpp:353-367`).
+
+Attachment blocks are children of their owning message frame, preserving
+message order and direction. A valid image resource is decoded only through the
+bounded no-follow thumbnail helper; otherwise the same row becomes a file card
+without hiding its message. Every card exposes an elided display basename with
+full tooltip/accessibility text, size/type metadata, and Open/Reveal anchors.
+Activation emits the presentation-time identity to the shell and performs no
+filesystem action in the widget. Card backgrounds are painted behind document
+blocks, so narrow reflow, selection, scrolling, and adjacent bubble geometry
+share the ordinary document layout rather than an overlay.

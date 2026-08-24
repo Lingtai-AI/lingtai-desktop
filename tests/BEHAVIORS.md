@@ -108,6 +108,10 @@ Qt plugin path set and an 8 s watchdog.
   and non-regular rejection; no-write snapshots; one generic skipped count per
   bad neighbor with no valid neighbor hidden; and an intermediate symlink never
   exposing an outside mailbox (`direct_conversation_history_test.cpp`).
+- `direct_conversation_attachment_actions` proves success only for the freshly
+  reopened current-entry regular file and rejects missing, replaced, symlinked,
+  non-regular, escaping, or device/inode/size-mismatched requests before any
+  external action (`direct_conversation_attachment_actions_test.cpp`).
 - `direct_mail_publisher` proves the text-only envelope remains field-compatible
   and attachment-free; attachment-only and mixed publication use exact private
   copies, deterministic extension-preserving duplicate names, and final human
@@ -161,6 +165,11 @@ Qt plugin path set and an 8 s watchdog.
   detail with one file card and one decoded image thumbnail at the normal
   macOS viewport. Missing baselines preserve the actual PNG as an inspection
   artifact without implicitly accepting it.
+- `visual_conversation_attachments_{light,dark}` and their narrow variants
+  capture incoming image/file cards, outgoing corrupt-image fallback, ordered
+  multiple attachments, filename elision, both actions, and responsive
+  light/dark presentation. `WRITE_UI_ARTIFACTS=1` retains actual/diff evidence
+  even for a passing comparison.
 - The removed Activity and Task Card destinations are proven absent: their
   page-nav buttons, panel surfaces, headings, state lines, and section owners
   have no surviving widget anchors, the page navigation retains exactly
@@ -188,6 +197,13 @@ Qt plugin path set and an 8 s watchdog.
   DemiBold fragment, the body as 14px Normal, and the timestamp and subject
   as 13px Normal / 13px Medium metadata fragments, proving author >= body >
   metadata with the exact 15/14/13 pixel values.
+- Its attachment section additionally proves incoming/outgoing order, multiple
+  cards, narrow non-overlap, long-name tooltip/accessibility semantics, bounded
+  valid image decode, corrupt-image file fallback, size/type labels, and two
+  semantic action anchors per attachment. Real viewport pointer events prove
+  that same-anchor Open/Reveal clicks emit their exact request once, while a
+  text-selection drag ending over an action emits nothing and retains the
+  native `QTextEdit` selection.
 
 ### Process-level smoke/persistence
 

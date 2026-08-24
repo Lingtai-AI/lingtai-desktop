@@ -108,6 +108,9 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
 - `tests/agent_projection_test.cpp` — `agent_projection`.
 - `tests/direct_conversation_route_test.cpp` — `direct_conversation_route`.
 - `tests/direct_conversation_history_test.cpp` — `direct_conversation_history`.
+- `tests/direct_conversation_attachment_actions_test.cpp` —
+  `direct_conversation_attachment_actions`; fresh current-entry-relative
+  no-follow identity revalidation and fail-closed mutation matrix.
 - `tests/direct_mail_publisher_test.cpp` — `direct_mail_publisher`.
 - `tests/agent_preset_summary_test.cpp` — `agent_preset_summary`.
 - `tests/agent_sleep_test.cpp` — `agent_sleep`.

@@ -89,6 +89,9 @@ bounded no-emission parent `crl` update producer the smoke needs.
 - `src/direct_conversation_history.{h,cpp}` — `read_direct_conversation`
   (`src/direct_conversation_history.h`): read-only mailbox rows plus ordered,
   current-entry-rooted attachment metadata and attachment-skip accounting.
+- `src/direct_conversation_attachment_actions.{h,cpp}` — fresh current-route,
+  current-message-entry no-follow attachment revalidation for Open/Reveal;
+  returns a path only after identity match and launches nothing.
 - `src/direct_mail_publisher.{h,cpp}` — `send_direct_mail`
   (`src/direct_mail_publisher.h`): one atomically published exclusive human
   outbox leaf with optional private attachment copies.
@@ -113,7 +116,8 @@ bounded no-emission parent `crl` update producer the smoke needs.
 - `src/ui/conversation_surface.{h,cpp}` — `ConversationSurface`
   (`src/ui/conversation_surface.h:23`): one read-only, text-selectable,
   bubble-painted conversation surface built from `DirectConversationMessage`
-  rows.
+  rows, including ordered bounded thumbnails/file cards and semantic
+  Open/Reveal anchors inside each owning message frame.
 
 Both are owned LingTai widgets, not Telegram screens. Route into
 `src/ui/ANATOMY.md` for composition details.

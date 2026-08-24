@@ -225,7 +225,28 @@ its code.
   `fstat`, preserves valid JSON order and duplicates, and reads no content.
   Missing/malformed/unsafe/symlinked/non-regular attachment entries increment
   `skipped_attachments`, never `skipped`, so the message and good siblings
-  survive. These local paths are observations only; open/reveal must revalidate.
+  survive. These local paths are observations only.
+- Every projected attachment renders directly below its owning incoming or
+  outgoing message in metadata order. Safely decoded images use bounded
+  aspect-preserving thumbnails; corrupt, unsupported, changed, unsafe, or
+  implausibly large images fall back to the same ordinary file card. File
+  cards show an elided basename, full basename tooltip/accessibility text,
+  human-readable size, stable type treatment, and `Open` / `Reveal in Finder`
+  links. Existing message text and skipped counts remain visible regardless of
+  attachment eligibility, and narrow layouts keep cards inside their message
+  lane without overlap.
+- Open/Reveal re-resolves the selected route and current message entry, then
+  reopens the selected basename beneath that entry's current `attachments/`
+  directory no-follow. Name/order and device/inode/size must still match the
+  rendered observation. Missing, moved-away, replaced, symlinked, non-regular,
+  escaping, or mismatched files invoke no external action. The shell owns one
+  injectable external-action seam; production uses the macOS open/Finder
+  mechanisms and tests use fakes only. Revalidation or invocation failure uses
+  the existing transient composer notice without changing history, chronology,
+  read/delivery state, scroll position, or draft.
+- History attachment rendering is observation only: it does not reuse outgoing
+  publisher authorization, apply the 25 MiB/100 MiB send caps, rescan arbitrary
+  parents, persist new absolute paths, publish mail, or infer delivery/unread.
 
 ## Dashboard sections
 

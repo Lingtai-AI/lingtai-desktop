@@ -8,26 +8,31 @@
 #include <unistd.h>
 
 namespace lingtai::desktop {
+namespace {
 
-QPixmap load_attachment_thumbnail(
-        const AcceptedAttachment &attachment,
+QPixmap load_thumbnail(
+        const std::filesystem::path &path,
+        AttachmentMediaKind media_kind,
+        std::uint64_t device_id,
+        std::uint64_t inode_id,
+        std::uint64_t byte_size,
         QSize bounds) {
-    if (attachment.media_kind != AttachmentMediaKind::image
+    if (media_kind != AttachmentMediaKind::image
         || !bounds.isValid() || bounds.isEmpty()
         || bounds.width() > 256 || bounds.height() > 256
-        || !attachment.source_path.is_absolute()) {
+        || !path.is_absolute()) {
         return {};
     }
 
-    const auto descriptor = ::open(attachment.source_path.c_str(),
+    const auto descriptor = ::open(path.c_str(),
         O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW);
     if (descriptor < 0) return {};
     struct stat status {};
     if (::fstat(descriptor, &status) != 0 || !S_ISREG(status.st_mode)
         || status.st_size < 0
-        || static_cast<std::uint64_t>(status.st_dev) != attachment.device_id
-        || static_cast<std::uint64_t>(status.st_ino) != attachment.inode_id
-        || static_cast<std::uint64_t>(status.st_size) != attachment.byte_size) {
+        || static_cast<std::uint64_t>(status.st_dev) != device_id
+        || static_cast<std::uint64_t>(status.st_ino) != inode_id
+        || static_cast<std::uint64_t>(status.st_size) != byte_size) {
         ::close(descriptor);
         return {};
     }
@@ -42,9 +47,6 @@ QPixmap load_attachment_thumbnail(
     reader.setAutoTransform(true);
     reader.setDecideFormatFromContent(true);
     const auto dimensions = reader.size();
-    // Some Qt image plugins do not honor scaled decode. Cap the full decoded
-    // source to at most 16M pixels (~64 MiB at 32 bpp) even in that case;
-    // the returned preview remains capped separately at 256x256.
     constexpr auto kMaximumImageDimension = 8192;
     constexpr auto kMaximumImagePixels = 16LL * 1024LL * 1024LL;
     if (!dimensions.isValid() || dimensions.isEmpty()
@@ -61,6 +63,32 @@ QPixmap load_attachment_thumbnail(
         return {};
     }
     return QPixmap::fromImage(image);
+}
+
+} // namespace
+
+QPixmap load_attachment_thumbnail(
+        const AcceptedAttachment &attachment,
+        QSize bounds) {
+    return load_thumbnail(
+        attachment.source_path,
+        attachment.media_kind,
+        attachment.device_id,
+        attachment.inode_id,
+        attachment.byte_size,
+        bounds);
+}
+
+QPixmap load_attachment_thumbnail(
+        const DirectConversationAttachment &attachment,
+        QSize bounds) {
+    return load_thumbnail(
+        attachment.local_path,
+        attachment.media_kind,
+        attachment.device_id,
+        attachment.inode_id,
+        attachment.byte_size,
+        bounds);
 }
 
 } // namespace lingtai::desktop

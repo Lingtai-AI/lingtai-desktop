@@ -218,6 +218,8 @@ void project_attachments(
             display_filename,
             static_cast<std::uint64_t>(opened.st_size),
             classify_attachment_media_kind(display_filename),
+            static_cast<std::uint64_t>(opened.st_dev),
+            static_cast<std::uint64_t>(opened.st_ino),
         });
     }
 }
@@ -279,7 +281,8 @@ void read_folder(
         const auto outgoing = membership == Membership::outgoing;
         if (outgoing && !outgoing_ids.insert(name).second) continue;
         DirectConversationMessage message{name, outgoing,
-            envelope->timestamp, envelope->subject, envelope->text, {}};
+            envelope->timestamp, envelope->subject, envelope->text, {}, {}};
+        message.mailbox_folder = folder_name;
         const auto entry_path = route.project_root / ".lingtai"
             / route.human_directory_key / "mailbox" / folder_name / name;
         project_attachments(entry_dir.get(), entry_path,

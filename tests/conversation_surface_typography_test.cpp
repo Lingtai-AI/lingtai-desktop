@@ -8,11 +8,13 @@
 #include "direct_conversation_history.h"
 
 #include <QtCore/QCoreApplication>
+#include <QtCore/QTemporaryDir>
 #include <QtGui/QAbstractTextDocumentLayout>
 #include <QtGui/QColor>
 #include <QtGui/QFont>
 #include <QtGui/QImage>
 #include <QtGui/QKeyEvent>
+#include <QtGui/QMouseEvent>
 #include <QtGui/QPixmap>
 #include <QtGui/QTextBlock>
 #include <QtGui/QTextBlockFormat>
@@ -29,16 +31,36 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
+#include <sys/stat.h>
 
 namespace lingtai::desktop {
 namespace {
 
 constexpr auto kMessageOutgoingProperty = QTextFormat::UserProperty + 5;
+
+DirectConversationAttachment projected_attachment(
+        const std::filesystem::path &path,
+        AttachmentMediaKind kind) {
+    struct stat status {};
+    if (::stat(path.c_str(), &status) != 0) {
+        throw std::runtime_error("attachment fixture must stat");
+    }
+    return {
+        path,
+        path.filename().string(),
+        static_cast<std::uint64_t>(status.st_size),
+        kind,
+        static_cast<std::uint64_t>(status.st_dev),
+        static_cast<std::uint64_t>(status.st_ino),
+    };
+}
 
 struct FragmentView {
     QString text;
@@ -2228,6 +2250,236 @@ void verify_readable_semantic_body() {
         "message time must stay 12-13px Normal in the muted #8A8F98 tone");
 }
 
+void verify_message_attachment_presentation() {
+    const auto check = [](bool condition, const char *message) {
+        if (!condition) throw std::runtime_error(message);
+    };
+    QTemporaryDir temporary;
+    check(temporary.isValid(), "attachment presentation sandbox must exist");
+    const auto root = std::filesystem::path(
+        temporary.path().toStdString());
+    const auto image_path = root / "market-map.png";
+    QImage image(640, 360, QImage::Format_RGB32);
+    image.fill(QColor(QStringLiteral("#3A8D73")));
+    check(image.save(QString::fromStdString(image_path.string())),
+        "valid image fixture must save");
+    const auto file_path = root /
+        "quarterly-risk-report-with-a-deliberately-very-long-filename.pdf";
+    std::ofstream(file_path, std::ios::binary) << "Risk bounded.\n";
+    const auto corrupt_path = root / "corrupt-preview.png";
+    std::ofstream(corrupt_path, std::ios::binary) << "not an image";
+
+    const auto messages = std::vector<DirectConversationMessage>{
+        {
+            .id = "incoming-attachments",
+            .outgoing = false,
+            .timestamp = "2026-08-24T10:00:00Z",
+            .text = "Incoming text remains visible.",
+            .attachments = {
+                projected_attachment(image_path, AttachmentMediaKind::image),
+                projected_attachment(file_path, AttachmentMediaKind::file),
+            },
+        },
+        {
+            .id = "outgoing-attachment",
+            .outgoing = true,
+            .timestamp = "2026-08-24T10:01:00Z",
+            .text = "Outgoing text remains visible.",
+            .attachments = {
+                projected_attachment(corrupt_path, AttachmentMediaKind::image),
+            },
+        },
+    };
+
+    ConversationSurface surface;
+    surface.resize(360, 620);
+    surface.show();
+    surface.set_conversation(QStringLiteral("Agent"), messages);
+    QCoreApplication::processEvents();
+    const auto plain = surface.document()->toPlainText();
+    check(plain.contains(QStringLiteral("Incoming text remains visible."))
+            && plain.contains(QStringLiteral("Outgoing text remains visible.")),
+        "attachment rendering must not hide either message text");
+    check(plain.contains(QStringLiteral("market-map.png"))
+            && plain.contains(QStringLiteral("corrupt-preview.png"))
+            && plain.indexOf(QStringLiteral("market-map.png"))
+                < plain.indexOf(QStringLiteral("corrupt-preview.png")),
+        "incoming/outgoing attachment cards must retain message chronology");
+    check(plain.contains(QStringLiteral("PDF file"))
+            && plain.contains(QStringLiteral("bytes"))
+            && plain.contains(QStringLiteral("Open"))
+            && plain.contains(QStringLiteral("Reveal in Finder")),
+        "ordinary cards must expose stable type, human size, and both actions");
+
+    auto image_count = 0;
+    auto action_count = 0;
+    auto long_name_tooltip = false;
+    for (auto block = surface.document()->begin(); block.isValid();
+            block = block.next()) {
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const auto fragment = it.fragment();
+            if (!fragment.isValid()) continue;
+            const auto format = fragment.charFormat();
+            if (format.isImageFormat()) {
+                const auto image_format = format.toImageFormat();
+                ++image_count;
+                check(image_format.width() <= 180
+                        && image_format.height() <= 120,
+                    "decoded thumbnail must remain inside its hard bounds");
+            }
+            if (format.isAnchor()
+                && format.anchorHref().startsWith(
+                    QStringLiteral("lingtai-attachment-action://"))) {
+                ++action_count;
+            }
+            if (format.toolTip().contains(QStringLiteral(
+                    "quarterly-risk-report-with-a-deliberately-very-long-filename.pdf"))) {
+                long_name_tooltip = true;
+            }
+        }
+    }
+    check(image_count == 1,
+        "only the safely decoded image may render inline; corrupt image falls back");
+    check(action_count == 6,
+        "every ordered attachment card must have one Open and one Reveal link");
+    check(long_name_tooltip
+            && surface.accessibleDescription().contains(QStringLiteral(
+                "quarterly-risk-report-with-a-deliberately-very-long-filename.pdf")),
+        "elided filename must retain full tooltip and accessibility metadata");
+
+    const auto frames = surface.document()->rootFrame()->childFrames();
+    check(frames.size() == 2,
+        "attachments must remain inside their two owning message frames");
+    const auto first = surface.document()->documentLayout()
+        ->frameBoundingRect(frames[0]);
+    const auto second = surface.document()->documentLayout()
+        ->frameBoundingRect(frames[1]);
+    check(first.right() <= surface.document()->size().width() + 1
+            && second.right() <= surface.document()->size().width() + 1
+            && first.bottom() <= second.top() + 1,
+        "narrow attachment frames must reflow without viewport escape or overlap");
+
+    struct Emission final {
+        DirectConversationAttachmentRequest request;
+        bool reveal = false;
+    };
+    auto emissions = std::vector<Emission>();
+    QObject::connect(
+        &surface,
+        &ConversationSurface::attachment_action_requested,
+        &surface,
+        [&](const DirectConversationAttachmentRequest &request, bool reveal) {
+            emissions.push_back({request, reveal});
+        });
+
+    auto open_point = QPoint();
+    auto reveal_point = QPoint();
+    auto body_point = QPoint();
+    for (auto block = surface.document()->begin(); block.isValid();
+            block = block.next()) {
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const auto fragment = it.fragment();
+            if (!fragment.isValid()) continue;
+            const auto format = fragment.charFormat();
+            const auto point_in_fragment = [&](int offset) {
+                auto cursor = QTextCursor(surface.document());
+                cursor.setPosition(fragment.position()
+                    + qBound(0, offset, fragment.length() - 1));
+                return surface.cursorRect(cursor).center() + QPoint(2, 0);
+            };
+            if (body_point.isNull()
+                && fragment.text().contains(QStringLiteral(
+                    "Incoming text remains visible."))) {
+                body_point = point_in_fragment(3);
+            }
+            if (!format.isAnchor()) continue;
+            if (open_point.isNull()
+                && fragment.text() == QStringLiteral("Open")) {
+                open_point = point_in_fragment(2);
+            } else if (reveal_point.isNull()
+                && fragment.text() == QStringLiteral("Reveal in Finder")) {
+                reveal_point = point_in_fragment(4);
+            }
+        }
+    }
+    check(!open_point.isNull() && !reveal_point.isNull()
+            && !body_point.isNull(),
+        "real pointer regression must locate body and action glyphs");
+
+    const auto send_press = [&](const QPoint &point) {
+        auto event = QMouseEvent(
+            QEvent::MouseButtonPress,
+            point,
+            point,
+            Qt::LeftButton,
+            Qt::LeftButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(surface.viewport(), &event);
+    };
+    const auto send_move = [&](const QPoint &point) {
+        auto event = QMouseEvent(
+            QEvent::MouseMove,
+            point,
+            point,
+            Qt::NoButton,
+            Qt::LeftButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(surface.viewport(), &event);
+    };
+    const auto send_release = [&](const QPoint &point) {
+        auto event = QMouseEvent(
+            QEvent::MouseButtonRelease,
+            point,
+            point,
+            Qt::LeftButton,
+            Qt::NoButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(surface.viewport(), &event);
+    };
+    const auto assert_first_request = [&](const Emission &emission) {
+        const auto &expected = messages[0].attachments[0];
+        check(emission.request.message_id == messages[0].id
+                && emission.request.attachment_index == 0
+                && emission.request.presented.local_path == expected.local_path
+                && emission.request.presented.display_filename
+                    == expected.display_filename
+                && emission.request.presented.byte_size == expected.byte_size
+                && emission.request.presented.media_kind == expected.media_kind
+                && emission.request.presented.device_id == expected.device_id
+                && emission.request.presented.inode_id == expected.inode_id,
+            "real click must emit the exact displayed attachment request");
+    };
+
+    send_press(open_point);
+    send_release(open_point);
+    check(emissions.size() == 1 && !emissions[0].reveal,
+        "a genuine same-anchor Open click must emit exactly once");
+    assert_first_request(emissions[0]);
+
+    send_press(reveal_point);
+    send_release(reveal_point);
+    check(emissions.size() == 2 && emissions[1].reveal,
+        "a genuine same-anchor Reveal click must emit exactly once");
+    assert_first_request(emissions[1]);
+
+    send_press(open_point);
+    send_release(reveal_point);
+    check(emissions.size() == 2,
+        "press/release href mismatch must not activate either action");
+
+    auto clear_selection = QTextCursor(surface.document());
+    clear_selection.setPosition(0);
+    surface.setTextCursor(clear_selection);
+    send_press(body_point);
+    send_move(open_point);
+    send_release(open_point);
+    check(emissions.size() == 2,
+        "selection drag ending over an attachment action must emit nothing");
+    check(surface.textCursor().hasSelection()
+            && !surface.textCursor().selectedText().isEmpty(),
+        "selection drag ending over an action must preserve QTextEdit selection");
+}
+
 } // namespace
 
 int run_typography_test(int argc, char **argv) {
@@ -2310,6 +2562,7 @@ int run_typography_test(int argc, char **argv) {
         verify_directional_bubble_policy();
         verify_outgoing_body_first_and_external_time();
         verify_new_day_append_scrolls_to_bottom();
+        verify_message_attachment_presentation();
         std::cout << "conversation surface typography: OK\n";
         return 0;
     } catch (const std::exception &error) {

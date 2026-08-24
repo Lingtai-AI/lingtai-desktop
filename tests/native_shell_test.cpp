@@ -6,6 +6,7 @@
 #include "project_setup_wizard.h"
 #include "runtime_options.h"
 #include "ui/object_names.h"
+#include "ui/conversation_surface.h"
 
 #include "styles/palette.h"
 #include "ui/UiTestFonts.h"
@@ -75,6 +76,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <sys/stat.h>
 #include <type_traits>
 #include <vector>
 
@@ -85,6 +87,8 @@ using lingtai::desktop::AgentManifestKind;
 using lingtai::desktop::AgentRole;
 using lingtai::desktop::AgentRow;
 using lingtai::desktop::AgentSnapshot;
+using lingtai::desktop::AttachmentMediaKind;
+using lingtai::desktop::DirectConversationAttachmentRequest;
 using lingtai::desktop::ProjectOpenDisposition;
 using lingtai::desktop::project_agents;
 
@@ -1245,10 +1249,16 @@ void verify_selected_agent_conversation(
     write_file(quiet / ".agent.json",
         R"({"admin":{},"agent_id":"20260712-191610-q001",)"
         R"("agent_name":"issue-643","address":"issue-643","state":"active"})");
-    write_file(mailbox / "inbox" / "20260807T184852-0d13" / "message.json",
-        conversation_envelope("telegram-bot", "human", "Slice done",
-            "PR published, not merged.\\n<b>#1223</b> & <not-a-tag>",
-            "received_at", "2026-08-07T18:48:52Z"));
+    const auto incoming_entry = mailbox / "inbox" / "20260807T184852-0d13";
+    const auto report = incoming_entry / "attachments" / "risk-report.txt";
+    write_file(report, "Risk remains bounded.\n");
+    auto incoming_envelope = conversation_envelope(
+        "telegram-bot", "human", "Slice done",
+        "PR published, not merged.\\n<b>#1223</b> & <not-a-tag>",
+        "received_at", "2026-08-07T18:48:52Z");
+    incoming_envelope.pop_back();
+    incoming_envelope += R"(,"attachments":["/serialized/parent/risk-report.txt"]})";
+    write_file(incoming_entry / "message.json", incoming_envelope);
     write_file(mailbox / "sent" / "20260807T190000-aa01" / "message.json",
         conversation_envelope("human", "telegram-bot", "Re: Slice done",
             "Thanks, reviewing tomorrow.", "sent_at",
@@ -1294,6 +1304,75 @@ void verify_selected_agent_conversation(
     require(state->text() == QStringLiteral("1 skipped"),
         "the compact state must show the skipped count without a message "
         "total");
+
+    // The UI-to-shell boundary carries presentation-time identity, but the
+    // shell resolves the current route and entry again before invoking only
+    // the injected external action. No test launches Finder or another app.
+    struct stat report_stat {};
+    require(::stat(report.c_str(), &report_stat) == 0,
+        "the projected attachment fixture must stat");
+    DirectConversationAttachmentRequest attachment_request{
+        "20260807T184852-0d13",
+        0,
+        {
+            report,
+            "risk-report.txt",
+            static_cast<std::uint64_t>(report_stat.st_size),
+            AttachmentMediaKind::file,
+            static_cast<std::uint64_t>(report_stat.st_dev),
+            static_cast<std::uint64_t>(report_stat.st_ino),
+        },
+    };
+    auto external_calls = std::vector<std::pair<fs::path, bool>>();
+    shell.set_attachment_external_action(
+        [&](const fs::path &path, bool reveal) {
+            external_calls.emplace_back(path, reveal);
+            return true;
+        });
+    auto *conversation_surface = static_cast<lingtai::desktop::ConversationSurface *>(
+        surface);
+    conversation_surface->attachment_action_requested(attachment_request, false);
+    conversation_surface->attachment_action_requested(attachment_request, true);
+    require(external_calls == std::vector<std::pair<fs::path, bool>>{
+                {report.lexically_normal(), false},
+                {report.lexically_normal(), true}},
+        "Open and Reveal must each invoke only the injected action after fresh "
+        "current-entry-relative revalidation");
+
+    auto *composer_input = static_cast<Ui::InputField *>(
+        window.findChild<QObject *>("lingtai_composer_input"));
+    require(composer_input != nullptr, "composer input must exist");
+    auto *notice = required_child<QLabel>(window, "lingtai_composer_status");
+    composer_input->setText(QStringLiteral("draft must survive"));
+    const auto history_before_action_failure = surface->toPlainText();
+    const auto scroll_before_action_failure = surface->verticalScrollBar()->value();
+    shell.set_attachment_external_action(
+        [&](const fs::path &, bool) {
+            external_calls.emplace_back(report, false);
+            return false;
+        });
+    const auto calls_before_failure = external_calls.size();
+    conversation_surface->attachment_action_requested(attachment_request, false);
+    require(external_calls.size() == calls_before_failure + 1
+            && notice->text() == QStringLiteral(
+                "Could not open this attachment."),
+        "external action failure must use the transient notice channel");
+    require(composer_input->getLastText() == QStringLiteral("draft must survive")
+            && surface->toPlainText() == history_before_action_failure
+            && surface->verticalScrollBar()->value()
+                == scroll_before_action_failure,
+        "action failure must preserve draft, history text, and scroll position");
+
+    std::error_code attachment_error;
+    fs::remove(report, attachment_error);
+    require(!attachment_error, "missing-action fixture must remove cleanly");
+    const auto calls_before_missing = external_calls.size();
+    conversation_surface->attachment_action_requested(attachment_request, true);
+    require(external_calls.size() == calls_before_missing
+            && notice->text() == QStringLiteral(
+                "This attachment is no longer available."),
+        "missing current attachment must call no external action and notice");
+    write_file(report, "Risk remains bounded.\n");
 
     // The real QTextDocument must expose the two directions as distinct
     // message lanes: incoming Agent rows carry sender metadata on the first

@@ -1,6 +1,7 @@
 #include "ui/conversation_surface.h"
 
 #include "base/basic_types.h"
+#include "attachment_thumbnail.h"
 #include "conversation_session.h"
 #include "styles/palette.h"
 
@@ -11,6 +12,7 @@
 #include <QtCore/QRegularExpression>
 #include <QtCore/QTimer>
 #include <QtCore/QUrl>
+#include <QtCore/QUrlQuery>
 #include <QtCore/QVariant>
 #include <QtGui/QAbstractTextDocumentLayout>
 #include <QtGui/QColor>
@@ -41,6 +43,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -127,6 +130,9 @@ constexpr auto kMessageReactionsProperty = QTextFormat::UserProperty + 9;
 // Marks LLM-detail frames so paintEvent never draws a Human/Agent bubble
 // around them (they share the root sibling list with message frames).
 constexpr auto kVerboseFrameProperty = QTextFormat::UserProperty + 10;
+constexpr auto kAttachmentBlockProperty = QTextFormat::UserProperty + 11;
+constexpr auto kAttachmentMessageIdProperty = QTextFormat::UserProperty + 12;
+constexpr auto kAttachmentIndexProperty = QTextFormat::UserProperty + 13;
 
 // The symmetric gutter of the centered reading column for a viewport: fixed
 // 12px edge gutters until the column max, then a shared share of the excess.
@@ -228,6 +234,120 @@ QColor human_bubble_color() {
     return conversation_canvas_is_light()
         ? QColor(QStringLiteral("#EEF7F3"))
         : QColor(QStringLiteral("#2A4038"));
+}
+
+QColor attachment_card_color() {
+    return conversation_canvas_is_light()
+        ? QColor(QStringLiteral("#F7F8FA"))
+        : QColor(QStringLiteral("#202B36"));
+}
+
+QColor attachment_card_border_color() {
+    return conversation_canvas_is_light()
+        ? QColor(QStringLiteral("#D8DDE5"))
+        : QColor(QStringLiteral("#405063"));
+}
+
+QString human_file_size(std::uint64_t bytes) {
+    constexpr auto kib = std::uint64_t{1024};
+    constexpr auto mib = kib * 1024;
+    constexpr auto gib = mib * 1024;
+    if (bytes >= gib) {
+        return QStringLiteral("%1 GB").arg(double(bytes) / double(gib), 0, 'f', 1);
+    }
+    if (bytes >= mib) {
+        return QStringLiteral("%1 MB").arg(double(bytes) / double(mib), 0, 'f', 1);
+    }
+    if (bytes >= kib) {
+        return QStringLiteral("%1 KB").arg(double(bytes) / double(kib), 0, 'f', 1);
+    }
+    return bytes == 1
+        ? QStringLiteral("1 byte")
+        : QStringLiteral("%1 bytes").arg(bytes);
+}
+
+QString attachment_type_label(const DirectConversationAttachment &attachment) {
+    if (attachment.media_kind == AttachmentMediaKind::image) {
+        return QStringLiteral("Image");
+    }
+    const auto suffix = QString::fromStdString(
+        std::filesystem::path(attachment.display_filename).extension().string())
+        .mid(1).toUpper();
+    return suffix.isEmpty() ? QStringLiteral("File")
+                            : QStringLiteral("%1 file").arg(suffix);
+}
+
+QTextCharFormat attachment_name_format(bool outgoing, const QString &tooltip) {
+    auto format = QTextCharFormat();
+    format.setForeground(body_reading_color(outgoing));
+    auto font = format.font();
+    font.setPixelSize(14);
+    font.setWeight(QFont::DemiBold);
+    format.setFont(font);
+    format.setToolTip(tooltip);
+    return format;
+}
+
+QTextCharFormat attachment_action_format(
+        bool outgoing,
+        const QString &message_id,
+        std::size_t index,
+        bool reveal) {
+    auto format = QTextCharFormat();
+    format.setForeground(st::windowActiveTextFg->c);
+    auto font = format.font();
+    font.setPixelSize(12);
+    format.setFont(font);
+    format.setFontUnderline(true);
+    format.setAnchor(true);
+    auto url = QUrl(QStringLiteral("lingtai-attachment-action://action"));
+    auto query = QUrlQuery();
+    query.addQueryItem(QStringLiteral("message"), message_id);
+    query.addQueryItem(QStringLiteral("index"), QString::number(index));
+    query.addQueryItem(QStringLiteral("reveal"), reveal ? QStringLiteral("1")
+                                                        : QStringLiteral("0"));
+    url.setQuery(query);
+    format.setAnchorHref(url.toString(QUrl::FullyEncoded));
+    format.setToolTip(reveal ? QStringLiteral("Reveal this attachment in Finder")
+                             : QStringLiteral("Open this attachment"));
+    return format;
+}
+
+struct ParsedAttachmentAction final {
+    QString message_id;
+    std::size_t attachment_index = 0;
+    bool reveal = false;
+};
+
+[[nodiscard]] std::optional<ParsedAttachmentAction>
+parse_attachment_action_href(const QString &href) {
+    const auto url = QUrl(href);
+    if (url.scheme() != QStringLiteral("lingtai-attachment-action")
+        || url.host() != QStringLiteral("action")
+        || !url.path().isEmpty()
+        || !url.userInfo().isEmpty()
+        || url.port() != -1) {
+        return std::nullopt;
+    }
+    const auto query = QUrlQuery(url);
+    if (query.queryItems().size() != 3) return std::nullopt;
+    const auto message_id = query.queryItemValue(
+        QStringLiteral("message"), QUrl::FullyDecoded);
+    auto index_ok = false;
+    const auto index = query.queryItemValue(QStringLiteral("index"))
+        .toULongLong(&index_ok);
+    const auto reveal = query.queryItemValue(QStringLiteral("reveal"));
+    if (message_id.isEmpty() || !index_ok
+        || index > std::numeric_limits<std::size_t>::max()
+        || (reveal != QStringLiteral("0")
+            && reveal != QStringLiteral("1"))) {
+        return std::nullopt;
+    }
+    return ParsedAttachmentAction{
+        message_id,
+        static_cast<std::size_t>(index),
+        reveal == QStringLiteral("1"),
+    };
 }
 
 QStringList reaction_chip_labels(const MessageReactions &bag) {
@@ -1381,6 +1501,7 @@ void ConversationSurface::set_plain_state(const QString &text) {
             && !empty_state_active_) {
         return;
     }
+    disarm_attachment_action();
     empty_state_active_ = false;
     select_agent_prompt_active_ = false;
     select_agent_main_name_.clear();
@@ -1388,6 +1509,8 @@ void ConversationSurface::set_plain_state(const QString &text) {
     last_plain_state_ = text;
     last_messages_.clear();
     last_reactions_.clear();
+    setAccessibleDescription(QStringLiteral(
+        "The current direct conversation, read-only."));
     // A plain (selection/no-route/empty) state has no lazy history, so the
     // render-time window resets to the full initial tail.
     history_offset_ = 0;
@@ -1419,7 +1542,10 @@ void ConversationSurface::set_select_agent_prompt(const QString &main_agent_name
             && last_plain_state_ == text) {
         return;
     }
+    disarm_attachment_action();
     select_agent_main_name_ = main_agent_name;
+    setAccessibleDescription(QStringLiteral(
+        "Select an Agent to view a direct conversation."));
     select_agent_prompt_active_ = true;
     empty_state_active_ = false;
     them_.clear();
@@ -1458,8 +1584,22 @@ bool ConversationSurface::same_core_content(
         const auto &after = messages[index];
         if (before.id != after.id || before.outgoing != after.outgoing
             || before.timestamp != after.timestamp
-            || before.text != after.text) {
+            || before.text != after.text
+            || before.attachments.size() != after.attachments.size()) {
             return false;
+        }
+        for (auto attachment_index = std::size_t{0};
+                attachment_index != before.attachments.size();
+                ++attachment_index) {
+            const auto &left = before.attachments[attachment_index];
+            const auto &right = after.attachments[attachment_index];
+            if (left.display_filename != right.display_filename
+                || left.byte_size != right.byte_size
+                || left.media_kind != right.media_kind
+                || left.device_id != right.device_id
+                || left.inode_id != right.inode_id) {
+                return false;
+            }
         }
     }
     for (const auto &[key, after] : reactions) {
@@ -1528,6 +1668,7 @@ void ConversationSurface::set_conversation(
             && verbose_level_ == last_rendered_verbose_level_) {
         return;
     }
+    disarm_attachment_action();
     const auto core_unchanged = them == them_
         && same_core_content(messages, reactions);
     them_ = them;
@@ -1538,6 +1679,18 @@ void ConversationSurface::set_conversation(
     select_agent_prompt_active_ = false;
     select_agent_main_name_.clear();
     empty_state_active_ = messages.empty();
+    auto attachment_names = QStringList();
+    for (const auto &message : messages) {
+        for (const auto &attachment : message.attachments) {
+            attachment_names.push_back(
+                QString::fromStdString(attachment.display_filename));
+        }
+    }
+    setAccessibleDescription(attachment_names.isEmpty()
+        ? QStringLiteral("The current direct conversation, read-only.")
+        : QStringLiteral("The current direct conversation, read-only. "
+              "Attachments in message order: %1")
+              .arg(attachment_names.join(QStringLiteral(", "))));
     if (!core_unchanged) {
         // Reset the render-time window to the initial chronological tail
         // whenever the conversation identity or mail content is replaced.
@@ -1562,6 +1715,7 @@ void ConversationSurface::apply_session_events(
             && verbose_level_ == last_rendered_verbose_level_) {
         return;
     }
+    disarm_attachment_action();
     last_session_events_ = session_events;
     if (last_messages_.empty()) {
         last_rendered_verbose_level_ = verbose_level_;
@@ -1586,12 +1740,14 @@ void ConversationSurface::apply_session_events(
 }
 
 ConversationVerboseLevel ConversationSurface::cycle_verbose_level() {
+    disarm_attachment_action();
     verbose_level_ = cycle_conversation_verbose_level(verbose_level_);
     emit verbose_level_changed(verbose_level_);
     return verbose_level_;
 }
 
 void ConversationSurface::refresh_chrome() {
+    disarm_attachment_action();
     if (last_messages_.empty() || rebuild_in_progress_) {
         update();
         return;
@@ -1633,6 +1789,7 @@ void ConversationSurface::schedule_rebuild_document() {
 }
 
 void ConversationSurface::rebuild_document() {
+    disarm_attachment_action();
     if (rebuild_in_progress_) {
         rebuild_scheduled_ = true;
         return;
@@ -1880,6 +2037,98 @@ void ConversationSurface::rebuild_document() {
         insert_markdown_body(
             cursor, body, body_format(outgoing), continuation,
             first_in_initial);
+
+        // Attachments are ordinary blocks inside the owning message frame, so
+        // their order, wrapping, lane alignment, scrolling, and chronology are
+        // inherited from the message rather than maintained by an overlay.
+        for (auto attachment_index = std::size_t{0};
+                attachment_index != message.attachments.size();
+                ++attachment_index) {
+            const auto &attachment = message.attachments[attachment_index];
+            auto attachment_block = continuation;
+            attachment_block.setTopMargin(8);
+            attachment_block.setBottomMargin(3);
+            attachment_block.setLeftMargin(
+                attachment_block.leftMargin() + 8);
+            attachment_block.setRightMargin(
+                attachment_block.rightMargin() + 8);
+            attachment_block.setProperty(kAttachmentBlockProperty, true);
+            attachment_block.setProperty(
+                kAttachmentMessageIdProperty,
+                QString::fromStdString(message.id));
+            attachment_block.setProperty(
+                kAttachmentIndexProperty,
+                static_cast<qulonglong>(attachment_index));
+            cursor.insertBlock(attachment_block);
+
+            const auto tooltip = QString::fromStdString(
+                attachment.display_filename);
+            const auto preview = load_attachment_thumbnail(
+                attachment, QSize(180, 120));
+            if (!preview.isNull()) {
+                const auto resource = QUrl(QStringLiteral(
+                    "lingtai-attachment-thumbnail://%1/%2")
+                    .arg(QString::fromStdString(message.id))
+                    .arg(attachment_index));
+                document->addResource(
+                    QTextDocument::ImageResource,
+                    resource,
+                    preview.toImage());
+                auto image = QTextImageFormat();
+                image.setName(resource.toString());
+                image.setWidth(preview.width());
+                image.setHeight(preview.height());
+                image.setToolTip(tooltip);
+                image.setProperty(QTextFormat::ImageAltText,
+                    QStringLiteral("Image attachment %1").arg(tooltip));
+                cursor.insertImage(image);
+                cursor.insertText(separator, secondary_format());
+            } else {
+                auto icon = secondary_format();
+                auto icon_font = icon.font();
+                icon_font.setWeight(QFont::DemiBold);
+                icon.setFont(icon_font);
+                cursor.insertText(
+                    attachment.media_kind == AttachmentMediaKind::image
+                        ? QStringLiteral("IMG  ")
+                        : QStringLiteral("FILE  "),
+                    icon);
+            }
+            // Leave stable room for the icon and the block's card insets. A
+            // conservative single-line budget prevents punctuation break
+            // opportunities in a long filename from turning elision into a
+            // second line at the narrow breakpoint.
+            const auto max_name_width = qMax(72, lane_max - 180);
+            const auto full_name = QString::fromStdString(
+                attachment.display_filename);
+            auto name_font = attachment_name_format(outgoing, tooltip).font();
+            const auto shown_name = QFontMetrics(name_font).elidedText(
+                full_name, Qt::ElideMiddle, max_name_width);
+            cursor.insertText(
+                shown_name,
+                attachment_name_format(outgoing, tooltip));
+            cursor.insertText(separator, secondary_format());
+            cursor.insertText(
+                QStringLiteral("%1 · %2   ")
+                    .arg(human_file_size(attachment.byte_size),
+                         attachment_type_label(attachment)),
+                secondary_format());
+            cursor.insertText(
+                QStringLiteral("Open"),
+                attachment_action_format(
+                    outgoing,
+                    QString::fromStdString(message.id),
+                    attachment_index,
+                    false));
+            cursor.insertText(QStringLiteral("   "), secondary_format());
+            cursor.insertText(
+                QStringLiteral("Reveal in Finder"),
+                attachment_action_format(
+                    outgoing,
+                    QString::fromStdString(message.id),
+                    attachment_index,
+                    true));
+        }
         pending_widths.push_back({
             frame,
             outgoing,
@@ -1985,6 +2234,7 @@ void ConversationSurface::rebuild_document() {
 }
 
 void ConversationSurface::rebuild_select_agent_prompt() {
+    disarm_attachment_action();
     if (!select_agent_prompt_active_ || last_plain_state_.isEmpty()) {
         return;
     }
@@ -2007,6 +2257,7 @@ void ConversationSurface::rebuild_select_agent_prompt() {
 }
 
 void ConversationSurface::rebuild_empty_state() {
+    disarm_attachment_action();
     auto *document = this->document();
     document->clear();
     clear_plain_state_anchor(document);
@@ -2159,6 +2410,7 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
         // Contiguous fenced runs only — never unite across prose, or the panel
         // swallows intervening body text and fails to hug each fence.
         std::vector<QRectF> code_runs;
+        std::vector<QRectF> attachment_cards;
         auto current_code_run = QRectF();
         auto in_code_run = false;
         for (auto block = frame->begin(); !block.atEnd();
@@ -2194,6 +2446,10 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
                 current_code_run = QRectF();
                 in_code_run = false;
             }
+            if (current_block.blockFormat()
+                    .property(kAttachmentBlockProperty).toBool()) {
+                attachment_cards.push_back(block_bounds.adjusted(-7, -5, 7, 5));
+            }
             if (!first_valid_block.isValid()) {
                 first_valid_block = current_block;
             }
@@ -2225,6 +2481,9 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
         text_bounds.translate(-h_offset, -v_offset);
         for (auto &run : code_runs) {
             run.translate(-h_offset, -v_offset);
+        }
+        for (auto &card : attachment_cards) {
+            card.translate(-h_offset, -v_offset);
         }
         const auto outgoing = frame->frameFormat()
             .property(kMessageOutgoingProperty)
@@ -2360,6 +2619,16 @@ void ConversationSurface::paintEvent(QPaintEvent *event) {
                 }
             }
         }
+        for (const auto &card : attachment_cards) {
+            if (!card.intersects(QRectF(event->rect()))) {
+                continue;
+            }
+            painter.save();
+            painter.setPen(QPen(attachment_card_border_color(), 1.0));
+            painter.setBrush(attachment_card_color());
+            painter.drawRoundedRect(card, 9, 9);
+            painter.restore();
+        }
         // Only fenced code gets a separate rounded surface per contiguous run;
         // ordinary paragraphs remain on the single Conversation canvas.
         for (const auto &code_bounds : code_runs) {
@@ -2490,19 +2759,82 @@ void ConversationSurface::keyPressEvent(QKeyEvent *event) {
 bool ConversationSurface::eventFilter(QObject *watched, QEvent *event) {
     if (watched == viewport()) {
         switch (event->type()) {
+        case QEvent::MouseButtonPress: {
+            const auto *mouse = static_cast<QMouseEvent *>(event);
+            disarm_attachment_action();
+            if (mouse->button() == Qt::LeftButton) {
+                const auto href = anchorAt(mouse->pos());
+                if (parse_attachment_action_href(href)) {
+                    armed_attachment_href_ = href;
+                    armed_attachment_press_pos_ = mouse->pos();
+                }
+            }
+            // Never consume the press: QTextEdit must retain its native
+            // caret, drag-selection, copy, and focus behavior.
+            break;
+        }
         case QEvent::MouseMove: {
             const auto *mouse = static_cast<QMouseEvent *>(event);
             update_hovered_message(mouse->pos());
+            viewport()->setCursor(parse_attachment_action_href(
+                    anchorAt(mouse->pos()))
+                ? Qt::PointingHandCursor
+                : Qt::IBeamCursor);
+            if (!armed_attachment_href_.isEmpty()
+                && ((mouse->pos() - armed_attachment_press_pos_)
+                        .manhattanLength() >= QApplication::startDragDistance()
+                    || anchorAt(mouse->pos()) != armed_attachment_href_)) {
+                disarm_attachment_action();
+            }
             break;
+        }
+        case QEvent::MouseButtonRelease: {
+            const auto *mouse = static_cast<QMouseEvent *>(event);
+            if (mouse->button() != Qt::LeftButton) {
+                disarm_attachment_action();
+                break;
+            }
+            const auto released_href = anchorAt(mouse->pos());
+            const auto action = released_href == armed_attachment_href_
+                    && (mouse->pos() - armed_attachment_press_pos_)
+                            .manhattanLength()
+                        < QApplication::startDragDistance()
+                ? parse_attachment_action_href(released_href)
+                : std::nullopt;
+            disarm_attachment_action();
+            if (!action) break;
+            const auto message = std::ranges::find_if(
+                last_messages_,
+                [&](const auto &candidate) {
+                    return QString::fromStdString(candidate.id)
+                        == action->message_id;
+                });
+            if (message == last_messages_.end()
+                || action->attachment_index >= message->attachments.size()) {
+                return true;
+            }
+            emit attachment_action_requested({
+                message->id,
+                action->attachment_index,
+                message->attachments[action->attachment_index],
+            }, action->reveal);
+            return true;
         }
         case QEvent::Leave:
             clear_hovered_message();
+            disarm_attachment_action();
+            viewport()->unsetCursor();
             break;
         default:
             break;
         }
     }
     return QTextEdit::eventFilter(watched, event);
+}
+
+void ConversationSurface::disarm_attachment_action() {
+    armed_attachment_href_.clear();
+    armed_attachment_press_pos_ = {};
 }
 
 void ConversationSurface::clear_hovered_message() {

@@ -50,11 +50,13 @@
 #include <QtCore/QDir>
 #include <QtCore/QLineF>
 #include <QtCore/QPoint>
+#include <QtCore/QProcess>
 #include <QtCore/QString>
 #include <QtCore/QStringList>
 #include <QtCore/QTimer>
 #include <QtCore/QVariant>
 #include <QtGui/QColor>
+#include <QtGui/QDesktopServices>
 #include <QtGui/QFont>
 #include <QtGui/QFontMetrics>
 #include <QtGui/QGuiApplication>
@@ -1926,6 +1928,10 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
         [this](const QString &) { handle_send_message(); });
     QObject::connect(detail_view_, &AgentDetailView::attachment_selection_requested,
         [this] { handle_attachment_selection(); });
+    QObject::connect(detail_view_, &AgentDetailView::attachment_action_requested,
+        [this](const DirectConversationAttachmentRequest &request, bool reveal) {
+            handle_attachment_action(request, reveal);
+        });
     QObject::connect(detail_view_, &AgentDetailView::kanban_agent_selected,
         [this](const fs::path &directory_key) {
             handle_kanban_agent_selected(directory_key);
@@ -2556,6 +2562,11 @@ void NativeShell::set_open_project_in_new_window_request_handler(
 
 void NativeShell::set_attachment_picker(AttachmentPicker picker) {
     attachment_picker_ = std::move(picker);
+}
+
+void NativeShell::set_attachment_external_action(
+        AttachmentExternalAction action) {
+    attachment_external_action_ = std::move(action);
 }
 
 void NativeShell::request_new_project_at(const fs::path &destination) {
@@ -3554,6 +3565,49 @@ void NativeShell::handle_attachment_selection() {
     }
     if (selected.empty()) return;
     detail_view_->merge_pending_attachments(selected);
+}
+
+void NativeShell::handle_attachment_action(
+        const DirectConversationAttachmentRequest &request,
+        bool reveal) {
+    if (!detail_view_ || !selection_state_.active_project()
+        || !selection_state_.selected_agent_directory_key()) {
+        return;
+    }
+    const auto route = resolve_direct_conversation_route(
+        *selection_state_.active_project(), agents_,
+        selection_state_.selected_agent_directory_key());
+    if (!route) {
+        detail_view_->show_composer_notice(
+            QStringLiteral("This attachment is no longer available."),
+            ComposerNoticeKind::error);
+        return;
+    }
+    const auto current_path = revalidate_direct_conversation_attachment(
+        *route, request);
+    if (!current_path) {
+        detail_view_->show_composer_notice(
+            QStringLiteral("This attachment is no longer available."),
+            ComposerNoticeKind::error);
+        return;
+    }
+
+    const auto invoked = attachment_external_action_
+        ? attachment_external_action_(*current_path, reveal)
+        : (reveal
+            ? QProcess::startDetached(
+                QStringLiteral("/usr/bin/open"),
+                {QStringLiteral("-R"),
+                 QString::fromStdString(current_path->string())})
+            : QDesktopServices::openUrl(QUrl::fromLocalFile(
+                QString::fromStdString(current_path->string()))));
+    if (!invoked) {
+        detail_view_->show_composer_notice(
+            reveal
+                ? QStringLiteral("Could not reveal this attachment in Finder.")
+                : QStringLiteral("Could not open this attachment."),
+            ComposerNoticeKind::error);
+    }
 }
 
 // Shows the selected Agent's own kernel-published resolved preset policy:

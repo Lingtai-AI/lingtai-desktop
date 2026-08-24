@@ -1,9 +1,11 @@
 #pragma once
 
 #include "conversation_session.h"
+#include "direct_conversation_attachment_actions.h"
 #include "direct_conversation_history.h"
 #include "message_reactions.h"
 
+#include <QtCore/QPoint>
 #include <QtWidgets/QTextEdit>
 
 #include <cstddef>
@@ -79,6 +81,10 @@ public:
 
 signals:
     void verbose_level_changed(ConversationVerboseLevel level);
+    // `reveal` false means Open, true means Reveal in Finder. The request
+    // carries the exact presentation-time identity for shell revalidation.
+    void attachment_action_requested(
+        const DirectConversationAttachmentRequest &request, bool reveal);
 
 protected:
     // Fills the viewport with the chat backdrop, paints the rounded message
@@ -105,6 +111,7 @@ private:
     void scroll_to_bottom_now();
     void update_hovered_message(const QPoint &viewport_pos);
     void clear_hovered_message();
+    void disarm_attachment_action();
     [[nodiscard]] int history_page_size() const noexcept;
     [[nodiscard]] bool same_core_content(
         const std::vector<DirectConversationMessage> &messages,
@@ -130,6 +137,10 @@ private:
     QString last_plain_state_;
     QString select_agent_main_name_;
     QString hovered_message_id_;
+    // Pointer activation is deliberately separate from QTextEdit's native
+    // selection gesture. Only a same-anchor click can consume its release.
+    QString armed_attachment_href_;
+    QPoint armed_attachment_press_pos_;
     bool empty_state_active_ = false;
     bool select_agent_prompt_active_ = false;
     int last_layout_width_ = 0;

@@ -68,6 +68,10 @@ touches a real Agent or project, and none depends on a network or provider.
   ctest. Read-only mailbox rows and attachment metadata, descriptor-relative
   containment, independent skip accounting, membership, order, collapse, and
   no-write proof.
+- `tests/direct_conversation_attachment_actions_test.cpp` —
+  `direct_conversation_attachment_actions` ctest. Fresh current-message-entry
+  lookup, descriptor-relative no-follow reopen, identity match, and mutation /
+  escape failure matrix.
 - `tests/direct_mail_publisher_test.cpp` — `direct_mail_publisher` ctest.
   Atomic text/attachment outbox leaf, revalidation, limits, final sent paths,
   naming, private byte copies, typed failures, rollback, and containment.
@@ -102,6 +106,10 @@ touches a real Agent or project, and none depends on a network or provider.
   attachment-only publication, exact indexed versus general-failure draft
   retention, slash isolation, and target clearing. Its picker is injected, so
   no test opens a native modal or Finder.
+- The same conversation journey injects the history attachment external-action
+  seam and proves exact Open/Reveal invocation after refresh, no invocation on
+  a missing file, transient notices, and preservation of history text, scroll,
+  and composer draft. It never launches Finder or another application.
 - `tests/native_shell_destinations_test.cpp` — `native_shell_destinations`
   ctest. The one focused Repair3 destination contract: it links the same
   shell + `desktop-app::lib_ui` + `src/crl_integration.cpp`
@@ -130,7 +138,9 @@ touches a real Agent or project, and none depends on a network or provider.
   `ConversationSurface`, renders representative incoming and outgoing
   messages, and proves the distinct author 15px DemiBold / body 14px Normal /
   timestamp 13px Normal / subject 13px Medium fragments (author >= body >
-  metadata) with the exact 15/14/13 pixel values. It takes no fixture root.
+  metadata) with the exact 15/14/13 pixel values. Its attachment coverage sends
+  real viewport press/move/release events to distinguish exact action clicks
+  from native text-selection drags. It takes no fixture root.
 
 ### 4. Process-level smoke/persistence
 
@@ -160,6 +170,7 @@ no fixture); the test itself creates and removes its sandbox within that root
 | `agent_projection_test.cpp` | `lingtai_agent_projection_test` | `agent_projection` | `agent-projection-fixture` |
 | `direct_conversation_route_test.cpp` | `lingtai_direct_conversation_route_test` | `direct_conversation_route` | `direct-conversation-route-fixture` |
 | `direct_conversation_history_test.cpp` | `lingtai_direct_conversation_history_test` | `direct_conversation_history` | `direct-conversation-history-fixture` |
+| `direct_conversation_attachment_actions_test.cpp` | `lingtai_direct_conversation_attachment_actions_test` | `direct_conversation_attachment_actions` | `direct-conversation-attachment-actions-fixture` |
 | `direct_mail_publisher_test.cpp` | `lingtai_direct_mail_publisher_test` | `direct_mail_publisher` | `direct-mail-publisher-fixture` |
 | `agent_preset_summary_test.cpp` | `lingtai_agent_preset_summary_test` | `agent_preset_summary` | `agent-preset-summary-fixture` |
 | `agent_sleep_test.cpp` | `lingtai_agent_sleep_test` | `agent_sleep` | `agent-sleep-fixture` |

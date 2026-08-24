@@ -51,7 +51,13 @@ Reads (no writes, no durable state):
   (`slash_command.h`) — classification only; support and effects remain outside.
 - `read_direct_conversation(route)` → `DirectConversationHistory`
   (`direct_conversation_history.h`) — text rows plus ordered, descriptor-
-  validated attachment metadata and independent attachment-skip accounting.
+  validated attachment metadata (including device/inode identity and current
+  mailbox folder) and independent attachment-skip accounting.
+- `revalidate_direct_conversation_attachment(route, request)` → optional
+  current path (`direct_conversation_attachment_actions.h`) — refreshes the
+  current message entry, descriptor-walks its current `attachments/` directory
+  no-follow, and yields a path only when index/name/device/inode/size still
+  match the presentation-time observation.
 - `read_agent_preset_summary(attachment, key)` → `AgentPresetSummary`
   (`agent_preset_summary.h`).
 - `preflight_attachments(selected_paths)` → `AttachmentSelectionResult`
@@ -117,7 +123,9 @@ caller proposes typed transitions only; the model performs no reads.
    state; one bad sibling never hides a healthy neighbor. Conversation
    attachment paths discard serialized parents, root the validated basename
    under the current entry, and remain observations rather than later action
-   authorization.
+   authorization. Open/Reveal therefore refresh and reopen at action time;
+   missing, replaced, linked, non-regular, escaping, or identity-mismatched
+   files fail closed.
 3. **Publishers/launchers own side effects.** Only `send_direct_mail`,
    `request_agent_sleep`, `start_agent`, and `ProjectBootstrapRunner` write or
    launch. Direct mail `queued` means only that the complete human outbox leaf
@@ -135,8 +143,9 @@ caller proposes typed transitions only; the model performs no reads.
    renders rows and reports clicks; `ConversationSurface` renders rows and
    paints bubbles; `AgentDetailView` owns only the composer draft,
    presentation, thumbnail attempts, and transient/persistent feedback.
-   NativeShell still owns picker orchestration, route resolution, and
-   publication. These widgets hold only view state.
+   NativeShell still owns picker orchestration, route resolution, publication,
+   and the injectable external Open/Reveal action. These widgets hold only
+   view state and emit the exact presentation-time attachment request.
 6. **The route stays pure.** `resolve_direct_conversation_route` performs no
    filesystem access; its library links only `lingtai_desktop_core`, making a
    second discovery read structurally impossible.
@@ -158,6 +167,8 @@ paths and names are in [`../ANATOMY.md`](../ANATOMY.md) and `CMakeLists.txt`:
 - `tests/agent_projection_test.cpp` — `agent_projection`.
 - `tests/direct_conversation_route_test.cpp` — `direct_conversation_route`.
 - `tests/direct_conversation_history_test.cpp` — `direct_conversation_history`.
+- `tests/direct_conversation_attachment_actions_test.cpp` —
+  `direct_conversation_attachment_actions`.
 - `tests/direct_mail_publisher_test.cpp` — `direct_mail_publisher`.
 - `tests/agent_preset_summary_test.cpp` — `agent_preset_summary`.
 - `tests/agent_sleep_test.cpp` — `agent_sleep`.

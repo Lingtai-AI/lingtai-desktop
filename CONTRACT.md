@@ -42,11 +42,14 @@ its folder.
 - The read, route, and action seams under `src/`, each with the single
   free function/class in its header:
   `project_agents`, `resolve_direct_conversation_route`,
-  `read_direct_conversation`, `send_direct_mail`,
+  `read_direct_conversation`, `revalidate_direct_conversation_attachment`,
+  `send_direct_mail`,
   `read_agent_preset_summary`, `request_agent_sleep`
   (+ its two observation functions), `start_agent`, `ProjectBootstrapRunner`.
 - `NativeShell` is the one composition root C5 owns; it proposes transitions
-  only through `WorkspaceSelectionState`.
+  only through `WorkspaceSelectionState`. It also owns the injectable
+  attachment Open/Reveal external-action seam; the conversation widget only
+  emits presentation identity and never launches an application.
 - `LINGTAI_LIB_UI_FULL_TARGET_SMOKE_OK` and `LINGTAI_NATIVE_SHELL_READY` are
   the only process-observable markers, emitted only on the `--smoke` path.
 

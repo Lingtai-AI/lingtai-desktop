@@ -38,8 +38,13 @@ void captureSurface(
         ThemeMode theme) {
     const auto fixtures_root = std::filesystem::path(
         LINGTAI_UI_TEST_FIXTURES_DIR);
-    const auto viewport = lingtai::desktop::ui_test::kNormalViewport;
-    const auto viewport_name = std::string_view("normal");
+    const auto narrow_attachments = surface == "conversation-attachments-narrow";
+    const auto viewport = narrow_attachments
+        ? lingtai::desktop::ui_test::ViewportSize{460, 760}
+        : lingtai::desktop::ui_test::kNormalViewport;
+    const auto viewport_name = narrow_attachments
+        ? std::string_view("narrow")
+        : std::string_view("normal");
     const auto snapshot_id =
         lingtai::desktop::visual_test::surfaceSnapshotId(surface);
     const auto theme_label = theme == ThemeMode::dark ? "dark" : "light";
@@ -78,6 +83,56 @@ void captureSurface(
         if (outcome.disposition
                 != lingtai::desktop::ProjectOpenDisposition::opened) {
             throw std::runtime_error("typical fixture must open");
+        }
+        target = &lingtai::desktop::visual_test::snapshotTargetForAgentDetail(
+            window);
+    } else if (surface == "conversation-attachments"
+            || surface == "conversation-attachments-narrow") {
+        const auto sandbox = std::filesystem::temp_directory_path()
+            / ("lingtai-visual-history-attachments-"
+                + std::to_string(static_cast<unsigned long long>(
+                    QCoreApplication::applicationPid()))
+                + (narrow_attachments ? "-narrow" : "-normal"));
+        std::error_code remove_error;
+        std::filesystem::remove_all(sandbox, remove_error);
+        const auto project = sandbox / "project";
+        const auto human = project / ".lingtai/human";
+        const auto agent = project / ".lingtai/alpha";
+        const auto incoming = human
+            / "mailbox/inbox/20260824T100000-in01";
+        const auto outgoing = human
+            / "mailbox/sent/20260824T100100-out1";
+        std::filesystem::create_directories(
+            incoming / "attachments");
+        std::filesystem::create_directories(
+            outgoing / "attachments");
+        std::filesystem::create_directories(agent);
+        std::ofstream(human / ".agent.json")
+            << R"({"agent_id":"human-id","agent_name":"Human","address":"human","state":"active"})";
+        std::ofstream(agent / ".agent.json")
+            << R"({"admin":{},"agent_id":"alpha-id","agent_name":"alpha","nickname":"Alpha","address":"alpha","state":"active"})";
+        const auto preview_path = incoming / "attachments/market-map.png";
+        QImage preview(640, 360, QImage::Format_RGB32);
+        preview.fill(QColor(QStringLiteral("#3A8D73")));
+        if (!preview.save(QString::fromStdString(preview_path.string()))) {
+            throw std::runtime_error("history attachment preview must save");
+        }
+        const auto report_name = std::string(
+            "quarterly-risk-report-with-a-deliberately-long-filename.pdf");
+        std::ofstream(incoming / "attachments" / report_name)
+            << "Risk remains bounded.\n";
+        std::ofstream(outgoing / "attachments/corrupt-preview.png")
+            << "not an image";
+        std::ofstream(incoming / "message.json")
+            << R"({"from":"alpha","to":["human"],"message":"Here are the market map and risk report.","received_at":"2026-08-24T10:00:00Z","identity":{"agent_id":"alpha-id"},"attachments":["/stale/market-map.png","nested/)"
+            << report_name << R"("]})";
+        std::ofstream(outgoing / "message.json")
+            << R"({"from":"human","to":["alpha"],"message":"This preview is corrupt, but its card remains available.","sent_at":"2026-08-24T10:01:00Z","attachments":["/stale/corrupt-preview.png"]})";
+        const auto outcome = lingtai::desktop::ui_test::openFixtureProject(
+            shell, project, std::filesystem::path(".lingtai/alpha"));
+        if (outcome.disposition
+                != lingtai::desktop::ProjectOpenDisposition::opened) {
+            throw std::runtime_error("history attachment fixture must open");
         }
         target = &lingtai::desktop::visual_test::snapshotTargetForAgentDetail(
             window);
@@ -212,6 +267,8 @@ void captureSurface(
             "setup-agents",
             "setup-review",
             "conversation",
+            "conversation-attachments",
+            "conversation-attachments-narrow",
             "composer-attachments",
             "presets",
             "kanban",
@@ -228,7 +285,9 @@ void printUsage() {
     std::cerr
         << "usage: native_shell_visual_test --surface=NAME --theme=light|dark\n"
         << "  surfaces: startup-idle setup-preset setup-agents setup-review\n"
-        << "            conversation composer-attachments presets kanban empty-conversation\n";
+        << "            conversation conversation-attachments "
+           "conversation-attachments-narrow composer-attachments presets "
+           "kanban empty-conversation\n";
 }
 
 } // namespace

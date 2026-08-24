@@ -219,7 +219,7 @@ VisualDiffResult assertMatchesBaseline(
 
     auto result = compareSnapshot(actual, expected, options);
     result.expected_path = baseline_path;
-    if (!result.passed) {
+    if (!result.passed || env_truthy("WRITE_UI_ARTIFACTS")) {
         const auto diff = makeDiffImage(actual, expected, options.channel_threshold);
         const auto artifact_dir = QDir(artifactsRoot()).filePath(
             QStringLiteral("visual/%1").arg(test_name));

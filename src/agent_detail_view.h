@@ -3,6 +3,7 @@
 #include "agent_preset_summary.h"
 #include "attachment_selection.h"
 #include "conversation_session.h"
+#include "direct_conversation_attachment_actions.h"
 #include "direct_conversation_history.h"
 #include "kanban_model.h"
 #include "message_reactions.h"
@@ -124,6 +125,8 @@ signals:
     // and state reads).
     void send_message_requested(const QString &text);
     void attachment_selection_requested();
+    void attachment_action_requested(
+        const DirectConversationAttachmentRequest &request, bool reveal);
     void back_requested();
     void start_requested();
     void sleep_requested();

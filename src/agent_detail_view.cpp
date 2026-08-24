@@ -804,6 +804,8 @@ AgentDetailView::AgentDetailView(
                 refresh_conversation_state_hint();
                 emit conversation_verbose_changed(level);
             });
+        connect(conversation, &ConversationSurface::attachment_action_requested,
+            this, &AgentDetailView::attachment_action_requested);
         detail_layout->addWidget(conversation, 1);
 
         return;
@@ -1039,6 +1041,8 @@ AgentDetailView::AgentDetailView(
             refresh_conversation_state_hint();
             emit conversation_verbose_changed(level);
         });
+    connect(conversation, &ConversationSurface::attachment_action_requested,
+        this, &AgentDetailView::attachment_action_requested);
     detail_layout->addWidget(conversation, 1);
 
     // Composer lane.

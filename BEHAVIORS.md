@@ -68,6 +68,7 @@ restate per-owner behavior; owner-level detail lives in `src/`, `src/ui/`, and
 | Composite agent projection | `tests/agent_projection_test.cpp` (`agent_projection`) | `ctest --test-dir build -R '^agent_projection$'` |
 | Pure route eligibility | `tests/direct_conversation_route_test.cpp` (`direct_conversation_route`) | `ctest --test-dir build -R '^direct_conversation_route$'` |
 | Mailbox read contract | `tests/direct_conversation_history_test.cpp` (`direct_conversation_history`) | `ctest --test-dir build -R '^direct_conversation_history$'` |
+| Attachment action revalidation | `tests/direct_conversation_attachment_actions_test.cpp` (`direct_conversation_attachment_actions`) | `ctest --test-dir build -R '^direct_conversation_attachment_actions$'` |
 | Outbox publisher (TUI envelope oracle) | `tests/direct_mail_publisher_test.cpp` (`direct_mail_publisher`) | `ctest --test-dir build -R '^direct_mail_publisher$'` |
 | Presets summary projection | `tests/agent_preset_summary_test.cpp` (`agent_preset_summary`) | `ctest --test-dir build -R '^agent_preset_summary$'` |
 | Sleep marker + observation | `tests/agent_sleep_test.cpp` (`agent_sleep`) | `ctest --test-dir build -R '^agent_sleep$'` |
@@ -76,3 +77,12 @@ restate per-owner behavior; owner-level detail lives in `src/`, `src/ui/`, and
 Visual fidelity against Telegram and functional fidelity against the TUI are
 compared at review against the oracle behavior, not automated in this
 repository's test suite.
+
+Direct-conversation attachment cards render below their owning message in
+projected order for both directions. Bounded valid images show thumbnails;
+unsafe or undecodable images remain visible as ordinary file cards. Open and
+Reveal refresh the current route and message entry, reopen no-follow, and
+require matching regular-file device/inode/size before the shell's injected
+external action. Failure uses the transient notice and preserves text,
+chronology, scroll, and draft. History remains observation-only and ignores
+outgoing send caps.

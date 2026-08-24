@@ -19,6 +19,8 @@ struct DirectConversationAttachment {
     std::string display_filename;
     std::uint64_t byte_size = 0;
     AttachmentMediaKind media_kind = AttachmentMediaKind::file;
+    std::uint64_t device_id = 0;
+    std::uint64_t inode_id = 0;
 };
 
 // One accepted direct message, already reduced to exactly what the selected-
@@ -35,6 +37,11 @@ struct DirectConversationMessage {
     std::string text;
     // Valid entries retain the envelope array's order, including duplicates.
     std::vector<DirectConversationAttachment> attachments;
+    // Immediate mailbox folder containing the currently observed entry. This
+    // safe leaf is retained only so an action can locate the current entry by
+    // id and re-walk it descriptor-relative; it is never itself trusted as an
+    // authorization or persisted outside this observation.
+    std::string mailbox_folder;
 };
 
 // A message.json larger than this is rejected unread; a conversation entry has

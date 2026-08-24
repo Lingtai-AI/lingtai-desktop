@@ -92,6 +92,9 @@ Public ports (`src/ui/conversation_surface.h:26-37`):
   focus (`conversation_surface.cpp:147-157`).
 - `set_plain_state(QString text)` — one plain centered state for the
   selection/no-route/empty cases (`conversation_surface.cpp:113-127`).
+- `attachment_action_requested(request, reveal)` — presentation-only signal
+  carrying message id, ordered index, and displayed identity to the native
+  shell; the widget launches nothing.
 
 View-only state (`conversation_surface.h:52-56`): the last accepted `them_`,
 `last_messages_`, `last_plain_state_`, and the quantized `last_layout_width_`
@@ -118,6 +121,13 @@ readable cap of 640px, and one outer gutter plus one inner remainder are
 derived and cross-assigned so incoming stays left-anchored and outgoing
 right-anchored inside the same column (`message_block_format` and
 `message_block_width`, `conversation_surface.cpp:44-72`).
+
+Attachment presentation uses ordinary message-frame blocks after the body.
+The document owns wrapping and scroll geometry; the painter adds the rounded
+card surface, and inline `QTextImageFormat` resources are bounded by the shared
+thumbnail helper. Open/Reveal are semantic anchors, not child widgets, so they
+have no separate `objectName` and retain the conversation surface's inherited
+text accessibility.
 
 Build ownership: `CMakeLists.txt:180` compiles `src/ui/conversation_surface.cpp`
 into `lingtai_desktop_native_shell`.

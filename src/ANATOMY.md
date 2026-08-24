@@ -62,11 +62,11 @@ Entry point and composition root:
   composer holds the ordered pending `AcceptedAttachment` draft, wrapping
   cards/removal, semantic notice timer, and per-card send errors; it emits a
   picker request but never opens a dialog, resolves a route, or publishes.
-- `attachment_thumbnail.{h,cpp}` — Qt image-preview helper for composer cards:
-  reopens the accepted regular file without following links, revalidates its
-  identity and size, rejects implausible decode dimensions/allocation, requests
-  a bounded decoder size, and returns an empty pixmap for the normal file-card
-  fallback.
+- `attachment_thumbnail.{h,cpp}` — Qt image-preview helper for composer and
+  history cards: reopens the observed regular file without following links,
+  revalidates identity and size, rejects implausible decode dimensions or
+  allocation, requests a bounded decoder size, and returns an empty pixmap for
+  the normal file-card fallback. History previews do not apply send caps.
 
 Domain models (pure, Qt-light state/derivation owners):
 
@@ -101,6 +101,10 @@ Domain readers/projections (stateless, read-only, one source each):
 - `direct_conversation_history.{h,cpp}` — `read_direct_conversation`: reads
   the human's own `mailbox` `inbox`/`sent`/`outbox` `message.json` rows and
   descriptor-validates ordered attachment metadata under each current entry.
+- `direct_conversation_attachment_actions.{h,cpp}` — fresh action-time
+  current-route/current-entry resolver and no-follow regular-file identity
+  revalidation. It returns only the freshly reconstructed path and launches
+  nothing.
 - `agent_preset_summary.{h,cpp}` — `read_agent_preset_summary`: reads the
   kernel-published `system/manifest.resolved.json` v1 envelope plus an
   `init.json` mtime staleness comparison.

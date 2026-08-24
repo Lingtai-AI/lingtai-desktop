@@ -68,6 +68,21 @@ below is grounded in the widget source.
   undo disabled (`conversation_surface.cpp:100-101`) but stays a plain
   `QTextEdit`; `paintEvent` delegates to `QTextEdit::paintEvent` so native
   text selection and copy are preserved (`conversation_surface.cpp:266-269`).
+- **Message attachments.** Each row's ordered attachment observations render
+  as real blocks inside the same message frame, below its text. Images are
+  bounded and aspect-preserving; a failed safe decode becomes an ordinary file
+  card. Basenames elide without exposing absolute paths, while the complete
+  basename remains in tooltip and surface accessibility metadata. Size/type
+  metadata and semantic Open/Reveal anchors reflow with the owning lane.
+- **Attachment action boundary.** The surface emits the selected message id,
+  index, and presentation-time identity only. It never opens a path. The native
+  shell refreshes the route/current entry, performs no-follow regular-file
+  identity revalidation, invokes its injectable external-action seam only on
+  success, and reports failure through the existing transient notice.
+  Pointer activation requires a left-button press and release on the same
+  internal action anchor within Qt's platform drag threshold. Movement into a
+  selection drag, anchor mismatch, leave, another button, or a surface state/
+  document change disarms the action while preserving native text selection.
   Message text is inserted literally and never interpreted as markup
   (`conversation_surface.cpp:201-210`).
 - **Scroll.** An identical conversation refresh is a no-op

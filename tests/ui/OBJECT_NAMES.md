@@ -79,6 +79,13 @@ test helpers that click the canvas by row index. Do not use screen coordinates.
 | `lingtai_selected_agent_preset_summary_section` | Presets section container |
 | `lingtai_kanban_page` | Kanban board page |
 
+Message attachment cards are document content inside
+`lingtai_selected_agent_conversation`, not child widgets. Their `Open` and
+`Reveal in Finder` text runs are accessible semantic anchors with
+`lingtai-attachment-action://` hrefs; full display basenames are retained in
+tooltips and the conversation surface's accessibility description. They do not
+receive fabricated per-card `objectName` values.
+
 ## Slash command popup
 
 | objectName | Role |

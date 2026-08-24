@@ -288,9 +288,11 @@ target_link_libraries(lingtai_desktop_native_shell PRIVATE
 
 # The one current conversation owner: it turns an already-accepted route into
 # the direct rows the selected-Agent surface renders. It reads the human's own
-# mailbox and descriptor-validates attachment metadata through the shared
-# classifier owner; it reads no attachment content and owns no presentation.
+# mailbox, descriptor-validates attachment metadata through the shared
+# classifier owner, and owns fresh current-entry action revalidation; it reads
+# no attachment content and owns neither presentation nor external launching.
 add_library(lingtai_desktop_conversation STATIC
+    src/direct_conversation_attachment_actions.cpp
     src/direct_conversation_history.cpp
     src/message_reactions.cpp
     src/injected_mail_journal.cpp
@@ -424,6 +426,13 @@ init_target(lingtai_direct_conversation_history_test)
 target_compile_options(lingtai_direct_conversation_history_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_direct_conversation_history_test PRIVATE
+    lingtai_desktop_conversation)
+add_executable(lingtai_direct_conversation_attachment_actions_test
+    tests/direct_conversation_attachment_actions_test.cpp)
+init_target(lingtai_direct_conversation_attachment_actions_test)
+target_compile_options(lingtai_direct_conversation_attachment_actions_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_direct_conversation_attachment_actions_test PRIVATE
     lingtai_desktop_conversation)
 add_executable(lingtai_message_reactions_test
     tests/message_reactions_test.cpp)
@@ -591,6 +600,8 @@ set(LINGTAI_VISUAL_SURFACES
     setup-agents
     setup-review
     conversation
+    conversation-attachments
+    conversation-attachments-narrow
     composer-attachments
     presets
     kanban
@@ -695,6 +706,9 @@ add_test(NAME slash_command
 add_test(NAME direct_conversation_history
     COMMAND lingtai_direct_conversation_history_test
         "${CMAKE_CURRENT_BINARY_DIR}/direct-conversation-history-fixture")
+add_test(NAME direct_conversation_attachment_actions
+    COMMAND lingtai_direct_conversation_attachment_actions_test
+        "${CMAKE_CURRENT_BINARY_DIR}/direct-conversation-attachment-actions-fixture")
 add_test(NAME message_reactions
     COMMAND lingtai_message_reactions_test)
 add_test(NAME conversation_unread
@@ -840,6 +854,7 @@ else()
 endif()
 add_executable(lingtai_conversation_surface_typography_test
     tests/conversation_surface_typography_test.cpp
+    src/attachment_thumbnail.cpp
     src/ui/conversation_surface.cpp
     src/message_reactions.cpp)
 init_target(lingtai_conversation_surface_typography_test)
@@ -872,6 +887,7 @@ set(LINGTAI_UNIT_TESTS
     attachment_selection
     agent_projection
     direct_conversation_route
+    direct_conversation_attachment_actions
     slash_command
     direct_conversation_history
     message_reactions
