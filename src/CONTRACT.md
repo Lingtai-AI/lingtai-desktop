@@ -53,6 +53,10 @@ Reads (no writes, no durable state):
   (`direct_conversation_history.h`).
 - `read_agent_preset_summary(attachment, key)` → `AgentPresetSummary`
   (`agent_preset_summary.h`).
+- `preflight_attachments(selected_paths)` → `AttachmentSelectionResult`
+  (`attachment_selection.h`) — current canonical source paths, display names,
+  sizes, media kinds, accepted-byte accounting, and ordered typed rejections.
+  It writes nothing and is never publication authorization.
 
 Side-effecting operations (the only writers/launchers; each owns one explicit
 bounded side-effect scope):
@@ -79,6 +83,12 @@ caller proposes typed transitions only; the model performs no reads.
   accepts an existing directory, canonicalizes it, and resolves contained
   relative paths. It is Qt-independent and used by every reader/owner that
   walks the project tree.
+- Attachment selection (`attachment_selection.h`) is a separate Qt-independent
+  local-file adapter. It canonicalizes and opens selected sources, measures the
+  opened regular files, deduplicates their filesystem identities, classifies a
+  small explicit image-extension set, and applies the 25 MiB per-file and
+  100 MiB cumulative limits in caller order. A publisher must revalidate later
+  because these facts do not close the time-of-check/time-of-use gap.
 - `posix_internal` (`posix_descriptor_primitives.h`) is the shared filesystem
   adapter seam: descriptor ownership, no-follow one-leaf opens, and `safe_leaf`
   validation. It is internal, links nothing, and carries no domain policy.
@@ -94,10 +104,12 @@ caller proposes typed transitions only; the model performs no reads.
    `WorkspaceSelectionState` + the sole `agents_` snapshot; conversation rows
    only in `read_direct_conversation`;
    Presets only in `read_agent_preset_summary`. No second owner exists.
-2. **Readers read.** Every reader opens its source one no-follow leaf at a
-   time through `posix_internal`, bounds the actual read, and never writes.
-   A missing/unreadable/unsafe source reduces to a coarse state; one bad
-   sibling never hides a healthy neighbor.
+2. **Readers read.** Every project-tree reader opens its source one no-follow
+   leaf at a time through `posix_internal`, bounds the actual read, and never
+   writes. Attachment selection instead canonicalizes an arbitrary caller-
+   selected local path and verifies the opened descriptor; it is not a
+   project-tree walk. A missing/unreadable/unsafe source reduces to a coarse
+   state; one bad sibling never hides a healthy neighbor.
 3. **Publishers/launchers own side effects.** Only `send_direct_mail`,
    `request_agent_sleep`, `start_agent`, and `ProjectBootstrapRunner` write or
    launch. They never claim target acceptance, queueing, liveness, or
@@ -140,6 +152,7 @@ paths and names are in [`../ANATOMY.md`](../ANATOMY.md) and `CMakeLists.txt`:
 - `tests/posix_descriptor_primitives_test.cpp` — `posix_descriptor_primitives`.
 - `tests/workspace_selection_test.cpp` — `workspace_selection`.
 - `tests/project_attachment_test.cpp` — `project_attachment`.
+- `tests/attachment_selection_test.cpp` — `attachment_selection`.
 - `tests/native_shell_test.cpp` — `native_shell_behavior` (links the shell +
   `lib_ui` + `crl_integration.cpp`).
 - `tests/test_native_shell.py` — `native_shell` (process persistence and

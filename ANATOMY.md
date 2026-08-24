@@ -31,8 +31,10 @@ upstream target names the pinned `lib_ui` needs without patching it
 (`CMakeLists.txt:79-166`), links the SDK zlib instead of a package-manager
 prefix (`CMakeLists.txt:67-70`), and declares the owned libraries:
 
-- `lingtai_desktop_core` — Qt-independent attachment + workspace-selection seam
-  (`CMakeLists.txt:169-174`).
+- `lingtai_desktop_core` — Qt-independent project attachment +
+  workspace-selection seam (`CMakeLists.txt`).
+- `lingtai_desktop_attachment_selection` — Qt-independent selected-file
+  metadata, local preflight, limits, and typed rejection seam (`CMakeLists.txt`).
 - `lingtai_desktop_posix_primitives` — descriptor/no-follow primitives, no
   link edge of its own (`CMakeLists.txt:203-209`).
 - `lingtai_desktop_agent_projection`, `lingtai_desktop_direct_route`,
@@ -72,6 +74,9 @@ bounded no-emission parent `crl` update producer the smoke needs.
 - `src/project_attachment.{h,cpp}` — `ProjectAttachment`
   (`src/project_attachment.h:34`) and `attach_project`
   (`src/project_attachment.h:59`): canonical-root containment seam.
+- `src/attachment_selection.{h,cpp}` — `preflight_attachments`: read-only
+  canonical source metadata, deterministic media classification, duplicate
+  detection, and ordered 25 MiB / 100 MiB limit application.
 - `src/agent_projection.{h,cpp}` — `project_agents`
   (`src/agent_projection.h:89`): one composite `.lingtai` scan returning
   `AgentSnapshot`/`AgentRow`.
@@ -113,8 +118,8 @@ Both are owned LingTai widgets, not Telegram screens. Route into
 
 ## Owned tests (`tests/`)
 
-Each C++ contract executable maps to one ctest name (declared
-`CMakeLists.txt:375-442`): `project_attachment`, `agent_projection`,
+Each C++ contract executable maps to one ctest name (declared in
+`CMakeLists.txt`): `project_attachment`, `attachment_selection`, `agent_projection`,
 `direct_conversation_route`, `direct_conversation_history`,
 `direct_mail_publisher`,
 `agent_preset_summary`, `agent_sleep`, `posix_descriptor_primitives`,

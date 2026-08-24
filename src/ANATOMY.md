@@ -62,6 +62,10 @@ Domain models (pure, Qt-light state/derivation owners):
   seam: `attach_project` canonicalizes a selected directory and
   `ProjectAttachment::resolve` verifies component-wise containment of a
   relative path.
+- `attachment_selection.{h,cpp}` — Qt-independent selected-file preflight:
+  canonical/opened regular-file facts, stable source metadata, filesystem-
+  identity deduplication, conservative image classification, ordered limits,
+  and typed local rejections. It owns no UI, copy, or publication authority.
 - `workspace_selection.{h,cpp}` — C1 model: the sole owner of the optional
   accepted active project and optional selected Agent directory key, and the
   sole same-root/root-switch transition owner.
@@ -133,7 +137,9 @@ keeps the parent summary):
   `direct_mail_publisher`,
   `agent_preset_summary`, and `agent_sleep` all consume the shared
   descriptor primitives as a private dependency. `project_attachment` and
-  `workspace_selection` do not (pure `std::filesystem`/state).
+  `workspace_selection` do not (pure `std::filesystem`/state), while
+  `attachment_selection` opens arbitrary caller-selected absolute sources
+  directly because it is not anchored in a project tree.
 - CMake link edges are the structural enforcement: `lingtai_desktop_direct_route`
   links only `lingtai_desktop_core` (a second discovery read is structurally
   impossible), and `lingtai_desktop_agent_launch` links only
@@ -145,6 +151,7 @@ keeps the parent summary):
 Owned library targets (`CMakeLists.txt`) and their source membership:
 
 - `lingtai_desktop_core` — `project_attachment.cpp`, `workspace_selection.cpp`.
+- `lingtai_desktop_attachment_selection` — `attachment_selection.cpp`.
 - `lingtai_desktop_posix_primitives` — `posix_descriptor_primitives.cpp`.
 - `lingtai_desktop_agent_projection` — `agent_projection.cpp`.
 - `lingtai_desktop_direct_route` — `direct_conversation_route.cpp`.

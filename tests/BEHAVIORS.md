@@ -18,6 +18,7 @@ surface is in
 ```bash
 python3 -m unittest tests.test_repository_contract
 ctest --test-dir build --output-on-failure -R '^project_attachment$'
+ctest --test-dir build --output-on-failure -R '^attachment_selection$'
 ctest --test-dir build --output-on-failure -R '^agent_projection$'
 ctest --test-dir build --output-on-failure -R '^direct_conversation_route$'
 ctest --test-dir build --output-on-failure -R '^slash_command$'
@@ -67,6 +68,13 @@ Qt plugin path set and an 8 s watchdog.
   to the tree (`project_attachment_test.cpp:69-199`). The permission fixture
   is honestly skipped when run as root or on non-POSIX platforms
   (`:94-128`).
+- `attachment_selection` proves ordered regular-file acceptance with canonical
+  source, display name, exact size and accepted-byte accounting; conservative
+  case-insensitive image classification; canonical duplicate, missing,
+  directory, FIFO, and practical unreadable rejections; inclusive 25 MiB and
+  cumulative 100 MiB boundaries; rejected-file budget behavior; and a
+  type/size-identical fixture tree after preflight
+  (`attachment_selection_test.cpp`).
 - `workspace_selection` proves the C1 model: closed start, activation owning
   the canonical root, safe/unsafe key validation, same-root preservation
   versus different-root clearing, idempotent clear, and that deleted roots

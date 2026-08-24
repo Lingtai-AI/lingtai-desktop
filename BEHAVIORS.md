@@ -62,6 +62,7 @@ restate per-owner behavior; owner-level detail lives in `src/`, `src/ui/`, and
 | Repro-1 real offscreen shell | `tests/native_shell_test.cpp` (`native_shell_behavior`) | `ctest --test-dir build -R '^native_shell_behavior$'` |
 | Repro-2 lock provenance + hygiene | `tests/test_repository_contract.py` | `python3 -m unittest tests.test_repository_contract` |
 | Core attachment/containment | `tests/project_attachment_test.cpp` (`project_attachment`) | `ctest --test-dir build -R '^project_attachment$'` |
+| Direct attachment selection facts | `tests/attachment_selection_test.cpp` (`attachment_selection`) | `ctest --test-dir build -R '^attachment_selection$'` |
 | C1 selection transitions | `tests/workspace_selection_test.cpp` (`workspace_selection`) | `ctest --test-dir build -R '^workspace_selection$'` |
 | Descriptor/no-follow primitives | `tests/posix_descriptor_primitives_test.cpp` (`posix_descriptor_primitives`) | `ctest --test-dir build -R '^posix_descriptor_primitives$'` |
 | Composite agent projection | `tests/agent_projection_test.cpp` (`agent_projection`) | `ctest --test-dir build -R '^agent_projection$'` |

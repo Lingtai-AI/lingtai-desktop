@@ -151,6 +151,20 @@ its code.
 
 ## Composer and conversation
 
+- `preflight_attachments` is the UI-independent direct-file selection model:
+  each selected path is canonicalized, opened nonblocking, and measured from
+  the opened regular file; accepted metadata retains that canonical source,
+  the selected leaf display name, exact bytes, and a conservative
+  case-insensitive image/file classification. Equivalent filesystem sources
+  are rejected after their first occurrence. The inclusive 25 MiB per-file
+  and 100 MiB cumulative limits are applied in input order; rejection consumes
+  no cumulative budget, so a later smaller file can still fit.
+- Missing, non-regular, unreadable, oversized, over-total, duplicate, and other
+  local failures remain distinct typed rejections carrying the rejected input.
+  Preflight performs no write or copy, catches failures at its public boundary,
+  and does not authorize publication. The existing text-only publisher and
+  envelope remain unchanged; a later attachment publisher must revalidate.
+
 - The composer is one vendored single-line `InputField` plus an explicit
   `Send` `RoundButton`, enabled only when a direct route resolves for the
   current selection. The `Message…` placeholder hides as soon as the field

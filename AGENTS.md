@@ -32,6 +32,7 @@ export QT_ROOT="$HOME/Qt/6.11.1/macos"
 ./scripts/configure.sh
 ./scripts/build.sh
 ctest --test-dir build --output-on-failure -R '^project_attachment$'
+ctest --test-dir build --output-on-failure -R '^attachment_selection$'
 ctest --test-dir build --output-on-failure -R '^agent_projection$'
 ctest --test-dir build --output-on-failure -R '^direct_conversation_route$'
 ctest --test-dir build --output-on-failure -R '^direct_conversation_history$'

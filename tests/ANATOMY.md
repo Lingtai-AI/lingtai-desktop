@@ -53,6 +53,9 @@ touches a real Agent or project, and none depends on a network or provider.
   `safe_leaf` validation, one-leaf-at-a-time opens.
 - `tests/project_attachment_test.cpp` — `project_attachment` ctest.
   Containment seam: canonical roots, typed failures, symlink/no-escape rules.
+- `tests/attachment_selection_test.cpp` — `attachment_selection` ctest.
+  Qt-free direct-file metadata, typed local rejection, deduplication, ordered
+  size limits, accounting, and no-mutation proof.
 - `tests/workspace_selection_test.cpp` — `workspace_selection` ctest. C1
   model: activation/selection/clear transitions, no-write proof.
 - `tests/agent_projection_test.cpp` — `agent_projection` ctest. The one
@@ -144,6 +147,7 @@ no fixture); the test itself creates and removes its sandbox within that root
 | `test_repository_contract.py` | Python `unittest` (no target) | manual: `python3 -m unittest tests.test_repository_contract` | — |
 | `posix_descriptor_primitives_test.cpp` | `lingtai_posix_descriptor_primitives_test` | `posix_descriptor_primitives` | `posix-descriptor-primitives-fixture` |
 | `project_attachment_test.cpp` | `lingtai_project_attachment_test` | `project_attachment` | `project-attachment-fixture` |
+| `attachment_selection_test.cpp` | `lingtai_attachment_selection_test` | `attachment_selection` | `attachment-selection-fixture` |
 | `workspace_selection_test.cpp` | `lingtai_workspace_selection_test` | `workspace_selection` | `workspace-selection-fixture` |
 | `agent_projection_test.cpp` | `lingtai_agent_projection_test` | `agent_projection` | `agent-projection-fixture` |
 | `direct_conversation_route_test.cpp` | `lingtai_direct_conversation_route_test` | `direct_conversation_route` | `direct-conversation-route-fixture` |

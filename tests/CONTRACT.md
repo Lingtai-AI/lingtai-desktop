@@ -103,6 +103,7 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
 
 - `tests/posix_descriptor_primitives_test.cpp` — `posix_descriptor_primitives`.
 - `tests/project_attachment_test.cpp` — `project_attachment`.
+- `tests/attachment_selection_test.cpp` — `attachment_selection`.
 - `tests/workspace_selection_test.cpp` — `workspace_selection`.
 - `tests/agent_projection_test.cpp` — `agent_projection`.
 - `tests/direct_conversation_route_test.cpp` — `direct_conversation_route`.

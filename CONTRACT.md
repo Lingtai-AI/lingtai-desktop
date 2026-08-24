@@ -33,6 +33,9 @@ its folder.
 
 - `lingtai_desktop_core`: `attach_project`, `ProjectAttachment::resolve`,
   `WorkspaceSelectionState`. Qt-independent; no Telegram dependency.
+- `lingtai_desktop_attachment_selection`: `preflight_attachments`, the
+  Qt-independent, read-only local selection fact model. It does not authorize
+  publication; a later publisher must revalidate accepted sources.
 - `lingtai_desktop_posix_primitives`: the descriptor-relative, no-follow walk
   primitives. Internal seam consumed privately by the readers/publisher; no
   consumer inherits it transitively.

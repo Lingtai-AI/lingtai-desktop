@@ -174,6 +174,17 @@ init_target(lingtai_desktop_core)
 target_include_directories(lingtai_desktop_core PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
+# Qt-free local attachment selection/preflight facts. It reads selected source
+# files without writing or authorizing publication; the later publisher owns
+# revalidation and copying.
+add_library(lingtai_desktop_attachment_selection STATIC
+    src/attachment_selection.cpp)
+init_target(lingtai_desktop_attachment_selection)
+target_include_directories(lingtai_desktop_attachment_selection PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(lingtai_desktop_attachment_selection PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+
 add_library(lingtai_desktop_native_shell STATIC
     src/native_shell.cpp
     src/shell_host.cpp
@@ -645,6 +656,13 @@ target_compile_options(lingtai_project_attachment_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_project_attachment_test PRIVATE
     lingtai_desktop_core)
+add_executable(lingtai_attachment_selection_test
+    tests/attachment_selection_test.cpp)
+init_target(lingtai_attachment_selection_test)
+target_compile_options(lingtai_attachment_selection_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_attachment_selection_test PRIVATE
+    lingtai_desktop_attachment_selection)
 add_executable(lingtai_agent_command_runner_test
     tests/agent_command_runner_test.cpp)
 init_target(lingtai_agent_command_runner_test)
@@ -658,6 +676,9 @@ enable_testing()
 add_test(NAME project_attachment
     COMMAND lingtai_project_attachment_test
         "${CMAKE_CURRENT_BINARY_DIR}/project-attachment-fixture")
+add_test(NAME attachment_selection
+    COMMAND lingtai_attachment_selection_test
+        "${CMAKE_CURRENT_BINARY_DIR}/attachment-selection-fixture")
 add_test(NAME agent_projection
     COMMAND lingtai_agent_projection_test
         "${CMAKE_CURRENT_BINARY_DIR}/agent-projection-fixture")
@@ -843,6 +864,7 @@ endif()
 # CTest labels for UI testing workflow (see tests/UI_TESTING_PLAN.md).
 set(LINGTAI_UNIT_TESTS
     project_attachment
+    attachment_selection
     agent_projection
     direct_conversation_route
     slash_command
