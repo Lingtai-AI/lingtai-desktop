@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agent_preset_summary.h"
+#include "attachment_selection.h"
 #include "conversation_session.h"
 #include "direct_conversation_history.h"
 #include "kanban_model.h"
@@ -22,7 +23,9 @@
 
 class QPalette;
 class QPushButton;
+class QGridLayout;
 class QTextEdit;
+class QTimer;
 class QWidget;
 
 namespace Ui {
@@ -32,6 +35,8 @@ class RpWidget;
 } // namespace Ui
 
 namespace lingtai::desktop {
+
+enum class ComposerNoticeKind { success, warning, error };
 
 class ConversationSurface;
 class KanbanPage;
@@ -90,6 +95,21 @@ public:
 
     void scroll_conversation_to_bottom();
 
+    [[nodiscard]] const std::vector<AcceptedAttachment> &pending_attachments()
+        const noexcept { return pending_attachments_; }
+    [[nodiscard]] bool has_pending_attachments() const noexcept {
+        return !pending_attachments_.empty();
+    }
+    void merge_pending_attachments(
+        const std::vector<std::filesystem::path> &selected_paths);
+    void remove_pending_attachment(std::size_t index);
+    void clear_pending_attachments();
+    void clear_attachment_errors();
+    void mark_attachment_error(std::size_t index, const QString &message);
+    void show_composer_notice(
+        const QString &message, ComposerNoticeKind kind);
+    void clear_composer_notice();
+
     // Preset summary UI (read-only preset catalog + state line).
     void render_preset_summary(
         const std::optional<AgentPresetSummary> &summary);
@@ -103,6 +123,7 @@ signals:
     // Composer + slash UI actions (the shell performs the actual side-effects
     // and state reads).
     void send_message_requested(const QString &text);
+    void attachment_selection_requested();
     void back_requested();
     void start_requested();
     void sleep_requested();
@@ -135,7 +156,11 @@ private:
     Ui::RpWidget *composer_ = nullptr;
     Ui::InputField *composer_input_ = nullptr;
     Ui::RoundButton *composer_send_button_ = nullptr;
+    QPushButton *composer_attachment_button_ = nullptr;
+    QWidget *composer_attachment_tray_ = nullptr;
+    QGridLayout *composer_attachment_layout_ = nullptr;
     QLabel *composer_status_ = nullptr;
+    QTimer *composer_notice_timer_ = nullptr;
     QLabel *conversation_state_ = nullptr;
     PaletteActionButton *conversation_detail_button_ = nullptr;
     ConversationSurface *conversation_surface_ = nullptr;
@@ -157,13 +182,18 @@ private:
 
     // Stubs: detailed implementations move in follow-up plan steps.
     void refresh_composer_enablement(bool composer_eligible);
+    void rebuild_attachment_cards();
+    void reflow_attachment_cards(int available_width);
     void refresh_conversation_state_hint();
     void refresh_conversation_detail_button();
 
     QString last_compact_state_;
     bool session_log_present_ = false;
     bool conversation_route_available_ = false;
+    bool composer_eligible_ = false;
+    int composer_detail_width_ = 0;
+    std::vector<AcceptedAttachment> pending_attachments_;
+    std::vector<QString> attachment_errors_;
 };
 
 } // namespace lingtai::desktop
-

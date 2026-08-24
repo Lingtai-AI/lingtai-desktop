@@ -123,7 +123,7 @@ caller proposes typed transitions only; the model performs no reads.
    launch. Direct mail `queued` means only that the complete human outbox leaf
    was published; none claims kernel pickup, target acceptance, delivery,
    liveness, or lifecycle from the local write/start alone.
-4. **The shell composes.** `NativeShell` composes the widgets, dialog, and
+4. **The shell composes.** `NativeShell` composes the widgets, native dialogs, and
    timer, re-derives visible routes from C1 truth, and proposes transitions
    through the model. It also owns the composer-local dispatch after calling
    `parse_slash_command` on raw text: every parsed command terminates locally
@@ -133,7 +133,10 @@ caller proposes typed transitions only; the model performs no reads.
    lifecycle behavior, and this composition changes no public interface.
 5. **UI widgets do not absorb domain/business behavior.** `AgentRoster`
    renders rows and reports clicks; `ConversationSurface` renders rows and
-   paints bubbles. Both hold only view state.
+   paints bubbles; `AgentDetailView` owns only the composer draft,
+   presentation, thumbnail attempts, and transient/persistent feedback.
+   NativeShell still owns picker orchestration, route resolution, and
+   publication. These widgets hold only view state.
 6. **The route stays pure.** `resolve_direct_conversation_route` performs no
    filesystem access; its library links only `lingtai_desktop_core`, making a
    second discovery read structurally impossible.

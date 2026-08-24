@@ -147,6 +147,20 @@ Qt plugin path set and an 8 s watchdog.
   assert the exact intended in-fixture mutations
   (`verify_composer_send_behavior`, `verify_request_sleep_action`,
   `verify_first_project_bootstrap`).
+- `verify_composer_send_behavior` additionally proves the injected picker
+  cancel path; ordered file/image cards; descriptor-revalidated bounded
+  thumbnail fallback for replaced, symlinked, invalid, and absurd-header
+  sources; second-picker duplicate and cumulative 100 MiB accounting over the
+  existing draft; the 25 MiB limit; keyboard removal and narrow wrapping;
+  attachment-only publication; slash-command isolation; target-switch
+  clearing; a two-card second-source publication failure retaining text/cards
+  and marking only index 1; and a general publisher failure retaining the
+  draft with no false per-card error. Its event-loop-bounded replacement-timer
+  assertion proves an older deadline cannot clear a newer composer notice.
+- `visual_composer_attachments_light` and `_dark` capture the selected-Agent
+  detail with one file card and one decoded image thumbnail at the normal
+  macOS viewport. Missing baselines preserve the actual PNG as an inspection
+  artifact without implicitly accepting it.
 - The removed Activity and Task Card destinations are proven absent: their
   page-nav buttons, panel surfaces, headings, state lines, and section owners
   have no surviving widget anchors, the page navigation retains exactly

@@ -8,10 +8,14 @@
 #include "visual/VisualTestUtils.h"
 
 #include <QtWidgets/QApplication>
+#include <QtWidgets/QLabel>
+#include <QtWidgets/QPushButton>
 #include <QtWidgets/QWidget>
+#include <QtGui/QImage>
 
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <optional>
 #include <stdexcept>
@@ -74,6 +78,53 @@ void captureSurface(
         if (outcome.disposition
                 != lingtai::desktop::ProjectOpenDisposition::opened) {
             throw std::runtime_error("typical fixture must open");
+        }
+        target = &lingtai::desktop::visual_test::snapshotTargetForAgentDetail(
+            window);
+    } else if (surface == "composer-attachments") {
+        const auto project = lingtai::desktop::ui_test::fixtureProjectRoot(
+            fixtures_root, "typical");
+        const auto outcome = lingtai::desktop::ui_test::openFixtureProject(
+            shell, project, std::filesystem::path(".lingtai/alpha"));
+        if (outcome.disposition
+                != lingtai::desktop::ProjectOpenDisposition::opened) {
+            throw std::runtime_error("typical fixture must open");
+        }
+        const auto sandbox = std::filesystem::temp_directory_path()
+            / ("lingtai-visual-composer-"
+                + std::to_string(static_cast<unsigned long long>(
+                    QCoreApplication::applicationPid())));
+        std::filesystem::create_directories(sandbox);
+        const auto report = sandbox / "quarterly-risk-report.txt";
+        std::ofstream(report) << "Risk is bounded.\n";
+        const auto image = sandbox / "market-map.PNG";
+        QImage preview(160, 96, QImage::Format_RGB32);
+        preview.fill(QColor(QStringLiteral("#3A8D73")));
+        if (!preview.save(QString::fromStdString(image.string()))) {
+            throw std::runtime_error("composer preview fixture must save");
+        }
+        shell.set_attachment_picker([report, image] {
+            return std::vector<std::filesystem::path>{report, image};
+        });
+        auto *button = window.findChild<QPushButton *>(
+            "lingtai_composer_attachment_button");
+        if (!button) throw std::runtime_error("attachment button is missing");
+        button->click();
+        QCoreApplication::processEvents();
+        auto *report_name = window.findChild<QLabel *>(
+            "lingtai_composer_attachment_name_0");
+        auto *remove = window.findChild<QPushButton *>(
+            "lingtai_composer_attachment_remove_0");
+        if (!report_name
+                || report_name->text()
+                    != QStringLiteral("quarterly-risk-report.txt")) {
+            throw std::runtime_error(
+                "the ordinary composer filename must remain fully readable");
+        }
+        if (!remove || remove->size() != QSize(28, 28)
+                || remove->focusPolicy() != Qt::StrongFocus) {
+            throw std::runtime_error(
+                "the composer remove target must remain 28x28 and focusable");
         }
         target = &lingtai::desktop::visual_test::snapshotTargetForAgentDetail(
             window);
@@ -161,6 +212,7 @@ void captureSurface(
             "setup-agents",
             "setup-review",
             "conversation",
+            "composer-attachments",
             "presets",
             "kanban",
             "empty-conversation",
@@ -176,7 +228,7 @@ void printUsage() {
     std::cerr
         << "usage: native_shell_visual_test --surface=NAME --theme=light|dark\n"
         << "  surfaces: startup-idle setup-preset setup-agents setup-review\n"
-        << "            conversation presets kanban empty-conversation\n";
+        << "            conversation composer-attachments presets kanban empty-conversation\n";
 }
 
 } // namespace

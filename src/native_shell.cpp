@@ -778,6 +778,54 @@ QString path_text(const fs::path &path) {
         static_cast<qsizetype>(bytes.size()));
 }
 
+[[nodiscard]] QString direct_mail_failure_text(
+        const DirectMailSendOutcome &outcome,
+        const std::vector<AcceptedAttachment> &attachments) {
+    auto filename = QStringLiteral("Attachment");
+    if (outcome.attachment_failure
+            && outcome.attachment_failure->index < attachments.size()) {
+        filename = QString::fromStdString(
+            attachments[outcome.attachment_failure->index].display_filename);
+    }
+    switch (outcome.failure_reason) {
+    case DirectMailFailureReason::attachment_missing:
+        return QStringLiteral("%1 is missing. Choose it again.").arg(filename);
+    case DirectMailFailureReason::attachment_replaced:
+        return QStringLiteral("%1 changed. Choose it again.").arg(filename);
+    case DirectMailFailureReason::attachment_unreadable:
+        return QStringLiteral("%1 can’t be read. Check its permissions.").arg(filename);
+    case DirectMailFailureReason::attachment_symlink:
+    case DirectMailFailureReason::attachment_not_regular:
+    case DirectMailFailureReason::attachment_invalid_source:
+        return QStringLiteral("%1 is no longer a valid file.").arg(filename);
+    case DirectMailFailureReason::attachment_size_changed:
+        return QStringLiteral("%1 changed size. Choose it again.").arg(filename);
+    case DirectMailFailureReason::attachment_per_file_limit:
+        return QStringLiteral("%1 exceeds the 25 MB file limit.").arg(filename);
+    case DirectMailFailureReason::attachment_total_limit:
+        return QStringLiteral("%1 exceeds the 100 MB attachment limit.").arg(filename);
+    case DirectMailFailureReason::unsafe_attachment_name:
+        return QStringLiteral("%1 has a filename that can’t be sent.").arg(filename);
+    case DirectMailFailureReason::attachment_destination_failure:
+    case DirectMailFailureReason::attachment_copy_failure:
+        return QStringLiteral("%1 couldn’t be copied. Try again.").arg(filename);
+    case DirectMailFailureReason::payload_failure:
+        return QStringLiteral("The message payload couldn’t be prepared.");
+    case DirectMailFailureReason::publish_failure:
+        return QStringLiteral("The message couldn’t be published. Try again.");
+    case DirectMailFailureReason::mailbox_unavailable:
+        return QStringLiteral("The local mailbox is unavailable.");
+    case DirectMailFailureReason::unsafe_route:
+        return QStringLiteral("No safe conversation route is available.");
+    case DirectMailFailureReason::empty_content:
+        return QStringLiteral("Add a message or attachment before sending.");
+    case DirectMailFailureReason::local_failure:
+    case DirectMailFailureReason::none:
+        return QStringLiteral("The message wasn’t queued due to a local error.");
+    }
+    return QStringLiteral("The message wasn’t queued.");
+}
+
 QString value_text(const std::optional<std::string> &value) {
     return value ? QString::fromStdString(*value) : QStringLiteral("unavailable");
 }
@@ -1876,6 +1924,8 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
         [this] { handle_request_sleep(); });
     QObject::connect(detail_view_, &AgentDetailView::send_message_requested,
         [this](const QString &) { handle_send_message(); });
+    QObject::connect(detail_view_, &AgentDetailView::attachment_selection_requested,
+        [this] { handle_attachment_selection(); });
     QObject::connect(detail_view_, &AgentDetailView::kanban_agent_selected,
         [this](const fs::path &directory_key) {
             handle_kanban_agent_selected(directory_key);
@@ -2502,6 +2552,10 @@ void NativeShell::set_open_project_request_handler(
 void NativeShell::set_open_project_in_new_window_request_handler(
         OpenProjectRequestHandler handler) {
     open_project_in_new_window_request_handler_ = std::move(handler);
+}
+
+void NativeShell::set_attachment_picker(AttachmentPicker picker) {
+    attachment_picker_ = std::move(picker);
 }
 
 void NativeShell::request_new_project_at(const fs::path &destination) {
@@ -3402,6 +3456,7 @@ void NativeShell::render_conversation() {
         selection_state_.selected_agent_directory_key());
     const bool route_available = route.has_value();
     if (!route_available) {
+        detail_view_->clear_pending_attachments();
         DirectConversationHistory empty;
         detail_view_->render_conversation(
             QString(), empty, QString(),
@@ -3460,9 +3515,45 @@ void NativeShell::reset_composer() {
         input->setPlaceholder(rpl::single(QStringLiteral("Message…")));
     }
     hide_slash_command_popup(window_.get());
-    if (auto *status = window_->findChild<QLabel *>("lingtai_composer_status")) {
+    if (detail_view_) {
+        detail_view_->clear_pending_attachments();
+        detail_view_->clear_composer_notice();
+    } else if (auto *status = window_->findChild<QLabel *>(
+            "lingtai_composer_status")) {
         status->clear();
     }
+}
+
+void NativeShell::handle_attachment_selection() {
+    if (!detail_view_ || !selection_state_.active_project()
+        || !selection_state_.selected_agent_directory_key()) {
+        return;
+    }
+    const auto route = resolve_direct_conversation_route(
+        *selection_state_.active_project(), agents_,
+        selection_state_.selected_agent_directory_key());
+    if (!route) {
+        detail_view_->clear_pending_attachments();
+        detail_view_->show_composer_notice(QStringLiteral(
+            "No conversation is available for this selection."),
+            ComposerNoticeKind::error);
+        return;
+    }
+
+    auto selected = std::vector<fs::path>();
+    if (attachment_picker_) {
+        selected = attachment_picker_();
+    } else {
+        const auto paths = QFileDialog::getOpenFileNames(window_.get(),
+            QStringLiteral("Attach files"), QString(),
+            QStringLiteral("All files (*)"));
+        selected.reserve(paths.size());
+        for (const auto &path : paths) {
+            selected.emplace_back(path.toStdString());
+        }
+    }
+    if (selected.empty()) return;
+    detail_view_->merge_pending_attachments(selected);
 }
 
 // Shows the selected Agent's own kernel-published resolved preset policy:
@@ -3694,36 +3785,60 @@ void NativeShell::handle_send_message() {
     }
 
     const auto text = raw_text.trimmed();
-    if (text.isEmpty()) return; // reject whitespace-only input without writing
+    const auto attachments = detail_view_
+        ? detail_view_->pending_attachments()
+        : std::vector<AcceptedAttachment>();
+    if (text.isEmpty() && attachments.empty()) return;
 
     if (!selection_state_.active_project()
         || !selection_state_.selected_agent_directory_key()) {
-        status->setText(QStringLiteral("Select an Agent to send a message."));
+        if (detail_view_) detail_view_->show_composer_notice(
+            QStringLiteral("Select an Agent to send a message."),
+            ComposerNoticeKind::error);
+        else status->setText(QStringLiteral("Select an Agent to send a message."));
         return;
     }
     const auto route = resolve_direct_conversation_route(
         *selection_state_.active_project(), agents_,
         selection_state_.selected_agent_directory_key());
     if (!route) {
-        status->setText(QStringLiteral(
+        if (detail_view_) {
+            detail_view_->show_composer_notice(QStringLiteral(
+                "No conversation is available for this selection."),
+                ComposerNoticeKind::error);
+        } else status->setText(QStringLiteral(
             "No conversation is available for this selection."));
         return;
     }
 
-    const auto outcome = send_direct_mail(*route, text.toStdString());
+    if (detail_view_) detail_view_->clear_attachment_errors();
+    const auto outcome = send_direct_mail(
+        *route, text.toStdString(), attachments);
     if (outcome.result == DirectMailSendResult::queued) {
         input->clear();
+        if (detail_view_) detail_view_->clear_pending_attachments();
         if (!outcome.message_id.empty()) {
             reaction_store_.set_receipt(
                 outcome.message_id, ReceiptStage::received);
         }
-        status->clear();
+        if (detail_view_) detail_view_->clear_composer_notice();
+        else status->clear();
         render_conversation();
         if (detail_view_) {
             detail_view_->scroll_conversation_to_bottom();
         }
     } else {
-        status->setText(QStringLiteral("Message was not queued."));
+        const auto message = direct_mail_failure_text(outcome, attachments);
+        if (detail_view_) {
+            if (outcome.attachment_failure) {
+                detail_view_->mark_attachment_error(
+                    outcome.attachment_failure->index, message);
+            }
+            detail_view_->show_composer_notice(
+                message, ComposerNoticeKind::error);
+        } else {
+            status->setText(message);
+        }
     }
 }
 

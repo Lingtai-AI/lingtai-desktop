@@ -62,9 +62,18 @@ test helpers that click the canvas by row index. Do not use screen coordinates.
 | `lingtai_selected_agent_conversation` | Conversation surface |
 | `lingtai_selected_agent_conversation_state` | Conversation status |
 | `lingtai_composer` | Composer lane |
+| `lingtai_composer_controls` | Input action row |
+| `lingtai_composer_attachment_button` | Native file picker request |
+| `lingtai_composer_attachment_tray` | Wrapping pending attachment region |
+| `lingtai_composer_attachment_card_N` | Pending card at ordered index N |
+| `lingtai_composer_attachment_preview_N` | Thumbnail or file-type fallback |
+| `lingtai_composer_attachment_name_N` | Elided filename with full-path tooltip |
+| `lingtai_composer_attachment_size_N` | Human-readable selected size |
+| `lingtai_composer_attachment_remove_N` | Keyboard-operable remove control |
+| `lingtai_composer_attachment_error_N` | Persistent indexed send error, when present |
 | `lingtai_composer_input` | Message field |
 | `lingtai_composer_send_button` | Send |
-| `lingtai_composer_status` | Send status |
+| `lingtai_composer_status` | Semantic transient composer notice |
 | `lingtai_selected_agent_preset_summary` | Preset catalog table |
 | `lingtai_selected_agent_preset_summary_state` | Preset summary status |
 | `lingtai_selected_agent_preset_summary_section` | Presets section container |

@@ -97,6 +97,11 @@ touches a real Agent or project, and none depends on a network or provider.
   the exact intended in-fixture mutations on the synthetic
   `commit-N-...-fixture` trees the test itself creates. The working
   directory is an injected path, not an OS or process sandbox.
+- The conversation journey's composer proof owns attachment selection,
+  pending cards, no-follow/revalidated bounded thumbnail fallback, warnings,
+  attachment-only publication, exact indexed versus general-failure draft
+  retention, slash isolation, and target clearing. Its picker is injected, so
+  no test opens a native modal or Finder.
 - `tests/native_shell_destinations_test.cpp` — `native_shell_destinations`
   ctest. The one focused Repair3 destination contract: it links the same
   shell + `desktop-app::lib_ui` + `src/crl_integration.cpp`

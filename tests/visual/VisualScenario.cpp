@@ -278,6 +278,7 @@ const char *surfaceSnapshotId(std::string_view surface) {
     if (surface == "setup-agents") return "setup-agents";
     if (surface == "setup-review") return "setup-review";
     if (surface == "conversation") return "conversation";
+    if (surface == "composer-attachments") return "composer-attachments";
     if (surface == "presets") return "presets";
     if (surface == "kanban") return "kanban";
     if (surface == "empty-conversation") return "empty-conversation";

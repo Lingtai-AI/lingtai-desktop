@@ -208,6 +208,12 @@ VisualDiffResult assertMatchesBaseline(
         VisualDiffResult result;
         result.message = QStringLiteral("missing baseline: ") + baseline_path;
         result.expected_path = baseline_path;
+        const auto artifact_dir = QDir(artifactsRoot()).filePath(
+            QStringLiteral("visual/%1").arg(test_name));
+        QDir().mkpath(artifact_dir);
+        result.actual_path = QDir(artifact_dir).filePath(
+            QStringLiteral("actual.png"));
+        static_cast<void>(saveImage(actual, result.actual_path));
         return result;
     }
 

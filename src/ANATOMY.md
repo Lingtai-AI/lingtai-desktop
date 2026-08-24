@@ -24,16 +24,19 @@ Entry point and composition root:
   `lingtai-tui` PATH lookup and the `$HOME/.lingtai-tui/runtime/venv/bin/python`
   fallback (`main.cpp:13`).
 - `native_shell.{h,cpp}` — the C5 composition owner: owns one `Ui::RpWindow`,
-  the roster column, the content pane, the New Project dialog, the composer and
-  its local slash-command dispatch, the one-second refresh timer, and the two
+  the roster column, the content pane, native dialog orchestration, the
+  composer's local slash-command/publisher dispatch, the one-second refresh
+  timer, and the two
   click-armed pending observations.
   The roster column is separated from the content pane by one semantic 8px
   drag handle (`lingtai_roster_resize_handle`, distinct from the one-pixel
   `Ui::PlainShadow` `lingtai_roster_separator` that follows it) whose drags
   re-derive a runtime-only 22%-30% roster width ratio over the absolute
-  260px / 380px two-surface minima. Public seams are the two setters
-  (`set_tui_executable`, `set_agent_start_fallback_python`), `open_project`,
-  and the read-only `window()` / `selection_state()` accessors;
+  260px / 380px two-surface minima. Its composition seams are
+  `set_tui_executable`, `set_agent_start_fallback_python`, and the narrow
+  `set_attachment_picker` injection used by shell tests (when unset, the
+  product path opens the native dialog), plus `open_project` and the read-only
+  `window()` / `selection_state()` accessors;
   `smoke_ready()` is real product readiness used only by `main.cpp`'s `--smoke`
   path (`native_shell.h:100`).
   The content pane composes one coherent workspace: the no-project welcome
@@ -55,6 +58,15 @@ Entry point and composition root:
 - `crl_integration.cpp` — the owned parent `crl` update producer: exactly one
   `crl::on_main_update_requests()` returning `rpl::never<>()` (no update
   source in the bounded smoke).
+- `agent_detail_view.{h,cpp}` — selected-Agent presentation owner. Its
+  composer holds the ordered pending `AcceptedAttachment` draft, wrapping
+  cards/removal, semantic notice timer, and per-card send errors; it emits a
+  picker request but never opens a dialog, resolves a route, or publishes.
+- `attachment_thumbnail.{h,cpp}` — Qt image-preview helper for composer cards:
+  reopens the accepted regular file without following links, revalidates its
+  identity and size, rejects implausible decode dimensions/allocation, requests
+  a bounded decoder size, and returns an empty pixmap for the normal file-card
+  fallback.
 
 Domain models (pure, Qt-light state/derivation owners):
 
@@ -167,8 +179,10 @@ Owned library targets (`CMakeLists.txt`) and their source membership:
 - `lingtai_desktop_agent_preset_summary` — `agent_preset_summary.cpp`.
 - `lingtai_desktop_agent_sleep` — `agent_sleep.cpp`.
 - `lingtai_desktop_agent_launch` — `agent_launch.cpp`.
-- `lingtai_desktop_native_shell` — `native_shell.cpp`, `project_bootstrap.cpp`,
-  `ui/agent_roster.cpp`, `ui/conversation_surface.cpp`.
+- `lingtai_desktop_native_shell` — `native_shell.cpp`,
+  `agent_detail_view.cpp`, `attachment_thumbnail.cpp`,
+  `project_bootstrap.cpp`, `ui/agent_roster.cpp`,
+  `ui/conversation_surface.cpp`.
 - `lingtai_desktop_smoke` (executable) — `main.cpp`, `crl_integration.cpp`.
 
 `lingtai_desktop_native_shell` links `desktop-app::lib_ui` privately, links
@@ -186,6 +200,9 @@ they are the shell's presentation layer and own no domain reads or writes.
   two click-armed pending observations (`SleepObservation` at most 3 s,
   `StartObservation` at most 10 s). All are discarded on project open
   or selection change and are never persisted.
+- `AgentDetailView` holds the session-only attachment draft and errors for the
+  currently selected target. Project/Agent changes and route loss clear it;
+  it is never persisted or shared across targets.
 - No reader or owner keeps durable cursors or ledgers; every read is one
   independent stateless observation. Owned boundaries: the direct local leaf
   writers (`send_direct_mail`, `request_agent_sleep`) write only their own

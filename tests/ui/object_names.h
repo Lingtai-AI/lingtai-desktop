@@ -47,6 +47,11 @@ inline constexpr auto kSelectedAgentConversationState =
     "lingtai_selected_agent_conversation_state";
 
 inline constexpr auto kComposer = "lingtai_composer";
+inline constexpr auto kComposerControls = "lingtai_composer_controls";
+inline constexpr auto kComposerAttachmentButton =
+    "lingtai_composer_attachment_button";
+inline constexpr auto kComposerAttachmentTray =
+    "lingtai_composer_attachment_tray";
 inline constexpr auto kComposerInput = "lingtai_composer_input";
 inline constexpr auto kComposerSendButton = "lingtai_composer_send_button";
 inline constexpr auto kComposerStatus = "lingtai_composer_status";

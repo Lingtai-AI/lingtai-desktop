@@ -79,6 +79,8 @@ enum class AgentDetailPage {
 class NativeShell final {
 public:
     using OpenProjectRequestHandler = std::function<void()>;
+    using AttachmentPicker =
+        std::function<std::vector<std::filesystem::path>()>;
 
     explicit NativeShell(RuntimeOptions runtime_options = {});
     ~NativeShell();
@@ -91,6 +93,7 @@ public:
     void set_open_project_request_handler(OpenProjectRequestHandler handler);
     void set_open_project_in_new_window_request_handler(
         OpenProjectRequestHandler handler);
+    void set_attachment_picker(AttachmentPicker picker);
     void request_new_project_at(const std::filesystem::path &destination);
     // The one Desktop-configured TUI executable for explicit first-project
     // bootstrap: the shipped `lingtai-tui` or a focused test fixture. It is
@@ -159,6 +162,7 @@ private:
     void maybe_warm_kanban_cache();
     void handle_kanban_agent_selected(const std::filesystem::path &directory_key);
     void reset_composer();
+    void handle_attachment_selection();
     void handle_send_message();
     void handle_agent_selection(const std::filesystem::path &directory_key);
     // The one selected-Agent lifecycle slash owner for `/suspend`, `/clear`,
@@ -272,6 +276,7 @@ private:
     InjectedMailJournal injected_mail_journal_;
     OpenProjectRequestHandler open_project_request_handler_;
     OpenProjectRequestHandler open_project_in_new_window_request_handler_;
+    AttachmentPicker attachment_picker_;
     std::filesystem::path agent_start_fallback_python_;
     // One narrow injectable dependency: the configured TUI executable used by
     // the explicit New Project flow and the selected-Agent lifecycle commands.

@@ -1,4 +1,5 @@
 #include "agent_detail_view.h"
+#include "attachment_thumbnail.h"
 
 #include "conversation_session.h"
 #include "kanban_page.h"
@@ -37,6 +38,7 @@
 #include <QtGui/QTextBlock>
 #include <QtGui/QTextDocument>
 #include <QtWidgets/QFrame>
+#include <QtWidgets/QGridLayout>
 #include <QtWidgets/QHBoxLayout>
 #include <QtWidgets/QListWidget>
 #include <QtWidgets/QPushButton>
@@ -104,6 +106,48 @@ QLabel *make_label(
     font.setWeight(weight);
     label->setFont(font);
     return label;
+}
+
+[[nodiscard]] QString human_file_size(std::uint64_t bytes) {
+    static constexpr std::array<const char *, 4> units = {
+        "B", "KB", "MB", "GB"};
+    auto value = static_cast<double>(bytes);
+    auto unit = std::size_t{0};
+    while (value >= 1024.0 && unit + 1 < units.size()) {
+        value /= 1024.0;
+        ++unit;
+    }
+    const auto precision = unit == 0 || value >= 10.0 ? 0 : 1;
+    return QStringLiteral("%1 %2")
+        .arg(value, 0, 'f', precision)
+        .arg(QString::fromLatin1(units[unit]));
+}
+
+[[nodiscard]] QString attachment_display_name(const std::filesystem::path &path) {
+    const auto filename = path.filename().string();
+    return QString::fromStdString(filename.empty() ? path.string() : filename);
+}
+
+[[nodiscard]] QString selection_rejection_text(
+        const RejectedAttachment &rejection) {
+    const auto name = attachment_display_name(rejection.input_path);
+    switch (rejection.reason) {
+    case AttachmentRejectionReason::missing:
+        return QStringLiteral("%1 is no longer available.").arg(name);
+    case AttachmentRejectionReason::not_regular:
+        return QStringLiteral("%1 must be a regular file.").arg(name);
+    case AttachmentRejectionReason::unreadable:
+        return QStringLiteral("%1 can’t be read. Check its permissions.").arg(name);
+    case AttachmentRejectionReason::per_file_limit:
+        return QStringLiteral("%1 exceeds the 25 MB file limit.").arg(name);
+    case AttachmentRejectionReason::total_limit:
+        return QStringLiteral("%1 would exceed the 100 MB attachment limit.").arg(name);
+    case AttachmentRejectionReason::duplicate:
+        return QStringLiteral("%1 is already attached.").arg(name);
+    case AttachmentRejectionReason::local_failure:
+        return QStringLiteral("%1 couldn’t be inspected.").arg(name);
+    }
+    return QStringLiteral("%1 couldn’t be attached.").arg(name);
 }
 
 // Composer growth: one centered line, two lines with the first nudged up, and
@@ -1007,6 +1051,22 @@ AgentDetailView::AgentDetailView(
     composer_layout->setContentsMargins(0, 0, 0, 0);
     composer_layout->setSpacing(4);
 
+    composer_attachment_tray_ = new QWidget(composer);
+    composer_attachment_tray_->setObjectName(
+        "lingtai_composer_attachment_tray");
+    composer_attachment_tray_->setAccessibleName(
+        QStringLiteral("Pending attachments"));
+    composer_attachment_tray_->setAccessibleDescription(QStringLiteral(
+        "Files that will be sent with the next ordinary message."));
+    composer_attachment_tray_->setMinimumWidth(0);
+    composer_attachment_layout_ = new QGridLayout(composer_attachment_tray_);
+    composer_attachment_layout_->setContentsMargins(0, 0, 0, 2);
+    composer_attachment_layout_->setHorizontalSpacing(6);
+    composer_attachment_layout_->setVerticalSpacing(6);
+    composer_attachment_layout_->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    composer_attachment_tray_->hide();
+    composer_layout->addWidget(composer_attachment_tray_);
+
     auto *composer_controls = new ComposerControls(composer);
     composer_controls->setObjectName("lingtai_composer_controls");
     composer_controls->setAccessibleName(QStringLiteral("Message controls"));
@@ -1047,8 +1107,11 @@ AgentDetailView::AgentDetailView(
     sync_composer_multiline_geometry(*composer_input);
 
     auto *attachment_button = new ComposerAttachmentButton(composer_controls);
+    composer_attachment_button_ = attachment_button;
     attachment_button->setObjectName("lingtai_composer_attachment_button");
     attachment_button->setAccessibleName(QStringLiteral("Attach file"));
+    attachment_button->setAccessibleDescription(QStringLiteral(
+        "Choose one or more local files to send with the next message."));
     attachment_button->setEnabled(false);
     composer_action_row->addWidget(attachment_button, 0, Qt::AlignVCenter);
     composer_action_row->addWidget(composer_input, 1, Qt::AlignVCenter);
@@ -1116,8 +1179,13 @@ AgentDetailView::AgentDetailView(
 
     composer_status_ = make_label(
         composer, QString(), "lingtai_composer_status", 10);
-    composer_status_->setAccessibleName(QStringLiteral("Send status"));
+    composer_status_->setAccessibleName(QStringLiteral("Composer notice"));
     composer_layout->addWidget(composer_status_);
+    composer_notice_timer_ = new QTimer(this);
+    composer_notice_timer_->setObjectName("lingtai_composer_notice_timer");
+    composer_notice_timer_->setSingleShot(true);
+    QObject::connect(composer_notice_timer_, &QTimer::timeout,
+        this, [this] { clear_composer_notice(); });
 
     conversation_state_ = make_label(
         composer, QString(), "lingtai_selected_agent_conversation_state", 10);
@@ -1264,6 +1332,11 @@ AgentDetailView::AgentDetailView(
         });
     }
 
+    if (composer_attachment_button_) {
+        QObject::connect(composer_attachment_button_, &QPushButton::clicked,
+            this, [this] { emit attachment_selection_requested(); });
+    }
+
     if (composer_input_) {
         composer_input_->submits()
             | rpl::on_next([this] {
@@ -1290,6 +1363,7 @@ AgentDetailView::AgentDetailView(
                     outer_scroll_ ? static_cast<QWidget *>(outer_scroll_)
                         : this,
                     composer_input_);
+                refresh_composer_enablement(composer_eligible_);
             }, composer_lifetime_);
 
         // With placeholderScale 0 the field would keep "Message…" while
@@ -1403,10 +1477,12 @@ void AgentDetailView::set_detail_width(int detail_width) {
     // the shell can stay deterministic and UI tests can instantiate this
     // widget in isolation.
     if (composer_) {
+        composer_detail_width_ = detail_width;
         const auto outer = std::max(12, (detail_width - 1600) / 2 + 12);
         composer_->setMinimumWidth(0);
         composer_->setMaximumWidth(QWIDGETSIZE_MAX);
         composer_->layout()->setContentsMargins(outer, 10, outer, 8);
+        reflow_attachment_cards(std::max(1, detail_width - 2 * outer));
         if (composer_input_) {
             QListWidget *popup = nullptr;
             if (outer_scroll_) {
@@ -1715,11 +1791,259 @@ void AgentDetailView::render_kanban(
 }
 
 void AgentDetailView::refresh_composer_enablement(bool composer_eligible) {
+    composer_eligible_ = composer_eligible;
     if (composer_input_) composer_input_->setEnabled(composer_eligible);
+    if (composer_attachment_button_) {
+        composer_attachment_button_->setEnabled(composer_eligible);
+    }
     if (composer_send_button_) {
-        composer_send_button_->setEnabled(composer_eligible);
+        const auto has_text = composer_input_
+            && !composer_input_->getLastText().trimmed().isEmpty();
+        composer_send_button_->setEnabled(
+            composer_eligible && (has_text || has_pending_attachments()));
+    }
+}
+
+void AgentDetailView::merge_pending_attachments(
+        const std::vector<std::filesystem::path> &selected_paths) {
+    if (selected_paths.empty()) return;
+    auto combined = std::vector<std::filesystem::path>();
+    combined.reserve(pending_attachments_.size() + selected_paths.size());
+    for (const auto &attachment : pending_attachments_) {
+        combined.push_back(attachment.source_path);
+    }
+    combined.insert(combined.end(), selected_paths.begin(), selected_paths.end());
+
+    auto result = preflight_attachments(combined);
+    pending_attachments_ = std::move(result.accepted);
+    attachment_errors_.assign(pending_attachments_.size(), QString());
+    rebuild_attachment_cards();
+    refresh_composer_enablement(composer_eligible_);
+    if (pending_attachments_.empty() && result.rejected.empty()
+            && !combined.empty()) {
+        show_composer_notice(
+            QStringLiteral("The selected files couldn’t be inspected."),
+            ComposerNoticeKind::error);
+    } else if (!result.rejected.empty()) {
+        show_composer_notice(
+            selection_rejection_text(result.rejected.front()),
+            ComposerNoticeKind::warning);
+    } else {
+        show_composer_notice(
+            pending_attachments_.size() == 1
+                ? QStringLiteral("1 attachment ready.")
+                : QStringLiteral("%1 attachments ready.")
+                    .arg(pending_attachments_.size()),
+            ComposerNoticeKind::success);
+    }
+}
+
+void AgentDetailView::remove_pending_attachment(std::size_t index) {
+    if (index >= pending_attachments_.size()) return;
+    pending_attachments_.erase(pending_attachments_.begin()
+        + static_cast<std::ptrdiff_t>(index));
+    if (index < attachment_errors_.size()) {
+        attachment_errors_.erase(attachment_errors_.begin()
+            + static_cast<std::ptrdiff_t>(index));
+    }
+    rebuild_attachment_cards();
+    refresh_composer_enablement(composer_eligible_);
+}
+
+void AgentDetailView::clear_pending_attachments() {
+    pending_attachments_.clear();
+    attachment_errors_.clear();
+    rebuild_attachment_cards();
+    refresh_composer_enablement(composer_eligible_);
+}
+
+void AgentDetailView::clear_attachment_errors() {
+    attachment_errors_.assign(pending_attachments_.size(), QString());
+    rebuild_attachment_cards();
+}
+
+void AgentDetailView::mark_attachment_error(
+        std::size_t index, const QString &message) {
+    if (index >= pending_attachments_.size()) return;
+    attachment_errors_.resize(pending_attachments_.size());
+    attachment_errors_[index] = message;
+    rebuild_attachment_cards();
+}
+
+void AgentDetailView::show_composer_notice(
+        const QString &message, ComposerNoticeKind kind) {
+    if (!composer_status_) return;
+    auto palette = composer_status_->palette();
+    palette.setColor(QPalette::WindowText,
+        kind == ComposerNoticeKind::error
+            ? st::attentionButtonFg->c
+            : kind == ComposerNoticeKind::success
+                ? st::dialogsNameFg->c
+                : st::windowSubTextFg->c);
+    composer_status_->setPalette(palette);
+    composer_status_->setProperty("lingtai_notice_kind",
+        kind == ComposerNoticeKind::error ? "error"
+            : kind == ComposerNoticeKind::warning ? "warning" : "success");
+    composer_status_->setText(message);
+    composer_status_->setAccessibleDescription(message);
+    if (composer_notice_timer_) composer_notice_timer_->start(4500);
+}
+
+void AgentDetailView::clear_composer_notice() {
+    if (composer_notice_timer_) composer_notice_timer_->stop();
+    if (!composer_status_) return;
+    composer_status_->clear();
+    composer_status_->setAccessibleDescription(QString());
+    composer_status_->setProperty("lingtai_notice_kind", QVariant());
+}
+
+void AgentDetailView::rebuild_attachment_cards() {
+    if (!composer_attachment_layout_ || !composer_attachment_tray_) return;
+    while (auto *item = composer_attachment_layout_->takeAt(0)) {
+        if (auto *widget = item->widget()) delete widget;
+        delete item;
+    }
+
+    for (auto index = std::size_t{0}; index != pending_attachments_.size();
+            ++index) {
+        const auto &attachment = pending_attachments_[index];
+        auto *card = new QWidget(composer_attachment_tray_);
+        card->setObjectName(QStringLiteral("lingtai_composer_attachment_card_%1")
+            .arg(index));
+        card->setAccessibleName(QStringLiteral("Pending attachment %1")
+            .arg(QString::fromStdString(attachment.display_filename)));
+        card->setAccessibleDescription(QStringLiteral("%1, %2")
+            .arg(QString::fromStdString(attachment.source_path.string()),
+                human_file_size(attachment.byte_size)));
+        card->setToolTip(QString::fromStdString(attachment.source_path.string()));
+        card->setFixedWidth(340);
+        card->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        auto card_border = index < attachment_errors_.size()
+                && !attachment_errors_[index].isEmpty()
+            ? st::attentionButtonFg->c : st::windowSubTextFg->c;
+        if (index >= attachment_errors_.size()
+                || attachment_errors_[index].isEmpty()) {
+            card_border.setAlpha(104);
+        }
+        card->setStyleSheet(QStringLiteral(
+            "QWidget#%1 { background-color: %2; border: 1px solid %3; "
+            "border-radius: 8px; } ")
+            .arg(card->objectName(),
+                st::windowBgOver->c.name(QColor::HexArgb),
+                card_border.name(QColor::HexArgb)));
+
+        auto *layout = new QHBoxLayout(card);
+        layout->setContentsMargins(8, 7, 6, 7);
+        layout->setSpacing(8);
+        auto *preview = new QLabel(card);
+        preview->setObjectName(QStringLiteral(
+            "lingtai_composer_attachment_preview_%1").arg(index));
+        preview->setAccessibleName(QStringLiteral("Attachment preview"));
+        preview->setFixedSize(52, 40);
+        preview->setAlignment(Qt::AlignCenter);
+        auto preview_border = st::windowSubTextFg->c;
+        preview_border.setAlpha(120);
+        preview->setStyleSheet(QStringLiteral(
+            "QLabel#%1 { background-color: %2; border: 1px solid %3; "
+            "border-radius: 6px; color: %4; font-weight: 600; }")
+            .arg(preview->objectName(),
+                st::windowBg->c.name(QColor::HexArgb),
+                preview_border.name(QColor::HexArgb),
+                st::windowFg->c.name(QColor::HexArgb)));
+        const auto thumbnail = load_attachment_thumbnail(attachment, QSize(52, 40));
+        if (!thumbnail.isNull()) {
+            preview->setPixmap(thumbnail);
+            preview->setProperty("lingtai_preview_kind", "thumbnail");
+        } else {
+            auto extension = QString::fromStdString(
+                attachment.source_path.extension().string())
+                .remove(QLatin1Char('.')).toUpper();
+            preview->setText(extension.isEmpty() ? QStringLiteral("FILE")
+                                                 : extension.left(5));
+            preview->setProperty("lingtai_preview_kind", "file");
+        }
+        layout->addWidget(preview, 0, Qt::AlignVCenter);
+
+        auto *labels = new QWidget(card);
+        labels->setMinimumWidth(0);
+        auto *labels_layout = new QVBoxLayout(labels);
+        labels_layout->setContentsMargins(0, 0, 0, 0);
+        labels_layout->setSpacing(1);
+        auto *name = new QLabel(
+            QString::fromStdString(attachment.display_filename), labels);
+        name->setObjectName(QStringLiteral(
+            "lingtai_composer_attachment_name_%1").arg(index));
+        name->setToolTip(QString::fromStdString(attachment.source_path.string()));
+        name->setTextFormat(Qt::PlainText);
+        name->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        name->setMinimumWidth(0);
+        auto name_font = name->font();
+        name_font.setWeight(QFont::DemiBold);
+        name->setFont(name_font);
+        name->setText(QFontMetrics(name->font()).elidedText(
+            name->text(), Qt::ElideMiddle, 210));
+        labels_layout->addWidget(name);
+        auto *detail = new QLabel(human_file_size(attachment.byte_size), labels);
+        detail->setObjectName(QStringLiteral(
+            "lingtai_composer_attachment_size_%1").arg(index));
+        auto detail_palette = detail->palette();
+        detail_palette.setColor(QPalette::WindowText, st::windowSubTextFg->c);
+        detail->setPalette(detail_palette);
+        labels_layout->addWidget(detail);
+        if (index < attachment_errors_.size()
+                && !attachment_errors_[index].isEmpty()) {
+            auto *error = new QLabel(attachment_errors_[index], labels);
+            error->setObjectName(QStringLiteral(
+                "lingtai_composer_attachment_error_%1").arg(index));
+            error->setWordWrap(true);
+            auto error_palette = error->palette();
+            error_palette.setColor(
+                QPalette::WindowText, st::attentionButtonFg->c);
+            error->setPalette(error_palette);
+            labels_layout->addWidget(error);
+        }
+        layout->addWidget(labels, 1);
+
+        auto *remove = new QPushButton(QStringLiteral("×"), card);
+        remove->setObjectName(QStringLiteral(
+            "lingtai_composer_attachment_remove_%1").arg(index));
+        remove->setAccessibleName(QStringLiteral("Remove %1")
+            .arg(QString::fromStdString(attachment.display_filename)));
+        remove->setAccessibleDescription(QStringLiteral(
+            "Removes this file from the pending message."));
+        remove->setToolTip(remove->accessibleName());
+        remove->setFixedSize(28, 28);
+        remove->setFlat(true);
+        remove->setCursor(Qt::PointingHandCursor);
+        remove->setFocusPolicy(Qt::StrongFocus);
+        QObject::connect(remove, &QPushButton::clicked,
+            this, [this, index] {
+                QTimer::singleShot(0, this,
+                    [this, index] { remove_pending_attachment(index); });
+            });
+        layout->addWidget(remove, 0, Qt::AlignTop);
+        composer_attachment_layout_->addWidget(card, 0, static_cast<int>(index));
+    }
+    composer_attachment_tray_->setVisible(!pending_attachments_.empty());
+    reflow_attachment_cards(std::max(1, composer_detail_width_));
+}
+
+void AgentDetailView::reflow_attachment_cards(int available_width) {
+    if (!composer_attachment_layout_) return;
+    auto cards = std::vector<QWidget *>();
+    while (auto *item = composer_attachment_layout_->takeAt(0)) {
+        if (auto *widget = item->widget()) cards.push_back(widget);
+        delete item;
+    }
+    constexpr auto kCardWidth = 340;
+    constexpr auto kCardGap = 6;
+    const auto columns = std::max(
+        1, (available_width + kCardGap) / (kCardWidth + kCardGap));
+    for (auto index = std::size_t{0}; index != cards.size(); ++index) {
+        composer_attachment_layout_->addWidget(cards[index],
+            static_cast<int>(index) / columns,
+            static_cast<int>(index) % columns);
     }
 }
 
 } // namespace lingtai::desktop
-

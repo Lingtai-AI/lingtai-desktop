@@ -80,7 +80,7 @@ its code.
   only rows whose manifest is `valid` are selectable, and any other click
   shows `lingtai_agent_selection_error`.
 - Selecting an Agent clears the composer and the pending sleep/start
-  observations, resets to the conversation page,
+  attachment draft/errors, and pending sleep/start observations, resets to the conversation page,
   recomputes the layout, and focuses the composer when visible/enabled.
 - The detail title is the manifest `nickname`, else `agent_name`, else the
   directory key; the subtitle shows the key (when it differs) plus
@@ -182,18 +182,35 @@ its code.
   means the complete outbox leaf exists; it does not mean kernel pickup or
   delivery. Empty text with no attachments writes nothing.
 
-- The composer is one vendored single-line `InputField` plus an explicit
-  `Send` `RoundButton`, enabled only when a direct route resolves for the
-  current selection. The `Message…` placeholder hides as soon as the field
+- The composer is one vendored bounded multiline `InputField`, a 40 px
+  paperclip, and an explicit `Send` `RoundButton`. The input and paperclip are
+  enabled only when a direct route resolves; Send additionally requires
+  trimmed text or at least one pending attachment. The `Message…` placeholder hides as soon as the field
   has any text. Typing a leading `/` (with no following space) opens a
   focus-free slash-command popup of Desktop commands; an exact unique name
   or ordinary text dismisses it. Arrow keys move the highlight, Tab/Enter
   insert the selected command, and Escape closes the popup.
+- The paperclip asks `NativeShell` for the normal native multi-file dialog;
+  tests replace that one picker seam. Each selection re-preflights existing
+  canonical sources plus new picker paths once, preserving accepted order and
+  applying duplicate and cumulative limits across the whole draft. Cancellation
+  changes nothing. Route loss or project/Agent change clears the draft.
+- Pending cards form a left-aligned wrapping row above the input. A thumbnail
+  reopens the accepted source without following links, requires the same
+  regular-file device/inode/size facts, and rejects implausible dimensions or
+  allocation before a bounded decode. Changed, linked, invalid, or unsupported
+  images use the normal file-type fallback without changing publisher
+  authorization. Cards preserve the full filename when it fits, plus a
+  full-path tooltip, human size, and keyboard remove.
+  Selection feedback uses one replaceable 4.5-second semantic notice; typed
+  send failures can additionally mark the indexed card until retry/removal.
 - After raw slash classification returns no command, ordinary send re-resolves
-  the route fresh (never a stale captured target), trims the text, rejects
-  whitespace-only input without writing, and calls `send_direct_mail`.
-  Outcome text is exactly `Queued` on success or `Message was not queued.`;
-  the ordinary-message composer clears only on success. The conversation state
+  the route fresh (never a stale captured target), trims the text, and calls
+  `send_direct_mail` with the current ordered draft. Attachment-only sends are
+  valid. Slash commands do not publish, consume, clear, or mark attachments.
+  Queued success clears text/cards/errors, refreshes history/receipt state, and
+  scrolls as before; route/publisher failure retains the draft and shows a
+  concise mapped notice. The conversation state
   line shows `N message(s)` plus ` · N skipped` when the one generic skipped
   count is nonzero.
 - The conversation surface renders rows read-only as plain text (kernel

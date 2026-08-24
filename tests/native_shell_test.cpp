@@ -1,4 +1,5 @@
 #include "native_shell.h"
+#include "agent_detail_view.h"
 #include "shell_host.h"
 #include "agent_projection.h"
 #include "preset_editor_model.h"
@@ -18,12 +19,16 @@
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QElapsedTimer>
+#include <QtCore/QEventLoop>
+#include <QtCore/QRegularExpression>
 #include <QtCore/QString>
 #include <QtCore/QThread>
+#include <QtCore/QTimer>
 #include <QtGui/QColor>
 #include <QtGui/QFont>
 #include <QtGui/QFontMetrics>
 #include <QtGui/QImage>
+#include <QtGui/QImageReader>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QMouseEvent>
 #include <QtGui/QPalette>
@@ -87,6 +92,20 @@ void require(bool condition, const std::string &message) {
     if (!condition) {
         throw std::runtime_error(message);
     }
+}
+
+template <typename Predicate>
+bool wait_for_event_loop(Predicate predicate, int timeout_ms) {
+    QElapsedTimer elapsed;
+    elapsed.start();
+    while (elapsed.elapsed() < timeout_ms) {
+        if (predicate()) return true;
+        QEventLoop iteration;
+        QTimer::singleShot(5, &iteration, &QEventLoop::quit);
+        iteration.exec(QEventLoop::AllEvents);
+    }
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    return predicate();
 }
 
 class ScopedApplicationPalette final {
@@ -165,6 +184,23 @@ void write_file(const fs::path &path, std::string_view bytes) {
     auto stream = std::ofstream(path, std::ios::binary);
     stream << bytes;
     require(stream.good(), "fixture file must be written: " + path.string());
+}
+
+std::string absurd_png_header() {
+    // Signature + valid 50,000 x 50,000 RGB IHDR followed by a tiny IDAT and
+    // IEND. QImageReader can inspect the claimed dimensions, while the fixture
+    // stays 65 bytes and the helper must reject it before pixel decoding.
+    const auto bytes = std::array<unsigned char, 65>{
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+        0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+        0x00, 0x00, 0xc3, 0x50, 0x00, 0x00, 0xc3, 0x50,
+        0x08, 0x02, 0x00, 0x00, 0x00, 0xc4, 0xcd, 0xaa, 0x9d,
+        0x00, 0x00, 0x00, 0x08, 0x49, 0x44, 0x41, 0x54,
+        0x78, 0x9c, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01,
+        0x48, 0x06, 0x89, 0xd2,
+        0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44,
+        0xae, 0x42, 0x60, 0x82};
+    return {reinterpret_cast<const char *>(bytes.data()), bytes.size()};
 }
 
 void append_file(const fs::path &path, std::string_view bytes) {
@@ -1457,6 +1493,10 @@ void verify_composer_send_behavior(
         required_child<QObject>(window, "lingtai_composer_input"));
     auto *send_button = static_cast<Ui::RoundButton *>(
         required_child<QObject>(window, "lingtai_composer_send_button"));
+    auto *attachment_button = required_child<QPushButton>(
+        window, "lingtai_composer_attachment_button");
+    auto *attachment_tray = required_child<QWidget>(
+        window, "lingtai_composer_attachment_tray");
     auto *status = required_child<QLabel>(
         window, "lingtai_composer_status");
 
@@ -1474,24 +1514,407 @@ void verify_composer_send_behavior(
     write_file(other / ".agent.json",
         R"({"admin":{},"agent_id":"20260712-191610-q001",)"
         R"("agent_name":"issue-643","address":"issue-643","state":"active"})");
+    const auto report = sandbox / "composer-report.txt";
+    const auto preview = sandbox / "composer-preview.PNG";
+    write_file(report, "composer attachment\n");
+    QImage preview_image(12, 8, QImage::Format_RGB32);
+    preview_image.fill(QColor(QStringLiteral("#3A8D73")));
+    require(preview_image.save(QString::fromStdString(preview.string())),
+        "the composer image fixture must be written");
 
-    static_cast<void>(shell.open_project(project, std::nullopt));
-    require(!input->isEnabled() && !send_button->isEnabled(),
-        "the composer must stay disabled until a valid route is selected");
-
-    click_agent(shell, "telegram-bot");
-    require(shell.selection_state().selected_agent_directory_key()
-                == std::optional<fs::path>("telegram-bot"),
-        "the first Agent must be selectable");
-    require(input->isEnabled() && send_button->isEnabled()
-            && input->getLastText().isEmpty(),
-        "a selected valid route must enable an empty composer");
+    auto picker_calls = 0;
+    shell.set_attachment_picker([&] {
+        ++picker_calls;
+        if (picker_calls == 1) return std::vector<fs::path>{report, preview};
+        return std::vector<fs::path>{};
+    });
 
     auto outbox_entry_count = [&] {
         if (!fs::exists(outbox)) return std::size_t{0};
         return static_cast<std::size_t>(std::distance(
             fs::directory_iterator(outbox), fs::directory_iterator{}));
     };
+
+    static_cast<void>(shell.open_project(project, std::nullopt));
+    require(!input->isEnabled() && !send_button->isEnabled()
+            && !attachment_button->isEnabled(),
+        "the composer must stay disabled until a valid route is selected");
+
+    click_agent(shell, "telegram-bot");
+    require(shell.selection_state().selected_agent_directory_key()
+                == std::optional<fs::path>("telegram-bot"),
+        "the first Agent must be selectable");
+    require(input->isEnabled() && !send_button->isEnabled()
+            && attachment_button->isEnabled()
+            && input->getLastText().isEmpty(),
+        "a selected route must enable drafting but not empty sending");
+    auto *detail_view = required_child<lingtai::desktop::AgentDetailView>(
+        window, "lingtai_agent_detail");
+
+    attachment_button->click();
+    QCoreApplication::processEvents();
+    require(picker_calls == 1 && attachment_tray->isVisible(),
+        "the injected picker must expose an ordered attachment tray");
+    require(window.findChild<QWidget *>("lingtai_composer_attachment_card_0")
+            && window.findChild<QWidget *>("lingtai_composer_attachment_card_1"),
+        "both selected files must have stable ordered card names");
+    auto *file_preview = required_child<QLabel>(
+        window, "lingtai_composer_attachment_preview_0");
+    auto *image_preview = required_child<QLabel>(
+        window, "lingtai_composer_attachment_preview_1");
+    auto *file_name = required_child<QLabel>(
+        window, "lingtai_composer_attachment_name_0");
+    auto *file_size = required_child<QLabel>(
+        window, "lingtai_composer_attachment_size_0");
+    require(file_preview->property("lingtai_preview_kind") == "file"
+            && file_preview->text() == QStringLiteral("TXT")
+            && image_preview->property("lingtai_preview_kind") == "thumbnail"
+            && !image_preview->pixmap().isNull(),
+        "file cards need a type icon while case-insensitive images decode a thumbnail");
+    require(file_name->toolTip().contains(QStringLiteral("composer-report.txt"))
+            && file_size->text() == QStringLiteral("20 B")
+            && !attachment_tray->accessibleName().isEmpty(),
+        "cards must expose the exact name, human size, tooltip, and tray accessibility");
+    require(send_button->isEnabled(),
+        "attachments alone must enable Send");
+    attachment_button->click();
+    QCoreApplication::processEvents();
+    require(picker_calls == 2
+            && window.findChildren<QWidget *>(
+                QRegularExpression(QStringLiteral(
+                    "lingtai_composer_attachment_card_.*"))).size() == 2,
+        "picker cancellation must not mutate the attachment draft");
+
+    const auto attachment_only_before = outbox_entry_count();
+    send_button->clicked(Qt::NoModifier, Qt::LeftButton);
+    require(outbox_entry_count() == attachment_only_before + 1,
+        "an attachment-only send must queue one atomic entry");
+    require(!attachment_tray->isVisible() && !send_button->isEnabled(),
+        "queued success must clear cards and restore empty-send disablement");
+    auto attachment_only_found = false;
+    for (const auto &entry : fs::directory_iterator(outbox)) {
+        const auto body = read_file(entry.path() / "message.json");
+        if (body.find("\"message\":\"\"") != std::string::npos
+                && body.find("\"attachments\":[") != std::string::npos
+                && fs::exists(entry.path() / "attachments/composer-report.txt")
+                && fs::exists(entry.path() / "attachments/composer-preview.PNG")) {
+            attachment_only_found = true;
+        }
+    }
+    require(attachment_only_found,
+        "attachment-only UI send must produce the real publisher envelope and copies");
+
+    shell.set_attachment_picker([&] {
+        return std::vector<fs::path>{report};
+    });
+    attachment_button->click();
+    input->setText(QStringLiteral("Mixed composer send."));
+    send_button->clicked(Qt::NoModifier, Qt::LeftButton);
+    auto mixed_found = false;
+    for (const auto &entry : fs::directory_iterator(outbox)) {
+        const auto body = read_file(entry.path() / "message.json");
+        if (body.find("Mixed composer send.") != std::string::npos
+                && body.find("\"attachments\":[") != std::string::npos
+                && fs::exists(entry.path() / "attachments/composer-report.txt")) {
+            mixed_found = true;
+        }
+    }
+    require(mixed_found && input->getLastText().isEmpty()
+            && !attachment_tray->isVisible(),
+        "mixed UI send must publish atomically and clear the complete draft");
+
+    shell.set_attachment_picker([&] { return std::vector<fs::path>{report}; });
+    attachment_button->click();
+    QCoreApplication::processEvents();
+    shell.set_attachment_picker([&] {
+        return std::vector<fs::path>{report, preview};
+    });
+    attachment_button->click();
+    QCoreApplication::processEvents();
+    require(required_child<QLabel>(window,
+                "lingtai_composer_attachment_name_0")->toolTip().contains(
+                QStringLiteral("composer-report.txt"))
+            && required_child<QLabel>(window,
+                "lingtai_composer_attachment_name_1")->toolTip().contains(
+                QStringLiteral("composer-preview.PNG"))
+            && !window.findChild<QWidget *>(
+                "lingtai_composer_attachment_card_2"),
+        "a second picker call must preserve the old card and append only its new file in order");
+    require(status->text().contains(QStringLiteral("composer-report.txt"))
+            && status->text().contains(QStringLiteral("already attached")),
+        "duplicate feedback must name the file and explain suppression");
+    auto *remove = required_child<QPushButton>(
+        window, "lingtai_composer_attachment_remove_0");
+    require(remove->size() == QSize(28, 28)
+            && remove->focusPolicy() == Qt::StrongFocus,
+        "the remove target must remain a real 28x28 keyboard-focusable control");
+    remove->setFocus();
+    auto remove_key = QKeyEvent(
+        QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
+    QApplication::sendEvent(remove, &remove_key);
+    auto remove_release = QKeyEvent(
+        QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier);
+    QApplication::sendEvent(remove, &remove_release);
+    QCoreApplication::processEvents();
+    require(window.findChild<QWidget *>("lingtai_composer_attachment_card_0")
+            && !window.findChild<QWidget *>(
+                "lingtai_composer_attachment_card_1"),
+        "removing the first card must retain and renumber the appended card");
+    required_child<QPushButton>(window,
+        "lingtai_composer_attachment_remove_0")->click();
+    QCoreApplication::processEvents();
+    require(!attachment_tray->isVisible(),
+        "the keyboard-operable remove controls must clear the draft");
+
+    const auto broken_image = sandbox / "broken-preview.JpG";
+    write_file(broken_image, "not an image");
+    shell.set_attachment_picker([&] {
+        return std::vector<fs::path>{broken_image};
+    });
+    attachment_button->click();
+    QCoreApplication::processEvents();
+    require(required_child<QLabel>(window,
+                "lingtai_composer_attachment_preview_0")
+                ->property("lingtai_preview_kind") == "file",
+        "a failed image thumbnail must fall back without rejecting the file");
+    required_child<QPushButton>(window,
+        "lingtai_composer_attachment_remove_0")->click();
+    QCoreApplication::processEvents();
+
+    const auto changed_image = sandbox / "changed-preview.PNG";
+    require(preview_image.save(QString::fromStdString(changed_image.string())),
+        "the changed-image fixture must be written");
+    shell.set_attachment_picker([&] {
+        return std::vector<fs::path>{changed_image};
+    });
+    attachment_button->click();
+    QCoreApplication::processEvents();
+    require(required_child<QLabel>(window,
+                "lingtai_composer_attachment_preview_0")
+                ->property("lingtai_preview_kind") == "thumbnail",
+        "an unchanged accepted image must render a thumbnail");
+    const auto accepted_changed = detail_view->pending_attachments().front();
+    fs::remove(changed_image);
+    require(preview_image.save(QString::fromStdString(changed_image.string())),
+        "the replacement image fixture must be written");
+    append_file(changed_image, "replacement");
+    detail_view->clear_attachment_errors();
+    QCoreApplication::processEvents();
+    require(required_child<QLabel>(window,
+                "lingtai_composer_attachment_preview_0")
+                ->property("lingtai_preview_kind") == "file"
+            && detail_view->pending_attachments().front().inode_id
+                == accepted_changed.inode_id,
+        "a post-preflight replacement must fail preview closed without changing authorization");
+    required_child<QPushButton>(window,
+        "lingtai_composer_attachment_remove_0")->click();
+    QCoreApplication::processEvents();
+
+    const auto symlink_image = sandbox / "symlink-preview.PNG";
+    require(preview_image.save(QString::fromStdString(symlink_image.string())),
+        "the symlink-image fixture must be written");
+    shell.set_attachment_picker([&] {
+        return std::vector<fs::path>{symlink_image};
+    });
+    attachment_button->click();
+    QCoreApplication::processEvents();
+    const auto accepted_symlink = detail_view->pending_attachments().front();
+    fs::remove(accepted_symlink.source_path);
+    std::error_code symlink_error;
+    fs::create_symlink(preview, accepted_symlink.source_path, symlink_error);
+    require(!symlink_error, "the post-preflight symlink fixture must be created");
+    require(fs::is_symlink(accepted_symlink.source_path),
+        "the accepted canonical source leaf must now be a symlink");
+    detail_view->clear_attachment_errors();
+    QCoreApplication::processEvents();
+    require(detail_view->pending_attachments().front().inode_id
+                == accepted_symlink.inode_id,
+        "preview rebuilding must not mutate accepted attachment facts");
+    require(required_child<QLabel>(window,
+                "lingtai_composer_attachment_preview_0")
+                ->property("lingtai_preview_kind") == "file",
+        "a post-preflight symlink must fail preview closed");
+    required_child<QPushButton>(window,
+        "lingtai_composer_attachment_remove_0")->click();
+    QCoreApplication::processEvents();
+
+    const auto absurd_image = sandbox / "absurd-preview.PNG";
+    write_file(absurd_image, absurd_png_header());
+    QImageReader absurd_probe(QString::fromStdString(absurd_image.string()));
+    absurd_probe.setDecideFormatFromContent(true);
+    require(absurd_probe.size() == QSize(50000, 50000),
+        "the absurd fixture must expose its claimed dimensions without decoding");
+    shell.set_attachment_picker([&] {
+        return std::vector<fs::path>{absurd_image};
+    });
+    attachment_button->click();
+    QCoreApplication::processEvents();
+    require(required_child<QLabel>(window,
+                "lingtai_composer_attachment_preview_0")
+                ->property("lingtai_preview_kind") == "file"
+            && detail_view->pending_attachments().size() == 1,
+        "an absurd image header must fall back without altering publisher authorization");
+    required_child<QPushButton>(window,
+        "lingtai_composer_attachment_remove_0")->click();
+    QCoreApplication::processEvents();
+
+    const auto too_large = sandbox / "oversized-diagnostic.log";
+    write_file(too_large, "x");
+    fs::resize_file(too_large,
+        lingtai::desktop::kAttachmentPerFileLimitBytes + 1);
+    shell.set_attachment_picker([&] {
+        return std::vector<fs::path>{report, too_large};
+    });
+    attachment_button->click();
+    QCoreApplication::processEvents();
+    require(window.findChild<QWidget *>("lingtai_composer_attachment_card_0")
+            && !window.findChild<QWidget *>(
+                "lingtai_composer_attachment_card_1"),
+        "a per-file rejection must preserve the valid sibling only");
+    require(status->text().contains(QStringLiteral("oversized-diagnostic.log"))
+            && status->text().contains(QStringLiteral("25 MB")),
+        "per-file feedback must name the file and 25 MB limit");
+    required_child<QPushButton>(window,
+        "lingtai_composer_attachment_remove_0")->click();
+    QCoreApplication::processEvents();
+
+    auto *notice_timer = required_child<QTimer>(
+        window, "lingtai_composer_notice_timer");
+    detail_view->show_composer_notice(
+        QStringLiteral("Older notice"),
+        lingtai::desktop::ComposerNoticeKind::warning);
+    require(notice_timer->isActive() && notice_timer->remainingTime() > 4000,
+        "a composer notice must arm the deterministic product timeout");
+    require(wait_for_event_loop([&] {
+        return notice_timer->remainingTime() > 0
+            && notice_timer->remainingTime() < 4200;
+    }, 1000), "the event loop must advance the first notice timer");
+    const auto older_remaining = notice_timer->remainingTime();
+    detail_view->show_composer_notice(
+        QStringLiteral("Newer notice"),
+        lingtai::desktop::ComposerNoticeKind::error);
+    require(status->text() == QStringLiteral("Newer notice")
+            && notice_timer->isActive()
+            && notice_timer->remainingTime() > older_remaining + 200,
+        "a newer notice must restart, not share, the older deadline");
+    require(wait_for_event_loop([&] { return status->text().isEmpty(); }, 6000),
+        "the replacement notice must clear through the event loop within its bounded timeout");
+    require(!notice_timer->isActive(),
+        "the single-shot notice timer must be inactive after clearing");
+
+    const auto total_paths = std::array<fs::path, 5>{
+        sandbox / "total-a.bin", sandbox / "total-b.bin",
+        sandbox / "total-c.bin", sandbox / "total-d.bin",
+        sandbox / "total-over.bin"};
+    for (auto index = std::size_t{0}; index != total_paths.size(); ++index) {
+        write_file(total_paths[index], "x");
+        fs::resize_file(total_paths[index], index == total_paths.size() - 1
+            ? 1 : lingtai::desktop::kAttachmentPerFileLimitBytes);
+    }
+    shell.set_attachment_picker([&] {
+        return std::vector<fs::path>(total_paths.begin(), total_paths.begin() + 4);
+    });
+    attachment_button->click();
+    QCoreApplication::processEvents();
+    require(required_child<QLabel>(window,
+                "lingtai_composer_attachment_name_0")->text()
+                == QStringLiteral("total-a.bin")
+            && required_child<QLabel>(window,
+                "lingtai_composer_attachment_name_3")->text()
+                == QStringLiteral("total-d.bin"),
+        "the first picker call must retain four ordered 25 MiB sparse cards");
+    shell.set_attachment_picker([&] {
+        return std::vector<fs::path>{total_paths.back()};
+    });
+    attachment_button->click();
+    QCoreApplication::processEvents();
+    require(window.findChild<QWidget *>("lingtai_composer_attachment_card_3")
+            && !window.findChild<QWidget *>(
+                "lingtai_composer_attachment_card_4"),
+        "the cumulative limit must keep the first four valid cards in order");
+    require(status->text().contains(QStringLiteral("total-over.bin"))
+            && status->text().contains(QStringLiteral("100 MB")),
+        "cumulative feedback must name the file and 100 MB limit");
+    window.resize(480, 520);
+    QCoreApplication::processEvents();
+    auto *first_card = required_child<QWidget>(
+        window, "lingtai_composer_attachment_card_0");
+    auto *second_card = required_child<QWidget>(
+        window, "lingtai_composer_attachment_card_1");
+    auto *controls = required_child<QWidget>(
+        window, "lingtai_composer_controls");
+    require(second_card->mapTo(attachment_tray, QPoint()).y()
+                > first_card->mapTo(attachment_tray, QPoint()).y(),
+        "narrow attachment cards must reflow vertically");
+    require(attachment_tray->mapTo(controls->parentWidget(), QPoint()).y()
+                + attachment_tray->height()
+            <= controls->mapTo(controls->parentWidget(), QPoint()).y(),
+        "the tray must stay above the input row without overlap");
+    window.resize(1100, 720);
+    QCoreApplication::processEvents();
+    click_agent(shell, "issue-643");
+    QCoreApplication::processEvents();
+    require(!attachment_tray->isVisible(),
+        "switching Agents must clear the prior target attachment draft");
+    click_agent(shell, "telegram-bot");
+
+    const auto first_revalidation = sandbox / "first-revalidation.txt";
+    const auto second_revalidation = sandbox / "second-revalidation.txt";
+    write_file(first_revalidation, "first\n");
+    write_file(second_revalidation, "second\n");
+    shell.set_attachment_picker([&] {
+        return std::vector<fs::path>{first_revalidation, second_revalidation};
+    });
+    attachment_button->click();
+    QCoreApplication::processEvents();
+    const auto before_command = outbox_entry_count();
+    input->setText(QStringLiteral("/help"));
+    send_button->clicked(Qt::NoModifier, Qt::LeftButton);
+    QCoreApplication::processEvents();
+    require(outbox_entry_count() == before_command
+            && attachment_tray->isVisible(),
+        "a slash command must stay local and leave attachments untouched");
+
+    input->setText(QStringLiteral("Retain this draft."));
+    fs::remove(second_revalidation);
+    send_button->clicked(Qt::NoModifier, Qt::LeftButton);
+    QCoreApplication::processEvents();
+    require(input->getLastText() == QStringLiteral("Retain this draft.")
+            && attachment_tray->isVisible()
+            && window.findChild<QWidget *>(
+                "lingtai_composer_attachment_card_0")
+            && window.findChild<QWidget *>(
+                "lingtai_composer_attachment_card_1"),
+        "a second-card publisher failure must retain the text and both cards");
+    require(!window.findChild<QLabel *>(
+                "lingtai_composer_attachment_error_0")
+            && window.findChild<QLabel *>(
+                "lingtai_composer_attachment_error_1")
+            && status->text().contains(
+                QStringLiteral("second-revalidation.txt")),
+        "publisher revalidation must mark exactly the failing second card");
+    const auto fresh_after_failure = sandbox / "fresh-after-failure.txt";
+    write_file(fresh_after_failure, "fresh\n");
+    shell.set_attachment_picker([&] {
+        return std::vector<fs::path>{fresh_after_failure};
+    });
+    attachment_button->click();
+    QCoreApplication::processEvents();
+    require(required_child<QLabel>(window,
+                "lingtai_composer_attachment_name_0")->toolTip().contains(
+                QStringLiteral("first-revalidation.txt"))
+            && required_child<QLabel>(window,
+                "lingtai_composer_attachment_name_1")->toolTip().contains(
+                QStringLiteral("fresh-after-failure.txt"))
+            && status->text().contains(
+                QStringLiteral("second-revalidation.txt")),
+        "re-preflight must preserve the valid old card, append the new one, and name the invalid old source");
+    required_child<QPushButton>(window,
+        "lingtai_composer_attachment_remove_1")->click();
+    QCoreApplication::processEvents();
+    required_child<QPushButton>(window,
+        "lingtai_composer_attachment_remove_0")->click();
+    QCoreApplication::processEvents();
 
     input->setText(QStringLiteral("   \t  "));
     const auto before_whitespace = tree_snapshot(project);
@@ -1602,14 +2025,27 @@ void verify_composer_send_behavior(
     require(shell.selection_state().selected_agent_directory_key()
                 == std::optional<fs::path>("telegram-bot"),
         "the blocked-outbox fixture Agent must still be selectable");
+    const auto general_failure_attachment = sandbox / "general-failure.txt";
+    write_file(general_failure_attachment, "pending\n");
+    shell.set_attachment_picker([&] {
+        return std::vector<fs::path>{general_failure_attachment};
+    });
+    attachment_button->click();
+    QCoreApplication::processEvents();
     input->setText(QStringLiteral("Should never be queued."));
     const auto blocked_before = tree_snapshot(blocked_project);
     send_button->clicked(Qt::NoModifier, Qt::LeftButton);
     require(input->getLastText() == QStringLiteral("Should never be queued."),
         "a failed send must preserve the typed text");
-    require(status->text() != QStringLiteral("Queued")
-            && !status->text().isEmpty(),
-        "a failed send must show a concise, non-empty, non-success status");
+    require(attachment_tray->isVisible()
+            && window.findChild<QWidget *>(
+                "lingtai_composer_attachment_card_0")
+            && !window.findChild<QLabel *>(
+                "lingtai_composer_attachment_error_0"),
+        "a general route/publisher failure must retain every pending card without a false per-card error");
+    require(status->text().contains(
+                QStringLiteral("local mailbox is unavailable")),
+        "a general publisher failure must show its transient mapped notice");
     require(tree_snapshot(blocked_project) == blocked_before,
         "a failed send must write nothing");
 
@@ -4793,9 +5229,9 @@ void verify_conversation_slash_interception(
         "the slash-interception fixture project must open");
     click_agent_canvas_row(window, 0);
     require(shell.selection_state().selected_agent_directory_key()
-                == std::optional<fs::path>("alpha")
-            && input->isEnabled() && send_button->isEnabled(),
-        "a selected valid Agent must enable the composer before slash input");
+            == std::optional<fs::path>("alpha")
+            && input->isEnabled() && !send_button->isEnabled(),
+        "a selected valid Agent must enable drafting but not empty sending");
 
     input->setText(QStringLiteral("/"));
     QCoreApplication::processEvents();
@@ -4864,8 +5300,8 @@ void verify_conversation_slash_interception(
 
     // Re-enter the same valid route for the command-status checks.
     click_agent_canvas_row(window, 0);
-    require(input->isEnabled() && send_button->isEnabled(),
-        "reselecting the valid Agent must re-enable the composer");
+    require(input->isEnabled() && !send_button->isEnabled(),
+        "reselecting the valid Agent must re-enable drafting only");
     submit_command(QStringLiteral("/sleep"));
     require(input->getLastText().isEmpty(),
         "raw /sleep must clear the composer after local submission");
@@ -5092,8 +5528,8 @@ void verify_conversation_slash_interception(
 
     click_agent_canvas_row(window, 1);
     require(shell.selection_state().selected_agent_directory_key()
-                == std::optional<fs::path>("beta")
-            && input->isEnabled() && send_button->isEnabled(),
+            == std::optional<fs::path>("beta")
+            && input->isEnabled() && !send_button->isEnabled(),
         "the stale beta fixture must be selected before CPR command checks");
     submit_command(QStringLiteral("/btw hello from beta"));
     require(status->text()

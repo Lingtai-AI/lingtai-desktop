@@ -186,6 +186,7 @@ target_compile_options(lingtai_desktop_attachment_selection PRIVATE
     -Wall -Wextra -Werror -pedantic)
 
 add_library(lingtai_desktop_native_shell STATIC
+    src/attachment_thumbnail.cpp
     src/native_shell.cpp
     src/shell_host.cpp
     src/agent_detail_view.cpp
@@ -590,6 +591,7 @@ set(LINGTAI_VISUAL_SURFACES
     setup-agents
     setup-review
     conversation
+    composer-attachments
     presets
     kanban
     empty-conversation)
