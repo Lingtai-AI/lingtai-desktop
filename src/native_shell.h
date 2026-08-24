@@ -84,6 +84,11 @@ public:
         std::function<std::vector<std::filesystem::path>()>;
     using AttachmentExternalAction =
         std::function<bool(const std::filesystem::path &, bool reveal)>;
+    using KanbanRefreshFunction = std::function<KanbanRefreshResult(
+        KanbanSnapshotIndex &,
+        const ProjectAttachment &,
+        const AgentSnapshot &,
+        bool force)>;
 
     explicit NativeShell(RuntimeOptions runtime_options = {});
     ~NativeShell();
@@ -98,6 +103,9 @@ public:
         OpenProjectRequestHandler handler);
     void set_attachment_picker(AttachmentPicker picker);
     void set_attachment_external_action(AttachmentExternalAction action);
+    // Deterministic worker seam used by the native-shell contract to hold or
+    // fail a refresh. Empty restores the production incremental reader.
+    void set_kanban_refresh_function(KanbanRefreshFunction refresh);
     void request_new_project_at(const std::filesystem::path &destination);
     // The one Desktop-configured TUI executable for explicit first-project
     // bootstrap: the shipped `lingtai-tui` or a focused test fixture. It is
@@ -169,9 +177,11 @@ private:
     void render_kanban();
     // Starts or reuses an off-UI-thread board read. When a warm cache exists
     // for the active project, the page paints immediately and refresh runs
-    // in the background. `force` cancels an in-flight read and rebuilds.
+    // in the background. `force` coalesces behind an in-flight read and then
+    // rebuilds from current project/Agent truth.
     void request_kanban_board(bool force);
-    void apply_kanban_board(std::uint64_t generation, KanbanBoard board);
+    void apply_kanban_board(
+        std::uint64_t generation, KanbanRefreshResult result);
     void invalidate_kanban_cache();
     void maybe_warm_kanban_cache();
     void handle_kanban_agent_selected(const std::filesystem::path &directory_key);
@@ -303,6 +313,7 @@ private:
     OpenProjectRequestHandler open_project_in_new_window_request_handler_;
     AttachmentPicker attachment_picker_;
     AttachmentExternalAction attachment_external_action_;
+    KanbanRefreshFunction kanban_refresh_function_;
     std::filesystem::path agent_start_fallback_python_;
     // One narrow injectable dependency: the configured TUI executable used by
     // the explicit New Project flow and the selected-Agent lifecycle commands.
@@ -355,10 +366,15 @@ private:
     // change. Lets /kanban paint instantly while a background refresh runs.
     std::optional<KanbanBoard> kanban_cache_;
     std::filesystem::path kanban_cache_root_;
+    std::shared_ptr<KanbanSnapshotIndex> kanban_index_
+        = std::make_shared<KanbanSnapshotIndex>();
     // Bumped to drop stale async results after project change, force reload,
     // or shell teardown.
     std::uint64_t kanban_load_generation_ = 0;
     bool kanban_load_inflight_ = false;
+    std::uint64_t kanban_running_generation_ = 0;
+    bool kanban_follow_up_ = false;
+    bool kanban_follow_up_force_ = false;
     int kanban_warm_ticks_ = 0;
     // Shared cancel token so a detached board read never touches a destroyed
     // shell. Set cancelled in the destructor before members tear down.

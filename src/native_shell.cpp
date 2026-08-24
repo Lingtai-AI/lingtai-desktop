@@ -95,6 +95,9 @@
 #include <algorithm>
 #include <array>
 #include <memory>
+#ifdef __APPLE__
+#include <pthread/qos.h>
+#endif
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -2575,6 +2578,10 @@ void NativeShell::set_attachment_external_action(
     attachment_external_action_ = std::move(action);
 }
 
+void NativeShell::set_kanban_refresh_function(KanbanRefreshFunction refresh) {
+    kanban_refresh_function_ = std::move(refresh);
+}
+
 void NativeShell::request_new_project_at(const fs::path &destination) {
     if (auto *input = find_ui_child<Ui::InputField>(
             *window_, "lingtai_bootstrap_destination_input")) {
@@ -3740,25 +3747,50 @@ void NativeShell::render_agent_preset_summary() {
 
 void NativeShell::invalidate_kanban_cache() {
     ++kanban_load_generation_;
-    kanban_load_inflight_ = false;
     kanban_warm_ticks_ = 0;
     kanban_cache_.reset();
     kanban_cache_root_.clear();
+    kanban_index_ = std::make_shared<KanbanSnapshotIndex>();
+    kanban_follow_up_ = kanban_load_inflight_;
+    kanban_follow_up_force_ = false;
 }
 
 void NativeShell::apply_kanban_board(
-        std::uint64_t generation, KanbanBoard board) {
-    if (generation != kanban_load_generation_) return;
-    kanban_load_inflight_ = false;
-    kanban_cache_ = std::move(board);
-    if (selection_state_.active_project()) {
-        kanban_cache_root_ = selection_state_.active_project()->root();
-    }
-    if (current_detail_page_ != AgentDetailPage::kanban || !detail_view_) {
+        std::uint64_t generation, KanbanRefreshResult result) {
+    if (!kanban_load_inflight_ || generation != kanban_running_generation_) {
         return;
     }
-    detail_view_->render_kanban(
-        *kanban_cache_, selection_state_.selected_agent_directory_key());
+    kanban_load_inflight_ = false;
+    const auto accepted = generation == kanban_load_generation_
+        && selection_state_.active_project() && result.current;
+    if (accepted && result.follow_up) kanban_follow_up_ = true;
+    const auto had_cache = kanban_cache_.has_value();
+    if (accepted) {
+        kanban_cache_ = std::move(result.board);
+        kanban_cache_root_ = selection_state_.active_project()->root();
+        if (current_detail_page_ == AgentDetailPage::kanban && detail_view_) {
+            if (!had_cache || result.changed) {
+                detail_view_->render_kanban(*kanban_cache_,
+                    selection_state_.selected_agent_directory_key());
+            }
+            if (kanban_page_) kanban_page_->set_refresh_state(false, false);
+        }
+    } else if (generation == kanban_load_generation_
+            && current_detail_page_ == AgentDetailPage::kanban
+            && kanban_page_) {
+        if (kanban_cache_) {
+            kanban_page_->set_refresh_state(false, true);
+        } else {
+            kanban_page_->set_loading(false);
+            detail_view_->render_kanban({}, std::nullopt);
+        }
+    }
+    if (kanban_follow_up_ || generation != kanban_load_generation_) {
+        const auto force = kanban_follow_up_force_;
+        kanban_follow_up_ = false;
+        kanban_follow_up_force_ = false;
+        request_kanban_board(force);
+    }
 }
 
 void NativeShell::request_kanban_board(bool force) {
@@ -3769,29 +3801,50 @@ void NativeShell::request_kanban_board(bool force) {
         }
         return;
     }
-    if (kanban_load_inflight_ && !force) return;
-    if (force) ++kanban_load_generation_;
+    ++kanban_load_generation_;
+    if (kanban_load_inflight_) {
+        kanban_follow_up_ = true;
+        kanban_follow_up_force_ = kanban_follow_up_force_ || force;
+        if (kanban_cache_ && kanban_page_
+                && current_detail_page_ == AgentDetailPage::kanban) {
+            kanban_page_->set_refresh_state(true, false);
+        }
+        return;
+    }
     const auto generation = kanban_load_generation_;
+    kanban_running_generation_ = generation;
     kanban_load_inflight_ = true;
+    if (kanban_cache_ && kanban_page_
+            && current_detail_page_ == AgentDetailPage::kanban) {
+        kanban_page_->set_refresh_state(true, false);
+    }
 
     const auto attachment = *selection_state_.active_project();
     const auto snapshot = agents_;
     const auto token = kanban_load_token_;
-    std::thread([this, attachment, snapshot, generation, token]() {
-        auto board = read_kanban_board(attachment, snapshot);
+    const auto index = kanban_index_;
+    const auto refresh = kanban_refresh_function_;
+    std::thread([this, attachment, snapshot, generation, force, token, index,
+            refresh]() {
+#ifdef __APPLE__
+        static_cast<void>(::pthread_set_qos_class_self_np(
+            QOS_CLASS_UTILITY, 0));
+#endif
+        auto result = refresh
+            ? refresh(*index, attachment, snapshot, force)
+            : index->refresh(attachment, snapshot, force);
         QTimer::singleShot(0, qApp,
-            [this, token, generation, board = std::move(board)]() mutable {
+            [this, token, generation, result = std::move(result)]() mutable {
                 if (!token || token->cancelled.load(std::memory_order_acquire)) {
                     return;
                 }
-                apply_kanban_board(generation, std::move(board));
+                apply_kanban_board(generation, std::move(result));
             });
     }).detach();
 }
 
 void NativeShell::maybe_warm_kanban_cache() {
     if (!selection_state_.active_project()) return;
-    if (kanban_load_inflight_) return;
     if (++kanban_warm_ticks_ < 10) return;
     kanban_warm_ticks_ = 0;
     request_kanban_board(false);
@@ -3808,11 +3861,11 @@ void NativeShell::render_kanban() {
     }
     const auto root = selection_state_.active_project()->root();
     if (kanban_cache_ && kanban_cache_root_ == root) {
-        // Warm cache hit: paint immediately and leave refresh to the idle
-        // warmer / Reload. A second read here would rebuild the widget tree
-        // as soon as the async result landed and freeze scrolling again.
+        // Stale-while-revalidate: paint the last internally complete board
+        // immediately, retain it while one coalesced worker checks freshness.
         detail_view_->render_kanban(
             *kanban_cache_, selection_state_.selected_agent_directory_key());
+        request_kanban_board(false);
         return;
     }
     if (kanban_page_) {

@@ -72,6 +72,8 @@ restate per-owner behavior; owner-level detail lives in `src/`, `src/ui/`, and
 | Outbox publisher (TUI envelope oracle) | `tests/direct_mail_publisher_test.cpp` (`direct_mail_publisher`) | `ctest --test-dir build -R '^direct_mail_publisher$'` |
 | Presets summary projection | `tests/agent_preset_summary_test.cpp` (`agent_preset_summary`) | `ctest --test-dir build -R '^agent_preset_summary$'` |
 | Sleep marker + observation | `tests/agent_sleep_test.cpp` (`agent_sleep`) | `ctest --test-dir build -R '^agent_sleep$'` |
+| Incremental Kanban snapshot/index | `tests/kanban_model_test.cpp` (`kanban_model`) | `ctest --test-dir build -R '^kanban_model$'` |
+| Kanban SWR/single-flight generation | `tests/native_shell_test.cpp` (`native_shell_kanban`) | `ctest --test-dir build -R '^native_shell_kanban$'` |
 | Repro-6 stale-observation rule | `tests/agent_sleep_test.cpp`, `tests/native_shell_test.cpp` | ctest names above |
 
 Visual fidelity against Telegram and functional fidelity against the TUI are

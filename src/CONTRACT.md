@@ -35,9 +35,9 @@ Obligations and prohibitions for agents working in `src/`:
 ## Port
 
 The boundary an external caller (mainly `NativeShell` and `main.cpp`) uses is
-a small set of free functions and small value objects. Every filesystem read
-function is `noexcept`, stateless, and returns one observation; the mailbox
-index is an explicit in-memory generation state machine; every side-effecting
+a small set of free functions and small value objects. Compatibility read
+functions are `noexcept`, stateless observations; the mailbox and Kanban
+indexes are explicit in-memory generation/source state; every side-effecting
 function returns one coarse result enum.
 
 Reads (no writes, no durable state):
@@ -66,6 +66,14 @@ Reads (no writes, no durable state):
   match the presentation-time observation.
 - `read_agent_preset_summary(attachment, key)` → `AgentPresetSummary`
   (`agent_preset_summary.h`).
+- `KanbanSnapshotIndex::refresh(attachment, snapshot, force)` →
+  `KanbanRefreshResult` (`kanban_model.h`) — the session-only complete-board
+  owner. Cold/forced reads may rebuild; unchanged refreshes perform fixed
+  per-Agent metadata checks, JSONL appends advance rotation-safe cursors, and
+  daemon membership reuses completed-run summaries. Rebuilds validate source
+  stamps across the full-read/cursor-capture boundary and expose a follow-up
+  until the affected Agent has one coherent generation. Capture incapability
+  without generation movement remains dormant until that source stamp changes.
 - `preflight_attachments(selected_paths)` → `AttachmentSelectionResult`
   (`attachment_selection.h`) — current canonical source paths, display names,
   sizes, device/inode identities, media kinds, accepted-byte accounting, and
@@ -94,6 +102,9 @@ caller proposes typed transitions only; the model performs no reads.
 `DirectMailboxSnapshotIndex` (`direct_conversation_history.h`) is the only
 owner of mailbox single-flight/generation acceptance. It performs no reads or
 threading; `NativeShell` supplies fingerprints/results and runs accepted jobs.
+`KanbanSnapshotIndex` is the corresponding Kanban source/index owner;
+`NativeShell` alone owns its low-priority worker, generation acceptance,
+coalescing, and stale-while-revalidate presentation.
 
 ## Adapters
 
@@ -181,6 +192,7 @@ paths and names are in [`../ANATOMY.md`](../ANATOMY.md) and `CMakeLists.txt`:
 - `tests/direct_mail_publisher_test.cpp` — `direct_mail_publisher`.
 - `tests/agent_preset_summary_test.cpp` — `agent_preset_summary`.
 - `tests/agent_sleep_test.cpp` — `agent_sleep`.
+- `tests/kanban_model_test.cpp` — `kanban_model`.
 - `tests/posix_descriptor_primitives_test.cpp` — `posix_descriptor_primitives`.
 - `tests/workspace_selection_test.cpp` — `workspace_selection`.
 - `tests/project_attachment_test.cpp` — `project_attachment`.

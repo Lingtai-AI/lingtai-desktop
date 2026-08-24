@@ -45,7 +45,8 @@ test proves. This file descends into `tests/` itself.
 The majority of `tests/`: each compiles against exactly one owned library
 target, takes one fixture-root argument from ctest, builds its own project
 tree inside that root, and proves a bounded read/write/derivation contract.
-No test in this layer links Qt (the readers deliberately do not), no test
+Most readers in this layer are Qt-free; `kanban_model` deliberately links
+QtCore for the production JSON/date projection but no widget stack. No test
 touches a real Agent or project, and none depends on a network or provider.
 
 - `tests/posix_descriptor_primitives_test.cpp` — `posix_descriptor_primitives`
@@ -81,6 +82,12 @@ touches a real Agent or project, and none depends on a network or provider.
   `manifest.resolved.json`.
 - `tests/agent_sleep_test.cpp` — `agent_sleep` ctest. Exact-target `.sleep`
   marker write plus the baseline/observe pair.
+- `tests/kanban_model_test.cpp` — `kanban_model` ctest. Full semantic facts
+  plus deterministic incremental counters for unchanged cycles, four growing
+  JSONL sources, full-read/cursor-capture races, partial/reset handling,
+  capture-incapable cursor liveness, human-row follow-up suppression, 300-run
+  daemon inventory changes, SQLite session freshness, malformed/unsafe parity,
+  and same-mtime newest-128 ordering.
 
 ### 3. Real-Qt widget/shell contracts
 
@@ -102,6 +109,9 @@ touches a real Agent or project, and none depends on a network or provider.
   the exact intended in-fixture mutations on the synthetic
   `commit-N-...-fixture` trees the test itself creates. The working
   directory is an injected path, not an OS or process sandbox.
+- Its focused `native_shell_kanban` journey holds and fails the real worker
+  seam to prove warm updating, stale retention, Reload coalescing, and
+  old-project generation rejection.
 - The conversation journey's composer proof owns attachment selection,
   pending cards, no-follow/revalidated bounded thumbnail fallback, warnings,
   attachment-only publication, exact indexed versus general-failure draft
@@ -175,6 +185,7 @@ no fixture); the test itself creates and removes its sandbox within that root
 | `direct_mail_publisher_test.cpp` | `lingtai_direct_mail_publisher_test` | `direct_mail_publisher` | `direct-mail-publisher-fixture` |
 | `agent_preset_summary_test.cpp` | `lingtai_agent_preset_summary_test` | `agent_preset_summary` | `agent-preset-summary-fixture` |
 | `agent_sleep_test.cpp` | `lingtai_agent_sleep_test` | `agent_sleep` | `agent-sleep-fixture` |
+| `kanban_model_test.cpp` | `lingtai_kanban_model_test` | `kanban_model` | `kanban-model-fixture` |
 | `native_shell_test.cpp` | `lingtai_native_shell_test` | `native_shell_behavior` | `native-shell-no-write-fixture` (CMake-created) |
 | `native_shell_destinations_test.cpp` | `lingtai_native_shell_destinations_test` | `native_shell_destinations` | — |
 | `native_shell_presets_test.cpp` | `lingtai_native_shell_presets_test` | `native_shell_presets` | `native-shell-presets-fixture` (CMake-created) |

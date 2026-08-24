@@ -26,6 +26,7 @@ ctest --test-dir build --output-on-failure -R '^direct_conversation_history$'
 ctest --test-dir build --output-on-failure -R '^direct_mail_publisher$'
 ctest --test-dir build --output-on-failure -R '^agent_preset_summary$'
 ctest --test-dir build --output-on-failure -R '^agent_sleep$'
+ctest --test-dir build --output-on-failure -R '^kanban_model$'
 ctest --test-dir build --output-on-failure -R '^posix_descriptor_primitives$'
 ctest --test-dir build --output-on-failure -R '^workspace_selection$'
 ctest --test-dir build --output-on-failure -R '^native_shell(_behavior)?$'
@@ -137,6 +138,19 @@ Qt plugin path set and an 8 s watchdog.
   post-baseline complete row is, and symlinked/non-regular leaves or
   intermediate directories fail closed with nothing written outside
   (`agent_sleep_test.cpp:90-233`).
+- `kanban_model` proves complete cold-board semantics and deterministic
+  incremental behavior: two unchanged generations open zero payloads and do
+  not enumerate daemon runs; token/event/chat/delegate appends consume only
+  complete appended rows; partial/reset sources remain generation-safe; a
+  test hook moves all four growing sources and SQLite exactly after full-read
+  completion, proving immediate affected-Agent repair, stable full-reader
+  parity, incompatible-cursor ordering, and no human-row follow-up loop; a
+  >1 MiB unterminated row proves capture incapability stays idle while its
+  stamp is unchanged, then rebuilds exactly once to parity when completed; a
+  300-run inventory reopens only new/nonterminal/replaced records; malformed,
+  unsafe, newest-128, provider, recent, session, context, and tree facts retain
+  full-reader parity; SQLite-only tool appends use one bounded query and a new
+  molt boundary takes the rare repartition path (`kanban_model_test.cpp`).
 
 ### Real-Qt widget/shell contracts
 
@@ -146,6 +160,8 @@ Qt plugin path set and an 8 s watchdog.
   representative palette tokens/assertions, open-project behavior, shell
   semantics and named regions, selected-Agent conversation, composer send,
   Request sleep / Start Agent / Presets panels,
+  Kanban stale-while-revalidate updating/failure states, Reload single-flight,
+  and old-project generation rejection,
   first-project bootstrap, layout modes, the persistent roster shell, the
   dashboard layout, and the Telegram theme reset — all against synthetic
   `commit-N-...-fixture` trees under the CMake-created no-write fixture.

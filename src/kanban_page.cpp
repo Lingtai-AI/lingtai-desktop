@@ -1166,6 +1166,17 @@ void KanbanPage::set_loading(bool loading) {
     apply_chrome();
 }
 
+void KanbanPage::set_refresh_state(bool updating, bool stale_error) {
+    updating_ = updating;
+    stale_error_ = stale_error;
+    auto *status = findChild<QLabel *>("lingtai_kanban_refresh_status");
+    if (!status) return;
+    status->setText(stale_error_
+        ? QStringLiteral("Refresh failed — showing last complete snapshot")
+        : (updating_ ? QStringLiteral("Updating…") : QString()));
+    status->setVisible(updating_ || stale_error_);
+}
+
 const KanbanAgent *KanbanPage::selected_agent() const {
     if (selected_key_) {
         for (const auto &agent : board_.agents) {
@@ -1332,6 +1343,13 @@ void KanbanPage::rebuild() {
     auto *actions_layout = new QHBoxLayout(actions);
     actions_layout->setContentsMargins(0, 0, 0, 0);
     actions_layout->setSpacing(8);
+    auto *refresh_status = make_label(actions,
+        stale_error_
+            ? QStringLiteral("Refresh failed — showing last complete snapshot")
+            : (updating_ ? QStringLiteral("Updating…") : QString()),
+        "lingtai_kanban_refresh_status", 11);
+    color_text(refresh_status, tokens.muted_text);
+    refresh_status->setVisible(updating_ || stale_error_);
     auto *reload = new QPushButton(QStringLiteral("Reload"), actions);
     reload->setObjectName("lingtai_kanban_reload");
     reload->setCursor(Qt::PointingHandCursor);
@@ -1346,6 +1364,7 @@ void KanbanPage::rebuild() {
         if (detail_open_) show_summary();
         else show_detail();
     });
+    actions_layout->addWidget(refresh_status);
     actions_layout->addWidget(reload);
     actions_layout->addWidget(detail_button_);
     hero_layout->addWidget(actions, 0, Qt::AlignTop);

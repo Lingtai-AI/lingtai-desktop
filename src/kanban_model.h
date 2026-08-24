@@ -5,6 +5,8 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -158,6 +160,55 @@ struct KanbanBoard {
     KanbanTokenTotals network_tokens;
     std::vector<KanbanAgent> agents;
     std::vector<std::string> tree_lines;
+};
+
+struct KanbanRefreshMetrics {
+    std::uint64_t payload_opens = 0;
+    std::uint64_t payload_bytes = 0;
+    std::uint64_t appended_bytes = 0;
+    std::uint64_t appended_lines = 0;
+    std::uint64_t daemon_enumerations = 0;
+    std::uint64_t daemon_records_opened = 0;
+    std::uint64_t full_agent_rebuilds = 0;
+};
+
+struct KanbanRefreshResult {
+    KanbanBoard board;
+    KanbanRefreshMetrics metrics;
+    bool changed = false;
+    bool current = true;
+    bool follow_up = false;
+};
+
+// Session-owned, descriptor-safe incremental board projection. The first
+// refresh builds a complete board. Later refreshes fingerprint fixed leaves,
+// consume only complete appended JSONL rows, and retain immutable daemon-run
+// summaries. The object is used by one worker at a time; NativeShell owns the
+// single-flight/generation policy around it.
+class KanbanSnapshotIndex final {
+public:
+    using RebuildReadCompleteHook = std::function<void(const AgentRow &)>;
+
+    KanbanSnapshotIndex();
+    ~KanbanSnapshotIndex();
+    KanbanSnapshotIndex(KanbanSnapshotIndex &&) noexcept;
+    KanbanSnapshotIndex &operator=(KanbanSnapshotIndex &&) noexcept;
+    KanbanSnapshotIndex(const KanbanSnapshotIndex &) = delete;
+    KanbanSnapshotIndex &operator=(const KanbanSnapshotIndex &) = delete;
+
+    [[nodiscard]] KanbanRefreshResult refresh(
+        const ProjectAttachment &attachment,
+        const AgentSnapshot &snapshot,
+        bool force = false) noexcept;
+    void reset() noexcept;
+    [[nodiscard]] const KanbanBoard *current() const noexcept;
+    // Deterministic test seam: invoked after a full Agent read and before its
+    // incremental cursors are captured. Empty restores production behavior.
+    void set_rebuild_read_complete_hook(RebuildReadCompleteHook hook);
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
 };
 
 [[nodiscard]] KanbanBoardColumn kanban_column_for_state(

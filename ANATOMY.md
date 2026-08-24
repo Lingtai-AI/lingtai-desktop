@@ -100,6 +100,9 @@ bounded no-emission parent `crl` update producer the smoke needs.
 - `src/agent_preset_summary.{h,cpp}` — `read_agent_preset_summary`
   (`src/agent_preset_summary.h:67`): stateless read-only
   `system/manifest.resolved.json` policy/effective projection.
+- `src/kanban_model.{h,cpp}` + `src/kanban_page.{h,cpp}` — session-owned
+  incremental Kanban source index and its stale-while-revalidate presentation;
+  the shell supplies the one coalesced low-priority worker.
 - `src/agent_sleep.{h,cpp}` — `request_agent_sleep` /
   `capture_agent_sleep_event_baseline` / `observe_agent_sleep_received`
   (`src/agent_sleep.h:24-51`): one `.sleep` leaf write + best-effort

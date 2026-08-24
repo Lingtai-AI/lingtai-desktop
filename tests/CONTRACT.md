@@ -114,6 +114,9 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
 - `tests/direct_mail_publisher_test.cpp` — `direct_mail_publisher`.
 - `tests/agent_preset_summary_test.cpp` — `agent_preset_summary`.
 - `tests/agent_sleep_test.cpp` — `agent_sleep`.
+- `tests/kanban_model_test.cpp` — `kanban_model`; complete-board parity plus
+  deterministic payload/cursor/daemon incrementality counters and rebuild
+  generation-race/capture-incapability liveness seams.
 - `tests/native_shell_test.cpp` — `native_shell_behavior` (links the shell +
   `lib_ui` + `crl_integration.cpp`; the real-Qt layer).
 - `tests/conversation_surface_typography_test.cpp` —

@@ -66,6 +66,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdarg>
 #include <dlfcn.h>
@@ -5188,6 +5189,83 @@ void verify_kanban_page(
                 == kanban_name_before_tick,
         "the 1s snapshot timer must not rebuild the kanban widget tree, "
         "because that stalls scrolling on large token ledgers");
+
+    std::atomic<int> refresh_calls = 0;
+    std::atomic<bool> release_refresh = false;
+    shell.set_kanban_refresh_function(
+        [&](lingtai::desktop::KanbanSnapshotIndex &index,
+                const lingtai::desktop::ProjectAttachment &attachment,
+                const lingtai::desktop::AgentSnapshot &snapshot,
+                bool force) {
+            ++refresh_calls;
+            while (!release_refresh.load(std::memory_order_acquire)) {
+                QThread::msleep(1);
+            }
+            return index.refresh(attachment, snapshot, force);
+        });
+    auto *reload = required_child<QPushButton>(window, "lingtai_kanban_reload");
+    reload->click();
+    reload->click();
+    reload->click();
+    QElapsedTimer refresh_start_wait;
+    refresh_start_wait.start();
+    while (refresh_calls.load(std::memory_order_acquire) == 0
+            && refresh_start_wait.elapsed() < 3000) {
+        QCoreApplication::processEvents();
+        QThread::msleep(5);
+    }
+    require(refresh_calls.load(std::memory_order_acquire) == 1,
+        "repeated Reload clicks must keep exactly one Kanban worker in flight");
+    require(required_child<QLabel>(window, "lingtai_kanban_name")
+                == kanban_name_before_tick
+            && required_child<QLabel>(window, "lingtai_kanban_refresh_status")
+                ->text().contains(QStringLiteral("Updating")),
+        "warm refresh must retain the complete board and show Updating");
+    release_refresh.store(true, std::memory_order_release);
+    QElapsedTimer refresh_finish_wait;
+    refresh_finish_wait.start();
+    while (refresh_finish_wait.elapsed() < 5000) {
+        QCoreApplication::processEvents();
+        const auto done = refresh_calls.load(std::memory_order_acquire) >= 2
+            && !required_child<QLabel>(window,
+                "lingtai_kanban_refresh_status")->text()
+                    .contains(QStringLiteral("Updating"));
+        if (done) break;
+        QThread::msleep(5);
+    }
+    QCoreApplication::processEvents();
+    require(refresh_calls.load(std::memory_order_acquire) == 2,
+        "Reloads during one flight must coalesce to exactly one follow-up");
+    kanban_name_before_tick = required_child<QLabel>(
+        window, "lingtai_kanban_name");
+
+    shell.set_kanban_refresh_function(
+        [](lingtai::desktop::KanbanSnapshotIndex &index,
+                const lingtai::desktop::ProjectAttachment &,
+                const lingtai::desktop::AgentSnapshot &,
+                bool) {
+            lingtai::desktop::KanbanRefreshResult failed;
+            failed.current = false;
+            if (const auto *board = index.current()) failed.board = *board;
+            return failed;
+        });
+    reload = required_child<QPushButton>(window, "lingtai_kanban_reload");
+    reload->click();
+    QElapsedTimer failure_wait;
+    failure_wait.start();
+    while (failure_wait.elapsed() < 3000) {
+        QCoreApplication::processEvents();
+        const auto text = required_child<QLabel>(
+            window, "lingtai_kanban_refresh_status")->text();
+        if (text.contains(QStringLiteral("failed"))) break;
+        QThread::msleep(5);
+    }
+    require(required_child<QLabel>(window, "lingtai_kanban_name")
+                == kanban_name_before_tick
+            && required_child<QLabel>(window, "lingtai_kanban_refresh_status")
+                ->text().contains(QStringLiteral("failed")),
+        "warm refresh failure must retain the last good board and show stale truth");
+    shell.set_kanban_refresh_function({});
     require(!conversation->isVisible() && !composer->isVisible(),
         "/kanban must hide the conversation and composer");
     auto *back = required_child<QPushButton>(window, "lingtai_kanban_back");
@@ -5431,6 +5509,65 @@ void verify_kanban_page(
         "Conversation must restore the chat from /presets");
     require_within_detail_viewport(window, *conversation,
         "conversation after resizing on /presets and going back");
+
+    const auto next_project = sandbox / "project-next";
+    write_file(next_project / ".lingtai/human/.agent.json",
+        R"({"agent_id":"h-next","agent_name":"Human","address":"human",)"
+        R"("state":"active"})");
+    write_file(next_project / ".lingtai/gamma/.agent.json",
+        R"({"admin":{},"agent_id":"g-next","agent_name":"gamma",)"
+        R"("nickname":"Gamma","address":"gamma","state":"active"})");
+    std::atomic<int> race_calls = 0;
+    std::atomic<bool> release_race = false;
+    shell.set_kanban_refresh_function(
+        [&](lingtai::desktop::KanbanSnapshotIndex &index,
+                const lingtai::desktop::ProjectAttachment &attachment,
+                const lingtai::desktop::AgentSnapshot &snapshot,
+                bool force) {
+            ++race_calls;
+            while (!release_race.load(std::memory_order_acquire)) {
+                QThread::msleep(1);
+            }
+            return index.refresh(attachment, snapshot, force);
+        });
+    submit_slash(QStringLiteral("/kanban"));
+    required_child<QPushButton>(window, "lingtai_kanban_reload")->click();
+    QElapsedTimer race_start;
+    race_start.start();
+    while (race_calls.load(std::memory_order_acquire) == 0
+            && race_start.elapsed() < 3000) {
+        QCoreApplication::processEvents();
+        QThread::msleep(5);
+    }
+    require(race_calls.load(std::memory_order_acquire) == 1,
+        "generation race fixture must hold one old-project refresh");
+    const auto next_outcome = shell.open_project(
+        next_project, fs::path(".lingtai/gamma"));
+    require(next_outcome.disposition == ProjectOpenDisposition::opened,
+        "generation race must accept the replacement project");
+    release_race.store(true, std::memory_order_release);
+    QElapsedTimer race_finish;
+    race_finish.start();
+    while (race_calls.load(std::memory_order_acquire) < 2
+            && race_finish.elapsed() < 5000) {
+        QCoreApplication::processEvents();
+        QThread::msleep(5);
+    }
+    require(race_calls.load(std::memory_order_acquire) == 2,
+        "stale completion must launch one coalesced new-project generation");
+    shell.set_kanban_refresh_function({});
+    submit_slash(QStringLiteral("/kanban"));
+    QElapsedTimer gamma_wait;
+    gamma_wait.start();
+    QLabel *gamma_name = nullptr;
+    while (gamma_wait.elapsed() < 5000) {
+        QCoreApplication::processEvents();
+        gamma_name = window.findChild<QLabel *>("lingtai_kanban_name");
+        if (gamma_name && gamma_name->text() == QStringLiteral("Gamma")) break;
+        QThread::msleep(5);
+    }
+    require(gamma_name && gamma_name->text() == QStringLiteral("Gamma"),
+        "an old-project result must never overwrite the new complete board");
 
     std::error_code cleanup_error;
     fs::remove_all(sandbox, cleanup_error);

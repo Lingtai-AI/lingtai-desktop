@@ -116,6 +116,12 @@ Domain readers/projections (stateless, read-only, one source each):
 - `agent_preset_summary.{h,cpp}` — `read_agent_preset_summary`: reads the
   kernel-published `system/manifest.resolved.json` v1 envelope plus an
   `init.json` mtime staleness comparison.
+- `kanban_model.{h,cpp}` — full-reader compatibility plus the session-owned
+  `KanbanSnapshotIndex`: per-source fingerprints/JSONL cursors, cached daemon
+  inventory and completed summaries, rebuild-generation validation, atomic
+  board composition, and deterministic payload/open metrics/test hook.
+- `kanban_page.{h,cpp}` — Kanban presentation, including cold loading and
+  nonblocking warm updating/stale status without clearing a complete board.
 
 Direct-operation/side-effect owners (the only writers/launchers):
 
@@ -192,6 +198,7 @@ Owned library targets (`CMakeLists.txt`) and their source membership:
 - `lingtai_desktop_agent_preset_summary` — `agent_preset_summary.cpp`.
 - `lingtai_desktop_agent_sleep` — `agent_sleep.cpp`.
 - `lingtai_desktop_agent_launch` — `agent_launch.cpp`.
+- `lingtai_desktop_kanban` — `kanban_model.cpp`.
 - `lingtai_desktop_native_shell` — `native_shell.cpp`,
   `agent_detail_view.cpp`, `attachment_thumbnail.cpp`,
   `project_bootstrap.cpp`, `ui/agent_roster.cpp`,
@@ -216,8 +223,10 @@ they are the shell's presentation layer and own no domain reads or writes.
 - `AgentDetailView` holds the session-only attachment draft and errors for the
   currently selected target. Project/Agent changes and route loss clear it;
   it is never persisted or shared across targets.
-- No reader or owner keeps durable cursors or ledgers; every read is one
-  independent stateless observation. Owned boundaries: the direct local leaf
+- `KanbanSnapshotIndex` keeps only in-session source cursors and completed-run
+  summaries for the active project; project change discards them and nothing
+  is persisted. Other readers remain independent stateless observations.
+  Owned boundaries: the direct local leaf
   writers (`send_direct_mail`, `request_agent_sleep`) write only their own
   leaf; `start_agent` owns the Agent's log plus the detached launch; and
   `ProjectBootstrapRunner` delegates the entire scaffold/config boundary to

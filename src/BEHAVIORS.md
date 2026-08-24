@@ -86,6 +86,34 @@ its code.
   directory key; the subtitle shows the key (when it differs) plus
   `role: … · presence: …`.
 
+## Kanban freshness
+
+- Project open starts one low-priority cold Kanban generation. Once complete,
+  `/kanban` paints that in-session board immediately and schedules one
+  coalesced refresh without clearing it. Warm work displays `Updating…`;
+  failure retains the last complete board and labels it stale.
+- The ten-tick warm path calls the session index, not the legacy full reader.
+  An unchanged project opens no ledger/history/daemon payload and performs no
+  daemon-run enumeration. Complete JSONL appends advance token, event,
+  history, and delegate cursors; partial trailing rows wait for their newline.
+  `log.sqlite`/WAL metadata gates bounded session/event queries, with a rare
+  affected-Agent token repartition only when the latest molt boundary changes.
+- Cold, forced, and affected-Agent rebuilds compare growing-source and
+  SQLite/WAL stamps from before the full read with the captured generation.
+  Movement makes that Agent non-authoritative and requests one immediate
+  affected-Agent repair; a paused writer converges without skipped or
+  duplicated rows. A cursor that is capture-incapable without source movement
+  waits for its stamp to change instead of chaining same-state rebuilds; that
+  change then triggers one affected-Agent rebuild. Human rows do not
+  participate in these growing-source follow-up checks.
+- Daemon membership is enumerated only after the directory fingerprint
+  changes. Completed summaries are immutable in-session; new, replaced, or
+  nonterminal changed records alone are reopened. Consumers receive only an
+  atomically composed complete `KanbanBoard`.
+- Reload is single-flight even under repeated clicks. Project/Agent/source
+  changes during a worker coalesce to one later generation, and a stale
+  project generation cannot publish under the new C1 project truth.
+
 ## Open / refresh
 
 - `open_project` attaches the selected directory, requires a real, safe,
