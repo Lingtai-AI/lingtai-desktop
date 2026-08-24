@@ -22,6 +22,18 @@
 namespace lingtai::desktop {
 namespace {
 
+// Cards must elevate above the page in both themes: white on light grey, and
+// night `#202B36` on `#17212B` — never the same fill as the page canvas.
+QColor credentials_card_fill(const SetupTokens &tokens, const QPalette &palette) {
+    return setup_is_dark(palette) ? tokens.control_fill : tokens.surface;
+}
+
+void color_label(QLabel *label, const QColor &color) {
+    if (!label) return;
+    label->setStyleSheet(QStringLiteral("color: %1;")
+        .arg(setup_color_css(color)));
+}
+
 QString initials_for(const QString &name) {
     QString letters;
     for (const auto &part : name.split(QRegularExpression(QStringLiteral("[@._\\-\\s]")),
@@ -62,6 +74,7 @@ QWidget *make_account_row(
         QWidget *parent,
         const CodexAccount &account,
         const SetupTokens &tokens,
+        const QPalette &palette,
         const std::function<void()> &on_remove) {
     auto *row = new QWidget(parent);
     row->setObjectName(QStringLiteral("lingtai_setup_credentials_row"));
@@ -81,8 +94,11 @@ QWidget *make_account_row(
     text_layout->setContentsMargins(0, 0, 0, 0);
     text_layout->setSpacing(3);
     const auto title = codex_account_display_name(account);
+    // Titles must use value_text — palette WindowText can stay light-mode black
+    // while the card fill follows night tokens, which is unreadable.
     text_layout->addWidget(make_setup_label(text_column, title,
-        "lingtai_setup_credentials_row_title", 14, QFont::DemiBold));
+        "lingtai_setup_credentials_row_title", 14, QFont::DemiBold,
+        tokens.value_text));
     auto *detail = make_setup_label(text_column,
         account.legacy
             ? QStringLiteral("~/.lingtai-tui/codex-auth.json")
@@ -121,6 +137,12 @@ QWidget *make_account_row(
         remove->setText(QStringLiteral("Confirm"));
     });
     layout->addWidget(remove, 0, Qt::AlignVCenter);
+
+    const auto card = credentials_card_fill(tokens, palette);
+    row->setStyleSheet(QStringLiteral(
+        "QWidget#lingtai_setup_credentials_row { background: %1; "
+        "border: 1px solid %2; border-radius: 12px; }")
+        .arg(setup_color_css(card), setup_color_css(tokens.border)));
     return row;
 }
 
@@ -139,7 +161,8 @@ QWidget *make_method_card(
     layout->setContentsMargins(18, 16, 18, 16);
     layout->setSpacing(4);
     layout->addWidget(make_setup_label(card, title,
-        "lingtai_setup_credentials_method_title", 14, QFont::DemiBold));
+        "lingtai_setup_credentials_method_title", 14, QFont::DemiBold,
+        tokens.value_text));
     auto *note = make_setup_label(card, detail,
         "lingtai_setup_credentials_method_detail", 12, QFont::Normal, tokens.muted_text);
     note->setWordWrap(true);
@@ -169,11 +192,13 @@ CredentialsPage::CredentialsPage(QWidget *parent)
     root->addWidget(back_, 0, Qt::AlignLeft);
 
     root->addWidget(make_setup_label(this, QStringLiteral("Credentials"),
-        "lingtai_setup_credentials_heading", 22, QFont::DemiBold));
+        "lingtai_setup_credentials_heading", 22, QFont::DemiBold,
+        setup_tokens(palette()).value_text));
     auto *subtitle = make_setup_label(this,
         QStringLiteral("Codex OAuth accounts for this machine. "
             "API keys are read from your environment automatically."),
-        "lingtai_setup_credentials_subtitle", 13, QFont::Normal);
+        "lingtai_setup_credentials_subtitle", 13, QFont::Normal,
+        setup_tokens(palette()).muted_text);
     subtitle->setWordWrap(true);
     root->addWidget(subtitle);
 
@@ -231,7 +256,8 @@ CredentialsPage::CredentialsPage(QWidget *parent)
     method_layout->setSpacing(10);
     auto *method_heading = make_setup_label(method_panel_,
         QStringLiteral("Choose a sign-in method"),
-        "lingtai_setup_credentials_method_heading", 14, QFont::DemiBold);
+        "lingtai_setup_credentials_method_heading", 14, QFont::DemiBold,
+        setup_tokens(palette()).value_text);
     method_layout->addWidget(method_heading);
     auto *method_cards = new QHBoxLayout;
     method_cards->setSpacing(12);
@@ -261,9 +287,11 @@ CredentialsPage::CredentialsPage(QWidget *parent)
     progress_layout->setContentsMargins(18, 18, 18, 18);
     progress_layout->setSpacing(10);
     progress_label_ = make_setup_label(progress_panel_, QString(),
-        "lingtai_setup_credentials_progress", 14, QFont::DemiBold);
+        "lingtai_setup_credentials_progress", 14, QFont::DemiBold,
+        setup_tokens(palette()).value_text);
     device_code_label_ = make_setup_label(progress_panel_, QString(),
-        "lingtai_setup_credentials_device_code", 18, QFont::DemiBold);
+        "lingtai_setup_credentials_device_code", 18, QFont::DemiBold,
+        setup_tokens(palette()).value_text);
     device_code_label_->setWordWrap(true);
     device_code_label_->hide();
     open_browser_ = new QPushButton(QStringLiteral("Open browser"), progress_panel_);
@@ -371,7 +399,8 @@ void CredentialsPage::rebuild_accounts() {
 
     const auto accounts = list_codex_accounts();
     for (const auto &account : accounts) {
-        auto *row = make_account_row(list_, account, tokens, [this, account] {
+        auto *row = make_account_row(list_, account, tokens, palette(),
+            [this, account] {
             if (!remove_codex_account_file(account.path)) {
                 set_message(QStringLiteral("Could not remove the account file."), true);
                 return;
@@ -379,10 +408,6 @@ void CredentialsPage::rebuild_accounts() {
             reload();
             emit accounts_changed();
         });
-        row->setStyleSheet(QStringLiteral(
-            "QWidget#lingtai_setup_credentials_row { background: %1; "
-            "border: 1px solid %2; border-radius: 12px; }")
-            .arg(setup_color_css(tokens.surface), setup_color_css(tokens.border)));
         layout->addWidget(row);
     }
 
@@ -413,12 +438,13 @@ void CredentialsPage::rebuild_accounts() {
         tokens.selection_accent);
     add_label->setAttribute(Qt::WA_TransparentForMouseEvents);
     add_layout->addWidget(add_label, 1);
+    const auto card = credentials_card_fill(tokens, palette());
     add->setStyleSheet(QStringLiteral(
         "QPushButton { text-align: left; border-radius: 12px; "
         "border: 1px dashed %1; background: %2; } "
         "QPushButton:hover { background: %3; }")
         .arg(setup_color_css(tokens.border),
-            setup_color_css(tokens.surface),
+            setup_color_css(card),
             setup_color_css(tokens.selected_row)));
     QObject::connect(add, &QPushButton::clicked, this, &CredentialsPage::show_method_chooser);
     layout->addWidget(add);
@@ -446,16 +472,32 @@ void CredentialsPage::refresh_hero() {
         hero_detail_->setText(QStringLiteral("Add Codex OAuth to use Codex presets on this machine."));
         paint_avatar(hero_avatar_, QStringLiteral("C"), tokens);
     }
-    hero_kicker_->setStyleSheet(QStringLiteral("color: %1;")
-        .arg(setup_color_css(tokens.selection_accent)));
-    hero_detail_->setStyleSheet(QStringLiteral("color: %1;")
-        .arg(setup_color_css(tokens.muted_text)));
+    color_label(hero_kicker_, tokens.selection_accent);
+    color_label(hero_title_, tokens.value_text);
+    color_label(hero_detail_, tokens.muted_text);
 }
 
 void CredentialsPage::apply_chrome() {
     if (applying_chrome_) return;
     applying_chrome_ = true;
     const auto tokens = setup_tokens(palette());
+    const auto card = credentials_card_fill(tokens, palette());
+    setAttribute(Qt::WA_StyledBackground, true);
+    setStyleSheet(QStringLiteral(
+        "QWidget#lingtai_setup_credentials_page { background: %1; }")
+        .arg(setup_color_css(tokens.page_bg)));
+    if (auto *heading = findChild<QLabel *>("lingtai_setup_credentials_heading")) {
+        color_label(heading, tokens.value_text);
+    }
+    if (auto *subtitle = findChild<QLabel *>("lingtai_setup_credentials_subtitle")) {
+        color_label(subtitle, tokens.muted_text);
+    }
+    if (auto *method_heading = findChild<QLabel *>(
+            "lingtai_setup_credentials_method_heading")) {
+        color_label(method_heading, tokens.value_text);
+    }
+    color_label(progress_label_, tokens.value_text);
+    color_label(device_code_label_, tokens.value_text);
     back_->setStyleSheet(QStringLiteral(
         "QPushButton { color: %1; border: none; background: transparent; "
         "text-align: left; padding: 0; font-weight: 600; }")
@@ -465,6 +507,9 @@ void CredentialsPage::apply_chrome() {
             "QScrollArea { background: transparent; border: none; }"));
         scroll->viewport()->setStyleSheet(QStringLiteral("background: transparent;"));
     }
+    if (list_) {
+        list_->setStyleSheet(QStringLiteral("background: transparent;"));
+    }
     if (auto *rail = findChild<QFrame *>("lingtai_setup_credentials_hero_rail")) {
         rail->setStyleSheet(QStringLiteral("background: %1; border: none;")
             .arg(setup_color_css(tokens.selection_accent)));
@@ -472,24 +517,32 @@ void CredentialsPage::apply_chrome() {
     hero_->setStyleSheet(QStringLiteral(
         "QWidget#lingtai_setup_credentials_hero { background: %1; "
         "border: 1px solid %2; border-radius: 12px; }")
-        .arg(setup_color_css(tokens.surface), setup_color_css(tokens.border)));
-    const auto card = QStringLiteral(
+        .arg(setup_color_css(card), setup_color_css(tokens.border)));
+    const auto method_card = QStringLiteral(
         "QPushButton { background: %1; border: 1px solid %2; border-radius: 12px; "
         "text-align: left; padding: 0; } "
         "QPushButton:hover { background: %3; }")
-        .arg(setup_color_css(tokens.surface),
+        .arg(setup_color_css(card),
             setup_color_css(tokens.border),
             setup_color_css(tokens.selected_row));
     if (auto *browser = findChild<QPushButton *>("lingtai_setup_credentials_browser_signin")) {
-        browser->setStyleSheet(card);
+        browser->setStyleSheet(method_card);
     }
     if (auto *device = findChild<QPushButton *>("lingtai_setup_credentials_device_signin")) {
-        device->setStyleSheet(card);
+        device->setStyleSheet(method_card);
+    }
+    if (auto *cancel_method = findChild<QPushButton *>(
+            "lingtai_setup_credentials_method_cancel")) {
+        cancel_method->setStyleSheet(QStringLiteral(
+            "QPushButton { color: %1; background: transparent; border: none; "
+            "padding: 0 10px; font-weight: 600; }")
+            .arg(setup_color_css(tokens.muted_text)));
     }
     progress_panel_->setStyleSheet(QStringLiteral(
         "QWidget#lingtai_setup_credentials_progress_panel { background: %1; "
         "border: 1px solid %2; border-radius: 12px; }")
-        .arg(setup_color_css(tokens.surface), setup_color_css(tokens.border)));
+        .arg(setup_color_css(card), setup_color_css(tokens.border)));
+    apply_setup_primary_button(open_browser_);
     apply_setup_secondary_button(
         findChild<QPushButton *>("lingtai_setup_credentials_cancel_signin"), tokens);
     applying_chrome_ = false;

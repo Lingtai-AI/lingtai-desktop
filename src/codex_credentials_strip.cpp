@@ -102,9 +102,13 @@ void CodexCredentialsStrip::apply_chrome() {
         "background: %2; border-radius: 8px; }")
         .arg(setup_color_css(tokens.selection_accent),
             setup_color_css(tokens.tag_fill)));
+    title_->setStyleSheet(QStringLiteral("color: %1;")
+        .arg(setup_color_css(tokens.value_text)));
     status_->setStyleSheet(QStringLiteral("color: %1;")
         .arg(setup_color_css(tokens.muted_text)));
-    const auto surface = setup_color_css(tokens.surface);
+    // Elevate above the setup page in both themes (same rule as Credentials).
+    const auto surface = setup_color_css(
+        setup_is_dark(palette()) ? tokens.control_fill : tokens.surface);
     const auto border = setup_color_css(tokens.border);
     const auto hover = setup_color_css(tokens.selected_row);
     setStyleSheet(QStringLiteral(
