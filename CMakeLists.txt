@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(lingtai_desktop VERSION 0.1.3 LANGUAGES C CXX OBJC OBJCXX)
+project(lingtai_desktop VERSION 0.1.4 LANGUAGES C CXX OBJC OBJCXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
