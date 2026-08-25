@@ -94,8 +94,14 @@ bounded side-effect scope):
   (`agent_launch.h`) — owns the Agent's `logs/agent.log` plus the detached
   launch.
 - `ProjectBootstrapRunner::run_presets` / `run_spawn`
-  (`project_bootstrap.h`) — delegates the entire project scaffold/config
+  (`project_bootstrap.h`) — delegates the entire first-project scaffold/config
   boundary to the TUI headless surface.
+- `AgentSetupStore::load` / `save` (`agent_setup_store.h`) — one bounded
+  existing-Agent setup snapshot/draft and one staged transaction over the
+  selected `init.json`, `.agent.json`, exact configured env leaf, peer
+  `manifest.preset` blocks when a replacement policy was supplied, and TUI-
+  parity peer orchestrator fields when the selected Agent is an orchestrator.
+  It does not scaffold or add an Agent.
 
 State models: `WorkspaceSelectionState` (`workspace_selection.h`) is the only
 owner of the accepted active project and the selected Agent directory key. A
@@ -157,8 +163,9 @@ coalescing, and stale-while-revalidate presentation.
    missing, replaced, linked, non-regular, escaping, or identity-mismatched
    files fail closed.
 3. **Publishers/launchers own side effects.** Only `send_direct_mail`,
-   `request_agent_sleep`, `start_agent`, and `ProjectBootstrapRunner` write or
-   launch. Direct mail `queued` means only that the complete human outbox leaf
+   `request_agent_sleep`, `start_agent`, `AgentSetupStore`, and
+   `ProjectBootstrapRunner` write or launch. Direct mail `queued` means only
+   that the complete human outbox leaf
    was published; none claims kernel pickup, target acceptance, delivery,
    liveness, or lifecycle from the local write/start alone.
 4. **The shell composes.** `NativeShell` composes the widgets, native dialogs, and
@@ -182,9 +189,17 @@ coalescing, and stale-while-revalidate presentation.
 7. **Containment is always enforced.** Every project-tree walk anchors at the
    canonical root and refuses intermediate symlinks; `ProjectAttachment::resolve`
    is used where a full path is needed (e.g. `start_agent`).
-8. **No scaffold/config/registry writes.** Desktop never scaffolds project or
-   Agent directories or writes their configuration; the explicit first-project
+8. **No unowned scaffold/config/registry writes.** Desktop never scaffolds an
+   Agent or broadly regenerates its configuration; explicit first-project
    bootstrap delegates that entire boundary to the TUI headless surface.
+   `AgentSetupStore` is the sole exception for an existing Agent: it preserves
+   the full documents and patches only the fields declared by
+   `AgentSetupDraft`, the one soul-flow key in the exact configured env leaf,
+   peer preset policy only for a non-empty replacement list, and orchestrator
+   `llm`/`capabilities`/`soul`/`context_limit`/`env_file` propagation while
+   forcing peer karma/nirvana false and deleting peer addons. Peer MCP,
+   identity/runtime, unknown fields, and safe admin extras remain untouched.
+   Every target participates in one staged transaction with rollback.
    Agent-local side effects (the one outbox leaf, the one `.sleep` marker, and
    the Start log plus launch) are the owners' own bounded behavior, not
    project/Agent scaffold or config writes.
@@ -201,6 +216,7 @@ paths and names are in [`../ANATOMY.md`](../ANATOMY.md) and `CMakeLists.txt`:
   `direct_conversation_attachment_actions`.
 - `tests/direct_mail_publisher_test.cpp` — `direct_mail_publisher`.
 - `tests/agent_preset_summary_test.cpp` — `agent_preset_summary`.
+- `tests/agent_setup_store_test.cpp` — `agent_setup_store`.
 - `tests/agent_sleep_test.cpp` — `agent_sleep`.
 - `tests/kanban_model_test.cpp` — `kanban_model`.
 - `tests/posix_descriptor_primitives_test.cpp` — `posix_descriptor_primitives`.

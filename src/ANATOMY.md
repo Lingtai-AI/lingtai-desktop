@@ -89,6 +89,13 @@ Domain models (pure, Qt-light state/derivation owners):
 - `workspace_selection.{h,cpp}` — C1 model: the sole owner of the optional
   accepted active project and optional selected Agent directory key, and the
   sole same-root/root-switch transition owner.
+- `agent_setup_store.{h,cpp}` — `AgentSetupState`/`AgentSetupDraft` plus
+  `reconcile_agent_setup_presets` (`agent_setup_store.h:15-127`): the
+  UI-independent existing-Agent setup domain. It retains full JSON values,
+  exposes a virtual Keep Current choice, and owns one validated staged
+  transaction across the selected Agent, descriptor-walked configured env leaf,
+  and peer preset/orchestrator propagation. An empty allowed-list request does
+  not replace peer preset policy.
 - `posix_descriptor_primitives.{h,cpp}` — `posix_internal` seam: move-only
   descriptor/directory-stream ownership, shared read flags, `safe_leaf`, and
   one-leaf-at-a-time no-follow `openat`-based opens. Internal; links nothing;
@@ -144,6 +151,10 @@ Direct-operation/side-effect owners (the only writers/launchers):
 - `project_bootstrap.{h,cpp}` — `ProjectBootstrapRunner`: async, shell-free
   owner of the two headless TUI calls `<exe> presets` and
   `<exe> spawn <dir> --preset <name>` with exact separate argv.
+- `agent_setup_store.{h,cpp}` — the only existing-Agent configuration writer:
+  descriptor-bounded load, setup-owned leaf patches, same-directory stage +
+  atomic rename, and bounded rollback. It never scaffolds an Agent or writes
+  UI/live runtime state.
 
 Presentation widgets under `src/ui/` (their public seams are
 `ui/agent_roster.h` and `ui/conversation_surface.h`; widget internals route
@@ -204,6 +215,7 @@ Owned library targets (`CMakeLists.txt`) and their source membership:
 - `lingtai_desktop_conversation` — `direct_conversation_history.cpp`.
 - `lingtai_desktop_mail_publisher` — `direct_mail_publisher.cpp`.
 - `lingtai_desktop_agent_preset_summary` — `agent_preset_summary.cpp`.
+- `lingtai_desktop_agent_setup_store` — `agent_setup_store.cpp`.
 - `lingtai_desktop_agent_sleep` — `agent_sleep.cpp`.
 - `lingtai_desktop_agent_launch` — `agent_launch.cpp`.
 - `lingtai_desktop_kanban` — `kanban_model.cpp`.
@@ -237,8 +249,11 @@ they are the shell's presentation layer and own no domain reads or writes.
   Owned boundaries: the direct local leaf
   writers (`send_direct_mail`, `request_agent_sleep`) write only their own
   leaf; `start_agent` owns the Agent's log plus the detached launch; and
-  `ProjectBootstrapRunner` delegates the entire scaffold/config boundary to
-  the TUI headless surface.
+  `ProjectBootstrapRunner` delegates the entire first-project scaffold/config boundary to
+  the TUI headless surface. `AgentSetupStore` alone may transactionally patch
+  its declared setup fields in existing Agent configuration, the exact env leaf
+  authorized by selected `init.json`, and bounded peer preset/orchestrator
+  fields; it never creates an Agent.
 
 ## Notes
 

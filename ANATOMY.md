@@ -39,7 +39,8 @@ prefix (`CMakeLists.txt:67-70`), and declares the owned libraries:
   link edge of its own (`CMakeLists.txt:203-209`).
 - `lingtai_desktop_agent_projection`, `lingtai_desktop_direct_route`,
   `lingtai_desktop_conversation`, `lingtai_desktop_mail_publisher`,
-  `lingtai_desktop_agent_preset_summary`, `lingtai_desktop_agent_sleep`,
+  `lingtai_desktop_agent_preset_summary`, `lingtai_desktop_agent_setup_store`,
+  `lingtai_desktop_agent_sleep`,
   `lingtai_desktop_agent_launch` — one library per read/write seam
   (`CMakeLists.txt:211-308`).
 - `lingtai_desktop_native_shell` — C5 composition linking the above with
@@ -100,6 +101,11 @@ bounded no-emission parent `crl` update producer the smoke needs.
 - `src/agent_preset_summary.{h,cpp}` — `read_agent_preset_summary`
   (`src/agent_preset_summary.h:67`): stateless read-only
   `system/manifest.resolved.json` policy/effective projection.
+- `src/agent_setup_store.{h,cpp}` — the UI-independent `AgentSetupStore`
+  (`src/agent_setup_store.h:117`): bounded lossless setup load, typed draft,
+  TUI-parity preset reconciliation, narrow descriptor-walked configured-env
+  merge, peer preset/orchestrator propagation, and staged atomic multi-file
+  save/rollback for existing Agents only.
 - `src/kanban_model.{h,cpp}` + `src/kanban_page.{h,cpp}` — session-owned
   incremental Kanban source index and its stale-while-revalidate presentation;
   the shell supplies the one coalesced low-priority worker.
@@ -133,7 +139,8 @@ Each C++ contract executable maps to one ctest name (declared in
 `CMakeLists.txt`): `project_attachment`, `attachment_selection`, `agent_projection`,
 `direct_conversation_route`, `direct_conversation_history`,
 `direct_mail_publisher`,
-`agent_preset_summary`, `agent_sleep`, `posix_descriptor_primitives`,
+`agent_preset_summary`, `agent_setup_store`, `agent_sleep`,
+`posix_descriptor_primitives`,
 `workspace_selection`, `native_shell_behavior`, plus the Python gates
 `native_shell` (process persistence + smoke-order, `tests/test_native_shell.py`)
 and `test_repository_contract.py` (pinned toolkit provenance + tracked-artifact
@@ -142,9 +149,10 @@ into `tests/ANATOMY.md` for the per-test contract mapping.
 
 ## Kernel artifacts Desktop reads
 
-Desktop has no link edge into the LingTai kernel package. Its only interface
-to the kernel is on-disk artifacts under an accepted `.lingtai` project plus
-two subprocess surfaces. Producer-side contracts live in the kernel repo
+Desktop has no link edge into the LingTai kernel package. Its interface to the
+kernel is on-disk artifacts under an accepted `.lingtai` project, the exact
+configured env leaf named by the selected Agent's bounded `init.json`, plus two
+subprocess surfaces. Producer-side contracts live in the kernel repo
 (`lingtai.kernel`) and are the normative source for artifact shape:
 
 - `.lingtai/<key>/.agent.json`, `.agent.heartbeat`, `.status.json`,
@@ -162,6 +170,7 @@ two subprocess surfaces. Producer-side contracts live in the kernel repo
 The root composes `src/` (owned Qt adaptation), `tests/` (owned contracts),
 `scripts/` + `cmake/` (build governance), and external `.deps/`/Qt inputs.
 Persistent Desktop state is deliberately minimal: the one composer outbox
-leaf, the one `.sleep` marker, and the started Agent's own `logs/` directory;
-the shell performs no project, registry, or settings writes. No Telegram
+leaf, the one `.sleep` marker, the started Agent's own `logs/` directory, and
+an explicit setup transaction's bounded existing-Agent configuration leaves;
+the shell performs no implicit project, registry, or settings writes. No Telegram
 account, protocol, chat, message, media, contact, or cache state exists here.

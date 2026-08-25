@@ -113,6 +113,9 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   no-follow identity revalidation and fail-closed mutation matrix.
 - `tests/direct_mail_publisher_test.cpp` — `direct_mail_publisher`.
 - `tests/agent_preset_summary_test.cpp` — `agent_preset_summary`.
+- `tests/agent_setup_store_test.cpp` — `agent_setup_store`; bounded load,
+  owned-field preservation, TUI preset/peer-orchestrator parity, external
+  configured-env merge, and atomic rollback/no-mutation failure evidence.
 - `tests/agent_sleep_test.cpp` — `agent_sleep`.
 - `tests/kanban_model_test.cpp` — `kanban_model`; complete-board parity plus
   deterministic payload/cursor/daemon incrementality counters and rebuild

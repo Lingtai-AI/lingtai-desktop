@@ -45,7 +45,8 @@ its folder.
   `read_direct_conversation`, `revalidate_direct_conversation_attachment`,
   `send_direct_mail`,
   `read_agent_preset_summary`, `request_agent_sleep`
-  (+ its two observation functions), `start_agent`, `ProjectBootstrapRunner`.
+  (+ its two observation functions), `start_agent`, `AgentSetupStore`,
+  `ProjectBootstrapRunner`.
 - `NativeShell` is the one composition root C5 owns; it proposes transitions
   only through `WorkspaceSelectionState`. It also owns the injectable
   attachment Open/Reveal external-action seam; the conversation widget only
@@ -56,14 +57,16 @@ its folder.
 ## Kernel boundary
 
 - Desktop has **no link edge** into the `lingtai` kernel package (no Python
-  import, no protocol, no account). Its only interface is on-disk artifacts
-  under an accepted `.lingtai` project plus two subprocess surfaces.
+  import, no protocol, no account). Its interface is on-disk artifacts under
+  an accepted `.lingtai` project, the exact configured env leaf named by a
+  selected Agent's bounded `init.json`, plus two subprocess surfaces.
 - Producer-side artifact contracts live in the kernel repo and are normative
   for shape: the append-only `logs/events.jsonl` journal
   (`src/lingtai/kernel/event_journal/CONTRACT.md`), the mailbox envelope,
   `system/manifest.resolved.json`, and the `.sleep`
-  marker. Desktop reads these read-only; it writes only its own outbox leaf,
-  the `.sleep` marker, and the started Agent's `logs/` directory.
+  marker. Outside an explicit `AgentSetupStore` save, Desktop reads Agent
+  configuration read-only; its other writers remain limited to its own outbox
+  leaf, the `.sleep` marker, and the started Agent's `logs/` directory.
 - The TUI executable (`lingtai-tui`) is invoked only through `NativeShell`'s
   exact separate-argv `presets`/`spawn` calls and `ProjectBootstrapRunner`;
   never a shell string, never a joined command line.
@@ -76,13 +79,15 @@ its folder.
   owner, producer, or dependency.
 - **No `desktop-app::lib_ui` fork or patch**: the pinned full target is built
   unmodified from the locked sources (`CMakeLists.txt:165-167`).
-- **No writes outside the declared leaves**; read seams are `noexcept` and
-  write nothing.
+- **No writes outside the declared leaves**; the narrowly declared setup
+  transaction may patch only its owned existing-Agent configuration leaves,
+  including the exact descriptor-walked env leaf already named by the selected
+  Agent's bounded `init.json`, and read seams are `noexcept` and write nothing.
 - **No committed build inputs**: `.deps/`, `build/`, Qt SDK trees, and binary
   icon copies must never be tracked.
-- **No additional first-project machinery**: Desktop never manually writes
-  project/Agent configuration, never adds an Agent to an existing network, and
-  delegates first-project bootstrap to the TUI headless surface.
+- **No additional first-project machinery**: `AgentSetupStore` updates only
+  setup-owned fields of existing Agents and never scaffolds or adds an Agent;
+  first-project bootstrap remains delegated to the TUI headless surface.
 
 ## Cross-doc graph
 

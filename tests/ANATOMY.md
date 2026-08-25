@@ -80,6 +80,11 @@ touches a real Agent or project, and none depends on a network or provider.
 - `tests/agent_preset_summary_test.cpp` — `agent_preset_summary` ctest.
   `resolved`/`stale`/`unavailable` projection of the selected Agent's
   `manifest.resolved.json`.
+- `tests/agent_setup_store_test.cpp` — `agent_setup_store` ctest. Full-document
+  preservation, Keep Current/TUI preset reconciliation, absolute external-env
+  ON/OFF merge, empty-policy no-propagation, peer orchestrator privilege
+  boundaries, unsafe/oversize/type rejection, absent-optional-path no-op bytes,
+  and staged/publish rollback against one injected fixture root.
 - `tests/agent_sleep_test.cpp` — `agent_sleep` ctest. Exact-target `.sleep`
   marker write plus the baseline/observe pair.
 - `tests/kanban_model_test.cpp` — `kanban_model` ctest. Full semantic facts
@@ -189,6 +194,7 @@ no fixture); the test itself creates and removes its sandbox within that root
 | `direct_conversation_attachment_actions_test.cpp` | `lingtai_direct_conversation_attachment_actions_test` | `direct_conversation_attachment_actions` | `direct-conversation-attachment-actions-fixture` |
 | `direct_mail_publisher_test.cpp` | `lingtai_direct_mail_publisher_test` | `direct_mail_publisher` | `direct-mail-publisher-fixture` |
 | `agent_preset_summary_test.cpp` | `lingtai_agent_preset_summary_test` | `agent_preset_summary` | `agent-preset-summary-fixture` |
+| `agent_setup_store_test.cpp` | `lingtai_agent_setup_store_test` | `agent_setup_store` | `agent-setup-store-fixture` |
 | `agent_sleep_test.cpp` | `lingtai_agent_sleep_test` | `agent_sleep` | `agent-sleep-fixture` |
 | `kanban_model_test.cpp` | `lingtai_kanban_model_test` | `kanban_model` | `kanban-model-fixture` |
 | `native_shell_test.cpp` | `lingtai_native_shell_test` | `native_shell_behavior` | `native-shell-no-write-fixture` (CMake-created) |

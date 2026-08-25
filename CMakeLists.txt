@@ -339,6 +339,17 @@ target_link_libraries(lingtai_desktop_agent_preset_summary
     PUBLIC lingtai_desktop_core
     PRIVATE Qt6::Core lingtai_desktop_posix_primitives)
 
+add_library(lingtai_desktop_agent_setup_store STATIC
+    src/agent_setup_store.cpp)
+init_target(lingtai_desktop_agent_setup_store)
+target_include_directories(lingtai_desktop_agent_setup_store PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(lingtai_desktop_agent_setup_store PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_desktop_agent_setup_store
+    PUBLIC lingtai_desktop_core Qt6::Core
+    PRIVATE lingtai_desktop_posix_primitives)
+
 add_library(lingtai_desktop_kanban STATIC
     src/kanban_model.cpp)
 init_target(lingtai_desktop_kanban)
@@ -470,6 +481,13 @@ target_compile_options(lingtai_agent_preset_summary_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_agent_preset_summary_test PRIVATE
     lingtai_desktop_agent_preset_summary)
+add_executable(lingtai_agent_setup_store_test
+    tests/agent_setup_store_test.cpp)
+init_target(lingtai_agent_setup_store_test)
+target_compile_options(lingtai_agent_setup_store_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_agent_setup_store_test PRIVATE
+    lingtai_desktop_agent_setup_store Qt6::Core)
 
 add_executable(lingtai_agent_detail_view_test
     tests/agent_detail_view_test.cpp
@@ -719,6 +737,9 @@ add_test(NAME direct_mail_publisher
 add_test(NAME agent_preset_summary
     COMMAND lingtai_agent_preset_summary_test
         "${CMAKE_CURRENT_BINARY_DIR}/agent-preset-summary-fixture")
+add_test(NAME agent_setup_store
+    COMMAND lingtai_agent_setup_store_test
+        "${CMAKE_CURRENT_BINARY_DIR}/agent-setup-store-fixture")
 add_test(NAME kanban_model
     COMMAND lingtai_kanban_model_test
         "${CMAKE_CURRENT_BINARY_DIR}/kanban-model-fixture")
