@@ -198,6 +198,7 @@ AgentPresetsPage::AgentPresetsPage(QWidget *parent)
 
 void AgentPresetsPage::load_from_chooser(
         QComboBox *chooser, const QString &preferred_default) {
+    existing_mode_ = false;
     rows_.clear();
     default_index_ = -1;
     if (!chooser) {
@@ -225,6 +226,30 @@ void AgentPresetsPage::load_from_chooser(
     }
     if (default_index_ < 0 && !rows_.isEmpty()) default_index_ = 0;
     if (default_index_ >= 0) rows_[default_index_].allowed = true;
+    rebuild_rows();
+}
+
+void AgentPresetsPage::load_existing(const QString &default_name,
+        const QStringList &allowed_names, const QString &active_name) {
+    existing_mode_ = true;
+    rows_.clear();
+    default_index_ = -1;
+    auto references = allowed_names;
+    if (!default_name.isEmpty() && !references.contains(default_name)) {
+        references.push_back(default_name);
+    }
+    if (!active_name.isEmpty() && !references.contains(active_name)) {
+        references.push_back(active_name);
+    }
+    for (const auto &reference : references) {
+        Row row;
+        row.name = reference;
+        row.summary = QStringLiteral("Existing preset reference");
+        row.allowed = allowed_names.contains(reference);
+        row.active = reference == active_name;
+        rows_.push_back(row);
+        if (reference == default_name) default_index_ = rows_.size() - 1;
+    }
     rebuild_rows();
 }
 
@@ -362,7 +387,13 @@ void AgentPresetsPage::refresh_row_chrome(int index, bool animate_toggle) {
     if (auto *toggle = as_toggle(row.toggle)) {
         toggle->set_checked(row.allowed, animate_toggle);
     }
-    row.default_label->setText(is_default ? QStringLiteral("Default") : QString());
+    const auto marker = is_default && row.active
+        ? QStringLiteral("Default · Active")
+        : (is_default ? QStringLiteral("Default")
+            : (row.active ? QStringLiteral("Active") : QString()));
+    row.default_label->setText(marker);
+    row.default_label->setAccessibleName(marker);
+    row.default_label->setFixedWidth(existing_mode_ ? 108 : 56);
     const auto highlight = setup_color_css(
         setup_tokens(row.widget->palette()).selected_row);
     row.widget->setStyleSheet(is_default

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "agent_setup_store.h"
+
 #include <QtCore/QString>
 #include <QtWidgets/QWidget>
 
@@ -21,6 +23,12 @@ public:
     explicit AgentConfigPage(QWidget *parent = nullptr);
 
     void load(const QString &default_preset, int allowed_count);
+    void load_existing(const AgentSetupDraft &draft,
+        const QString &folder_name, const QString &default_preset,
+        int allowed_count);
+    [[nodiscard]] AgentSetupDraft apply_to_draft(
+        AgentSetupDraft draft) const;
+    void set_existing_mode(bool existing);
     void install_dialog_status(QWidget *status);
     [[nodiscard]] QString agent_name() const;
     [[nodiscard]] QString folder_name() const;
@@ -49,6 +57,7 @@ private:
     QLineEdit *soul_path_ = nullptr;
     QPlainTextEdit *comment_ = nullptr;
     QLabel *status_ = nullptr;
+    QPushButton *commit_ = nullptr;
     QVBoxLayout *footer_host_ = nullptr;
     bool folder_dirty_ = false;
     bool covenant_dirty_ = false;

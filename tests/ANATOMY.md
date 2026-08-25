@@ -117,6 +117,10 @@ touches a real Agent or project, and none depends on a network or provider.
 - Its focused `native_shell_kanban` journey holds and fails the real worker
   seam to prove warm updating, stale retention, Reload coalescing, and
   old-project generation rejection.
+- Its focused `setup` journey opens one synthetic selected Agent and proves
+  direct store hydration/save, immutable identity, no-op bytes, cancellation,
+  typed save failures, selection-preserving refresh, no TUI invocation, and
+  both creation/rerun mode-reset directions through the real shared wizard.
 - Its focused `outgoing` journey holds the real mailbox worker behind a stale
   generation and proves synchronous text/attachment presentation, rapid-send
   order, Agent isolation, transient-snapshot retention, authoritative

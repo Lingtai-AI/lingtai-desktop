@@ -6,7 +6,7 @@ class QKeyEvent;
 
 namespace lingtai::desktop {
 
-// New-project setup lives in the main window content pane, not a separate dialog.
+// Project creation and existing-Agent setup share this in-window shell.
 class ProjectSetupWizard final : public QWidget {
     Q_OBJECT
 

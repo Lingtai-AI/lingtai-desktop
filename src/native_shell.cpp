@@ -51,6 +51,7 @@
 #include <QtCore/QLineF>
 #include <QtCore/QPoint>
 #include <QtCore/QProcess>
+#include <QtCore/QJsonArray>
 #include <QtCore/QString>
 #include <QtCore/QStringList>
 #include <QtCore/QTimer>
@@ -126,6 +127,39 @@ constexpr auto kMaximumRosterWidthRatio = 0.30;
 constexpr auto kRosterResizeHandleWidth = 8;
 constexpr auto kTwoColumnAvailableThreshold =
     kRosterColumnWidth + kDetailColumnMinimumWidth;
+
+QString setup_failure_name(AgentSetupFailure failure) {
+    switch (failure) {
+    case AgentSetupFailure::none: return QStringLiteral("none");
+    case AgentSetupFailure::unsafe_agent_key: return QStringLiteral("unsafe Agent key");
+    case AgentSetupFailure::project_unavailable: return QStringLiteral("project unavailable");
+    case AgentSetupFailure::missing_required_file: return QStringLiteral("missing required file");
+    case AgentSetupFailure::unsafe_path: return QStringLiteral("unsafe path");
+    case AgentSetupFailure::symlink_rejected: return QStringLiteral("symlink rejected");
+    case AgentSetupFailure::not_regular: return QStringLiteral("not a regular file");
+    case AgentSetupFailure::oversized: return QStringLiteral("source oversized");
+    case AgentSetupFailure::malformed_json: return QStringLiteral("malformed JSON");
+    case AgentSetupFailure::invalid_shape: return QStringLiteral("invalid source shape");
+    case AgentSetupFailure::missing_identity: return QStringLiteral("missing identity");
+    case AgentSetupFailure::source_changed: return QStringLiteral("source changed");
+    case AgentSetupFailure::invalid_draft: return QStringLiteral("invalid input");
+    case AgentSetupFailure::staging_failed: return QStringLiteral("staging failed");
+    case AgentSetupFailure::publish_failed: return QStringLiteral("publish failed");
+    case AgentSetupFailure::rollback_failed: return QStringLiteral("rollback failed");
+    case AgentSetupFailure::local_failure: return QStringLiteral("local failure");
+    }
+    return QStringLiteral("local failure");
+}
+
+QString setup_failure_text(const QString &phase, AgentSetupFailure failure,
+        const std::string &detail) {
+    auto text = QStringLiteral("%1 (%2)")
+        .arg(phase, setup_failure_name(failure));
+    if (!detail.empty()) {
+        text += QStringLiteral(": %1").arg(QString::fromStdString(detail));
+    }
+    return text;
+}
 
 namespace fs = std::filesystem;
 
@@ -2355,11 +2389,21 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
             go_to_page(2);
         });
     QObject::connect(agents_page, &AgentPresetsPage::back_requested,
-        [go_to_page] { go_to_page(1); });
+        [this, go_to_page] {
+            if (setup_mode_ == SetupMode::rerun_existing) {
+                handle_cancel_bootstrap();
+            } else {
+                go_to_page(1);
+            }
+        });
     QObject::connect(agents_page, &AgentPresetsPage::continue_requested,
-        [preset_chooser, agents_page, review_page, go_to_page] {
+        [this, preset_chooser, agents_page, review_page, go_to_page] {
             const auto name = agents_page->default_name();
             if (name.isEmpty()) return;
+            if (setup_mode_ == SetupMode::rerun_existing) {
+                go_to_page(3);
+                return;
+            }
             const auto index = preset_chooser->findText(name);
             if (index >= 0) preset_chooser->setCurrentIndex(index);
             review_page->load(name, agents_page->allowed_count());
@@ -2589,6 +2633,10 @@ void NativeShell::set_mailbox_snapshot_read_function(
         : MailboxSnapshotReadFunction(read_direct_mailbox_snapshot);
 }
 
+void NativeShell::set_agent_setup_save_function(AgentSetupSaveFunction save) {
+    agent_setup_save_function_ = std::move(save);
+}
+
 void NativeShell::request_new_project_at(const fs::path &destination) {
     if (auto *input = find_ui_child<Ui::InputField>(
             *window_, "lingtai_bootstrap_destination_input")) {
@@ -2627,7 +2675,11 @@ void NativeShell::set_bootstrap_status(const QString &text) {
 
 void NativeShell::request_new_project() {
     if (bootstrap_pending_) return;
+    existing_setup_state_.reset();
+    setup_mode_ = SetupMode::create_project;
+    hide_setup_wizard();
     if (tui_executable_.empty()) {
+        setup_mode_ = SetupMode::none;
         set_bootstrap_status(QStringLiteral(
             "New Project is unavailable: no TUI executable is configured."));
         refresh_route();
@@ -2649,6 +2701,7 @@ void NativeShell::handle_presets_finished(PresetDiscoveryResult result) {
     if (result.kind != PresetDiscoveryKind::succeeded
         || result.presets.empty()) {
         bootstrap_pending_ = false;
+        setup_mode_ = SetupMode::none;
         set_bootstrap_actions_enabled(true);
         QString failure;
         if (result.kind == PresetDiscoveryKind::process_failed) {
@@ -2679,6 +2732,12 @@ void NativeShell::handle_presets_finished(PresetDiscoveryResult result) {
 
 void NativeShell::show_setup_wizard(
         const std::vector<PresetEntry> &presets) {
+    setup_mode_ = SetupMode::create_project;
+    existing_setup_state_.reset();
+    if (auto *review_page = window_->findChild<AgentConfigPage *>(
+            "lingtai_setup_review_page")) {
+        review_page->set_existing_mode(false);
+    }
     auto *chooser = window_->findChild<QComboBox *>(
         "lingtai_bootstrap_preset_chooser");
     if (!chooser) return;
@@ -2767,6 +2826,157 @@ void NativeShell::show_setup_wizard(
     recompute_setup_layout(setup_route_);
 }
 
+void NativeShell::request_existing_agent_setup() {
+    if (bootstrap_pending_ || !selection_state_.active_project()
+            || !selection_state_.selected_agent_directory_key()) {
+        if (auto *status = window_->findChild<QLabel *>(
+                "lingtai_composer_status")) {
+            status->setText(QStringLiteral(
+                "Setup requires a currently selected Agent."));
+        }
+        return;
+    }
+    AgentSetupStore store(*selection_state_.active_project());
+    auto loaded = store.load(
+        *selection_state_.selected_agent_directory_key());
+    if (!loaded) {
+        set_bootstrap_status(setup_failure_text(
+            QStringLiteral("Setup load failed"), loaded.failure,
+            loaded.detail));
+        refresh_route();
+        recompute_layout(window_->body()->width());
+        return;
+    }
+    show_existing_setup_wizard(std::move(*loaded.state));
+}
+
+void NativeShell::show_existing_setup_wizard(AgentSetupState state) {
+    const auto manifest = state.init_document.value("manifest").toObject();
+    const auto preset = manifest.value("preset").toObject();
+    const auto active = preset.value("active").toString();
+    auto default_name = preset.value("default").toString();
+    if (default_name.isEmpty()) default_name = active;
+    auto allowed = QStringList();
+    const auto allowed_value = preset.value("allowed").toArray();
+    for (const auto &value : allowed_value) {
+        if (value.isString() && !value.toString().isEmpty()
+                && !allowed.contains(value.toString())) {
+            allowed.push_back(value.toString());
+        }
+    }
+    if (!default_name.isEmpty() && !allowed.contains(default_name)) {
+        allowed.push_back(default_name);
+    }
+    if (!active.isEmpty() && !allowed.contains(active)) {
+        allowed.push_back(active);
+    }
+
+    setup_mode_ = SetupMode::rerun_existing;
+    existing_setup_state_ = std::move(state);
+    bootstrap_pending_ = false;
+    set_bootstrap_status(QString());
+    if (auto *agents_page = window_->findChild<AgentPresetsPage *>(
+            "lingtai_setup_agents_page")) {
+        agents_page->load_existing(default_name, allowed, active);
+    }
+    if (auto *review_page = window_->findChild<AgentConfigPage *>(
+            "lingtai_setup_review_page")) {
+        review_page->load_existing(existing_setup_state_->draft,
+            path_text(existing_setup_state_->agent_key), default_name,
+            allowed.size());
+    }
+    if (auto *dialog_status = find_ui_child<Ui::FlatLabel>(
+            *window_, "lingtai_bootstrap_dialog_status")) {
+        dialog_status->setText(QString());
+    }
+    if (auto *pages = window_->findChild<QStackedWidget *>(
+            "lingtai_setup_pages")) {
+        pages->setCurrentIndex(2);
+    }
+    if (auto *steps = window_->findChild<QWidget *>("lingtai_setup_steps")) {
+        update_setup_step_indicator(steps, 1);
+        steps->show();
+    }
+    setup_route_visible_ = true;
+    setup_route_->show();
+    setup_route_->setFocus();
+    refresh_route();
+    recompute_layout(window_->body()->width());
+    recompute_setup_layout(setup_route_);
+}
+
+void NativeShell::handle_save_existing_setup() {
+    if (!setup_route_ || !setup_route_visible_ || !existing_setup_state_
+            || !selection_state_.active_project()
+            || !selection_state_.selected_agent_directory_key()
+            || *selection_state_.selected_agent_directory_key()
+                != existing_setup_state_->agent_key) {
+        return;
+    }
+    auto *dialog_status = find_ui_child<Ui::FlatLabel>(
+        *window_, "lingtai_bootstrap_dialog_status");
+    auto *agents_page = window_->findChild<AgentPresetsPage *>(
+        "lingtai_setup_agents_page");
+    auto *review_page = window_->findChild<AgentConfigPage *>(
+        "lingtai_setup_review_page");
+    if (!dialog_status || !agents_page || !review_page) return;
+
+    auto draft = review_page->apply_to_draft(existing_setup_state_->draft);
+    draft.agent_name = existing_setup_state_->draft.agent_name;
+    std::vector<std::string> requested_allowed;
+    for (const auto &reference : agents_page->allowed_names()) {
+        requested_allowed.push_back(reference.toStdString());
+    }
+    draft.allowed_presets = requested_allowed
+            == existing_setup_state_->draft.allowed_presets
+        ? std::vector<std::string>{} : std::move(requested_allowed);
+    const auto manifest = existing_setup_state_->init_document
+        .value("manifest").toObject();
+    const auto preset = manifest.value("preset").toObject();
+    auto current_default = preset.value("default").toString();
+    if (current_default.isEmpty()) {
+        current_default = preset.value("active").toString();
+    }
+    const auto requested_default = agents_page->default_name();
+    if (!requested_default.isEmpty()
+            && requested_default != current_default) {
+        draft.preset.choice = AgentSetupPresetChoice::select_preset;
+        draft.preset.reference = requested_default.toStdString();
+        // The rerun route intentionally performs no global/TUI preset read.
+        // Preserve the loaded effective llm/capabilities while changing only
+        // the stored reference policy.
+        draft.preset.manifest = manifest;
+    } else {
+        draft.preset.choice = AgentSetupPresetChoice::keep_current;
+        draft.preset.reference.clear();
+        draft.preset.manifest = {};
+    }
+
+    const AgentSetupStore store(*selection_state_.active_project());
+    const auto result = agent_setup_save_function_
+        ? agent_setup_save_function_(store, *existing_setup_state_, draft)
+        : store.save(*existing_setup_state_, draft);
+    if (!result) {
+        dialog_status->setText(setup_failure_text(
+            QStringLiteral("Setup save failed"), result.failure,
+            result.detail));
+        return;
+    }
+
+    const auto result_text = result.status == AgentSetupSaveStatus::saved
+        ? QStringLiteral("Setup saved.")
+        : QStringLiteral("Setup already up to date (no change).");
+    setup_mode_ = SetupMode::none;
+    existing_setup_state_.reset();
+    hide_setup_wizard();
+    agents_ = project_agents(*selection_state_.active_project());
+    render_roster();
+    refresh_route();
+    show_detail_page(current_detail_page_);
+    recompute_layout(window_->body()->width());
+    set_bootstrap_status(result_text);
+}
+
 void NativeShell::hide_setup_wizard() {
     setup_route_visible_ = false;
     if (setup_route_) {
@@ -2797,6 +3007,10 @@ void NativeShell::handle_browse_destination() {
 }
 
 void NativeShell::handle_create_and_start() {
+    if (setup_mode_ == SetupMode::rerun_existing) {
+        handle_save_existing_setup();
+        return;
+    }
     if (!setup_route_ || !setup_route_visible_
         || bootstrap_runner_->is_pending()) {
         return;
@@ -2850,6 +3064,8 @@ void NativeShell::handle_cancel_bootstrap() {
     // discovery/spawn subprocess is pending.
     if (bootstrap_runner_ && bootstrap_runner_->is_pending()) return;
     bootstrap_pending_ = false;
+    setup_mode_ = SetupMode::none;
+    existing_setup_state_.reset();
     hide_setup_wizard();
     refresh_route();
     recompute_layout(window_->body()->width());
@@ -2859,6 +3075,8 @@ void NativeShell::handle_cancel_bootstrap() {
 
 void NativeShell::handle_spawn_finished(SpawnOutcome outcome) {
     bootstrap_pending_ = false;
+    setup_mode_ = SetupMode::none;
+    existing_setup_state_.reset();
     hide_setup_wizard();
     refresh_route();
     recompute_layout(window_->body()->width());
@@ -4176,12 +4394,7 @@ void NativeShell::handle_send_message() {
         }
         if (command->name == "setup") {
             status->clear();
-            if (selection_state_.active_project()) {
-                request_new_project_at(
-                    selection_state_.active_project()->root());
-            } else {
-                request_new_project();
-            }
+            request_existing_agent_setup();
             return;
         }
         if (command->name == "kanban") {

@@ -46,6 +46,12 @@ Entry point and composition root:
   `window()` / `selection_state()` accessors;
   `smoke_ready()` is real product readiness used only by `main.cpp`'s `--smoke`
   path (`native_shell.h:100`).
+  `/setup` is its explicit rerun-existing mode: it loads and retains one
+  `AgentSetupState`, hydrates the shared Agents/Review wizard pages, fixes the
+  selected Agent name/directory, and saves through `AgentSetupStore`; its
+  narrow save-result injection exists only for deterministic shell tests.
+  The existing New Project mode still owns the independent TUI
+  `presets`/`spawn` sequence, and every entry resets the other mode.
   The content pane composes one coherent workspace: the no-project welcome
   branding and its rhythm spacing live in the empty route only (a selected
   project's route starts at the content origin), and the selected-Agent page
@@ -181,7 +187,8 @@ keeps the parent summary):
   `send_direct_mail`,
   `read_agent_preset_summary`,
   `request_agent_sleep` + the baseline/observe pair, `start_agent`, and the
-  `ProjectBootstrapRunner` calls. The click handlers rerun `project_agents`
+  `ProjectBootstrapRunner` calls, and `AgentSetupStore` for the selected-Agent
+  `/setup` route. The click handlers rerun `project_agents`
   once at the click boundary and update the sole `agents_` snapshot.
 - `NativeShell` → `WorkspaceSelectionState`: the shell proposes typed
   transitions (`activate_project`, `select_agent`,

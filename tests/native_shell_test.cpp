@@ -22,6 +22,8 @@
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QEventLoop>
 #include <QtCore/QMetaObject>
+#include <QtCore/QJsonDocument>
+#include <QtCore/QJsonObject>
 #include <QtCore/QRegularExpression>
 #include <QtCore/QString>
 #include <QtCore/QThread>
@@ -52,6 +54,7 @@
 #include <QtWidgets/QLineEdit>
 #include <QtWidgets/QListWidget>
 #include <QtWidgets/QProgressBar>
+#include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QScrollBar>
@@ -3681,6 +3684,282 @@ exit 0)",
     require(!cleanup_error, "bootstrap fixtures must be removed");
 }
 
+void verify_existing_agent_setup(
+        lingtai::desktop::NativeShell &shell,
+        const fs::path &sandbox) {
+    using lingtai::desktop::AgentSetupFailure;
+    using lingtai::desktop::AgentSetupSaveResult;
+    using lingtai::desktop::AgentSetupSaveStatus;
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "setup rerun fixture must start clean");
+    fs::create_directories(sandbox);
+    const auto project = sandbox / "project";
+    const auto agent = project / ".lingtai/alpha";
+    const auto env = sandbox / "agent.env";
+    write_file(project / ".lingtai/human/.agent.json",
+        R"({"agent_id":"human-id","agent_name":"Human","address":"human","state":"active"})");
+    write_file(agent / ".agent.json",
+        R"({"agent_id":"alpha-id","agent_name":"Original Agent","address":"alpha","state":"idle","admin":{"karma":true,"nirvana":true},"identity_extra":"keep"})");
+    write_file(env, "KEEP=1\nLINGTAI_SOUL_FLOW_ENABLED=true\nTAIL=2\n");
+    const auto init = QStringLiteral(R"({
+  "env_file": "%1",
+  "covenant_file": "/prompts/covenant.md",
+  "comment_file": "/prompts/comment.md",
+  "unknown_top": {"keep": true},
+  "manifest": {
+    "agent_name": "Original Agent",
+    "language": "zh",
+    "context_limit": 654321,
+    "max_rpm": 17,
+    "max_aed_attempts": 9,
+    "admin": {"karma": true, "nirvana": true},
+    "soul": {"delay": 321, "unknown": "keep"},
+    "preset": {
+      "active": "mystery-active",
+      "default": "default-ref",
+      "allowed": ["default-ref", "mystery-active", "alt-ref"]
+    },
+    "llm": {"provider": "fixture", "model": "fixture-model"},
+    "capabilities": [{"type": "email"}]
+  }
+})").arg(path_text(env)).toStdString();
+    write_file(agent / "init.json", init);
+
+    const auto tui = sandbox / "fixture-tui";
+    const auto tui_argv = sandbox / "tui-argv.txt";
+    write_fixture_tui(tui, tui_argv,
+        R"(printf '%s' '{"presets":[{"name":"creation","source":"saved","path":"/fixture/creation.json"}]}'
+exit 0)",
+        R"(exit 9)");
+    shell.set_tui_executable(fs::absolute(tui));
+    const auto opened = shell.open_project(project, fs::path(".lingtai/alpha"));
+    require(opened.disposition == ProjectOpenDisposition::opened,
+        "setup rerun fixture project must open with alpha selected");
+
+    auto &window = shell.window();
+    auto *input = static_cast<Ui::InputField *>(
+        required_child<QObject>(window, "lingtai_composer_input"));
+    auto *wizard = required_child<lingtai::desktop::ProjectSetupWizard>(
+        window, "lingtai_project_setup_wizard");
+    auto *pages = required_child<QStackedWidget>(window, "lingtai_setup_pages");
+    auto *agents_page = required_child<QWidget>(
+        window, "lingtai_setup_agents_page");
+    auto *review_page = required_child<QWidget>(
+        window, "lingtai_setup_review_page");
+    auto *agents_continue = required_child<QPushButton>(
+        window, "lingtai_setup_agents_continue");
+    auto *commit = required_child<QPushButton>(
+        window, "lingtai_bootstrap_create_start");
+    auto *dialog_status = required_ui_child<Ui::FlatLabel>(
+        window, "lingtai_bootstrap_dialog_status");
+    auto *outer_status = required_ui_child<Ui::FlatLabel>(
+        window, "lingtai_bootstrap_status");
+    auto *name = required_child<QLineEdit>(
+        *review_page, "lingtai_setup_review_agent_name");
+    auto *folder = required_child<QLineEdit>(
+        *review_page, "lingtai_setup_review_folder_name");
+    auto *language = required_child<QComboBox>(
+        *review_page, "lingtai_setup_review_language");
+    auto *context = required_child<QSpinBox>(
+        *review_page, "lingtai_setup_review_context_limit");
+    auto *cadence = required_child<QSpinBox>(
+        *review_page, "lingtai_setup_review_soul_cadence");
+    auto *max_rpm = required_child<QSpinBox>(
+        *review_page, "lingtai_setup_review_max_rpm");
+    auto *max_aed = required_child<QSpinBox>(
+        *review_page, "lingtai_setup_review_max_aed");
+    auto *karma = required_child<QCheckBox>(
+        *review_page, "lingtai_setup_review_karma");
+    auto *nirvana = required_child<QCheckBox>(
+        *review_page, "lingtai_setup_review_nirvana");
+    auto *soul_flow = required_child<QCheckBox>(
+        *review_page, "lingtai_setup_review_soul_flow");
+    auto *covenant = required_child<QLineEdit>(
+        *review_page, "lingtai_setup_review_covenant");
+    auto *comment = required_child<QPlainTextEdit>(
+        *review_page, "lingtai_setup_review_comment");
+    const auto submit_setup = [&] {
+        input->setText(QStringLiteral("/setup"));
+        auto enter = QKeyEvent(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QApplication::sendEvent(input->rawTextEdit(), &enter);
+        QCoreApplication::processEvents();
+        require(wizard->isVisible(), "/setup must open the existing-Agent wizard");
+    };
+
+    const auto before = tree_snapshot(project);
+    const auto env_before = read_file(env);
+    submit_setup();
+    require(read_file(tui_argv).empty(),
+        "/setup must not invoke TUI preset discovery or spawn");
+    require(pages->currentWidget() == agents_page,
+        "rerun setup must enter the hydrated Agent preset-policy page");
+    auto preset_markers = std::map<QString, QString>();
+    auto preset_allowed = std::map<QString, bool>();
+    const auto preset_names = agents_page->findChildren<QLabel *>(
+        "lingtai_setup_agents_row_name");
+    for (auto *preset_name : preset_names) {
+        auto *row = preset_name->parentWidget()->parentWidget();
+        auto *marker = required_child<QLabel>(
+            *row, "lingtai_setup_agents_row_default");
+        auto *allowed = required_child<QCheckBox>(
+            *row, "lingtai_setup_agents_allowed");
+        preset_markers[preset_name->text()] = marker->text();
+        preset_allowed[preset_name->text()] = allowed->isChecked();
+    }
+    require(preset_markers.size() == 3
+            && preset_markers[QStringLiteral("default-ref")]
+                == QStringLiteral("Default")
+            && preset_markers[QStringLiteral("mystery-active")]
+                == QStringLiteral("Active")
+            && preset_markers.contains(QStringLiteral("alt-ref"))
+            && std::ranges::all_of(preset_allowed,
+                [](const auto &entry) { return entry.second; }),
+        "rerun setup must preserve default, active, allowed, and unknown refs");
+    agents_continue->click();
+    QCoreApplication::processEvents();
+    require(pages->currentWidget() == review_page
+            && commit->text() == QStringLiteral("Save setup"),
+        "rerun review must use a setup-save action");
+    require(name->text() == QStringLiteral("Original Agent")
+            && name->isReadOnly()
+            && folder->text() == QStringLiteral("alpha")
+            && folder->isReadOnly()
+            && language->currentData().toString() == QStringLiteral("zh")
+            && context->value() == 654321
+            && cadence->value() == 321
+            && max_rpm->value() == 17
+            && max_aed->value() == 9
+            && karma->isChecked() && nirvana->isChecked()
+            && soul_flow->isChecked()
+            && covenant->text() == QStringLiteral("/prompts/covenant.md")
+            && comment->toPlainText() == QStringLiteral("/prompts/comment.md"),
+        "rerun review must hydrate every setup-owned draft field");
+    name->setText(QStringLiteral("Injected rename"));
+    folder->setText(QStringLiteral("injected-folder"));
+    commit->click();
+    QCoreApplication::processEvents();
+    require(!wizard->isVisible()
+            && outer_status->accessibilityName().contains(
+                QStringLiteral("no change"), Qt::CaseInsensitive)
+            && tree_snapshot(project) == before
+            && read_file(env) == env_before,
+        "unchanged setup must close as a true byte-for-byte no-op");
+    require(shell.selection_state().selected_agent_directory_key()
+            == std::optional<fs::path>("alpha"),
+        "successful no-change setup must preserve the exact selection");
+
+    submit_setup();
+    agents_continue->click();
+    QCoreApplication::processEvents();
+    context->setValue(777777);
+    soul_flow->setChecked(false);
+    covenant->setText(QStringLiteral("/prompts/new-covenant.md"));
+    comment->setPlainText(QStringLiteral("/prompts/new-comment.md"));
+    commit->click();
+    QCoreApplication::processEvents();
+    require(!wizard->isVisible()
+            && outer_status->accessibilityName() == QStringLiteral("Setup saved.")
+            && read_file(tui_argv).empty(),
+        "changed setup must save through Desktop and close without TUI spawn");
+    const auto saved_init = QJsonDocument::fromJson(
+        QByteArray::fromStdString(read_file(agent / "init.json"))).object();
+    const auto saved_manifest = saved_init.value("manifest").toObject();
+    const auto saved_identity = QJsonDocument::fromJson(
+        QByteArray::fromStdString(read_file(agent / ".agent.json"))).object();
+    require(saved_manifest.value("agent_name").toString()
+                == QStringLiteral("Original Agent")
+            && saved_identity.value("agent_name").toString()
+                == QStringLiteral("Original Agent")
+            && saved_manifest.value("context_limit").toInt() == 777777
+            && saved_init.value("covenant_file").toString()
+                == QStringLiteral("/prompts/new-covenant.md")
+            && saved_init.value("comment_file").toString()
+                == QStringLiteral("/prompts/new-comment.md")
+            && read_file(env) == "KEEP=1\nTAIL=2\n",
+        "saved setup must update owned fields while identity stays fixed");
+
+    const auto after_save = tree_snapshot(project);
+    const auto env_after_save = read_file(env);
+    submit_setup();
+    agents_continue->click();
+    QCoreApplication::processEvents();
+    context->setValue(888888);
+    auto escape = QKeyEvent(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(wizard, &escape);
+    QCoreApplication::processEvents();
+    require(!wizard->isVisible() && tree_snapshot(project) == after_save
+            && read_file(env) == env_after_save,
+        "Escape must close rerun setup without writing");
+
+    submit_setup();
+    agents_continue->click();
+    QCoreApplication::processEvents();
+    context->setValue(999999);
+    write_file(agent / "init.json", read_file(agent / "init.json") + "\n");
+    const auto externally_changed = read_file(agent / "init.json");
+    commit->click();
+    QCoreApplication::processEvents();
+    require(wizard->isVisible()
+            && dialog_status->accessibilityName().contains(
+                QStringLiteral("source changed"))
+            && read_file(agent / "init.json") == externally_changed,
+        "source-change failure must stay open, report exactly, and not overwrite");
+    wizard->reject();
+    QCoreApplication::processEvents();
+
+    shell.set_agent_setup_save_function([](const auto &, const auto &,
+            const auto &) {
+        return AgentSetupSaveResult{
+            .status = AgentSetupSaveStatus::failed,
+            .failure = AgentSetupFailure::rollback_failed,
+            .detail = "fixture rollback evidence",
+        };
+    });
+    const auto before_injected_failure = tree_snapshot(project);
+    const auto env_before_injected_failure = read_file(env);
+    submit_setup();
+    agents_continue->click();
+    QCoreApplication::processEvents();
+    context->setValue(context->value() + 1);
+    commit->click();
+    QCoreApplication::processEvents();
+    require(wizard->isVisible()
+            && dialog_status->accessibilityName().contains(
+                QStringLiteral("rollback failed"))
+            && dialog_status->accessibilityName().contains(
+                QStringLiteral("fixture rollback evidence"))
+            && tree_snapshot(project) == before_injected_failure
+            && read_file(env) == env_before_injected_failure,
+        "rollback failure must remain open with the exact typed status");
+    shell.set_agent_setup_save_function({});
+    wizard->reject();
+    QCoreApplication::processEvents();
+
+    shell.request_new_project_at(sandbox / "creation-destination");
+    require(wait_for_event_loop([&] { return wizard->isVisible(); }, 3000),
+        "New Project must still discover presets and open creation mode");
+    require(read_file(tui_argv) == fixture_tui_argv({"presets"})
+            && commit->text() == QStringLiteral("Create orchestrator")
+            && !name->isReadOnly() && !folder->isReadOnly(),
+        "rerun-to-creation mode reset must restore presets and editable identity");
+    wizard->reject();
+    QCoreApplication::processEvents();
+    submit_setup();
+    agents_continue->click();
+    QCoreApplication::processEvents();
+    require(commit->text() == QStringLiteral("Save setup")
+            && name->isReadOnly() && folder->isReadOnly()
+            && read_file(tui_argv) == fixture_tui_argv({"presets"}),
+        "creation-to-rerun reset must restore fixed identity without discovery");
+    wizard->reject();
+    QCoreApplication::processEvents();
+
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "setup rerun fixtures must be removed");
+}
+
 // The Commit-30 Telegram-derived responsive slice: one journey proves the
 // source-backed 380x480 minimum, the OneColumn <-> Normal transition at the
 // two-surface minima, the Return keyboard activation of a focused valid row
@@ -6130,8 +6409,8 @@ void verify_conversation_slash_interception(
     require(conversation_nav->isVisible() && !presets_nav->isVisible(),
         "raw /presets must reveal Conversation as the way back, never a Presets tab");
 
-    // `/setup` is the new-workspace wizard (preset catalog, editor, agent
-    // review), not the `/presets` allow-list catalog.
+    // `/setup` is the selected-Agent setup rerun, not the read-only
+    // `/presets` summary destination.
     conversation_nav->click();
     QCoreApplication::processEvents();
     require(conversation_nav->isChecked() && input->isVisible(),
@@ -6149,8 +6428,8 @@ void verify_conversation_slash_interception(
         window, "lingtai_bootstrap_status");
     require(wizard->isVisible()
             || !bootstrap_status->accessibilityName().isEmpty(),
-        "raw /setup must start the new-workspace setup wizard, or report "
-        "why that wizard cannot run");
+        "raw /setup must start existing-Agent setup, or report why the "
+        "selected fixture cannot be loaded");
     if (wizard->isVisible()) {
         wizard->reject();
         QCoreApplication::processEvents();
@@ -6992,6 +7271,13 @@ void run_native_shell_journey(
         });
         return;
     }
+    if (journey == "setup") {
+        with_offscreen_shell([&](NativeShell &shell) {
+            verify_existing_agent_setup(
+                shell, project_root / "desktop-setup-rerun-fixture");
+        });
+        return;
+    }
     if (journey == "roster") {
         with_offscreen_shell([&](NativeShell &shell) {
             verify_persistent_roster_shell(
@@ -7080,6 +7366,7 @@ void run_native_shell_journey(
         constexpr std::array kStages = {
             "semantics",
             "bootstrap",
+            "setup",
             "roster",
             "conversation",
             "lifecycle",
@@ -7133,6 +7420,8 @@ int main(int argc, char **argv) {
         && std::string_view(argv[2]) == "--floating-composer-only";
     const auto project_setup_only = argc == 3
         && std::string_view(argv[2]) == "--project-setup-only";
+    const auto setup_rerun_only = argc == 3
+        && std::string_view(argv[2]) == "--setup-rerun-only";
     const auto kanban_only = argc == 3
         && std::string_view(argv[2]) == "--kanban-only";
     const auto journey_flag = argc == 3
@@ -7141,7 +7430,8 @@ int main(int argc, char **argv) {
         || responsive_header_only || modern_composer_only
         || slash_interception_only || compact_header_only
         || two_surface_only || plain_underline_only
-        || floating_composer_only || project_setup_only || kanban_only;
+        || floating_composer_only || project_setup_only || setup_rerun_only
+        || kanban_only;
     if (argc != 2 && !has_legacy_flag && !journey_flag) {
         std::cerr << "usage: native_shell_test PROJECT_ROOT "
                      "[--journey=NAME|--journey=all|"
@@ -7149,9 +7439,9 @@ int main(int argc, char **argv) {
                      "--modern-composer-only|--slash-interception-only|"
                      "--compact-header-only|--two-surface-only|"
                      "--plain-underline-only|--floating-composer-only|"
-                     "--project-setup-only|--kanban-only]\n"
+                     "--project-setup-only|--setup-rerun-only|--kanban-only]\n"
                      "  journeys: semantics bootstrap roster conversation "
-                     "lifecycle layout theme composer outgoing kanban all\n";
+                     "setup lifecycle layout theme composer outgoing kanban all\n";
         return 2;
     }
     try {
@@ -7239,6 +7529,15 @@ int main(int argc, char **argv) {
             QCoreApplication::processEvents();
             verify_preset_editor_model(project_root / "preset-editor-model-fixture");
             verify_project_setup_wizard_contract(shell);
+            std::cout << "native shell behavior: OK\n";
+            return 0;
+        }
+        if (setup_rerun_only) {
+            lingtai::desktop::NativeShell shell;
+            shell.show_offscreen();
+            QCoreApplication::processEvents();
+            verify_existing_agent_setup(
+                shell, project_root / "desktop-setup-rerun-fixture");
             std::cout << "native shell behavior: OK\n";
             return 0;
         }

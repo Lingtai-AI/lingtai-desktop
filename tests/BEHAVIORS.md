@@ -198,6 +198,11 @@ Qt plugin path set and an 8 s watchdog.
   and marking only index 1; and a general publisher failure retaining the
   draft with no false per-card error. Its event-loop-bounded replacement-timer
   assertion proves an older deadline cannot clear a newer composer notice.
+- `verify_existing_agent_setup` proves the selected-Agent `/setup` route on a
+  synthetic project: full policy/review hydration, fixed identity/folder,
+  byte-exact no-change and cancellation, owned-field save, selected-project
+  refresh, source-change/rollback failure presentation, no TUI calls, and
+  creation/rerun mode reset in both directions.
 - `visual_composer_attachments_light` and `_dark` capture the selected-Agent
   detail with one file card and one decoded image thumbnail at the normal
   macOS viewport. Missing baselines preserve the actual PNG as an inspection

@@ -236,6 +236,7 @@ target_link_libraries(lingtai_desktop_native_shell
         lingtai_desktop_mail_publisher lingtai_desktop_agent_sleep
         lingtai_desktop_agent_launch lingtai_desktop_agent_prompt_actions
         lingtai_desktop_agent_preset_summary
+        lingtai_desktop_agent_setup_store
         lingtai_desktop_kanban)
 
 # Internal POSIX descriptor/no-follow primitives. No Qt, no project model, and
@@ -804,6 +805,7 @@ file(MAKE_DIRECTORY
 set(NATIVE_SHELL_JOURNEYS
     semantics
     bootstrap
+    setup
     roster
     conversation
     lifecycle

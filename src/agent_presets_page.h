@@ -18,6 +18,8 @@ public:
     explicit AgentPresetsPage(QWidget *parent = nullptr);
 
     void load_from_chooser(QComboBox *chooser, const QString &preferred_default);
+    void load_existing(const QString &default_name,
+        const QStringList &allowed_names, const QString &active_name);
     [[nodiscard]] QString default_name() const;
     [[nodiscard]] QStringList allowed_names() const;
     [[nodiscard]] int allowed_count() const;
@@ -38,6 +40,7 @@ private:
         QString model;
         QStringList tags;
         bool allowed = false;
+        bool active = false;
         QWidget *widget = nullptr;
         QWidget *toggle = nullptr;
         QLabel *default_label = nullptr;
@@ -55,6 +58,7 @@ private:
     QPushButton *continue_ = nullptr;
     QVector<Row> rows_;
     int default_index_ = -1;
+    bool existing_mode_ = false;
 };
 
 } // namespace lingtai::desktop

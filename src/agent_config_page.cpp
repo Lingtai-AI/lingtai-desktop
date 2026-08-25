@@ -386,21 +386,21 @@ AgentConfigPage::AgentConfigPage(QWidget *parent)
     back->setObjectName("lingtai_setup_review_back");
     back->setFixedHeight(34);
     apply_setup_secondary_button(back, tokens);
-    auto *create = new QPushButton(QStringLiteral("Create orchestrator"), this);
-    create->setObjectName("lingtai_bootstrap_create_start");
-    create->setAccessibleName(QStringLiteral("Create orchestrator"));
-    create->setFixedHeight(34);
-    create->setStyleSheet(QStringLiteral(
+    commit_ = new QPushButton(QStringLiteral("Create orchestrator"), this);
+    commit_->setObjectName("lingtai_bootstrap_create_start");
+    commit_->setAccessibleName(QStringLiteral("Create orchestrator"));
+    commit_->setFixedHeight(34);
+    commit_->setStyleSheet(QStringLiteral(
         "QPushButton { background: %1; color: white; border: none; "
         "border-radius: 6px; padding: 0 16px; font-weight: 600; }").arg(accent_css(this)));
     actions->addWidget(back);
     actions->addStretch();
-    actions->addWidget(create);
+    actions->addWidget(commit_);
     footer_host_->addLayout(actions);
     root->addLayout(footer_host_);
 
     connect(back, &QPushButton::clicked, this, &AgentConfigPage::back_requested);
-    connect(create, &QPushButton::clicked, this, &AgentConfigPage::create_requested);
+    connect(commit_, &QPushButton::clicked, this, &AgentConfigPage::create_requested);
     connect(name_, &QLineEdit::textEdited, this, [this](const QString &text) {
         if (!folder_dirty_) folder_->setText(text);
     });
@@ -431,6 +431,7 @@ AgentConfigPage::AgentConfigPage(QWidget *parent)
 }
 
 void AgentConfigPage::load(const QString &default_preset, int allowed_count) {
+    set_existing_mode(false);
     folder_dirty_ = false;
     covenant_dirty_ = false;
     soul_path_dirty_ = false;
@@ -452,6 +453,82 @@ void AgentConfigPage::load(const QString &default_preset, int allowed_count) {
     comment_->clear();
     update_prompt_paths();
     update_status(default_preset, allowed_count);
+}
+
+void AgentConfigPage::load_existing(const AgentSetupDraft &draft,
+        const QString &folder_name, const QString &default_preset,
+        int allowed_count) {
+    set_existing_mode(true);
+    folder_dirty_ = true;
+    covenant_dirty_ = true;
+    soul_path_dirty_ = true;
+    name_->setText(QString::fromStdString(draft.agent_name));
+    folder_->setText(folder_name);
+    const auto language = QString::fromStdString(draft.language);
+    auto language_index = language_->findData(language);
+    if (language_index < 0 && !language.isEmpty()) {
+        language_->addItem(language, language);
+        language_index = language_->count() - 1;
+    }
+    {
+        const QSignalBlocker block(language_);
+        language_->setCurrentIndex(language_index >= 0 ? language_index : 0);
+    }
+    context_limit_->setValue(static_cast<int>(draft.context_limit));
+    soul_cadence_->setValue(draft.soul_delay
+        ? static_cast<int>(*draft.soul_delay) : 0);
+    max_rpm_->setValue(static_cast<int>(draft.max_rpm));
+    max_aed_->setValue(static_cast<int>(draft.max_aed_attempts));
+    karma_->setChecked(draft.karma);
+    nirvana_->setChecked(draft.nirvana);
+    soul_flow_->setChecked(draft.soul_flow_enabled);
+    soul_cadence_->setEnabled(draft.soul_flow_enabled);
+    if (auto *wrap = soul_cadence_->parentWidget()) {
+        wrap->setEnabled(draft.soul_flow_enabled);
+    }
+    covenant_->setText(QString::fromStdString(draft.covenant_file));
+    // Existing setup owns comment_file, not free-form comment content.
+    comment_->setPlainText(QString::fromStdString(draft.comment_file));
+    soul_path_->clear();
+    soul_path_->setReadOnly(true);
+    update_status(default_preset, allowed_count);
+}
+
+AgentSetupDraft AgentConfigPage::apply_to_draft(AgentSetupDraft draft) const {
+    draft.language = language().toStdString();
+    draft.context_limit = context_limit_->value();
+    draft.soul_delay = soul_cadence_->value() > 0
+        ? std::optional<double>(soul_cadence_->value()) : std::nullopt;
+    draft.max_rpm = max_rpm_->value();
+    draft.max_aed_attempts = max_aed_->value();
+    draft.karma = karma_->isChecked();
+    draft.nirvana = nirvana_->isChecked();
+    draft.soul_flow_enabled = soul_flow_->isChecked();
+    draft.covenant_file = covenant_->text().trimmed().toStdString();
+    draft.comment_file = comment_->toPlainText().trimmed().toStdString();
+    return draft;
+}
+
+void AgentConfigPage::set_existing_mode(bool existing) {
+    if (!existing) {
+        while (language_->count() > 3) language_->removeItem(3);
+    }
+    name_->setReadOnly(existing);
+    folder_->setReadOnly(existing);
+    name_->setAccessibleDescription(existing
+        ? QStringLiteral("Existing Agent name; cannot be changed during setup.")
+        : QString());
+    folder_->setAccessibleDescription(existing
+        ? QStringLiteral("Existing Agent folder; cannot be changed during setup.")
+        : QString());
+    soul_path_->setReadOnly(existing);
+    if (commit_) {
+        const auto text = existing
+            ? QStringLiteral("Save setup")
+            : QStringLiteral("Create orchestrator");
+        commit_->setText(text);
+        commit_->setAccessibleName(text);
+    }
 }
 
 QString AgentConfigPage::agent_name() const {

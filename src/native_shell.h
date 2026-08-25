@@ -4,6 +4,7 @@
 #include "agent_launch.h"
 #include "agent_projection.h"
 #include "agent_sleep.h"
+#include "agent_setup_store.h"
 #include "conversation_session.h"
 #include "conversation_unread.h"
 #include "direct_conversation_route.h"
@@ -92,6 +93,9 @@ public:
         bool force)>;
     using MailboxSnapshotReadFunction = std::function<DirectMailboxSnapshot(
         const DirectMailboxRequest &)>;
+    using AgentSetupSaveFunction = std::function<AgentSetupSaveResult(
+        const AgentSetupStore &, const AgentSetupState &,
+        const AgentSetupDraft &)>;
 
     explicit NativeShell(RuntimeOptions runtime_options = {});
     ~NativeShell();
@@ -112,6 +116,8 @@ public:
     // Deterministic worker seam used by the native-shell contract to hold a
     // mailbox generation. Empty restores the production snapshot reader.
     void set_mailbox_snapshot_read_function(MailboxSnapshotReadFunction read);
+    // Deterministic UI-contract seam. Empty restores AgentSetupStore::save.
+    void set_agent_setup_save_function(AgentSetupSaveFunction save);
     void request_new_project_at(const std::filesystem::path &destination);
     // The one Desktop-configured TUI executable for explicit first-project
     // bootstrap: the shipped `lingtai-tui` or a focused test fixture. It is
@@ -145,11 +151,14 @@ private:
     void handle_presets_finished(PresetDiscoveryResult result);
     void handle_spawn_finished(SpawnOutcome outcome);
     void handle_create_and_start();
+    void request_existing_agent_setup();
+    void handle_save_existing_setup();
     void handle_cancel_bootstrap();
     void handle_browse_destination();
     void set_bootstrap_actions_enabled(bool enabled);
     void set_bootstrap_status(const QString &text);
     void show_setup_wizard(const std::vector<PresetEntry> &presets);
+    void show_existing_setup_wizard(AgentSetupState state);
     void hide_setup_wizard();
     [[nodiscard]] bool in_project_setup() const;
     void refresh_route();
@@ -376,8 +385,12 @@ private:
     // The one async owner of the headless `presets`/`spawn` subprocess calls.
     // Owned by the shell; no PID, lock, retry, or rollback machinery.
     std::unique_ptr<ProjectBootstrapRunner> bootstrap_runner_;
-    // The one in-window New Project setup route, built once in the
-    // constructor and hidden until a successful preset discovery.
+    enum class SetupMode { none, create_project, rerun_existing };
+    SetupMode setup_mode_ = SetupMode::none;
+    std::optional<AgentSetupState> existing_setup_state_;
+    AgentSetupSaveFunction agent_setup_save_function_;
+    // The one in-window setup route, built once and shared by explicit New
+    // Project creation and selected-Agent rerun modes.
     ProjectSetupWizard *setup_route_ = nullptr;
     bool setup_route_visible_ = false;
     Ui::RpWidget *bootstrap_status_surface_ = nullptr;

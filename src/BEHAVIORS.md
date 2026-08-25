@@ -202,6 +202,18 @@ its code.
   Anchor: `ProjectBootstrapRunner` parse rules (`project_bootstrap.cpp:53`),
   shell handlers (`native_shell.cpp:1286-1399`).
 
+## Existing Agent setup rerun
+
+- `/setup` requires the active project's exact selected Agent and reuses the
+  in-window setup wizard in an explicit existing-Agent mode. It loads one
+  `AgentSetupState` through `AgentSetupStore`, hydrates preset policy plus all
+  setup-owned review fields, and keeps Agent name/folder visibly read-only.
+- Save calls `AgentSetupStore::save` directly. `saved` and `no_change` close
+  the route, refresh the selected project, and preserve selection; every typed
+  failure stays open with its detail. Cancel, Back, and Escape write nothing.
+  This route never runs TUI `presets` or `spawn`; entering New Project resets
+  the same wizard to its existing creation semantics, and vice versa.
+
 ## Composer and conversation
 
 - `preflight_attachments` is the UI-independent direct-file selection model:

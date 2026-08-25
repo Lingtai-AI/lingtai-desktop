@@ -103,6 +103,13 @@ bounded side-effect scope):
   parity peer orchestrator fields when the selected Agent is an orchestrator.
   It does not scaffold or add an Agent.
 
+`NativeShell` routes `/setup` for the exact current selection through that
+existing-Agent store and the shared in-window setup wizard. It retains the
+loaded state until Save or cancellation, never invokes TUI preset discovery or
+spawn for this route, and refreshes the selected project only after `saved` or
+`no_change`. New Project remains the separate `ProjectBootstrapRunner`
+`presets`/`spawn` flow.
+
 State models: `WorkspaceSelectionState` (`workspace_selection.h`) is the only
 owner of the accepted active project and the selected Agent directory key. A
 caller proposes typed transitions only; the model performs no reads.
@@ -163,7 +170,8 @@ coalescing, and stale-while-revalidate presentation.
    missing, replaced, linked, non-regular, escaping, or identity-mismatched
    files fail closed.
 3. **Publishers/launchers own side effects.** Only `send_direct_mail`,
-   `request_agent_sleep`, `start_agent`, `AgentSetupStore`, and
+   `request_agent_sleep`, `start_agent`, `AgentSetupStore` (composed by the
+   shell's selected-Agent `/setup` route), and
    `ProjectBootstrapRunner` write or launch. Direct mail `queued` means only
    that the complete human outbox leaf
    was published; none claims kernel pickup, target acceptance, delivery,

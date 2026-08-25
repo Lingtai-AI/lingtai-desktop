@@ -121,7 +121,8 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   deterministic payload/cursor/daemon incrementality counters and rebuild
   generation-race/capture-incapability liveness seams.
 - `tests/native_shell_test.cpp` — `native_shell_behavior` (links the shell +
-  `lib_ui` + `crl_integration.cpp`; the real-Qt layer).
+  `lib_ui` + `crl_integration.cpp`; the real-Qt layer), including the focused
+  synthetic existing-Agent setup rerun journey.
 - `tests/conversation_surface_typography_test.cpp` —
   `conversation_surface_typography` (the dedicated widget/document typography
   contract on the real `ConversationSurface`).

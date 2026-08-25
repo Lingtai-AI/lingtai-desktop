@@ -71,7 +71,7 @@ int main() {
     for (const auto &offer : all) {
         if (std::string_view(offer.name) == "setup") found_setup = true;
     }
-    expect(found_setup, "the catalog must include /setup for the workspace wizard");
+    expect(found_setup, "the catalog must include /setup for selected-Agent setup");
     const auto prefix = matching_slash_commands("/s");
     expect(prefix.size() >= 2, "/s must match sleep and suspend");
     expect(matching_slash_commands("/sleep").empty(),
