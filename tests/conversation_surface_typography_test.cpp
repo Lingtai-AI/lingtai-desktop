@@ -4,6 +4,7 @@
 #include "styles/palette.h"
 #include "styles/style_widgets.h"
 #include "ui/style/style_core_scale.h"
+#include "ui/style/style_core_palette.h"
 
 #include "direct_conversation_history.h"
 
@@ -2946,6 +2947,201 @@ void verify_incremental_append_matches_clean_presentation() {
     }
 }
 
+void set_test_palette_color(const char *name, const char *hex) {
+    const auto color = QColor(QString::fromLatin1(hex));
+    const auto result = style::main_palette::setColor(
+        QLatin1String(name),
+        static_cast<uchar>(color.red()),
+        static_cast<uchar>(color.green()),
+        static_cast<uchar>(color.blue()),
+        static_cast<uchar>(color.alpha()));
+    if (result != style::palette::SetResult::Ok
+        && result != style::palette::SetResult::Duplicate) {
+        throw std::runtime_error("receipt palette fixture must apply");
+    }
+}
+
+void apply_receipt_test_palette(bool dark) {
+    style::main_palette::reset();
+    if (!dark) {
+        return;
+    }
+    set_test_palette_color("windowBg", "#17212B");
+    set_test_palette_color("windowBgOver", "#232E3C");
+    set_test_palette_color("windowBgRipple", "#24303D");
+    set_test_palette_color("historyTextOutFg", "#E4ECF2");
+    set_test_palette_color("msgServiceFg", "#708499");
+}
+
+double relative_luminance(const QColor &color) {
+    const auto linear = [](double component) {
+        component /= 255.0;
+        return component <= 0.04045
+            ? component / 12.92
+            : std::pow((component + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * linear(color.red())
+        + 0.7152 * linear(color.green())
+        + 0.0722 * linear(color.blue());
+}
+
+double contrast_ratio(const QColor &first, const QColor &second) {
+    const auto first_luminance = relative_luminance(first);
+    const auto second_luminance = relative_luminance(second);
+    return (std::max(first_luminance, second_luminance) + 0.05)
+        / (std::min(first_luminance, second_luminance) + 0.05);
+}
+
+int exact_color_pixel_count(
+        const QImage &image,
+        const QColor &color) {
+    const auto expected = color.rgba();
+    auto count = 0;
+    for (auto y = 0; y != image.height(); ++y) {
+        for (auto x = 0; x != image.width(); ++x) {
+            count += image.pixel(x, y) == expected ? 1 : 0;
+        }
+    }
+    return count;
+}
+
+int exact_color_pill_count(const QImage &image, const QColor &color) {
+    const auto expected = color.rgba();
+    auto rows = std::vector<bool>(std::size_t(image.height()), false);
+    for (auto y = 0; y != image.height(); ++y) {
+        for (auto x = 0; x != image.width(); ++x) {
+            if (image.pixel(x, y) == expected) {
+                rows[std::size_t(y)] = true;
+                break;
+            }
+        }
+    }
+    auto pills = 0;
+    for (auto top = 0; top != image.height();) {
+        if (!rows[std::size_t(top)]) {
+            ++top;
+            continue;
+        }
+        auto bottom = top;
+        while (bottom + 1 < image.height()
+            && rows[std::size_t(bottom + 1)]) {
+            ++bottom;
+        }
+        auto columns = std::vector<bool>(std::size_t(image.width()), false);
+        for (auto y = top; y <= bottom; ++y) {
+            for (auto x = 0; x != image.width(); ++x) {
+                columns[std::size_t(x)] = columns[std::size_t(x)]
+                    || image.pixel(x, y) == expected;
+            }
+        }
+        for (auto x = 0; x != image.width();) {
+            if (!columns[std::size_t(x)]) {
+                ++x;
+                continue;
+            }
+            ++pills;
+            while (x < image.width() && columns[std::size_t(x)]) {
+                ++x;
+            }
+        }
+        top = bottom + 1;
+    }
+    return pills;
+}
+
+QImage render_receipt_chips(bool dark, bool include_peer_text = true) {
+    apply_receipt_test_palette(dark);
+    auto store = MessageReactionStore();
+    store.set_receipt("received", ReceiptStage::received);
+    store.set_receipt("seen", ReceiptStage::seen);
+    store.set_receipt("replied", ReceiptStage::replied);
+    if (include_peer_text) {
+        store.upsert_peer_reaction(
+            "replied", ReactionId{"acknowledge"}, "alpha");
+    }
+
+    const auto messages = std::vector<DirectConversationMessage>{
+        {.id = "received", .outgoing = true,
+            .timestamp = "2026-08-25T09:01:00Z",
+            .text = "Human message: received receipt below."},
+        {.id = "seen", .outgoing = true,
+            .timestamp = "2026-08-25T09:02:00Z",
+            .text = "Human message: seen receipt below."},
+        {.id = "replied", .outgoing = true,
+            .timestamp = "2026-08-25T09:03:00Z",
+            .text = "Human message: replied receipt below."},
+    };
+    ConversationSurface surface;
+    surface.setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    surface.setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    surface.resize(820, 620);
+    surface.show();
+    surface.set_conversation(
+        QStringLiteral("Agent"), messages, store.all());
+    QCoreApplication::processEvents();
+    auto image = QImage(surface.size(), QImage::Format_ARGB32);
+    image.fill(Qt::transparent);
+    surface.render(&image);
+    return image;
+}
+
+void verify_unified_receipt_chip_fill(const QString &preview_path = {}) {
+    const auto dark_fill = QColor(QStringLiteral("#45665A"));
+    const auto old_dark_fill = QColor(QStringLiteral("#354F46"));
+    const auto light_fill = QColor(QStringLiteral("#D7EBE3"));
+    const auto dark_text = QColor(QStringLiteral("#E4ECF2"));
+    const auto human_bubble = QColor(QStringLiteral("#2A4038"));
+
+    const auto dark = render_receipt_chips(true);
+    const auto dark_pills = exact_color_pill_count(dark, dark_fill);
+    if (dark_pills != 4) {
+        throw std::runtime_error(
+            "received, seen, replied, and future peer-text chips must share "
+            "the selected #45665A dark fill (found "
+            + std::to_string(dark_pills) + " pills)");
+    }
+    const auto old_dark_pixels = exact_color_pixel_count(dark, old_dark_fill);
+    if (old_dark_pixels >= 20) {
+        throw std::runtime_error(
+            "the superseded #354F46 dark receipt fill must not render as a "
+            "solid chip area (found " + std::to_string(old_dark_pixels)
+            + " exact pixels)");
+    }
+    if (dark_fill.lightnessF() <= human_bubble.lightnessF()) {
+        throw std::runtime_error(
+            "the dark receipt fill must stay lighter than the Human bubble");
+    }
+    if (contrast_ratio(dark_text, dark_fill) < 4.5) {
+        throw std::runtime_error(
+            "dark receipt text contrast must remain at least 4.5:1");
+    }
+
+    const auto light = render_receipt_chips(false);
+    const auto light_pills = exact_color_pill_count(light, light_fill);
+    if (light_pills != 4) {
+        throw std::runtime_error(
+            "light receipt chips must retain their shared #D7EBE3 fill");
+    }
+    if (!preview_path.isEmpty() && !dark.save(preview_path)) {
+        throw std::runtime_error("selected receipt preview must save");
+    }
+}
+
+void export_production_receipt_preview(const QString &preview_path) {
+    if (preview_path.isEmpty()) {
+        throw std::runtime_error("production receipt preview path is required");
+    }
+    const auto dark_fill = QColor(QStringLiteral("#45665A"));
+    const auto image = render_receipt_chips(true, false);
+    if (exact_color_pill_count(image, dark_fill) != 3) {
+        throw std::runtime_error(
+            "production receipt preview must contain exactly three chips");
+    }
+    if (!image.save(preview_path)) {
+        throw std::runtime_error("production receipt preview must save");
+    }
+}
+
 } // namespace
 
 int run_typography_test(int argc, char **argv) {
@@ -3021,6 +3217,22 @@ int run_typography_test(int argc, char **argv) {
             std::cout << "conversation surface append presentation: OK\n";
             return 0;
         }
+        if (argc > 1
+                && QString::fromLocal8Bit(argv[1])
+                    == QStringLiteral("--receipt-chip-only")) {
+            verify_unified_receipt_chip_fill(
+                argc > 2 ? QString::fromLocal8Bit(argv[2]) : QString());
+            std::cout << "conversation surface receipt chip fill: OK\n";
+            return 0;
+        }
+        if (argc > 1
+                && QString::fromLocal8Bit(argv[1])
+                    == QStringLiteral("--receipt-production-preview-only")) {
+            export_production_receipt_preview(
+                argc > 2 ? QString::fromLocal8Bit(argv[2]) : QString());
+            std::cout << "conversation surface production receipts preview: OK\n";
+            return 0;
+        }
         ConversationSurface surface;
         surface.resize(640, 480);
         verify_typography(surface, QStringLiteral("Telegram Bot"));
@@ -3038,6 +3250,7 @@ int run_typography_test(int argc, char **argv) {
         verify_message_attachment_presentation();
         verify_revision_noop_and_incremental_append();
         verify_incremental_append_matches_clean_presentation();
+        verify_unified_receipt_chip_fill();
         std::cout << "conversation surface typography: OK\n";
         return 0;
     } catch (const std::exception &error) {

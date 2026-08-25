@@ -374,7 +374,7 @@ QColor reaction_chip_fill(bool outgoing) {
     // Stronger mint than the bubble so chips read on top in both themes.
     return conversation_canvas_is_light()
         ? QColor(QStringLiteral("#D7EBE3"))
-        : QColor(QStringLiteral("#354F46"));
+        : QColor(QStringLiteral("#45665A"));
 }
 
 QTextCharFormat secondary_format() {
