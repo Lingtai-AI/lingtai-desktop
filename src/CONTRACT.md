@@ -85,7 +85,8 @@ bounded side-effect scope):
 
 - `send_direct_mail(route, text, attachments = {})` → `DirectMailSendOutcome`
   (`direct_mail_publisher.h`) — one atomic human `outbox/<id>` leaf, with
-  typed local failure facts and optional copied attachments.
+  typed local failure facts and, only on success, the exact published
+  id/timestamp/body plus descriptor-established copied-attachment metadata.
 - `request_agent_sleep(attachment, key)` → `AgentSleepRequestResult`,
   plus `capture_agent_sleep_event_baseline` / `observe_agent_sleep_received`
   (`agent_sleep.h`) — one `.sleep` marker.
@@ -102,8 +103,13 @@ caller proposes typed transitions only; the model performs no reads.
 `DirectMailboxSnapshotIndex` (`direct_conversation_history.h`) is the only
 owner of mailbox single-flight/generation acceptance. It performs no reads or
 threading; `NativeShell` supplies fingerprints/results and runs accepted jobs.
-The worker proves unchanged histories and exact append prefixes structurally;
-the index assigns stable accepted per-history revisions. A render may borrow
+The worker proves unchanged histories and exact append prefixes structurally,
+and the index assigns stable accepted per-history revisions.
+`NativeShell` owns the session-only pending-publication projection layered on
+that accepted history. It keys published rows by canonical project and Agent,
+retires them only when an accepted snapshot contains the same ID, and derives
+one presentation revision/append lineage from the merged history.
+A render may borrow
 the current immutable snapshot only for its synchronous call stack and never
 retain that pointer across snapshot acceptance.
 `KanbanSnapshotIndex` is the corresponding Kanban source/index owner;

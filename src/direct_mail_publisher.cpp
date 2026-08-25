@@ -34,6 +34,7 @@ struct StampedId {
 
 struct PreparedAttachment {
     fs::path sent_path;
+    DirectMailPublishedAttachment published;
 };
 
 [[nodiscard]] DirectMailSendOutcome failure(
@@ -220,7 +221,8 @@ void rollback_leaf(
         std::size_t index,
         const std::string &destination_name,
         std::uint64_t measured_total,
-        std::uint64_t &measured_size_out) {
+        std::uint64_t &measured_size_out,
+        DirectMailPublishedAttachment &published_out) {
     if (!attachment.source_path.is_absolute()) {
         return attachment_failure(
             DirectMailFailureReason::attachment_invalid_source,
@@ -295,11 +297,8 @@ void rollback_leaf(
     }
 
     auto result = DirectMailSendOutcome{
-        DirectMailSendResult::queued,
-        DirectMailFailureReason::none,
-        std::nullopt,
-        {},
-        {},
+        .result = DirectMailSendResult::queued,
+        .failure_reason = DirectMailFailureReason::none,
     };
     std::array<char, 64 * 1024> buffer{};
     std::uint64_t copied = 0;
@@ -343,6 +342,13 @@ void rollback_leaf(
                 count < 0 ? last_error() : std::error_code{});
         }
     }
+    struct stat destination_status {};
+    if (result.result == DirectMailSendResult::queued
+            && ::fstat(raw_destination, &destination_status) != 0) {
+        result = attachment_failure(
+            DirectMailFailureReason::attachment_copy_failure,
+            index, attachment.source_path, last_error());
+    }
     if (::close(raw_destination) != 0
             && result.result == DirectMailSendResult::queued) {
         result = attachment_failure(
@@ -357,6 +363,13 @@ void rollback_leaf(
     }
     if (result.result == DirectMailSendResult::queued) {
         measured_size_out = measured_size;
+        published_out = {
+            .display_filename = destination_name,
+            .byte_size = measured_size,
+            .media_kind = attachment.media_kind,
+            .device_id = static_cast<std::uint64_t>(destination_status.st_dev),
+            .inode_id = static_cast<std::uint64_t>(destination_status.st_ino),
+        };
     }
     return result;
 }
@@ -470,9 +483,11 @@ DirectMailSendOutcome send_direct_mail(
                         attachment.display_filename, used_names);
 
                     std::uint64_t current_size = 0;
+                    auto published = DirectMailPublishedAttachment();
                     const auto copy = copy_one_attachment(
                         attachments_directory.get(), attachment, index,
-                        destination_name, measured_total, current_size);
+                        destination_name, measured_total, current_size,
+                        published);
                     if (copy.result != DirectMailSendResult::queued) {
                         // The destination may have been created before a copy
                         // or close failure, so include it in owned rollback.
@@ -483,9 +498,13 @@ DirectMailSendOutcome send_direct_mail(
                     }
                     copied_names.push_back(destination_name);
                     measured_total += current_size;
+                    published.local_path = route.project_root / ".lingtai" / key
+                        / "mailbox" / "outbox" / stamp->directory_id
+                        / "attachments" / destination_name;
                     prepared.push_back({
                         route.project_root / ".lingtai" / key / "mailbox" / "sent"
                             / stamp->directory_id / "attachments" / destination_name,
+                        std::move(published),
                     });
                 }
 
@@ -503,12 +522,24 @@ DirectMailSendOutcome send_direct_mail(
                         copied_names, attachments_directory_created);
                     return failure(DirectMailFailureReason::publish_failure, error);
                 }
+                auto published_attachments =
+                    std::vector<DirectMailPublishedAttachment>();
+                published_attachments.reserve(prepared.size());
+                for (auto &attachment : prepared) {
+                    published_attachments.push_back(
+                        std::move(attachment.published));
+                }
                 return {
-                    DirectMailSendResult::queued,
-                    DirectMailFailureReason::none,
-                    std::nullopt,
-                    {},
-                    stamp->directory_id,
+                    .result = DirectMailSendResult::queued,
+                    .failure_reason = DirectMailFailureReason::none,
+                    .message_id = stamp->directory_id,
+                    .published_message = DirectMailPublishedMessage{
+                        .id = stamp->directory_id,
+                        .timestamp = stamp->received_at,
+                        .subject = {},
+                        .text = text,
+                        .attachments = std::move(published_attachments),
+                    },
                 };
             } catch (...) {
                 rollback_leaf(outbox.get(), leaf.get(), stamp->directory_id,

@@ -55,6 +55,7 @@ namespace lingtai::desktop {
 
 class KanbanPage;
 class AgentDetailView;
+struct DirectMailPublishedMessage;
 
 enum class ProjectOpenDisposition {
     opened,
@@ -89,6 +90,8 @@ public:
         const ProjectAttachment &,
         const AgentSnapshot &,
         bool force)>;
+    using MailboxSnapshotReadFunction = std::function<DirectMailboxSnapshot(
+        const DirectMailboxRequest &)>;
 
     explicit NativeShell(RuntimeOptions runtime_options = {});
     ~NativeShell();
@@ -106,6 +109,9 @@ public:
     // Deterministic worker seam used by the native-shell contract to hold or
     // fail a refresh. Empty restores the production incremental reader.
     void set_kanban_refresh_function(KanbanRefreshFunction refresh);
+    // Deterministic worker seam used by the native-shell contract to hold a
+    // mailbox generation. Empty restores the production snapshot reader.
+    void set_mailbox_snapshot_read_function(MailboxSnapshotReadFunction read);
     void request_new_project_at(const std::filesystem::path &destination);
     // The one Desktop-configured TUI executable for explicit first-project
     // bootstrap: the shipped `lingtai-tui` or a focused test fixture. It is
@@ -156,6 +162,10 @@ private:
         DirectMailboxSnapshot snapshot,
         DirectMailboxFingerprint fingerprint_after);
     void invalidate_mailbox_snapshot();
+    void record_published_message(const DirectConversationRoute &route,
+        const DirectMailPublishedMessage &published);
+    void reconcile_published_messages(const DirectMailboxRequest &request,
+        const DirectMailboxSnapshot &snapshot);
     struct SelectedConversationView final {
         // Borrowed from the current immutable snapshot and consumed only by
         // the synchronous render call; never retained across snapshot swaps.
@@ -163,6 +173,14 @@ private:
         DirectMailboxSnapshot::HistoryRevision revision;
         bool snapshot_ready = false;
     };
+    struct ProjectedConversationView final {
+        const DirectConversationHistory *history = nullptr;
+        DirectMailboxSnapshot::HistoryRevision revision;
+    };
+    [[nodiscard]] ProjectedConversationView project_conversation_history(
+        const DirectConversationRoute &route,
+        const DirectConversationHistory &authoritative,
+        std::uint64_t authoritative_revision);
     [[nodiscard]] SelectedConversationView refresh_unseen_badges();
     void render_conversation(
         std::optional<SelectedConversationView> history = std::nullopt);
@@ -311,6 +329,23 @@ private:
     // routes. The UI thread performs only fixed-count fingerprints; the
     // descriptor scan and JSON parse run in one detached single-flight job.
     DirectMailboxSnapshotIndex mailbox_snapshot_index_;
+    struct PendingPublishedMessage final {
+        std::filesystem::path project_root;
+        std::filesystem::path agent_key;
+        DirectConversationMessage message;
+    };
+    std::vector<PendingPublishedMessage> pending_published_messages_;
+    std::uint64_t published_messages_revision_ = 0;
+    struct ConversationHistoryProjection final {
+        std::filesystem::path project_root;
+        std::filesystem::path agent_key;
+        std::uint64_t authoritative_revision = 0;
+        std::uint64_t published_revision = 0;
+        std::uint64_t presentation_revision = 0;
+        DirectConversationHistory history;
+    };
+    std::optional<ConversationHistoryProjection> conversation_history_projection_;
+    std::uint64_t next_conversation_presentation_revision_ = 0;
     struct MailboxLoadToken {
         std::atomic<bool> cancelled{false};
     };
@@ -321,6 +356,8 @@ private:
     AttachmentPicker attachment_picker_;
     AttachmentExternalAction attachment_external_action_;
     KanbanRefreshFunction kanban_refresh_function_;
+    MailboxSnapshotReadFunction mailbox_snapshot_read_function_ =
+        read_direct_mailbox_snapshot;
     std::filesystem::path agent_start_fallback_python_;
     // One narrow injectable dependency: the configured TUI executable used by
     // the explicit New Project flow and the selected-Agent lifecycle commands.

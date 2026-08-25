@@ -4,6 +4,7 @@
 #include "direct_conversation_route.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -44,6 +45,26 @@ struct DirectMailAttachmentFailure {
     std::filesystem::path source_path;
 };
 
+// Exact copied-file facts established descriptor-relative before the atomic
+// message.json publication. They describe the current outbox copy only; they
+// make no claim that the kernel has picked it up or delivered it.
+struct DirectMailPublishedAttachment {
+    std::filesystem::path local_path;
+    std::string display_filename;
+    std::uint64_t byte_size = 0;
+    AttachmentMediaKind media_kind = AttachmentMediaKind::file;
+    std::uint64_t device_id = 0;
+    std::uint64_t inode_id = 0;
+};
+
+struct DirectMailPublishedMessage {
+    std::string id;
+    std::string timestamp;
+    std::string subject;
+    std::string text;
+    std::vector<DirectMailPublishedAttachment> attachments;
+};
+
 struct DirectMailSendOutcome {
     DirectMailSendResult result = DirectMailSendResult::failed_local;
     DirectMailFailureReason failure_reason =
@@ -52,6 +73,9 @@ struct DirectMailSendOutcome {
     std::error_code system_error;
     // Non-empty only when result is queued: the outbox leaf directory id.
     std::string message_id;
+    // Present only after the complete message.json has been atomically
+    // published. These are local publication facts, never delivery state.
+    std::optional<DirectMailPublishedMessage> published_message;
 };
 
 // Publishes one human outbox entry for the route's target, using

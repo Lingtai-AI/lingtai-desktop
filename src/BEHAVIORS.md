@@ -142,6 +142,15 @@ its code.
   the scan schedules one follow-up generation; stale results are discarded.
   The most recent completed same-route snapshot remains renderable while its
   replacement is in flight, and project/route switches never reuse it.
+- After `send_direct_mail` atomically succeeds, its exact local-publication
+  facts enter a project/Agent-keyed session projection before the composer is
+  cleared. The ordinary conversation renderer merges those rows after the
+  last accepted history, so rapid sends appear once in publication order
+  without waiting for a mailbox scan. A snapshot that does not yet contain an
+  ID leaves its pending row in place; the first accepted snapshot containing
+  that ID retires the pending copy and presents the authoritative metadata
+  without duplication. Project-open/invalidation clears the projection;
+  selection changes cannot expose another route's rows.
 - Roster state label: `Roster unavailable` when the scan is not complete,
   `No Agents found — scan complete`, or `N Agent(s) — scan complete`.
 
@@ -224,7 +233,10 @@ its code.
   returns a typed reason (plus attachment index/source when applicable), never
   returns a message id, and removes only that call's exclusive leaf. `queued`
   means the complete outbox leaf exists; it does not mean kernel pickup or
-  delivery. Empty text with no attachments writes nothing.
+  delivery. A queued result also returns the exact stamped id/timestamp/body
+  and copied outbox file name/path/size/device/inode/media facts established by
+  that publication; a failure returns none of them. Empty text with no
+  attachments writes nothing.
 
 - The composer is one vendored bounded multiline `InputField`, a 40 px
   paperclip, and an explicit `Send` `RoundButton`. The input and paperclip are

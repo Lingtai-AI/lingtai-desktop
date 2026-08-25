@@ -789,6 +789,7 @@ set(NATIVE_SHELL_JOURNEYS
     layout
     theme
     composer
+    outgoing
     kanban)
 foreach(journey IN LISTS NATIVE_SHELL_JOURNEYS)
     file(MAKE_DIRECTORY
@@ -915,6 +916,7 @@ set(LINGTAI_UI_TESTS
     native_shell_layout
     native_shell_theme
     native_shell_composer
+    native_shell_outgoing
     native_shell_kanban
     native_shell_destinations
     native_shell_presets

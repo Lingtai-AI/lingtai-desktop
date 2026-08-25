@@ -68,6 +68,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdarg>
 #include <dlfcn.h>
 #include <filesystem>
@@ -2418,17 +2419,9 @@ void verify_composer_send_behavior(
     require(status->text().isEmpty(),
         "a successful send attaches a receipt to the bubble instead of a "
         "composer Queued label");
-    const auto send_render_deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (!surface->toPlainText().contains(
-                QStringLiteral("Ted, the slice is complete."))
-            && std::chrono::steady_clock::now() < send_render_deadline) {
-        QThread::msleep(20);
-        QCoreApplication::processEvents();
-    }
     require(surface->toPlainText().contains(
                 QStringLiteral("Ted, the slice is complete.")),
-        "a successful send must refresh the shared snapshot and show the new row");
+        "a successful send must show the published row synchronously");
     require(fs::exists(outbox), "a successful send must create the outbox folder");
     require(outbox_entry_count() == outbox_before_success + 1,
         "exactly one leaf must be created by the one successful send");
@@ -2537,10 +2530,264 @@ void verify_composer_send_behavior(
         "a general publisher failure must show its transient mapped notice");
     require(tree_snapshot(blocked_project) == blocked_before,
         "a failed send must write nothing");
+    require(!surface->toPlainText().contains(
+            QStringLiteral("Should never be queued.")),
+        "a failed local publication must never create a presented row");
 
     std::error_code cleanup_error;
     fs::remove_all(sandbox, cleanup_error);
     require(!cleanup_error, "composer fixtures must be removed");
+}
+
+// A successful local publication is session truth immediately. Hold the
+// ordinary mailbox worker behind a stale snapshot to prove the real Send path
+// presents text and copied attachments without it, preserves rapid-send order
+// and route isolation, then reconciles the authoritative copies exactly once.
+void verify_outgoing_message_immediate_presentation(
+        lingtai::desktop::NativeShell &shell,
+        const fs::path &sandbox) {
+    std::error_code initial_cleanup_error;
+    fs::remove_all(sandbox, initial_cleanup_error);
+    require(!initial_cleanup_error,
+        "prior immediate-presentation fixtures must be removable");
+    auto &window = shell.window();
+    auto *surface = required_child<QTextEdit>(
+        window, "lingtai_selected_agent_conversation");
+    auto *input = static_cast<Ui::InputField *>(
+        required_child<QObject>(window, "lingtai_composer_input"));
+    auto *send_button = static_cast<Ui::RoundButton *>(
+        required_child<QObject>(window, "lingtai_composer_send_button"));
+    auto *attachment_button = required_child<QPushButton>(
+        window, "lingtai_composer_attachment_button");
+    auto *conversation_state = required_child<QLabel>(
+        window, "lingtai_selected_agent_conversation_state");
+
+    const auto project = sandbox / "project";
+    const auto mailbox = project / ".lingtai/human/mailbox";
+    write_file(project / ".lingtai/human/.agent.json",
+        R"({"agent_id":"20260101-000000-h001","agent_name":"Ted",)"
+        R"("address":"human","state":"active"})");
+    write_file(project / ".lingtai/telegram-bot/.agent.json",
+        R"({"admin":{},"agent_id":"20260712-191609-d0c8",)"
+        R"("agent_name":"telegram-bot","nickname":"Telegram Bot",)"
+        R"("address":"telegram-bot","state":"active"})");
+    write_file(project / ".lingtai/issue-643/.agent.json",
+        R"({"admin":{},"agent_id":"20260712-191610-q001",)"
+        R"("agent_name":"issue-643","address":"issue-643","state":"active"})");
+    write_file(mailbox / "inbox/20260825T120000-base/message.json",
+        conversation_envelope_without_attachments(
+            "telegram-bot", "human", "Baseline", "Initial accepted row.",
+            "received_at", "2026-08-25T12:00:00Z"));
+    const auto attachment = sandbox / "immediate-proof.txt";
+    write_file(attachment, "published attachment\n");
+
+    auto mutex = std::mutex();
+    auto condition = std::condition_variable();
+    auto hold = false;
+    auto entered = false;
+    auto release = false;
+    auto stale_returned = std::atomic<bool>(false);
+    auto stale = lingtai::desktop::DirectMailboxSnapshot();
+    struct HeldWorkerRelease final {
+        std::mutex &mutex;
+        std::condition_variable &condition;
+        bool &hold;
+        bool &release;
+        ~HeldWorkerRelease() {
+            {
+                const auto lock = std::lock_guard(mutex);
+                hold = false;
+                release = true;
+            }
+            condition.notify_all();
+        }
+    } held_worker_release{mutex, condition, hold, release};
+    shell.set_mailbox_snapshot_read_function(
+        [&](const lingtai::desktop::DirectMailboxRequest &request) {
+            auto lock = std::unique_lock(mutex);
+            if (!hold) {
+                lock.unlock();
+                return lingtai::desktop::read_direct_mailbox_snapshot(request);
+            }
+            entered = true;
+            condition.notify_all();
+            condition.wait(lock, [&] { return release; });
+            stale_returned.store(true, std::memory_order_release);
+            return stale;
+        });
+
+    static_cast<void>(shell.open_project(project, std::nullopt));
+    click_agent(shell, "telegram-bot");
+    require(wait_for_event_loop([&] {
+        return surface->toPlainText().contains(
+            QStringLiteral("Initial accepted row."));
+    }, 3000), "the fixture must begin from one accepted mailbox snapshot");
+    const auto occurrences = [](const QString &haystack, const QString &needle) {
+        auto count = 0;
+        for (auto at = 0;;) {
+            at = haystack.indexOf(needle, at);
+            if (at < 0) return count;
+            ++count;
+            at += needle.size();
+        }
+    };
+
+    const auto request = lingtai::desktop::DirectMailboxRequest{{{
+        "telegram-bot",
+        *lingtai::desktop::resolve_direct_conversation_route(
+            *shell.selection_state().active_project(),
+            project_agents(*shell.selection_state().active_project()),
+            fs::path("telegram-bot")),
+    }}};
+    stale = lingtai::desktop::read_direct_mailbox_snapshot(request);
+    stale.histories["telegram-bot"].skipped = 7;
+    {
+        const auto lock = std::lock_guard(mutex);
+        hold = true;
+    }
+
+    shell.set_attachment_picker([&] {
+        return std::vector<fs::path>{attachment};
+    });
+    attachment_button->click();
+    QCoreApplication::processEvents();
+    input->setText(QStringLiteral("Immediate mixed publication."));
+    send_button->clicked(Qt::NoModifier, Qt::LeftButton);
+    require(wait_for_event_loop([&] {
+        const auto lock = std::lock_guard(mutex);
+        return entered;
+    }, 1000), "the post-send mailbox worker must be held deterministically");
+
+    auto text = surface->toPlainText();
+    require(text.contains(QStringLiteral("Immediate mixed publication."))
+            && text.contains(QStringLiteral("immediate-proof.txt")),
+        "published text and copied attachment metadata must render before the held worker returns");
+    require(occurrences(text,
+                QStringLiteral("Immediate mixed publication.")) == 1,
+        "the first immediate publication must render exactly once");
+    require(input->getLastText().isEmpty(),
+        "immediate presentation must retain the successful composer clear");
+
+    {
+        const auto lock = std::lock_guard(mutex);
+        hold = false;
+        release = true;
+    }
+    condition.notify_all();
+    require(wait_for_event_loop([&] {
+        return stale_returned.load(std::memory_order_acquire)
+            && conversation_state->text() == QStringLiteral("7 skipped");
+    }, 1000),
+        "the deliberate transient snapshot must be accepted while the published row remains visible");
+    text = surface->toPlainText();
+    require(occurrences(text,
+                QStringLiteral("Immediate mixed publication.")) == 1,
+        "an accepted transient snapshot without the published ID must retain exactly one pending row");
+
+    {
+        const auto lock = std::lock_guard(mutex);
+        hold = true;
+        entered = false;
+        release = false;
+        stale.histories["telegram-bot"].skipped = 8;
+        stale_returned.store(false, std::memory_order_release);
+    }
+
+    input->setText(QStringLiteral("Rapid second publication."));
+    send_button->clicked(Qt::NoModifier, Qt::LeftButton);
+    require(wait_for_event_loop([&] {
+        const auto lock = std::lock_guard(mutex);
+        return entered;
+    }, 1000), "rapid-send mailbox catch-up must also be held deterministically");
+    text = surface->toPlainText();
+    require(text.indexOf(QStringLiteral("Immediate mixed publication."))
+                < text.indexOf(QStringLiteral("Rapid second publication.")),
+        "two publications before snapshot catch-up must render in publication order");
+    require(occurrences(text,
+                QStringLiteral("Immediate mixed publication.")) == 1
+            && occurrences(text,
+                QStringLiteral("Rapid second publication.")) == 1,
+        "rapid immediate publications must each render exactly once");
+
+    click_agent(shell, "issue-643");
+    text = surface->toPlainText();
+    require(!text.contains(QStringLiteral("Immediate mixed publication."))
+            && !text.contains(QStringLiteral("Rapid second publication.")),
+        "pending publications must not leak into another Agent route");
+    click_agent(shell, "telegram-bot");
+    text = surface->toPlainText();
+    require(text.contains(QStringLiteral("Immediate mixed publication."))
+            && text.contains(QStringLiteral("Rapid second publication.")),
+        "returning to the publication route must restore its pending rows");
+    require(occurrences(text,
+                QStringLiteral("Immediate mixed publication.")) == 1
+            && occurrences(text,
+                QStringLiteral("Rapid second publication.")) == 1,
+        "route restoration must not duplicate pending rows");
+
+    {
+        const auto lock = std::lock_guard(mutex);
+        hold = false;
+        release = true;
+    }
+    condition.notify_all();
+    require(wait_for_event_loop([&] {
+        return stale_returned.load(std::memory_order_acquire)
+            && conversation_state->text() == QStringLiteral("8 skipped");
+    }, 1000), "the second transient snapshot must be accepted without authoritative catch-up");
+
+    text = surface->toPlainText();
+    const auto first_transient_count = occurrences(
+        text, QStringLiteral("Immediate mixed publication."));
+    const auto second_transient_count = occurrences(
+        text, QStringLiteral("Rapid second publication."));
+    require(first_transient_count == 1 && second_transient_count == 1,
+        "a transient snapshot without the published IDs must neither hide nor duplicate them (first="
+        + std::to_string(first_transient_count) + ", second="
+        + std::to_string(second_transient_count) + ")");
+
+    write_file(mailbox / "inbox/20260825T120100-reconcile/message.json",
+        conversation_envelope_without_attachments(
+            "telegram-bot", "human", "Catch-up", "Authoritative catch-up.",
+            "received_at", "2026-08-25T12:01:00Z"));
+    require(wait_for_event_loop([&] {
+        const auto current = surface->toPlainText();
+        return current.contains(QStringLiteral("Authoritative catch-up."))
+            && occurrences(current,
+                QStringLiteral("Immediate mixed publication.")) == 1
+            && occurrences(current,
+                QStringLiteral("Rapid second publication.")) == 1;
+    }, 3000),
+        "authoritative history must reconcile each published ID to exactly one row");
+
+    // Once authoritative history has owned both IDs, removing those fixture
+    // leaves must remove the rows too; no retired optimistic copy may survive.
+    const auto outbox = mailbox / "outbox";
+    for (const auto &entry : fs::directory_iterator(outbox)) {
+        const auto body = read_file(entry.path() / "message.json");
+        if (body.find("Immediate mixed publication.") != std::string::npos
+                || body.find("Rapid second publication.") != std::string::npos) {
+            std::error_code remove_error;
+            fs::remove_all(entry.path(), remove_error);
+            require(!remove_error, "published fixture leaf must be removable");
+        }
+    }
+    write_file(mailbox / "inbox/20260825T120200-retire/message.json",
+        conversation_envelope_without_attachments(
+            "telegram-bot", "human", "Retire", "Retirement observed.",
+            "received_at", "2026-08-25T12:02:00Z"));
+    require(wait_for_event_loop([&] {
+        const auto current = surface->toPlainText();
+        return current.contains(QStringLiteral("Retirement observed."))
+            && !current.contains(QStringLiteral("Immediate mixed publication."))
+            && !current.contains(QStringLiteral("Rapid second publication."));
+    }, 3000),
+        "reconciled pending rows must retire when later authoritative history removes them");
+
+    shell.set_mailbox_snapshot_read_function({});
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "immediate-presentation fixtures must be removed");
 }
 
 // The Step-5 Request sleep action row: one button plus one status label
@@ -6767,6 +7014,13 @@ void run_native_shell_journey(
         });
         return;
     }
+    if (journey == "outgoing") {
+        with_offscreen_shell([&](NativeShell &shell) {
+            verify_outgoing_message_immediate_presentation(
+                shell, project_root / "outgoing-immediate-fixture");
+        });
+        return;
+    }
     if (journey == "lifecycle") {
         with_offscreen_shell([&](NativeShell &shell) {
             verify_request_sleep_action(
@@ -6832,6 +7086,7 @@ void run_native_shell_journey(
             "layout",
             "theme",
             "composer",
+            "outgoing",
             "kanban",
         };
         for (const auto *stage : kStages) {
@@ -6896,7 +7151,7 @@ int main(int argc, char **argv) {
                      "--plain-underline-only|--floating-composer-only|"
                      "--project-setup-only|--kanban-only]\n"
                      "  journeys: semantics bootstrap roster conversation "
-                     "lifecycle layout theme composer kanban all\n";
+                     "lifecycle layout theme composer outgoing kanban all\n";
         return 2;
     }
     try {

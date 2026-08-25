@@ -31,7 +31,10 @@ Entry point and composition root:
   It also owns the `DirectMailboxSnapshotIndex` generation state and its
   cancellation token: the timer performs only a fixed-count mailbox-folder
   fingerprint, while one detached worker reads a shared all-route snapshot
-  and posts a current-generation result back to the UI thread.
+  and posts a current-generation result back to the UI thread. Its
+  project/Agent-keyed pending-publication projection merges publisher-proven
+  outgoing rows with that accepted snapshot, maintains presentation append
+  lineage, and retires a row only after the same ID is authoritative.
   The roster column is separated from the content pane by one semantic 8px
   drag handle (`lingtai_roster_resize_handle`, distinct from the one-pixel
   `Ui::PlainShadow` `lingtai_roster_separator` that follows it) whose drags
@@ -131,7 +134,9 @@ Direct-operation/side-effect owners (the only writers/launchers):
 - `direct_mail_publisher.{h,cpp}` — `send_direct_mail`: revalidates accepted
   local-file identity/size/limits, exclusively creates one human
   `outbox/<id>` leaf, privately copies optional attachments, and publishes the
-  temp-then-renamed `message.json` last; failures roll back that owned leaf.
+  temp-then-renamed `message.json` last; success returns only the stamped
+  message and descriptor-established copied-file facts needed for immediate
+  session presentation, while failures roll back that owned leaf.
 - `agent_sleep.{h,cpp}` — `request_agent_sleep`: creates/truncates one
   `.sleep` marker; plus the best-effort `sleep_received` baseline/observe pair.
 - `agent_launch.{h,cpp}` — `start_agent`: one detached, shell-free

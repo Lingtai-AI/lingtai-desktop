@@ -112,6 +112,11 @@ touches a real Agent or project, and none depends on a network or provider.
 - Its focused `native_shell_kanban` journey holds and fails the real worker
   seam to prove warm updating, stale retention, Reload coalescing, and
   old-project generation rejection.
+- Its focused `outgoing` journey holds the real mailbox worker behind a stale
+  generation and proves synchronous text/attachment presentation, rapid-send
+  order, Agent isolation, transient-snapshot retention, authoritative
+  deduplication, and pending-row retirement through the ordinary Send/render
+  path.
 - The conversation journey's composer proof owns attachment selection,
   pending cards, no-follow/revalidated bounded thumbnail fallback, warnings,
   attachment-only publication, exact indexed versus general-failure draft

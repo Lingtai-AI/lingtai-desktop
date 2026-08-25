@@ -2582,6 +2582,13 @@ void NativeShell::set_kanban_refresh_function(KanbanRefreshFunction refresh) {
     kanban_refresh_function_ = std::move(refresh);
 }
 
+void NativeShell::set_mailbox_snapshot_read_function(
+        MailboxSnapshotReadFunction read) {
+    mailbox_snapshot_read_function_ = read
+        ? std::move(read)
+        : MailboxSnapshotReadFunction(read_direct_mailbox_snapshot);
+}
+
 void NativeShell::request_new_project_at(const fs::path &destination) {
     if (auto *input = find_ui_child<Ui::InputField>(
             *window_, "lingtai_bootstrap_destination_input")) {
@@ -3274,8 +3281,9 @@ void NativeShell::request_mailbox_snapshot() {
 void NativeShell::start_mailbox_snapshot_job(
         DirectMailboxSnapshotIndex::Job job) {
     const auto token = mailbox_load_token_;
-    std::thread([this, token, job = std::move(job)]() mutable {
-        auto snapshot = read_direct_mailbox_snapshot(job.request);
+    const auto read = mailbox_snapshot_read_function_;
+    std::thread([this, token, read, job = std::move(job)]() mutable {
+        auto snapshot = read(job.request);
         DirectMailboxSnapshotIndex::classify(job, snapshot);
         auto fingerprint_after = direct_mailbox_fingerprint(job.request);
         if (!token
@@ -3307,15 +3315,148 @@ void NativeShell::apply_mailbox_snapshot_job(
         start_mailbox_snapshot_job(std::move(*completion.follow_up));
     }
     if (completion.accepted) {
+        if (const auto *accepted = mailbox_snapshot_index_.current()) {
+            reconcile_published_messages(job.request, *accepted);
+        }
         render_roster();
     }
 }
 
 void NativeShell::invalidate_mailbox_snapshot() {
     mailbox_snapshot_index_.reset();
+    if (!pending_published_messages_.empty()) {
+        pending_published_messages_.clear();
+        ++published_messages_revision_;
+    }
+    conversation_history_projection_.reset();
     conversation_render_key_.reset();
     receipts_history_revision_ = 0;
     if (agent_roster_) agent_roster_->set_unseen_counts({});
+}
+
+void NativeShell::record_published_message(
+        const DirectConversationRoute &route,
+        const DirectMailPublishedMessage &published) {
+    auto message = DirectConversationMessage{
+        .id = published.id,
+        .outgoing = true,
+        .timestamp = published.timestamp,
+        .subject = published.subject,
+        .text = published.text,
+        .mailbox_folder = "outbox",
+    };
+    message.attachments.reserve(published.attachments.size());
+    for (const auto &attachment : published.attachments) {
+        message.attachments.push_back({
+            .local_path = attachment.local_path,
+            .display_filename = attachment.display_filename,
+            .byte_size = attachment.byte_size,
+            .media_kind = attachment.media_kind,
+            .device_id = attachment.device_id,
+            .inode_id = attachment.inode_id,
+        });
+    }
+    pending_published_messages_.push_back({
+        route.project_root,
+        route.target_directory_key,
+        std::move(message),
+    });
+    ++published_messages_revision_;
+}
+
+void NativeShell::reconcile_published_messages(
+        const DirectMailboxRequest &request,
+        const DirectMailboxSnapshot &snapshot) {
+    const auto before = pending_published_messages_.size();
+    std::erase_if(pending_published_messages_, [&](const auto &pending) {
+        const auto route = std::ranges::find_if(request.routes,
+            [&](const auto &candidate) {
+                return candidate.route.project_root == pending.project_root
+                    && candidate.route.target_directory_key == pending.agent_key;
+            });
+        if (route == request.routes.end()) return false;
+        const auto found = snapshot.histories.find(route->agent_key);
+        return found != snapshot.histories.end()
+            && std::ranges::any_of(found->second.messages,
+                [&](const auto &message) {
+                    return message.id == pending.message.id;
+                });
+    });
+    if (pending_published_messages_.size() != before) {
+        ++published_messages_revision_;
+    }
+}
+
+NativeShell::ProjectedConversationView
+NativeShell::project_conversation_history(
+        const DirectConversationRoute &route,
+        const DirectConversationHistory &authoritative,
+        std::uint64_t authoritative_revision) {
+    const auto same_source = conversation_history_projection_
+        && conversation_history_projection_->project_root == route.project_root
+        && conversation_history_projection_->agent_key
+            == route.target_directory_key
+        && conversation_history_projection_->authoritative_revision
+            == authoritative_revision
+        && conversation_history_projection_->published_revision
+            == published_messages_revision_;
+    if (same_source) {
+        return {
+            &conversation_history_projection_->history,
+            {.revision =
+                conversation_history_projection_->presentation_revision},
+        };
+    }
+
+    auto projected = authoritative;
+    for (const auto &pending : pending_published_messages_) {
+        if (pending.project_root != route.project_root
+                || pending.agent_key != route.target_directory_key) {
+            continue;
+        }
+        if (std::ranges::none_of(projected.messages,
+                [&](const auto &message) {
+                    return message.id == pending.message.id;
+                })) {
+            projected.messages.push_back(pending.message);
+        }
+    }
+
+    auto revision = DirectMailboxSnapshot::HistoryRevision();
+    const auto same_route = conversation_history_projection_
+        && conversation_history_projection_->project_root == route.project_root
+        && conversation_history_projection_->agent_key
+            == route.target_directory_key;
+    if (same_route && conversation_history_projection_->history == projected) {
+        revision.revision =
+            conversation_history_projection_->presentation_revision;
+    } else {
+        revision.revision = ++next_conversation_presentation_revision_;
+        if (same_route) {
+            const auto &before = conversation_history_projection_->history;
+            const auto diagnostics_same = before.skipped == projected.skipped
+                && before.skipped_attachments
+                    == projected.skipped_attachments;
+            const auto exact_prefix = diagnostics_same
+                && projected.messages.size() > before.messages.size()
+                && std::equal(before.messages.begin(), before.messages.end(),
+                    projected.messages.begin());
+            if (exact_prefix) {
+                revision.append_from_revision =
+                    conversation_history_projection_->presentation_revision;
+                revision.append_from = before.messages.size();
+            }
+        }
+    }
+    conversation_history_projection_ = ConversationHistoryProjection{
+        .project_root = route.project_root,
+        .agent_key = route.target_directory_key,
+        .authoritative_revision = authoritative_revision,
+        .published_revision = published_messages_revision_,
+        .presentation_revision = revision.revision,
+        .history = std::move(projected),
+    };
+    return {&conversation_history_projection_->history, revision};
 }
 
 NativeShell::SelectedConversationView
@@ -3591,6 +3732,7 @@ void NativeShell::render_conversation(
     }
 
     if (!selection_present) {
+        conversation_history_projection_.reset();
         conversation_render_key_.reset();
         DirectConversationHistory empty;
         detail_view_->render_conversation(
@@ -3607,6 +3749,7 @@ void NativeShell::render_conversation(
         selection_state_.selected_agent_directory_key());
     const bool route_available = route.has_value();
     if (!route_available) {
+        conversation_history_projection_.reset();
         conversation_render_key_.reset();
         detail_view_->clear_pending_attachments();
         DirectConversationHistory empty;
@@ -3636,8 +3779,11 @@ void NativeShell::render_conversation(
         selected_view = view;
     }
     static const auto kEmptyHistory = DirectConversationHistory();
-    const auto &history = selected_view->history
+    const auto &authoritative_history = selected_view->history
         ? *selected_view->history : kEmptyHistory;
+    const auto projected = project_conversation_history(
+        *route, authoritative_history, selected_view->revision.revision);
+    const auto &history = *projected.history;
     injected_mail_journal_.poll(
         route->project_root, route->target_directory_key);
     if (seen_injected_revision_ != injected_mail_journal_.revision()) {
@@ -3645,7 +3791,8 @@ void NativeShell::render_conversation(
         seen_injected_revision_ = injected_mail_journal_.revision();
     }
     if (receipts_history_revision_ != selected_view->revision.revision) {
-        sync_receipts_from_history(reaction_store_, history.messages);
+        sync_receipts_from_history(
+            reaction_store_, authoritative_history.messages);
         receipts_history_revision_ = selected_view->revision.revision;
     }
     const auto *presentation_name = window_->findChild<QLabel *>(
@@ -3676,7 +3823,7 @@ void NativeShell::render_conversation(
         .route = route->target_directory_key.generic_string(),
         .them = them,
         .compact = compact,
-        .history = selected_view->revision.revision,
+        .history = projected.revision.revision,
         .reactions = reaction_store_.revision(),
         .injected = injected_mail_journal_.revision(),
         .session_events = session_events_revision_,
@@ -3701,10 +3848,10 @@ void NativeShell::render_conversation(
         session_events,
         session_log_present,
         ConversationPresentationRevision{
-            .history = selected_view->revision.revision,
+            .history = projected.revision.revision,
             .append_from_history =
-                selected_view->revision.append_from_revision,
-            .append_from = selected_view->revision.append_from,
+                projected.revision.append_from_revision,
+            .append_from = projected.revision.append_from,
             .reactions = reaction_store_.revision(),
             .session_events = session_events_revision_,
         });
@@ -4111,6 +4258,9 @@ void NativeShell::handle_send_message() {
     const auto outcome = send_direct_mail(
         *route, text.toStdString(), attachments);
     if (outcome.result == DirectMailSendResult::queued) {
+        if (outcome.published_message) {
+            record_published_message(*route, *outcome.published_message);
+        }
         input->clear();
         if (detail_view_) detail_view_->clear_pending_attachments();
         if (!outcome.message_id.empty()) {

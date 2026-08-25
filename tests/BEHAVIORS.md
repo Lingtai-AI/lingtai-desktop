@@ -120,7 +120,9 @@ Qt plugin path set and an 8 s watchdog.
 - `direct_mail_publisher` proves the text-only envelope remains field-compatible
   and attachment-free; attachment-only and mixed publication use exact private
   copies, deterministic extension-preserving duplicate names, and final human
-  sent paths while bytes remain in outbox before pickup. It also pins source
+  sent paths while bytes remain in outbox before pickup. Queued outcomes expose
+  the exact stamped row and copied outbox path/size/device/inode facts, while
+  failures expose no published-row facts. It also pins source
   identity/type/size/access and forged-limit revalidation, structured failure
   facts, both-empty no-write, owned-leaf rollback (including a forced
   destination failure), fresh ids/nonoverwrite, and symlinked-route containment

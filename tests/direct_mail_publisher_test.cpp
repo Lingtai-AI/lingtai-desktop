@@ -101,6 +101,8 @@ void require_attachment_failure(
         "attachment failure must preserve its typed reason");
     require(outcome.message_id.empty(),
         "failed sends must never expose a message id");
+    require(!outcome.published_message,
+        "failed sends must never expose published-row facts");
     require(outcome.attachment_failure.has_value()
             && outcome.attachment_failure->index == index
             && outcome.attachment_failure->source_path == source,
@@ -156,6 +158,14 @@ void verify_publish_and_failure(const fs::path &sandbox) {
     const auto id = leaf.filename().string();
     require(result.message_id == id,
         "queued outcome must expose the created leaf id");
+    require(result.published_message
+            && result.published_message->id == id
+            && result.published_message->timestamp.size() == 20
+            && result.published_message->subject.empty()
+            && result.published_message->text
+                == "Ted, the slice is complete."
+            && result.published_message->attachments.empty(),
+        "queued text outcome must expose only exact atomic publication facts");
     require(id.size() == 20 && id[8] == 'T' && id[15] == '-',
         "the id must be the interoperable YYYYMMDDTHHMMSS-xxxx shape");
     require(leaf_entries(leaf) == std::vector<std::string>{"message.json"},
@@ -267,7 +277,9 @@ void verify_attachment_publish(const fs::path &sandbox) {
     const auto result = send_direct_mail(route_for(project), "", selected.accepted);
     require(result.result == DirectMailSendResult::queued
             && result.failure_reason == DirectMailFailureReason::none
-            && !result.attachment_failure && !result.message_id.empty(),
+            && !result.attachment_failure && !result.message_id.empty()
+            && result.published_message
+            && result.published_message->attachments.size() == 3,
         "attachment-only mail must queue with success-only id facts");
 
     const auto leaf = outbox_of(project) / result.message_id;
@@ -282,6 +294,24 @@ void verify_attachment_publish(const fs::path &sandbox) {
             && read_file(attachments / "report-1.pdf") == read_file(report)
             && read_file(attachments / "image.png") == read_file(image),
         "every attachment is copied byte-exactly from the validated source");
+    const auto expected_names = std::array<std::string, 3>{
+        "report.pdf", "image.png", "report-1.pdf"};
+    for (auto index = std::size_t{0}; index != expected_names.size(); ++index) {
+        const auto &published =
+            result.published_message->attachments[index];
+        struct stat copied {};
+        require(::stat(published.local_path.c_str(), &copied) == 0
+                && published.local_path
+                    == attachments / expected_names[index]
+                && published.display_filename == expected_names[index]
+                && published.byte_size
+                    == static_cast<std::uint64_t>(copied.st_size)
+                && published.device_id
+                    == static_cast<std::uint64_t>(copied.st_dev)
+                && published.inode_id
+                    == static_cast<std::uint64_t>(copied.st_ino),
+            "published attachment facts must name and identify the exact copied outbox file");
+    }
     require((permissions_of(attachments) & 0077) == 0
             && (permissions_of(attachments / "report.pdf") & 0177) == 0,
         "attachment directory and files are private");
