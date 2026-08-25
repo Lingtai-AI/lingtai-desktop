@@ -36,6 +36,7 @@ private:
     void pull_text_fields();
     void on_save();
     void on_manage_credential();
+    void changeEvent(QEvent *event) override;
 
     PresetEditorModel model_;
     QStringList existing_names_;

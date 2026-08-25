@@ -3,6 +3,8 @@
 #include "base/basic_types.h"
 #include "styles/palette.h"
 
+#include <QtGui/QGuiApplication>
+#include <QtGui/QStyleHints>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLineEdit>
 #include <QtWidgets/QPushButton>
@@ -11,7 +13,20 @@
 namespace lingtai::desktop {
 
 bool setup_is_dark(const QPalette &palette) {
-    if (st::windowBg->c.lightness() < 128) return true;
+    // Prefer the OS color scheme so setup chips track System Settings light/dark
+    // even if a stale st::windowBg token briefly disagrees.
+    if (const auto *hints = QGuiApplication::styleHints()) {
+        const auto scheme = hints->colorScheme();
+        if (scheme == Qt::ColorScheme::Dark) {
+            return true;
+        }
+        if (scheme == Qt::ColorScheme::Light) {
+            return false;
+        }
+    }
+    if (st::windowBg->c.lightness() < 128) {
+        return true;
+    }
     return palette.color(QPalette::Window).lightness() < 128;
 }
 
@@ -103,14 +118,21 @@ QString setup_plain_text_css(const SetupTokens &tokens) {
 }
 
 QString setup_choice_button_css(const SetupTokens &tokens) {
+    // Idle chips must track the page theme: white on light, elevated fill on
+    // night. Never leave Fusion/Button defaults to paint a dark plate in light.
+    const auto dark = tokens.page_bg.lightness() < 128;
+    const auto idle_fill = dark ? tokens.control_fill : tokens.surface;
+    const auto idle_text = tokens.value_text;
     return QStringLiteral(
         "QPushButton { border: 1px solid %1; border-radius: 6px; "
-        "padding: 0 12px; background: %2; color: %3; }"
-        "QPushButton:checked { background: %4; color: white; "
+        "padding: 0 12px; background-color: %2; color: %3; }"
+        "QPushButton:!checked { background-color: %2; color: %3; "
+        "border: 1px solid %1; font-weight: 400; }"
+        "QPushButton:checked { background-color: %4; color: white; "
         "border: 1px solid %4; font-weight: 600; }")
         .arg(setup_color_css(tokens.border),
-            setup_color_css(tokens.control_fill),
-            setup_color_css(tokens.value_text),
+            setup_color_css(idle_fill),
+            setup_color_css(idle_text),
             setup_color_css(tokens.selection_accent));
 }
 

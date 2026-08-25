@@ -2,6 +2,7 @@
 
 #include "setup_style.h"
 
+#include <QtCore/QEvent>
 #include <QtCore/QHash>
 #include <QtCore/QSignalBlocker>
 #include <QtCore/QVector>
@@ -184,15 +185,26 @@ public:
         for (auto index = 0; index != labels.size(); ++index) {
             auto *button = new QPushButton(labels[index], this);
             button->setCheckable(true);
+            button->setFlat(true);
+            button->setAutoFillBackground(true);
             button->setFixedHeight(32);
             button->setCursor(Qt::PointingHandCursor);
             apply_setup_fusion(button);
-            button->setStyleSheet(setup_choice_button_css(setup_tokens(palette())));
             group_->addButton(button, index);
             layout_->addWidget(button);
             buttons_.push_back(button);
         }
         layout_->addStretch();
+        apply_chrome();
+    }
+
+    void apply_chrome() {
+        const auto css = setup_choice_button_css(setup_tokens(palette()));
+        for (auto *button : buttons_) {
+            if (button) {
+                button->setStyleSheet(css);
+            }
+        }
     }
 
     void set_value(const QString &value) {
@@ -677,6 +689,14 @@ void PresetEditorPage::rebuild_from_model() {
     }
     rebuilding_ = false;
     sync_conditional_rows();
+    // Reasoning effort (and regions) recreate buttons on each rebuild; re-tint
+    // every strip so idle chips match Service tier / API under the live theme.
+    for (auto *strip : {tier_, service_tier_, thinking_, api_compat_,
+            wire_api_, transport_, regions_}) {
+        if (strip) {
+            strip->apply_chrome();
+        }
+    }
 }
 
 void PresetEditorPage::sync_conditional_rows() {
@@ -695,6 +715,19 @@ void PresetEditorPage::sync_conditional_rows() {
 
 void PresetEditorPage::on_manage_credential() {
     emit credentials_requested();
+}
+
+void PresetEditorPage::changeEvent(QEvent *event) {
+    QWidget::changeEvent(event);
+    if (event->type() != QEvent::PaletteChange) {
+        return;
+    }
+    for (auto *strip : {tier_, service_tier_, thinking_, api_compat_,
+            wire_api_, transport_, regions_}) {
+        if (strip) {
+            strip->apply_chrome();
+        }
+    }
 }
 
 void PresetEditorPage::on_save() {
