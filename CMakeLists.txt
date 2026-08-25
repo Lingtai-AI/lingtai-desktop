@@ -237,7 +237,20 @@ target_link_libraries(lingtai_desktop_native_shell
         lingtai_desktop_agent_launch lingtai_desktop_agent_prompt_actions
         lingtai_desktop_agent_preset_summary
         lingtai_desktop_agent_setup_store
+        lingtai_desktop_tui_executable
         lingtai_desktop_kanban)
+
+# Small host-executable resolver. All environment and fallback roots are
+# injected; it reads only the bounded managed-install receipt and candidate
+# metadata and never launches a process or mutates PATH.
+add_library(lingtai_desktop_tui_executable STATIC
+    src/tui_executable_resolver.cpp)
+init_target(lingtai_desktop_tui_executable)
+target_include_directories(lingtai_desktop_tui_executable PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(lingtai_desktop_tui_executable PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_desktop_tui_executable PRIVATE Qt6::Core)
 
 # Internal POSIX descriptor/no-follow primitives. No Qt, no project model, and
 # deliberately no link edge of its own: it is the shared safety mechanism every
@@ -490,6 +503,14 @@ target_compile_options(lingtai_agent_setup_store_test PRIVATE
 target_link_libraries(lingtai_agent_setup_store_test PRIVATE
     lingtai_desktop_agent_setup_store Qt6::Core)
 
+add_executable(lingtai_tui_executable_resolver_test
+    tests/tui_executable_resolver_test.cpp)
+init_target(lingtai_tui_executable_resolver_test)
+target_compile_options(lingtai_tui_executable_resolver_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_tui_executable_resolver_test PRIVATE
+    lingtai_desktop_tui_executable)
+
 add_executable(lingtai_agent_detail_view_test
     tests/agent_detail_view_test.cpp
     src/crl_integration.cpp)
@@ -741,6 +762,9 @@ add_test(NAME agent_preset_summary
 add_test(NAME agent_setup_store
     COMMAND lingtai_agent_setup_store_test
         "${CMAKE_CURRENT_BINARY_DIR}/agent-setup-store-fixture")
+add_test(NAME tui_executable_resolver
+    COMMAND lingtai_tui_executable_resolver_test
+        "${CMAKE_CURRENT_BINARY_DIR}/tui-executable-resolver-fixture")
 add_test(NAME kanban_model
     COMMAND lingtai_kanban_model_test
         "${CMAKE_CURRENT_BINARY_DIR}/kanban-model-fixture")

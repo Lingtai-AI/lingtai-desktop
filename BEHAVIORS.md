@@ -43,6 +43,12 @@ restate per-owner behavior; owner-level detail lives in `src/`, `src/ui/`, and
   exclusively on-disk `.lingtai` artifacts plus the exact-argv
   `lingtai-tui`/`python -m lingtai run` subprocesses. Enforced by link graph
   (`CMakeLists.txt:169-308`) and review.
+- **Repro-4a — Finder launch resolves the installed TUI without a shell.**
+  Normal `ShellHost` composition checks injected inherited PATH order, a valid
+  managed receipt candidate, home-local bin, then the two canonical macOS bin
+  directories. Candidates must resolve to executable regular files; no PATH
+  mutation, login shell, or subprocess participates in discovery. Proven by
+  `tui_executable_resolver`.
 - **Repro-5 — Read seams write nothing.** Every read projection
   (`project_agents`, `read_direct_conversation`,
   `read_agent_preset_summary`,

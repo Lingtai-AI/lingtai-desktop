@@ -25,6 +25,7 @@ ctest --test-dir build --output-on-failure -R '^slash_command$'
 ctest --test-dir build --output-on-failure -R '^direct_conversation_history$'
 ctest --test-dir build --output-on-failure -R '^direct_mail_publisher$'
 ctest --test-dir build --output-on-failure -R '^agent_preset_summary$'
+ctest --test-dir build --output-on-failure -R '^tui_executable_resolver$'
 ctest --test-dir build --output-on-failure -R '^agent_sleep$'
 ctest --test-dir build --output-on-failure -R '^kanban_model$'
 ctest --test-dir build --output-on-failure -R '^posix_descriptor_primitives$'
@@ -54,6 +55,13 @@ Qt plugin path set and an 8 s watchdog.
   `project_attachment_test.cpp:36`, `direct_conversation_route_test.cpp:99`).
 
 ### Pure/domain unit tests
+
+- `tui_executable_resolver` proves first-entry PATH precedence over managed and
+  fallback candidates; canonical receipt success and malformed/shape/schema
+  rejection; home-local and both redirected system fallbacks; rejection of
+  absent, directory, non-executable, dangling, and non-regular candidates;
+  symlink-path preservation for an executable regular target; and empty
+  fail-closed behavior without reading or mutating the process PATH.
 
 - `posix_descriptor_primitives` proves the descriptor seam: exactly-once
   ownership with a real recycled-descriptor double-close probe

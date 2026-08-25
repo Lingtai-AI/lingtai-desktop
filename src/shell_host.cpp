@@ -1,17 +1,19 @@
 #include "shell_host.h"
 
+#include "tui_executable_resolver.h"
+
 #include "base/event_filter.h"
 #include "ui/widgets/rp_window.h"
 
 #include <QtCore/QDir>
 #include <QtCore/QPoint>
-#include <QtCore/QStandardPaths>
 #include <QtCore/QTimer>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QFileDialog>
 #include <QtWidgets/QWidget>
 
 #include <algorithm>
+#include <cstdlib>
 #include <utility>
 
 namespace lingtai::desktop {
@@ -23,12 +25,13 @@ std::filesystem::path default_fallback_python() {
 }
 
 std::filesystem::path default_tui_executable() {
-    const auto configured = QStandardPaths::findExecutable(
-        QStringLiteral("lingtai-tui"));
-    if (configured.isEmpty()) {
-        return {};
-    }
-    return std::filesystem::path(configured.toStdU16String());
+    const auto *inherited_path = std::getenv("PATH");
+    return resolve_tui_executable({
+        .inherited_path = inherited_path ? inherited_path : "",
+        .home = std::filesystem::path(QDir::homePath().toStdU16String()),
+        .usr_local_bin = "/usr/local/bin",
+        .opt_homebrew_bin = "/opt/homebrew/bin",
+    });
 }
 
 } // namespace

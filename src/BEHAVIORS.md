@@ -184,6 +184,13 @@ its code.
 
 ## New Project (TUI functional boundary)
 
+- Normal `ShellHost` construction resolves `lingtai-tui` in exact order:
+  inherited PATH, canonical managed receipt `bin_dir`, home-local bin,
+  `/usr/local/bin`, `/opt/homebrew/bin`, then empty. The pure resolver receives
+  PATH/home/system roots as values, ignores empty PATH entries, bounds and
+  validates the receipt schema/shape, and accepts only executable regular-file
+  candidates. A benign symlink is returned as the supplied symlink path.
+
 - `New Project…` runs `<configured-tui> presets` headless (exact separate
   argv); with no configured executable it fails closed with a single status.
   While pending, both New/Open actions are disabled and the status shows the

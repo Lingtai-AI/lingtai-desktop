@@ -20,8 +20,8 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
   validated by `tests/test_repository_contract.py`.
 - `scripts/` owns the bootstrap/configure/build/smoke entry points;
   `scripts/bootstrap-deps.sh` is the only sanctioned way to populate `.deps/`.
-- `main.cpp` owns application composition: the one fallback interpreter, the
-  one configured TUI executable, and the `--smoke` path. The shell performs no
+- `ShellHost` owns application composition: the one fallback interpreter and
+  the one configured TUI executable; `main.cpp` owns the `--smoke` path. The shell performs no
   project, registry, or settings writes beyond the explicit user-triggered
   actions (composer send, Request sleep, Start Agent, plus the explicit New
   Project bootstrap delegation).
@@ -70,6 +70,9 @@ its folder.
 - The TUI executable (`lingtai-tui`) is invoked only through `NativeShell`'s
   exact separate-argv `presets`/`spawn` calls and `ProjectBootstrapRunner`;
   never a shell string, never a joined command line.
+- `resolve_tui_executable` is the sole default-executable discovery owner. It
+  consumes only injected PATH/home/system roots, validates regular executable
+  candidates, and reads only the bounded managed-install receipt.
 
 ## Forbidden dependencies
 

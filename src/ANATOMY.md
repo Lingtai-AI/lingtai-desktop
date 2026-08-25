@@ -17,12 +17,14 @@ is the only owner that links them all together. See the repository map
 
 Entry point and composition root:
 
-- `main.cpp` — `main()`: constructs one `NativeShell`, installs the two
-  injectable dependencies application composition owns (the Desktop fallback
-  interpreter and the configured TUI executable), wires the native directory
-  picker, and runs the `--smoke` / `--offscreen` paths. Sole owner of the
-  `lingtai-tui` PATH lookup and the `$HOME/.lingtai-tui/runtime/venv/bin/python`
-  fallback (`main.cpp:13`).
+- `main.cpp` — `main()`: constructs `ShellHost` and runs the `--smoke` /
+  `--offscreen` paths.
+- `shell_host.{h,cpp}` — owns all native windows, directory-picker routing,
+  the fallback interpreter, and normal TUI executable injection.
+- `tui_executable_resolver.{h,cpp}` — small discovery owner with injected
+  inherited PATH, home, and system fallback directories. It parses only the
+  bounded canonical managed-install receipt, validates executable regular
+  candidates (including benign symlink targets), and launches nothing.
 - `native_shell.{h,cpp}` — the C5 composition owner: owns one `Ui::RpWindow`,
   the roster column, the content pane, native dialog orchestration, the
   composer's local slash-command/publisher dispatch, the one-second refresh
@@ -223,6 +225,7 @@ Owned library targets (`CMakeLists.txt`) and their source membership:
 - `lingtai_desktop_mail_publisher` — `direct_mail_publisher.cpp`.
 - `lingtai_desktop_agent_preset_summary` — `agent_preset_summary.cpp`.
 - `lingtai_desktop_agent_setup_store` — `agent_setup_store.cpp`.
+- `lingtai_desktop_tui_executable` — `tui_executable_resolver.cpp`.
 - `lingtai_desktop_agent_sleep` — `agent_sleep.cpp`.
 - `lingtai_desktop_agent_launch` — `agent_launch.cpp`.
 - `lingtai_desktop_kanban` — `kanban_model.cpp`.

@@ -25,7 +25,7 @@ Obligations and prohibitions for agents working in `src/`:
    re-derive project/Agent truth, implement eligibility policy, or write
    project files itself.
 4. Keep the shell's injectable seams narrow: application composition
-   (`main.cpp`) is the only place that chooses the concrete fallback
+   (`ShellHost`) is the only place that chooses the concrete fallback
    interpreter and the configured TUI executable, and it passes them in
    through the two setters. Do not hard-code either in the shell or any
    reader.
@@ -42,6 +42,9 @@ function returns one coarse result enum.
 
 Reads (no writes, no durable state):
 
+- `resolve_tui_executable(search)` → executable path or empty
+  (`tui_executable_resolver.h`) — host-independent resolution policy over
+  injected PATH/home/system roots; it never mutates PATH or starts a process.
 - `project_agents(attachment)` → `AgentSnapshot` (`agent_projection.h`).
   The snapshot is shared live truth and keeps the human pseudo-agent row
   (routing, mailbox, and selected-detail truth consume it); only the
@@ -151,6 +154,9 @@ coalescing, and stale-while-revalidate presentation.
 - The TUI subprocess (`lingtai-tui`) is the outbound adapter for explicit
   first-project bootstrap, reached only through `ProjectBootstrapRunner` with
   exact separate argv and a bounded JSON parse.
+- The TUI executable resolver is a separate pre-launch adapter. It returns the
+  supplied candidate path (including an accepted symlink path) only when it
+  resolves to an executable regular file; malformed receipts fail closed.
 
 ## Contract rules
 

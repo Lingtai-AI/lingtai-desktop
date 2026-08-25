@@ -40,6 +40,7 @@ prefix (`CMakeLists.txt:67-70`), and declares the owned libraries:
 - `lingtai_desktop_agent_projection`, `lingtai_desktop_direct_route`,
   `lingtai_desktop_conversation`, `lingtai_desktop_mail_publisher`,
   `lingtai_desktop_agent_preset_summary`, `lingtai_desktop_agent_setup_store`,
+  `lingtai_desktop_tui_executable`,
   `lingtai_desktop_agent_sleep`,
   `lingtai_desktop_agent_launch` — one library per read/write seam
   (`CMakeLists.txt:211-308`).
@@ -55,13 +56,15 @@ surfaces at runtime, which are not linked dependencies.
 
 ## Owned source owners (`src/`)
 
-`src/main.cpp` is the persistent app entry: one `NativeShell`, the one
-Desktop fallback interpreter (`set_agent_start_fallback_python`,
-`src/main.cpp:25-27`), the one configured TUI executable resolved from PATH
-(`set_tui_executable`, `src/main.cpp:43-48`), and the `--smoke` path that
+`src/main.cpp` is the persistent app entry and owns the `--smoke` path that
 emits `LINGTAI_NATIVE_SHELL_READY` and `LINGTAI_LIB_UI_FULL_TARGET_SMOKE_OK`
 before exiting (`src/main.cpp:55-83`). `src/crl_integration.cpp` supplies the
 bounded no-emission parent `crl` update producer the smoke needs.
+
+`src/shell_host.cpp` owns normal window composition, including the fallback
+interpreter and the configured TUI executable. `src/tui_executable_resolver.*`
+owns the injected PATH → managed receipt → home-local → two system-directory
+resolution order and preserves an accepted symlink path.
 
 - `src/native_shell.{h,cpp}` — `NativeShell` (`src/native_shell.h:64`), the
   one C5-owned composition: `WorkspaceSelectionState` C1 truth, the 260px
