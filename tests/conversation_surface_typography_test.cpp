@@ -34,6 +34,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -44,6 +45,13 @@ namespace lingtai::desktop {
 namespace {
 
 constexpr auto kMessageOutgoingProperty = QTextFormat::UserProperty + 5;
+constexpr auto kMessageTimestampProperty = QTextFormat::UserProperty + 2;
+constexpr auto kMessageReactionsProperty = QTextFormat::UserProperty + 9;
+constexpr auto kMessageBlockProperty = QTextFormat::UserProperty + 1;
+constexpr auto kCodeBlockProperty = QTextFormat::UserProperty + 4;
+constexpr auto kAttachmentBlockProperty = QTextFormat::UserProperty + 11;
+constexpr auto kAttachmentMessageIdProperty = QTextFormat::UserProperty + 12;
+constexpr auto kAttachmentIndexProperty = QTextFormat::UserProperty + 13;
 
 DirectConversationAttachment projected_attachment(
         const std::filesystem::path &path,
@@ -2615,6 +2623,329 @@ void verify_revision_noop_and_incremental_append() {
     QObject::disconnect(connection);
 }
 
+QString rect_fingerprint(const QRectF &rect) {
+    return QStringLiteral("%1,%2,%3,%4")
+        .arg(rect.x(), 0, 'f', 3)
+        .arg(rect.y(), 0, 'f', 3)
+        .arg(rect.width(), 0, 'f', 3)
+        .arg(rect.height(), 0, 'f', 3);
+}
+
+// Serializes the geometry consumed by paintEvent, including both QTextLine
+// rectangles, the glyph-tight naturalTextRect, frame origins/margins, the
+// derived Human bubble, external timestamp, and current scroll translation.
+QStringList presented_geometry(ConversationSurface &surface) {
+    surface.document()->documentLayout()->documentSize();
+    const auto frames = surface.document()->rootFrame()->childFrames();
+    if (frames.isEmpty()) {
+        throw std::runtime_error("presentation fixture has no message frame");
+    }
+    auto *frame = frames.back();
+    const auto frame_format = frame->frameFormat();
+    const auto frame_rect = surface.document()->documentLayout()
+        ->frameBoundingRect(frame);
+    auto result = QStringList();
+    const auto h_offset = surface.horizontalScrollBar()->value();
+    const auto v_offset = surface.verticalScrollBar()->value();
+    auto text_bounds = QRectF();
+    QTextBlock first_block;
+    for (auto it = frame->begin(); !it.atEnd(); ++it) {
+        const auto block = it.currentBlock();
+        if (!block.isValid()) continue;
+        if (!first_block.isValid()) first_block = block;
+        const auto format = block.blockFormat();
+        const auto *layout = block.layout();
+        result.push_back(QStringLiteral(
+            "block pos=%1 margins=%2,%3,%4,%5 lines=%6")
+            .arg(rect_fingerprint(QRectF(layout->position(), QSizeF())))
+            .arg(format.leftMargin(), 0, 'f', 3)
+            .arg(format.topMargin(), 0, 'f', 3)
+            .arg(format.rightMargin(), 0, 'f', 3)
+            .arg(format.bottomMargin(), 0, 'f', 3)
+            .arg(layout->lineCount()));
+        for (auto index = 0; index != layout->lineCount(); ++index) {
+            const auto line = layout->lineAt(index);
+            const auto natural = line.naturalTextRect()
+                .translated(layout->position())
+                .translated(frame_rect.topLeft());
+            text_bounds = text_bounds.isNull()
+                ? natural : text_bounds.united(natural);
+            result.push_back(QStringLiteral("line rect=%1 natural=%2 advance=%3")
+                .arg(rect_fingerprint(line.rect()))
+                .arg(rect_fingerprint(line.naturalTextRect()))
+                .arg(line.horizontalAdvance(), 0, 'f', 3));
+        }
+    }
+    if (!first_block.isValid() || first_block.layout()->lineCount() == 0) {
+        throw std::runtime_error("appended message has no laid-out body line");
+    }
+    const auto lane_right = first_block.layout()->lineAt(0).rect()
+        .translated(first_block.layout()->position())
+        .translated(frame_rect.topLeft()).right();
+    auto bubble = text_bounds.adjusted(-15, -11, 15, 11);
+    bubble.setRight(lane_right + 15);
+    const auto timestamp = frame_format
+        .property(kMessageTimestampProperty).toString();
+    auto timestamp_font = fragments_of(first_block).front().font;
+    timestamp_font.setPixelSize(12);
+    const auto metrics = QFontMetricsF(timestamp_font);
+    const auto time_rect = QRectF(
+        bubble.right() - metrics.horizontalAdvance(timestamp),
+        bubble.bottom() + 4,
+        metrics.horizontalAdvance(timestamp), metrics.height());
+    result.push_back(QStringLiteral(
+        "frame=%1 margins=%2,%3,%4,%5 outgoing=%6 reactions=%7")
+        .arg(rect_fingerprint(frame_rect))
+        .arg(frame_format.leftMargin(), 0, 'f', 3)
+        .arg(frame_format.topMargin(), 0, 'f', 3)
+        .arg(frame_format.rightMargin(), 0, 'f', 3)
+        .arg(frame_format.bottomMargin(), 0, 'f', 3)
+        .arg(frame_format.property(kMessageOutgoingProperty).toBool())
+        .arg(frame_format.property(kMessageReactionsProperty)
+            .toStringList().join('|')));
+    result.push_back(QStringLiteral("bubble=%1 timestamp=%2 viewportBubble=%3")
+        .arg(rect_fingerprint(bubble))
+        .arg(rect_fingerprint(time_rect))
+        .arg(rect_fingerprint(bubble.translated(-h_offset, -v_offset))));
+    result.push_back(QStringLiteral(
+        "viewport=%1x%2 scroll=%3,%4 doc=%5x%6 margin=%7")
+        .arg(surface.viewport()->width())
+        .arg(surface.viewport()->height())
+        .arg(h_offset).arg(v_offset)
+        .arg(surface.document()->size().width(), 0, 'f', 3)
+        .arg(surface.document()->size().height(), 0, 'f', 3)
+        .arg(surface.document()->documentMargin(), 0, 'f', 3));
+    return result;
+}
+
+struct PresentedState {
+    QStringList geometry;
+    std::vector<QTextBlockFormat> block_formats;
+    QImage viewport;
+};
+
+PresentedState capture_presented_state(ConversationSurface &surface) {
+    auto block_formats = std::vector<QTextBlockFormat>();
+    const auto frames = surface.document()->rootFrame()->childFrames();
+    if (frames.isEmpty()) {
+        throw std::runtime_error("presentation fixture has no message frame");
+    }
+    for (auto it = frames.back()->begin(); !it.atEnd(); ++it) {
+        const auto block = it.currentBlock();
+        if (block.isValid()) block_formats.push_back(block.blockFormat());
+    }
+    return {presented_geometry(surface), std::move(block_formats),
+        surface.viewport()->grab().toImage()};
+}
+
+QString block_format_fingerprint(const QTextBlockFormat &format) {
+    return QStringLiteral(
+        "margins=%1,%2,%3,%4 message=%5 attachment=%6 "
+        "attachmentMessageId=%7 attachmentIndex=%8 code=%9 "
+        "alignment=%10 indent=%11 textIndent=%12")
+        .arg(format.leftMargin(), 0, 'f', 3)
+        .arg(format.topMargin(), 0, 'f', 3)
+        .arg(format.rightMargin(), 0, 'f', 3)
+        .arg(format.bottomMargin(), 0, 'f', 3)
+        .arg(format.property(kMessageBlockProperty).toBool())
+        .arg(format.property(kAttachmentBlockProperty).toBool())
+        .arg(format.property(kAttachmentMessageIdProperty).toString())
+        .arg(format.property(kAttachmentIndexProperty).toULongLong())
+        .arg(format.property(kCodeBlockProperty).toBool())
+        .arg(static_cast<int>(format.alignment()))
+        .arg(format.indent())
+        .arg(format.textIndent(), 0, 'f', 3);
+}
+
+void require_same_presentation(
+        const PresentedState &incremental,
+        const PresentedState &rebuilt,
+        const char *phase) {
+    if (incremental.block_formats != rebuilt.block_formats) {
+        auto mismatch = std::size_t{0};
+        const auto count = std::min(
+            incremental.block_formats.size(), rebuilt.block_formats.size());
+        while (mismatch != count
+                && incremental.block_formats[mismatch]
+                    == rebuilt.block_formats[mismatch]) {
+            ++mismatch;
+        }
+        throw std::runtime_error(std::string(phase)
+            + " incremental block format differs from clean rebuild at block "
+            + std::to_string(mismatch) + ": incremental='"
+            + (mismatch < incremental.block_formats.size()
+                ? block_format_fingerprint(
+                    incremental.block_formats[mismatch]).toStdString()
+                : "<end>")
+            + "' rebuilt='"
+            + (mismatch < rebuilt.block_formats.size()
+                ? block_format_fingerprint(
+                    rebuilt.block_formats[mismatch]).toStdString()
+                : "<end>") + "'");
+    }
+    if (incremental.geometry != rebuilt.geometry) {
+        auto mismatch = 0;
+        const auto count = std::min(
+            incremental.geometry.size(), rebuilt.geometry.size());
+        while (mismatch != count
+                && incremental.geometry[mismatch] == rebuilt.geometry[mismatch]) {
+            ++mismatch;
+        }
+        throw std::runtime_error(std::string(phase)
+            + " incremental geometry differs from clean rebuild at item "
+            + std::to_string(mismatch) + ": incremental='"
+            + (mismatch < incremental.geometry.size()
+                ? incremental.geometry[mismatch].toStdString() : "<end>")
+            + "' rebuilt='"
+            + (mismatch < rebuilt.geometry.size()
+                ? rebuilt.geometry[mismatch].toStdString() : "<end>") + "'");
+    }
+    if (incremental.viewport != rebuilt.viewport) {
+        auto changed = 0;
+        auto bounds = QRect();
+        for (auto y = 0; y != incremental.viewport.height(); ++y) {
+            for (auto x = 0; x != incremental.viewport.width(); ++x) {
+                if (incremental.viewport.pixel(x, y)
+                        != rebuilt.viewport.pixel(x, y)) {
+                    ++changed;
+                    bounds = bounds.isNull() ? QRect(x, y, 1, 1)
+                        : bounds.united(QRect(x, y, 1, 1));
+                }
+            }
+        }
+        throw std::runtime_error(std::string(phase)
+            + " incremental viewport differs from clean rebuild: "
+            + std::to_string(changed) + " pixels in "
+            + rect_fingerprint(bounds).toStdString());
+    }
+}
+
+void verify_incremental_append_matches_clean_presentation() {
+    const auto revision = [](std::uint64_t history, std::uint64_t reactions,
+            std::size_t append_from = std::numeric_limits<std::size_t>::max(),
+            std::uint64_t parent = 0) {
+        return ConversationPresentationRevision{
+            .history = history,
+            .append_from_history = parent,
+            .append_from = append_from,
+            .reactions = reactions,
+            .session_events = 30,
+        };
+    };
+    auto messages = std::vector<DirectConversationMessage>();
+    for (auto index = 0; index != 18; ++index) {
+        messages.push_back({
+            .id = "presented-" + std::to_string(index),
+            .outgoing = index % 3 == 0,
+            .timestamp = "2026-08-24T18:" + std::to_string(10 + index) + ":00Z",
+            .text = "Established conversation row " + std::to_string(index)
+                + " with enough body text to exercise the real wrapping lane.",
+            .mailbox_folder = index % 3 == 0 ? "sent" : "inbox",
+        });
+    }
+    auto reactions = std::unordered_map<std::string, MessageReactions>();
+    QTemporaryDir temporary;
+    if (!temporary.isValid()) {
+        throw std::runtime_error("append presentation sandbox must exist");
+    }
+    const auto attachment_path = std::filesystem::path(
+        temporary.path().toStdString()) / "pure-append-evidence.txt";
+    std::ofstream(attachment_path, std::ios::binary)
+        << "Attachment survives incremental transplant.\n";
+    const auto attachment = projected_attachment(
+        attachment_path, AttachmentMediaKind::file);
+    ConversationSurface incremental;
+    incremental.setAttribute(Qt::WA_DontShowOnScreen);
+    incremental.setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    incremental.resize(640, 280);
+    incremental.show();
+    incremental.set_conversation(QStringLiteral("Agent"), messages,
+        reactions, {}, revision(40, 50));
+    incremental.scroll_to_bottom();
+    QCoreApplication::processEvents();
+
+    const auto first_append_from = messages.size();
+    messages.push_back({
+        .id = "first-real-send",
+        .outgoing = true,
+        .timestamp = "2026-08-24T19:00:00Z",
+        .text = "OK, commit to main and push.",
+        .attachments = {attachment},
+        .mailbox_folder = "sent",
+    });
+    incremental.set_conversation(QStringLiteral("Agent"), messages,
+        reactions, {}, revision(41, 50, first_append_from, 40));
+    const auto first_incremental = capture_presented_state(incremental);
+
+    ConversationSurface first_reference;
+    first_reference.setAttribute(Qt::WA_DontShowOnScreen);
+    first_reference.setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    first_reference.resize(incremental.size());
+    first_reference.show();
+    first_reference.set_conversation(QStringLiteral("Agent"), messages,
+        reactions, {}, revision(41, 50));
+    first_reference.scroll_to_bottom();
+    QCoreApplication::processEvents();
+    const auto first_rebuilt = capture_presented_state(first_reference);
+    require_same_presentation(first_incremental, first_rebuilt, "first append");
+    if (first_incremental.block_formats.size() < 2) {
+        throw std::runtime_error(
+            "pure attachment append must render a tail block");
+    }
+    const auto &incremental_attachment = first_incremental.block_formats.back();
+    if (!incremental_attachment
+                .property(kAttachmentBlockProperty).toBool()
+            || incremental_attachment
+                .property(kAttachmentMessageIdProperty).toString()
+                != QStringLiteral("first-real-send")
+            || incremental_attachment
+                .property(kAttachmentIndexProperty).toULongLong() != 0) {
+        throw std::runtime_error(
+            "pure attachment append must retain its tail block semantics");
+    }
+
+    MessageReactions received;
+    received.list.push_back({
+        .id = receipt_reaction_id(ReceiptStage::received),
+        .count = 1,
+        .mine = true,
+        .source = ReactionSource::system_receipt,
+    });
+    reactions.emplace("first-real-send", received);
+    incremental.set_conversation(QStringLiteral("Agent"), messages,
+        reactions, {}, revision(41, 51));
+    incremental.scroll_to_bottom();
+    QCoreApplication::processEvents();
+
+    const auto second_append_from = messages.size();
+    messages.push_back({
+        .id = "second-real-send",
+        .outgoing = true,
+        .timestamp = "2026-08-24T19:01:00Z",
+        .text = "等一下\nCheck the second QTextBlock before continuing.",
+        .mailbox_folder = "sent",
+    });
+    incremental.set_conversation(QStringLiteral("Agent"), messages,
+        reactions, {}, revision(42, 51, second_append_from, 41));
+    const auto second_incremental = capture_presented_state(incremental);
+
+    ConversationSurface second_reference;
+    second_reference.setAttribute(Qt::WA_DontShowOnScreen);
+    second_reference.setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    second_reference.resize(incremental.size());
+    second_reference.show();
+    second_reference.set_conversation(QStringLiteral("Agent"), messages,
+        reactions, {}, revision(42, 51));
+    second_reference.scroll_to_bottom();
+    QCoreApplication::processEvents();
+    const auto second_rebuilt = capture_presented_state(second_reference);
+    require_same_presentation(second_incremental, second_rebuilt, "second append");
+    if (second_incremental.block_formats.size() < 2) {
+        throw std::runtime_error(
+            "real newline append must render multiple QTextBlocks");
+    }
+}
+
 } // namespace
 
 int run_typography_test(int argc, char **argv) {
@@ -2683,6 +3014,13 @@ int run_typography_test(int argc, char **argv) {
             std::cout << "conversation surface hidden resize reflow: OK\n";
             return 0;
         }
+        if (argc > 1
+                && QString::fromLocal8Bit(argv[1])
+                    == QStringLiteral("--append-presentation-only")) {
+            verify_incremental_append_matches_clean_presentation();
+            std::cout << "conversation surface append presentation: OK\n";
+            return 0;
+        }
         ConversationSurface surface;
         surface.resize(640, 480);
         verify_typography(surface, QStringLiteral("Telegram Bot"));
@@ -2699,6 +3037,7 @@ int run_typography_test(int argc, char **argv) {
         verify_new_day_append_scrolls_to_bottom();
         verify_message_attachment_presentation();
         verify_revision_noop_and_incremental_append();
+        verify_incremental_append_matches_clean_presentation();
         std::cout << "conversation surface typography: OK\n";
         return 0;
     } catch (const std::exception &error) {

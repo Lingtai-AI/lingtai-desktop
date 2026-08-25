@@ -1787,11 +1787,13 @@ bool ConversationSurface::append_conversation_suffix(
     }
 
     ConversationSurface suffix_surface;
+    suffix_surface.setAttribute(Qt::WA_DontShowOnScreen);
     suffix_surface.setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     suffix_surface.setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     suffix_surface.resize(
         viewport()->width() + 2 * suffix_surface.frameWidth(),
         std::max(64, viewport()->height()));
+    suffix_surface.show();
     suffix_surface.set_conversation(
         them, suffix_messages, suffix_reactions, {});
     const auto source_frames =
@@ -1835,11 +1837,19 @@ bool ConversationSurface::append_conversation_suffix(
         auto *source = source_frames[source_index];
         auto target_cursor = root_append_cursor(document());
         auto *target = target_cursor.insertFrame(source->frameFormat());
+        const auto source_first_format =
+            source->begin().currentBlock().blockFormat();
         auto source_cursor = source->firstCursorPosition();
         source_cursor.setPosition(
             source->lastPosition(), QTextCursor::KeepAnchor);
         auto target_content = target->firstCursorPosition();
+        const auto merged_block = target_content.block();
         target_content.insertFragment(QTextDocumentFragment(source_cursor));
+        // insertFragment merges its first source block into the target frame's
+        // existing empty block but keeps that block's default format. Restore
+        // the real first format after the merge, or a one-block Human suffix
+        // loses its right-anchoring margins until a complete rebuild.
+        QTextCursor(merged_block).setBlockFormat(source_first_format);
     }
     last_messages_.insert(last_messages_.end(),
         messages.begin() + static_cast<std::ptrdiff_t>(append_from),
