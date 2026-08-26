@@ -3901,15 +3901,20 @@ exit 0)",
         preset_markers[preset_name->text()] = marker->text();
         preset_allowed[preset_name->text()] = allowed->isChecked();
     }
-    require(preset_markers.size() == 3
+    require(preset_markers.size() == 6
             && preset_markers[QStringLiteral("current")]
                 == QStringLiteral("Default")
             && preset_markers[QStringLiteral("mystery-active")]
                 == QStringLiteral("Active")
             && preset_markers.contains(QStringLiteral("alt-ref"))
-            && std::ranges::all_of(preset_allowed,
-                [](const auto &entry) { return entry.second; }),
-        "rerun setup must preserve default, active, allowed, and unknown refs");
+            && preset_allowed[QStringLiteral("current")]
+            && preset_allowed[QStringLiteral("mystery-active")]
+            && preset_allowed[QStringLiteral("alt-ref")]
+            && !preset_allowed[QStringLiteral("next")]
+            && !preset_allowed[QStringLiteral("minimax")]
+            && !preset_allowed[QStringLiteral("custom")],
+        "rerun Agents must show the full system catalog, precheck only the "
+        "Agent's included refs, and preserve active/default/unknown refs");
     agents_back->click();
     QCoreApplication::processEvents();
     require(pages->currentWidget() == preset_page
@@ -3987,6 +3992,48 @@ exit 0)",
                 == QStringLiteral("/prompts/new-comment.md")
             && read_file(env) == "KEEP=1\nTAIL=2\n",
         "saved setup must update owned fields while identity stays fixed");
+
+    submit_setup();
+    enter_selected_real_preset();
+    auto *current_allowed = static_cast<QCheckBox *>(nullptr);
+    auto *next_allowed = static_cast<QCheckBox *>(nullptr);
+    for (auto *label : agents_page->findChildren<QLabel *>(
+            "lingtai_setup_agents_row_name")) {
+        auto *row = label->parentWidget()->parentWidget();
+        auto *allowed = required_child<QCheckBox>(
+            *row, "lingtai_setup_agents_allowed");
+        if (label->text() == QStringLiteral("current")) {
+            current_allowed = allowed;
+        } else if (label->text() == QStringLiteral("next")) {
+            next_allowed = allowed;
+        }
+    }
+    require(current_allowed && next_allowed && current_allowed->isChecked()
+            && !next_allowed->isChecked(),
+        "rerun Agents must expose included A and unincluded catalog B");
+    current_allowed->click();
+    next_allowed->click();
+    QCoreApplication::processEvents();
+    require(current_allowed->isChecked() && next_allowed->isChecked(),
+        "the default must remain included while another catalog preset can be added");
+    agents_continue->click();
+    QCoreApplication::processEvents();
+    commit->click();
+    QCoreApplication::processEvents();
+    const auto included_document = QJsonDocument::fromJson(
+        QByteArray::fromStdString(read_file(agent / "init.json"))).object();
+    const auto included_policy = included_document.value("manifest").toObject()
+        .value("preset").toObject();
+    require(included_policy.value("default").toString()
+                == QStringLiteral("~/.lingtai-tui/presets/saved/current.json")
+            && included_policy.value("active").toString()
+                == QStringLiteral("mystery-active")
+            && included_policy.value("allowed").toArray() == QJsonArray{
+                QStringLiteral("~/.lingtai-tui/presets/saved/current.json"),
+                path_text(global / "presets/saved/next.json"),
+                QStringLiteral("mystery-active"), QStringLiteral("alt-ref")},
+        "adding catalog B must use its canonical path in catalog order while "
+        "preserving exact default/active/unknown references");
 
     const auto after_save = tree_snapshot(project);
     const auto env_after_save = read_file(env);

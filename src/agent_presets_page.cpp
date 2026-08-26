@@ -17,8 +17,6 @@
 #include <QtWidgets/QSizePolicy>
 #include <QtWidgets/QVBoxLayout>
 
-#include <algorithm>
-
 namespace lingtai::desktop {
 namespace {
 
@@ -246,22 +244,16 @@ void AgentPresetsPage::load_existing(const QString &default_name,
     if (!active_name.isEmpty() && !references.contains(active_name)) {
         references.push_back(active_name);
     }
-    for (const auto &reference : references) {
+    const auto append_row = [&](const QString &reference,
+                                const PresetCatalogRow *known) {
         Row row;
         row.reference = reference;
         row.name = reference;
         row.summary = QStringLiteral("Existing preset reference");
-        row.allowed = allowed_names.contains(reference);
+        row.allowed = allowed_names.contains(reference)
+            || reference == default_name;
         row.active = reference == active_name;
-        const auto normalized = normalize_preset_reference(
-            reference, lingtai_global_dir());
-        const auto known = std::find_if(catalog_rows.begin(), catalog_rows.end(),
-            [&](const PresetCatalogRow &candidate) {
-                return normalize_preset_reference(
-                    QString::fromStdString(candidate.entry.path),
-                    lingtai_global_dir()) == normalized;
-            });
-        if (known != catalog_rows.end()) {
+        if (known) {
             row.name = QString::fromStdString(known->entry.name);
             row.summary = known->summary;
             row.provider = known->provider;
@@ -270,6 +262,32 @@ void AgentPresetsPage::load_existing(const QString &default_name,
         }
         rows_.push_back(row);
         if (reference == default_name) default_index_ = rows_.size() - 1;
+    };
+
+    auto remaining_references = references;
+    auto catalog_references = QStringList();
+    for (const auto &catalog_row : catalog_rows) {
+        const auto catalog_reference = QString::fromStdString(
+            catalog_row.entry.path);
+        const auto normalized = normalize_preset_reference(
+            catalog_reference, lingtai_global_dir());
+        if (catalog_references.contains(normalized)) continue;
+        catalog_references.push_back(normalized);
+        auto matched_index = -1;
+        for (auto index = 0; index != remaining_references.size(); ++index) {
+            if (normalize_preset_reference(remaining_references[index],
+                    lingtai_global_dir()) == normalized) {
+                matched_index = index;
+                break;
+            }
+        }
+        const auto reference = matched_index >= 0
+            ? remaining_references.takeAt(matched_index)
+            : catalog_reference;
+        append_row(reference, &catalog_row);
+    }
+    for (const auto &reference : remaining_references) {
+        append_row(reference, nullptr);
     }
     rebuild_rows();
 }
