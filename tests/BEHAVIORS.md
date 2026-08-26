@@ -167,8 +167,10 @@ Qt plugin path set and an 8 s watchdog.
 
 - `native_shell_behavior` proves the composed shell on a real `QApplication`
   with the real widgets shown off-screen: dark palette inheritance and
-  restoration, live light/dark scheme transitions sampling the current
-  representative palette tokens/assertions, open-project behavior, shell
+  restoration, live light→dark→light and dark→light→dark scheme transitions
+  that inspect the composer's stored text/placeholder/selection colors and
+  document format, its Send/attachment paint, and the actual Agent Config,
+  Agent Presets, and Preset Editor control palettes/QSS, open-project behavior, shell
   semantics and named regions, selected-Agent conversation, composer send,
   Request sleep / Start Agent / Presets panels,
   Kanban stale-while-revalidate updating/failure states, Reload single-flight,

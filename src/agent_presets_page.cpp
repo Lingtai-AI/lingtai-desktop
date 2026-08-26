@@ -197,6 +197,50 @@ AgentPresetsPage::AgentPresetsPage(QWidget *parent)
     connect(search, &QLineEdit::textChanged, this, [this](const QString &query) {
         apply_filter(query);
     });
+    apply_chrome();
+}
+
+void AgentPresetsPage::apply_chrome() {
+    const auto tokens = setup_tokens(palette());
+    const auto value = setup_color_css(tokens.value_text);
+    const auto muted = setup_color_css(tokens.muted_text);
+    const auto accent = setup_color_css(tokens.selection_accent);
+    if (auto *search = findChild<QLineEdit *>("lingtai_setup_agents_search")) {
+        apply_setup_line_edit(search, tokens);
+    }
+    if (auto *catalog = findChild<QScrollArea *>("lingtai_setup_agents_catalog")) {
+        catalog->setStyleSheet(QStringLiteral(
+            "QScrollArea { background: transparent; border: 1px solid %1; "
+            "border-radius: 8px; }").arg(setup_color_css(tokens.border)));
+    }
+    for (auto *label : findChildren<QLabel *>()) {
+        const auto name = label->objectName();
+        if (name == QStringLiteral("lingtai_setup_agents_message")) {
+            label->setStyleSheet(QStringLiteral("color: %1;")
+                .arg(setup_color_css(tokens.danger_text)));
+        } else if (name == QStringLiteral("lingtai_setup_agents_row_default")) {
+            label->setStyleSheet(QStringLiteral("color: %1;").arg(accent));
+        } else if (name == QStringLiteral("lingtai_setup_agents_row_caps")
+                && label->text() != QStringLiteral("—")) {
+            label->setStyleSheet(setup_chip_css(tokens));
+        } else {
+            const auto secondary = name.contains(QStringLiteral("subtitle"))
+                || name.contains(QStringLiteral("column"))
+                || name.contains(QStringLiteral("summary"))
+                || name.contains(QStringLiteral("model"))
+                || name.contains(QStringLiteral("note"))
+                || name.contains(QStringLiteral("empty"))
+                || name == QStringLiteral("lingtai_setup_agents_row_caps");
+            label->setStyleSheet(QStringLiteral("color: %1;")
+                .arg(secondary ? muted : value));
+        }
+    }
+    apply_setup_secondary_button(
+        findChild<QPushButton *>("lingtai_setup_agents_back"), tokens);
+    apply_setup_primary_button(continue_);
+    for (auto index = 0; index != rows_.size(); ++index) {
+        refresh_row_chrome(index);
+    }
 }
 
 void AgentPresetsPage::load_from_chooser(

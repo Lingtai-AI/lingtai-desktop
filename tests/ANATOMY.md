@@ -102,18 +102,19 @@ touches a real Agent or project, and none depends on a network or provider.
 
 ### 3. Real-Qt widget/shell contracts
 
-- `tests/native_shell_test.cpp` — `native_shell_behavior` ctest. The
-  real-Qt shell contract: it links `lingtai_desktop_native_shell` +
+- `tests/native_shell_test.cpp` — the split `native_shell_<journey>` ctests.
+  The real-Qt shell contract links `lingtai_desktop_native_shell` +
   `desktop-app::lib_ui` + `src/crl_integration.cpp` (`CMakeLists.txt:837-849`),
   constructs a real `QApplication`, shows the real `NativeShell`
   off-screen (`shell.show_offscreen()`), and drives the real widgets to
   prove shell semantics, named regions, geometry, the composer send flow,
   the functional composer paste/IME flow, the dashboard sections, Request
-  sleep, Start Agent, layout modes, and the
-  no-write rule. On macOS it runs with `QT_QPA_PLATFORM=cocoa`, elsewhere
-  with `offscreen` (`CMakeLists.txt:853-880`). Its fixture root is
-  `native-shell-no-write-fixture`, created by CMake and used by the test as
-  its working directory (`CMakeLists.txt:431-435`). `project_tree` snapshots
+  sleep, Start Agent, layout modes, live
+  light→dark→light and dark→light→dark stored-control palette refresh, and
+  the no-write rule. On macOS it runs with `QT_QPA_PLATFORM=cocoa`, elsewhere
+  with `offscreen` (`CMakeLists.txt:873-879`). CMake creates and passes one
+  `native-shell-<journey>-fixture` working root per split journey
+  (`CMakeLists.txt:853-872`). `project_tree` snapshots
   surround the specific read-only, no-escape, and no-write cases — and any
   explicit outside symlink target the test names — proving those fixtures
   remain unchanged through those operations; the write journeys (composer

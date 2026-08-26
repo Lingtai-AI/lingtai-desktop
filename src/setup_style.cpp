@@ -7,6 +7,7 @@
 #include <QtGui/QStyleHints>
 #include <QtWidgets/QLabel>
 #include <QtWidgets/QLineEdit>
+#include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QStyleFactory>
 
@@ -171,6 +172,17 @@ void apply_setup_line_edit(QLineEdit *field, const SetupTokens &tokens) {
     if (!field) return;
     apply_setup_fusion(field);
     field->setStyleSheet(setup_line_edit_css(tokens));
+    auto palette = field->palette();
+    palette.setColor(QPalette::Base, tokens.control_fill);
+    palette.setColor(QPalette::Text, tokens.value_text);
+    palette.setColor(QPalette::PlaceholderText, tokens.muted_text);
+    field->setPalette(palette);
+}
+
+void apply_setup_plain_text(QPlainTextEdit *field, const SetupTokens &tokens) {
+    if (!field) return;
+    apply_setup_fusion(field);
+    field->setStyleSheet(setup_plain_text_css(tokens));
     auto palette = field->palette();
     palette.setColor(QPalette::Base, tokens.control_fill);
     palette.setColor(QPalette::Text, tokens.value_text);

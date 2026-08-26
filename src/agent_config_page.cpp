@@ -362,8 +362,7 @@ AgentConfigPage::AgentConfigPage(QWidget *parent)
     comment_->setObjectName("lingtai_setup_review_comment");
     comment_->setPlaceholderText(QStringLiteral("Optional instructions for this agent."));
     comment_->setFixedHeight(96);
-    apply_setup_fusion(comment_);
-    comment_->setStyleSheet(setup_plain_text_css(tokens));
+    apply_setup_plain_text(comment_, tokens);
     layout->addWidget(make_field_block(body, QStringLiteral("Comment"), comment_));
     auto *prompt_note = make_label(body,
         QStringLiteral("Prompt files can be changed later in agent settings."),
@@ -428,6 +427,63 @@ AgentConfigPage::AgentConfigPage(QWidget *parent)
     soul_flow_->setChecked(false);
     soul_cadence_->setEnabled(false);
     if (auto *wrap = soul_cadence_->parentWidget()) wrap->setEnabled(false);
+    apply_chrome();
+}
+
+void AgentConfigPage::apply_chrome() {
+    const auto tokens = setup_tokens(palette());
+    const auto value = setup_color_css(tokens.value_text);
+    const auto muted = setup_color_css(tokens.muted_text);
+
+    for (auto *field : findChildren<QLineEdit *>()) {
+        if (field->objectName().startsWith(QStringLiteral("lingtai_setup_review_"))) {
+            apply_setup_line_edit(field, tokens);
+        }
+    }
+    if (language_) language_->setStyleSheet(setup_combo_css(tokens));
+    apply_setup_plain_text(comment_, tokens);
+    for (auto *spin : findChildren<QSpinBox *>()) {
+        spin->setStyleSheet(QStringLiteral(
+            "QSpinBox { border: none; background: transparent; padding: 0 10px; "
+            "color: %1; }").arg(value));
+    }
+    for (auto *wrap : findChildren<QWidget *>(
+            QStringLiteral("lingtai_setup_review_spin_wrap"))) {
+        wrap->setStyleSheet(setup_spin_wrap_css(tokens));
+        for (auto *button : wrap->findChildren<QPushButton *>()) {
+            button->setStyleSheet(QStringLiteral(
+                "QPushButton { background: %1; border: none; border-radius: 4px; "
+                "color: %2; font-size: 10px; font-weight: 700; padding: 0; }"
+                "QPushButton:hover { background: %3; }"
+                "QPushButton:pressed { background: %3; }"
+                "QPushButton:disabled { color: %4; background: %1; }")
+                .arg(setup_color_css(tokens.header),
+                    setup_color_css(tokens.selection_accent),
+                    setup_color_css(tokens.selected_row), muted));
+        }
+    }
+    for (auto *rule : findChildren<QFrame *>()) {
+        if (rule->frameShape() == QFrame::HLine) {
+            rule->setStyleSheet(QStringLiteral("color: %1;")
+                .arg(setup_color_css(tokens.border)));
+        }
+    }
+    for (auto *label : findChildren<QLabel *>()) {
+        const auto name = label->objectName();
+        const auto secondary = name.contains(QStringLiteral("subtitle"))
+            || name.contains(QStringLiteral("help"))
+            || name.contains(QStringLiteral("note"))
+            || name.endsWith(QStringLiteral("_status"));
+        label->setStyleSheet(QStringLiteral("color: %1;")
+            .arg(secondary ? muted : value));
+    }
+    for (const auto *name : {
+            "lingtai_setup_review_covenant_choose",
+            "lingtai_setup_review_soul_path_choose",
+            "lingtai_setup_review_back"}) {
+        apply_setup_secondary_button(findChild<QPushButton *>(name), tokens);
+    }
+    apply_setup_primary_button(commit_);
 }
 
 void AgentConfigPage::load(const QString &default_preset, int allowed_count) {

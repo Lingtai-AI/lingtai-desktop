@@ -34,6 +34,7 @@ public:
     [[nodiscard]] QString folder_name() const;
     [[nodiscard]] QString language() const;
     [[nodiscard]] QString create_status() const;
+    void apply_chrome();
 
 signals:
     void back_requested();

@@ -6,6 +6,7 @@
 
 class QLabel;
 class QLineEdit;
+class QPlainTextEdit;
 class QPushButton;
 class QWidget;
 
@@ -40,6 +41,7 @@ struct SetupTokens {
 
 void apply_setup_fusion(QWidget *widget);
 void apply_setup_line_edit(QLineEdit *field, const SetupTokens &tokens);
+void apply_setup_plain_text(QPlainTextEdit *field, const SetupTokens &tokens);
 
 QLabel *make_setup_label(
     QWidget *parent,

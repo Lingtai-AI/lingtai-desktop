@@ -22,6 +22,7 @@ public:
 
     void load(const PresetEditorLoadRequest &request);
     void refresh_credentials();
+    void apply_chrome();
     [[nodiscard]] PresetEditorModel &model() noexcept { return model_; }
     [[nodiscard]] const PresetEditorModel &model() const noexcept { return model_; }
 

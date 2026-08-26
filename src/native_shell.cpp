@@ -41,6 +41,7 @@
 #include "ui/platform/mac/ui_window_title_mac.h"
 #include "ui/rp_widget.h"
 #include "ui/style/style_core_palette.h"
+#include "ui/style/style_core.h"
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/labels.h"
@@ -1137,6 +1138,9 @@ void apply_system_palette() {
     if (system_prefers_dark_palette()) {
         apply_telegram_night_palette();
     }
+    // Publish one completed Desktop palette transaction. lib_ui subscribers
+    // (notably InputField) must observe all reset/setColor mutations together.
+    style::NotifyPaletteChanged();
 }
 
 void apply_titlebar_brand_palette(QWidget *window) {
@@ -2603,6 +2607,15 @@ void NativeShell::refresh_system_palette() {
     apply_system_palette();
     apply_titlebar_brand_palette(window_.get());
     apply_project_setup_palette(setup_route_);
+    if (auto *page = window_->findChild<AgentConfigPage *>()) {
+        page->apply_chrome();
+    }
+    if (auto *page = window_->findChild<AgentPresetsPage *>()) {
+        page->apply_chrome();
+    }
+    if (auto *page = window_->findChild<PresetEditorPage *>()) {
+        page->apply_chrome();
+    }
     apply_preset_catalog_chrome(window_.get());
     if (agent_roster_) agent_roster_->apply_chrome();
     if (content_) {

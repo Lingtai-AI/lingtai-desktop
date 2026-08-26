@@ -27,6 +27,7 @@ public:
     [[nodiscard]] QStringList allowed_names() const;
     [[nodiscard]] int allowed_count() const;
     [[nodiscard]] bool has_saved_presets() const;
+    void apply_chrome();
 
 signals:
     void back_requested();

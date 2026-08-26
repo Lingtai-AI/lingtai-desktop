@@ -568,6 +568,7 @@ PresetEditorPage::PresetEditorPage(QWidget *parent)
         model_.set_base_url(value);
         rebuild_from_model();
     });
+    apply_chrome();
 }
 
 void PresetEditorPage::load(const PresetEditorLoadRequest &request) {
@@ -722,6 +723,89 @@ void PresetEditorPage::changeEvent(QEvent *event) {
     if (event->type() != QEvent::PaletteChange) {
         return;
     }
+    apply_chrome();
+}
+
+void PresetEditorPage::apply_chrome() {
+    const auto tokens = setup_tokens(palette());
+    const auto value = setup_color_css(tokens.value_text);
+    const auto muted = setup_color_css(tokens.muted_text);
+    const auto accent = setup_color_css(tokens.selection_accent);
+
+    for (auto *field : findChildren<QLineEdit *>()) {
+        if (field->objectName().startsWith(
+                QStringLiteral("lingtai_setup_edit_preset_"))) {
+            apply_setup_line_edit(field, tokens);
+        }
+    }
+    for (auto *combo : findChildren<QComboBox *>()) {
+        if (combo->objectName().startsWith(
+                QStringLiteral("lingtai_setup_edit_preset_"))) {
+            combo->setStyleSheet(setup_combo_css(tokens));
+        }
+    }
+    for (auto *rule : findChildren<QFrame *>()) {
+        if (rule->frameShape() == QFrame::HLine) {
+            rule->setStyleSheet(QStringLiteral("color: %1;")
+                .arg(setup_color_css(tokens.border)));
+        }
+    }
+    for (auto *label : findChildren<QLabel *>()) {
+        const auto name = label->objectName();
+        if (name == QStringLiteral("lingtai_setup_edit_preset_error")) {
+            label->setStyleSheet(QStringLiteral("color: %1;")
+                .arg(setup_color_css(tokens.danger_text)));
+        } else if (name == QStringLiteral(
+                "lingtai_setup_edit_preset_credential")) {
+            const auto color = model_.is_codex_provider()
+                ? (model_.codex_bound_valid()
+                    ? tokens.selection_accent : tokens.danger_text)
+                : tokens.muted_text;
+            label->setStyleSheet(QStringLiteral("color: %1;")
+                .arg(setup_color_css(color)));
+        } else {
+            const auto secondary = name.contains(QStringLiteral("subtitle"))
+                || name.contains(QStringLiteral("note"))
+                || name.contains(QStringLiteral("field_label"))
+                || name.contains(QStringLiteral("cap_desc"))
+                || name.contains(QStringLiteral("guidance"));
+            label->setStyleSheet(QStringLiteral("color: %1;")
+                .arg(secondary ? muted : value));
+        }
+    }
+    if (auto *back = findChild<QPushButton *>(
+            "lingtai_setup_edit_preset_back")) {
+        back->setStyleSheet(QStringLiteral(
+            "QPushButton { color: %1; border: none; background: transparent; "
+            "text-align: left; padding: 0; font-weight: 600; }").arg(accent));
+    }
+    if (manage_) {
+        manage_->setStyleSheet(QStringLiteral(
+            "QPushButton { color: %1; background: %2; border: 1px solid %1; "
+            "border-radius: 8px; padding: 0 14px; font-weight: 600; } "
+            "QPushButton:hover { background: %3; }")
+            .arg(accent, setup_color_css(tokens.control_fill),
+                setup_color_css(tokens.selected_row)));
+    }
+    for (auto *toggle : findChildren<QCheckBox *>()) {
+        if (toggle->objectName().startsWith(
+                QStringLiteral("lingtai_setup_edit_preset_cap_"))) {
+            toggle->setStyleSheet(QStringLiteral(
+                "QCheckBox::indicator { width: 36px; height: 20px; }"
+                "QCheckBox::indicator:checked { image: none; border-radius: 10px; "
+                "background: %1; }").arg(accent));
+        }
+    }
+    if (auto *footer = findChild<QWidget *>(
+            "lingtai_setup_edit_preset_footer")) {
+        footer->setStyleSheet(QStringLiteral(
+            "QWidget#lingtai_setup_edit_preset_footer { background: transparent; "
+            "border-top: 1px solid %1; }")
+            .arg(setup_color_css(tokens.border)));
+    }
+    apply_setup_secondary_button(findChild<QPushButton *>(
+        "lingtai_setup_edit_preset_cancel"), tokens);
+    apply_setup_primary_button(save_);
     for (auto *strip : {tier_, service_tier_, thinking_, api_compat_,
             wire_api_, transport_, regions_}) {
         if (strip) {

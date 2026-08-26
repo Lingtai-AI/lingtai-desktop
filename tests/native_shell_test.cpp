@@ -1,5 +1,8 @@
 #include "native_shell.h"
+#include "agent_config_page.h"
 #include "agent_detail_view.h"
+#include "agent_presets_page.h"
+#include "preset_editor_page.h"
 #include "shell_host.h"
 #include "agent_projection.h"
 #include "preset_editor_model.h"
@@ -5331,6 +5334,188 @@ void verify_telegram_theme_reset(
     require(conversation->isVisible(),
         "the conversation must be the visible default content of a selected "
         "Agent");
+
+    // A live palette change must reach the real stored colors inside lib_ui's
+    // composer and every setup control whose QSS/QPalette embeds theme
+    // literals. Exercise both round trips in this one long-lived shell so a
+    // construction-only style can never pass by matching the initial theme.
+    const auto raw_composer = composer_input->rawTextEdit();
+    auto *attachment_button = required_child<QPushButton>(
+        window, "lingtai_composer_attachment_button");
+    auto *agents_page = required_child<lingtai::desktop::AgentPresetsPage>(
+        window, "lingtai_setup_agents_page");
+    auto *review_page = required_child<lingtai::desktop::AgentConfigPage>(
+        window, "lingtai_setup_review_page");
+    auto *editor_page = required_child<lingtai::desktop::PresetEditorPage>(
+        window, "lingtai_setup_edit_preset_page");
+    auto *kanban_page = required_child<QWidget>(window, "lingtai_kanban_page");
+
+    QComboBox chooser;
+    chooser.addItem(QStringLiteral("theme-probe"));
+    chooser.setItemData(0, QStringLiteral("Palette probe"), Qt::UserRole);
+    chooser.setItemData(0, QStringLiteral("fixture"), Qt::UserRole + 2);
+    chooser.setItemData(0, QStringLiteral("model"), Qt::UserRole + 3);
+    chooser.setItemData(0, false, Qt::UserRole + 4);
+    chooser.setItemData(0, true, Qt::UserRole + 5);
+    chooser.setItemData(0, true, Qt::UserRole + 6);
+    agents_page->load_from_chooser(&chooser, QStringLiteral("theme-probe"));
+
+    const auto image_contains = [&](QWidget *widget, const QColor &expected) {
+        widget->repaint();
+        QCoreApplication::processEvents();
+        const auto image = widget->grab().toImage();
+        for (auto y = 0; y != image.height(); ++y) {
+            for (auto x = 0; x != image.width(); ++x) {
+                if (color_close(image.pixelColor(x, y), expected)) return true;
+            }
+        }
+        return false;
+    };
+    const auto require_css = [](QWidget *widget, const QString &needle,
+                                const char *message) {
+        require(widget->styleSheet().contains(needle), message);
+    };
+    const auto assert_live_widget_colors = [&](Qt::ColorScheme scheme) {
+        const auto dark = scheme == Qt::ColorScheme::Dark;
+        const auto control = dark ? QStringLiteral("#202B36")
+                                  : QStringLiteral("#FFFFFF");
+        const auto value = dark ? QStringLiteral("#E4ECF2")
+                                : QStringLiteral("#1F2933");
+        const auto muted = dark ? QStringLiteral("#7F91A4")
+                                : QStringLiteral("#6B7280");
+        const auto chip_fill = dark ? QStringLiteral("#232E3C")
+                                    : QStringLiteral("#E8F1F8");
+
+        require(raw_composer->palette().color(QPalette::Text)
+                    == st::defaultInputField.textFg->c
+                && raw_composer->palette().color(QPalette::Highlight)
+                    == st::msgInBgSelected->c
+                && raw_composer->palette().color(QPalette::HighlightedText)
+                    == st::historyTextInFgSelected->c,
+            "live theme must rewrite the composer inner text and selection palette");
+        const auto fragment = raw_composer->document()->begin().begin().fragment();
+        require(fragment.isValid()
+                && fragment.charFormat().foreground().color()
+                    == st::defaultInputField.textFg->c,
+            "live theme must rewrite existing composer document text formats");
+        require(send_button->isEnabled() && attachment_button->isEnabled(),
+            "theme refresh must preserve enabled composer actions");
+        require(image_contains(send_button, st::activeButtonBg->c),
+            "the enabled Send control must paint the current active-button fill");
+        require(image_contains(attachment_button, st::windowSubTextFg->c),
+            "the attachment control must paint the current secondary ink");
+        composer_input->setText(QString());
+        composer_input->clearFocus();
+        window.setFocus();
+        QCoreApplication::processEvents();
+        require(image_contains(composer_input, st::defaultInputField.placeholderFg->c),
+            "the empty composer must paint the current placeholder color");
+        composer_input->setText(QStringLiteral("Theme probe"));
+        QCoreApplication::processEvents();
+
+        for (const auto *name : {
+                "lingtai_setup_review_agent_name",
+                "lingtai_setup_review_folder_name",
+                "lingtai_setup_review_covenant",
+                "lingtai_setup_review_soul_path"}) {
+            auto *field = required_child<QLineEdit>(*review_page, name);
+            require(field->palette().color(QPalette::Base) == QColor(control)
+                    && field->palette().color(QPalette::Text) == QColor(value)
+                    && field->palette().color(QPalette::PlaceholderText)
+                        == QColor(muted),
+                "Agent Config line edits must reapply current Base/Text/placeholder colors");
+            require_css(field, control,
+                "Agent Config line-edit QSS must track the live theme");
+        }
+        require_css(required_child<QComboBox>(*review_page,
+                "lingtai_setup_review_language"), control,
+            "Agent Config combo QSS must track the live theme");
+        require_css(required_child<QPlainTextEdit>(*review_page,
+                "lingtai_setup_review_comment"), value,
+            "Agent Config plain-text QSS must track the live theme");
+        require_css(required_child<QWidget>(*review_page,
+                "lingtai_setup_review_spin_wrap"), control,
+            "Agent Config spin chrome must track the live theme");
+        require_css(required_child<QPushButton>(*review_page,
+                "lingtai_setup_review_back"), control,
+            "Agent Config secondary action must track the live theme");
+        require_css(required_child<QLabel>(*review_page,
+                "lingtai_setup_review_heading"), value,
+            "Agent Config labels must track the live theme");
+
+        auto *agents_search = required_child<QLineEdit>(
+            *agents_page, "lingtai_setup_agents_search");
+        require(agents_search->palette().color(QPalette::Base) == QColor(control)
+                && agents_search->palette().color(QPalette::Text) == QColor(value)
+                && agents_search->palette().color(QPalette::PlaceholderText)
+                    == QColor(muted),
+            "Agent Presets search must reapply current Base/Text/placeholder colors");
+        require_css(required_child<QWidget>(*agents_page,
+                "lingtai_setup_agents_catalog"), dark
+                    ? QStringLiteral("rgba(255, 255, 255, 38)")
+                    : QStringLiteral("#D8DEE6"),
+            "Agent Presets catalog border must track the live theme");
+        require_css(required_child<QLabel>(*agents_page,
+                "lingtai_setup_agents_row_name"), value,
+            "Agent Presets row text must track the live theme");
+        require_css(required_child<QWidget>(*agents_page,
+                "lingtai_setup_agents_row_default"),
+            st::windowBgActive->c.name(QColor::HexRgb).toUpper(),
+            "Agent Presets row marker must track the live accent");
+        require_css(required_child<QWidget>(*agents_page,
+                "lingtai_setup_agents_row_caps"), chip_fill,
+            "Agent Presets capability chips must track the live theme");
+
+        for (const auto *name : {
+                "lingtai_setup_edit_preset_name",
+                "lingtai_setup_edit_preset_summary",
+                "lingtai_setup_edit_preset_gains",
+                "lingtai_setup_edit_preset_losses",
+                "lingtai_setup_edit_preset_model_edit",
+                "lingtai_setup_edit_preset_base_url",
+                "lingtai_setup_edit_preset_api_key"}) {
+            auto *field = required_child<QLineEdit>(*editor_page, name);
+            require(field->palette().color(QPalette::Base) == QColor(control)
+                    && field->palette().color(QPalette::Text) == QColor(value)
+                    && field->palette().color(QPalette::PlaceholderText)
+                        == QColor(muted),
+                "Preset Editor line edits must reapply current actual colors");
+        }
+        require_css(required_child<QComboBox>(*editor_page,
+                "lingtai_setup_edit_preset_provider"), control,
+            "Preset Editor combo QSS must track the live theme");
+        require_css(required_child<QPushButton>(*editor_page,
+                "lingtai_setup_edit_preset_manage"), control,
+            "Preset Editor Manage action must track the live theme");
+        require_css(required_child<QPushButton>(*editor_page,
+                "lingtai_setup_edit_preset_cancel"), control,
+            "Preset Editor secondary action must track the live theme");
+        require_css(required_child<QLabel>(*editor_page,
+                "lingtai_setup_edit_preset_heading"), value,
+            "Preset Editor labels must track the live theme");
+        auto *choice = required_child<QWidget>(
+            *editor_page, "lingtai_setup_edit_preset_tier");
+        require(!choice->findChildren<QPushButton *>().isEmpty()
+                && choice->findChildren<QPushButton *>().front()->styleSheet()
+                    .contains(control),
+            "Preset Editor choice strips must retain live theme chrome");
+
+        require(kanban_page->palette().color(QPalette::Window) == st::windowBg->c,
+            "the already-correct Kanban surface must remain coherent");
+    };
+
+    const auto switch_and_assert = [&](Qt::ColorScheme scheme) {
+        style_hints->setColorScheme(scheme);
+        QCoreApplication::processEvents();
+        QCoreApplication::processEvents();
+        assert_live_widget_colors(scheme);
+    };
+    composer_input->setText(QStringLiteral("Theme probe"));
+    switch_and_assert(Qt::ColorScheme::Light);
+    switch_and_assert(Qt::ColorScheme::Dark);
+    switch_and_assert(Qt::ColorScheme::Light);
+    switch_and_assert(Qt::ColorScheme::Dark);
+    switch_and_assert(Qt::ColorScheme::Light);
     require(!preset_owner->isVisible(),
         "Presets must not stack under the conversation in the chat-first "
         "detail");
