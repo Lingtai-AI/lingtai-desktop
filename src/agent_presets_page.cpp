@@ -17,6 +17,8 @@
 #include <QtWidgets/QSizePolicy>
 #include <QtWidgets/QVBoxLayout>
 
+#include <algorithm>
+
 namespace lingtai::desktop {
 namespace {
 
@@ -201,6 +203,7 @@ void AgentPresetsPage::load_from_chooser(
         QComboBox *chooser, const QString &preferred_default) {
     existing_mode_ = false;
     rows_.clear();
+    loaded_allowed_names_.clear();
     default_index_ = -1;
     if (!chooser) {
         rebuild_rows();
@@ -236,8 +239,15 @@ void AgentPresetsPage::load_existing(const QString &default_name,
         const std::vector<PresetCatalogRow> &catalog_rows) {
     existing_mode_ = true;
     rows_.clear();
+    loaded_allowed_names_.clear();
+    for (const auto &reference : allowed_names) {
+        if (!reference.isEmpty()
+                && !loaded_allowed_names_.contains(reference)) {
+            loaded_allowed_names_.push_back(reference);
+        }
+    }
     default_index_ = -1;
-    auto references = allowed_names;
+    auto references = loaded_allowed_names_;
     if (!default_name.isEmpty() && !references.contains(default_name)) {
         references.push_back(default_name);
     }
@@ -250,7 +260,7 @@ void AgentPresetsPage::load_existing(const QString &default_name,
         row.reference = reference;
         row.name = reference;
         row.summary = QStringLiteral("Existing preset reference");
-        row.allowed = allowed_names.contains(reference)
+        row.allowed = loaded_allowed_names_.contains(reference)
             || reference == default_name;
         row.active = reference == active_name;
         if (known) {
@@ -299,13 +309,28 @@ QString AgentPresetsPage::default_name() const {
 
 QStringList AgentPresetsPage::allowed_names() const {
     auto names = QStringList();
-    if (default_index_ >= 0 && default_index_ < rows_.size()
-            && rows_[default_index_].allowed) {
-        names.push_back(rows_[default_index_].reference);
+    if (!existing_mode_) {
+        if (default_index_ >= 0 && default_index_ < rows_.size()
+                && rows_[default_index_].allowed) {
+            names.push_back(rows_[default_index_].reference);
+        }
+        for (auto index = 0; index != rows_.size(); ++index) {
+            if (index == default_index_ || !rows_[index].allowed) continue;
+            names.push_back(rows_[index].reference);
+        }
+        return names;
     }
-    for (auto index = 0; index != rows_.size(); ++index) {
-        if (index == default_index_ || !rows_[index].allowed) continue;
-        names.push_back(rows_[index].reference);
+
+    for (const auto &reference : loaded_allowed_names_) {
+        const auto included = std::ranges::any_of(rows_, [&](const Row &row) {
+            return row.reference == reference && row.allowed;
+        });
+        if (included && !names.contains(reference)) names.push_back(reference);
+    }
+    for (const auto &row : rows_) {
+        if (row.allowed && !names.contains(row.reference)) {
+            names.push_back(row.reference);
+        }
     }
     return names;
 }

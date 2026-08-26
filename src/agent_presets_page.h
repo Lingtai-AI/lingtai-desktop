@@ -61,6 +61,7 @@ private:
     QLabel *message_ = nullptr;
     QPushButton *continue_ = nullptr;
     QVector<Row> rows_;
+    QStringList loaded_allowed_names_;
     int default_index_ = -1;
     bool existing_mode_ = false;
 };
