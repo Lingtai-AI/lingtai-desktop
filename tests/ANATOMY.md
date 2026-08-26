@@ -184,6 +184,14 @@ touches a real Agent or project, and none depends on a network or provider.
   metadata) with the exact 15/14/13 pixel values. Its attachment coverage sends
   real viewport press/move/release events to distinguish exact action clicks
   from native text-selection drags. It takes no fixture root.
+- `tests/conversation_surface_scroll_test.cpp` —
+  `conversation_surface_scroll` ctest. A focused real-Qt surface-only contract:
+  it constructs `QApplication` and production `ConversationSurface`, sends
+  real `QWheelEvent`s to the viewport, and proves zero-delta queued-pin
+  cancellation, tiny-update and momentum ownership, non-jumping `ScrollEnd`,
+  ordinary bottom-follow, manual non-bottom preservation, and delegation to
+  native `QTextEdit` wheel movement. It does not construct `AgentDetailView`
+  or `NativeShell` and takes no fixture root.
 
 ### 4. Process-level smoke/persistence
 
@@ -225,6 +233,7 @@ no fixture); the test itself creates and removes its sandbox within that root
 | `native_shell_destinations_test.cpp` | `lingtai_native_shell_destinations_test` | `native_shell_destinations` | — |
 | `native_shell_presets_test.cpp` | `lingtai_native_shell_presets_test` | `native_shell_presets` | `native-shell-presets-fixture` (CMake-created) |
 | `conversation_surface_typography_test.cpp` | `lingtai_conversation_surface_typography_test` | `conversation_surface_typography` | — (no fixture) |
+| `conversation_surface_scroll_test.cpp` | `lingtai_conversation_surface_scroll_test` | `conversation_surface_scroll` | — (no fixture) |
 | `test_native_shell.py` | `lingtai_desktop_smoke` (built) | `native_shell` | `$<TARGET_FILE:lingtai_desktop_smoke>` |
 
 ## Fixture and data ownership
@@ -246,8 +255,9 @@ no fixture); the test itself creates and removes its sandbox within that root
   `outside_before` — remains unchanged. It is not an OS or process sandbox
   and does not claim nothing can leak to an arbitrary unobserved outside
   path.
-- The Qt-aware tests are not run under the domain layer: `native_shell_test`
-  and `conversation_surface_typography_test` need the `lib_ui` link edge and
+- The Qt-aware tests are not run under the domain layer: `native_shell_test`,
+  `conversation_surface_typography_test`, and
+  `conversation_surface_scroll_test` need the `lib_ui` link edge and
   `test_native_shell.py` needs the built smoke executable, so all are
   registered as their own ctests and run with the platform Qt plugin.
 - Production ownership is deliberately not duplicated here: the readers,

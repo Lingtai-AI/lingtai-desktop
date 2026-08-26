@@ -96,11 +96,13 @@ Public ports (`src/ui/conversation_surface.h:26-37`):
   carrying message id, ordered index, and displayed identity to the native
   shell; the widget launches nothing.
 
-View-only state (`conversation_surface.h:52-56`): the last accepted `them_`,
-`last_messages_`, `last_plain_state_`, and the quantized `last_layout_width_`
-used to avoid reflowing on every pixel of a live resize. There is no document
-model here beyond what Qt's `QTextDocument` owns; blocks are rebuilt
-programmatically from the caller rows.
+View-only state: the last accepted `them_`, `last_messages_`,
+`last_plain_state_`, the quantized `last_layout_width_` used to avoid reflowing
+on every pixel of a live resize, and one phase-driven wheel-gesture flag plus
+the existing deferred-pin generation. The flag is necessary because a
+pixel-precise trackpad gesture can begin without moving `QScrollBar`'s integer
+value. There is no document model here beyond what Qt's `QTextDocument` owns;
+blocks are rebuilt programmatically from the caller rows.
 
 Painting/layout (`conversation_surface.cpp:239-307`): `paintEvent` fills the
 viewport with the `st::windowBgOver` chat backdrop, paints rounded bubbles
@@ -128,6 +130,12 @@ card surface, and inline `QTextImageFormat` resources are bounded by the shared
 thumbnail helper. Open/Reveal are semantic anchors, not child widgets, so they
 have no separate `objectName` and retain the conversation surface's inherited
 text accessibility.
+
+Viewport wheel observation (`eventFilter`) cancels any queued automatic
+bottom pin before native handling and tracks `ScrollBegin`/updates/momentum
+through `ScrollEnd`. Append and rebuild follow the bottom only outside that
+active interval. The filter never consumes wheel events; `QTextEdit` remains
+the scrolling, kinetic-motion, selection, copy, and accessibility owner.
 
 Build ownership: `CMakeLists.txt:180` compiles `src/ui/conversation_surface.cpp`
 into `lingtai_desktop_native_shell`.

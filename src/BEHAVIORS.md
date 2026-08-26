@@ -126,9 +126,14 @@ its code.
   `QTextDocument` mutation. A worker-proven direct append from the currently
   presented revision keeps the complete indexed history, copies only the new
   presentation suffix, retains existing message frames and the Ctrl+U window,
-  and follows the bottom only when the viewport was already there. Revision
-  gaps, replacement/reorder/shrink, or independent presentation changes use a
-  complete rebuild.
+  and follows the bottom only when the viewport was already there and no
+  trackpad gesture/momentum is active. Any viewport wheel event cancels an
+  already queued delayed bottom pin before native `QTextEdit` handling; phase-
+  bearing gestures retain reader ownership through momentum until `ScrollEnd`,
+  even when a zero/tiny delta does not change the integer scrollbar value.
+  `ScrollEnd` itself never jumps. Revision gaps, replacement/reorder/shrink, or
+  independent presentation changes use a complete rebuild under the same
+  gesture-aware follow rule.
 
 - `open_project` attaches the selected directory, requires a real, safe,
   contained `.lingtai` directory, projects one `AgentSnapshot`, and activates

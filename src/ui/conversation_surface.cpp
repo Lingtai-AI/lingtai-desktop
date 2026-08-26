@@ -39,6 +39,7 @@
 #include <QtGui/QTextFrame>
 #include <QtGui/QTextImageFormat>
 #include <QtGui/QTextLayout>
+#include <QtGui/QWheelEvent>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QScrollBar>
 
@@ -1804,7 +1805,8 @@ bool ConversationSurface::append_conversation_suffix(
 
     auto *scrollbar = verticalScrollBar();
     const auto previous_scroll = scrollbar->value();
-    const auto was_at_bottom = previous_scroll >= scrollbar->maximum();
+    const auto was_at_bottom = !wheel_gesture_active_
+        && previous_scroll >= scrollbar->maximum();
     const auto old_frames = document()->rootFrame()->childFrames();
     if (old_frames.isEmpty()) return false;
 
@@ -1973,7 +1975,8 @@ void ConversationSurface::rebuild_document() {
     // already there and otherwise preserves the prior non-bottom position.
     auto *scrollbar = verticalScrollBar();
     const auto previous = scrollbar->value();
-    const auto was_at_bottom = previous >= scrollbar->maximum();
+    const auto was_at_bottom = !wheel_gesture_active_
+        && previous >= scrollbar->maximum();
 
     auto *document = this->document();
     document->clear();
@@ -2508,6 +2511,10 @@ void ConversationSurface::scroll_to_bottom_now() {
 }
 
 void ConversationSurface::scroll_to_bottom() {
+    if (wheel_gesture_active_) {
+        ++scroll_pin_generation_;
+        return;
+    }
     scroll_to_bottom_now();
     // QTextEdit may still sync its slider from a queued documentSizeChanged
     // after a new-day frame top margin lands. Pin again once that maximum is
@@ -2517,6 +2524,7 @@ void ConversationSurface::scroll_to_bottom() {
     const auto generation = ++scroll_pin_generation_;
     QTimer::singleShot(0, this, [this, generation, pinned_at] {
         if (generation != scroll_pin_generation_) return;
+        if (wheel_gesture_active_) return;
         if (verticalScrollBar()->value() != pinned_at) return;
         scroll_to_bottom_now();
     });
@@ -2931,6 +2939,28 @@ void ConversationSurface::keyPressEvent(QKeyEvent *event) {
 bool ConversationSurface::eventFilter(QObject *watched, QEvent *event) {
     if (watched == viewport()) {
         switch (event->type()) {
+        case QEvent::Wheel: {
+            // Observe intent before QTextEdit handles the event. A zero/tiny
+            // pixel delta can leave QScrollBar's integer value unchanged, but
+            // it must still cancel a queued automatic bottom pin.
+            ++scroll_pin_generation_;
+            const auto phase = static_cast<QWheelEvent *>(event)->phase();
+            switch (phase) {
+            case Qt::ScrollBegin:
+            case Qt::ScrollUpdate:
+            case Qt::ScrollMomentum:
+                wheel_gesture_active_ = true;
+                break;
+            case Qt::ScrollEnd:
+                wheel_gesture_active_ = false;
+                break;
+            case Qt::NoScrollPhase:
+                break;
+            }
+            // Never consume the wheel: native QTextEdit scrolling, kinetic
+            // behavior, selection, copy, and accessibility remain in charge.
+            break;
+        }
         case QEvent::MouseButtonPress: {
             const auto *mouse = static_cast<QMouseEvent *>(event);
             disarm_attachment_action();

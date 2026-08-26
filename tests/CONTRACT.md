@@ -139,6 +139,10 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
 - `tests/conversation_surface_typography_test.cpp` —
   `conversation_surface_typography` (the dedicated widget/document typography
   contract on the real `ConversationSurface`).
+- `tests/conversation_surface_scroll_test.cpp` —
+  `conversation_surface_scroll` (the dedicated real-Qt viewport-wheel and
+  gesture-aware bottom-follow contract on `ConversationSurface`, without the
+  shell or composer lifecycle).
 - `tests/test_native_shell.py` — `native_shell` (process persistence and
   smoke-order via the built smoke executable).
 - `tests/test_repository_contract.py` — manual `python3 -m unittest

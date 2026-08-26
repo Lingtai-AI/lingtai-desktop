@@ -954,6 +954,33 @@ else()
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
+add_executable(lingtai_conversation_surface_scroll_test
+    tests/conversation_surface_scroll_test.cpp
+    src/attachment_thumbnail.cpp
+    src/ui/conversation_surface.cpp
+    src/message_reactions.cpp)
+init_target(lingtai_conversation_surface_scroll_test)
+target_include_directories(lingtai_conversation_surface_scroll_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(lingtai_conversation_surface_scroll_test PRIVATE
+    -Wall -Wextra -Werror -pedantic
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-unused-parameter>
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-deprecated-this-capture>
+    $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-unused-parameter>)
+target_link_libraries(lingtai_conversation_surface_scroll_test PRIVATE
+    lingtai_desktop_conversation
+    desktop-app::lib_ui
+    Qt6::Widgets Qt6::Gui Qt6::Core)
+add_test(NAME conversation_surface_scroll
+    COMMAND lingtai_conversation_surface_scroll_test)
+if(APPLE)
+    set_tests_properties(conversation_surface_scroll PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
+else()
+    set_tests_properties(conversation_surface_scroll PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
 # CTest labels for UI testing workflow (see tests/UI_TESTING_PLAN.md).
 set(LINGTAI_UNIT_TESTS
     project_attachment
@@ -994,6 +1021,7 @@ set(LINGTAI_UI_TESTS
     native_shell_destinations
     native_shell_presets
     conversation_surface_typography
+    conversation_surface_scroll
     agent_detail_view
     ui_test_harness
     ui_agent_detail_pages)

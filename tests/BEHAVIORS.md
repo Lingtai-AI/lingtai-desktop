@@ -266,6 +266,12 @@ Qt plugin path set and an 8 s watchdog.
   that same-anchor Open/Reveal clicks emit their exact request once, while a
   text-selection drag ending over an action emits nothing and retains the
   native `QTextEdit` selection.
+- `conversation_surface_scroll` sends real `QWheelEvent`s to the production
+  viewport and proves that zero/tiny phase-bearing intent cancels delayed
+  bottom pins before integer movement, append/rebuild yield through momentum,
+  `ScrollEnd` does not jump, normal no-gesture bottom-follow and manual
+  non-bottom retention remain intact, and ordinary wheel movement still
+  traverses native `QTextEdit` handling.
 
 ### Process-level smoke/persistence
 

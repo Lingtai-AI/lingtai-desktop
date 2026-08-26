@@ -170,9 +170,12 @@ private:
     // and appending into the same document.
     bool rebuild_in_progress_ = false;
     bool rebuild_scheduled_ = false;
-    // Cancels a deferred bottom pin when the human scrolls away or a rebuild
-    // restores a non-bottom position before the queued pass runs.
+    // Cancels a deferred bottom pin when the human takes wheel ownership or a
+    // rebuild restores a non-bottom position before the queued pass runs.
     int scroll_pin_generation_ = 0;
+    // Pixel-precise trackpad intent can begin without changing the integer
+    // scrollbar value, so phases — not valueChanged alone — own this state.
+    bool wheel_gesture_active_ = false;
     ConversationVerboseLevel last_rendered_verbose_level_
         = ConversationVerboseLevel::off;
 };

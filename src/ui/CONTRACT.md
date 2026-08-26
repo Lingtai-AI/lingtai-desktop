@@ -87,6 +87,10 @@ below is grounded in the widget source.
   (`conversation_surface.cpp:201-210`).
 - **Scroll.** An identical conversation refresh is a no-op
   (`conversation_surface.cpp:147-157`); a changed refresh follows the bottom
-  only if the human was already there, else preserves the prior position
-  (`conversation_surface.cpp:164-166`, `213-215`). An unchanged roster refresh
-  preserves scroll by not rebuilding the row tree.
+  only if the human was already there and no phase-bearing wheel gesture or
+  momentum is active, else preserves the prior position. Every viewport wheel
+  event first cancels a queued delayed pin, including a zero/tiny delta that
+  leaves the integer scrollbar value unchanged. `ScrollEnd` releases gesture
+  ownership without jumping, and the event then continues through native
+  `QTextEdit` handling. An unchanged roster refresh preserves scroll by not
+  rebuilding the row tree.
