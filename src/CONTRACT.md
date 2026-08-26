@@ -27,8 +27,11 @@ Obligations and prohibitions for agents working in `src/`:
 4. Keep the shell's injectable seams narrow: application composition
    (`ShellHost`) is the only place that chooses the concrete fallback
    interpreter and the configured TUI executable, and it passes them in
-   through the two setters. Do not hard-code either in the shell or any
-   reader.
+   through the two setters. `make_native_window()` is the application boundary
+   for pinned toolkit prerequisites: it initializes process-global emoji state
+   once after widget styles and keeps it alive until `QApplication` teardown.
+   Do not hard-code either executable in the shell or any reader, and do not
+   move toolkit lifecycle ownership into an individual widget or window.
 5. Report a mismatch between this contract and the code rather than silently
    rewriting the promise to match accidental behavior.
 
@@ -154,7 +157,10 @@ coalescing, and stale-while-revalidate presentation.
   adapter seam: descriptor ownership, no-follow one-leaf opens, and `safe_leaf`
   validation. It is internal, links nothing, and carries no domain policy.
 - The pinned toolkit (`desktop-app::lib_ui`) is consumed only by the shell
-  library and the smoke executable; readers never link it.
+  library and the smoke executable; readers never link it. Application
+  composition owns its process-global integrations, animations manager,
+  palette/styles, and one `QApplication`-owned emoji runtime shared by every
+  shell; composer widgets consume those prerequisites but do not own them.
 - The TUI subprocess (`lingtai-tui`) is the outbound adapter for explicit
   first-project bootstrap, reached only through `ProjectBootstrapRunner` with
   exact separate argv and a bounded JSON parse.
@@ -188,7 +194,9 @@ coalescing, and stale-while-revalidate presentation.
    liveness, or lifecycle from the local write/start alone.
 4. **The shell composes.** `NativeShell` composes the widgets, native dialogs, and
    timer, re-derives visible routes from C1 truth, and proposes transitions
-   through the model. It also owns the composer-local dispatch after calling
+   through the model. Its window factory also establishes the pinned toolkit's
+   application-lifetime prerequisites before `AgentDetailView` can construct
+   the composer. It also owns the composer-local dispatch after calling
    `parse_slash_command` on raw text: every parsed command terminates locally
    before `send_direct_mail`. U2 lifecycle slash dispatch may invoke only the
    existing `request_agent_sleep` and `start_agent` owners through their

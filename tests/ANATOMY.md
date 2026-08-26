@@ -104,13 +104,14 @@ touches a real Agent or project, and none depends on a network or provider.
 
 - `tests/native_shell_test.cpp` — `native_shell_behavior` ctest. The
   real-Qt shell contract: it links `lingtai_desktop_native_shell` +
-  `desktop-app::lib_ui` + `src/crl_integration.cpp` (`CMakeLists.txt:418-429`),
+  `desktop-app::lib_ui` + `src/crl_integration.cpp` (`CMakeLists.txt:837-849`),
   constructs a real `QApplication`, shows the real `NativeShell`
   off-screen (`shell.show_offscreen()`), and drives the real widgets to
   prove shell semantics, named regions, geometry, the composer send flow,
-  the dashboard sections, Request sleep, Start Agent, layout modes, and the
+  the functional composer paste/IME flow, the dashboard sections, Request
+  sleep, Start Agent, layout modes, and the
   no-write rule. On macOS it runs with `QT_QPA_PLATFORM=cocoa`, elsewhere
-  with `offscreen` (`CMakeLists.txt:436-442`). Its fixture root is
+  with `offscreen` (`CMakeLists.txt:853-880`). Its fixture root is
   `native-shell-no-write-fixture`, created by CMake and used by the test as
   its working directory (`CMakeLists.txt:431-435`). `project_tree` snapshots
   surround the specific read-only, no-escape, and no-write cases — and any
@@ -139,6 +140,15 @@ touches a real Agent or project, and none depends on a network or provider.
   attachment-only publication, exact indexed versus general-failure draft
   retention, slash isolation, and target clearing. Its picker is injected, so
   no test opens a native modal or Finder.
+- Its focused `native_shell_paste` journey carries plain and rich-source
+  logical text in `QMimeData`, delivers it through real Qt drag/drop events to
+  the `Ui::InputField` MIME insertion path, then drives its real input-method
+  emoji path and proves selection/caret editing,
+  Unicode Send/render/clear, and one application-owned emoji runtime shared by
+  two simultaneous shells. On macOS it uses Cocoa without ever accessing
+  `QClipboard`; literal system paste remains outside automation because the
+  full shell cannot run on the offscreen/minimal Qt plugins
+  (`tests/native_shell_test.cpp:2557`, `CMakeLists.txt:863-879`).
 - The same conversation journey injects the history attachment external-action
   seam and proves exact Open/Reveal invocation after refresh, no invocation on
   a missing file, transient notices, and preservation of history text, scroll,
@@ -211,6 +221,7 @@ no fixture); the test itself creates and removes its sandbox within that root
 | `agent_sleep_test.cpp` | `lingtai_agent_sleep_test` | `agent_sleep` | `agent-sleep-fixture` |
 | `kanban_model_test.cpp` | `lingtai_kanban_model_test` | `kanban_model` | `kanban-model-fixture` |
 | `native_shell_test.cpp` | `lingtai_native_shell_test` | `native_shell_behavior` | `native-shell-no-write-fixture` (CMake-created) |
+| `native_shell_test.cpp` (paste journey) | `lingtai_native_shell_test` | `native_shell_paste` | `native-shell-paste-fixture` (CMake-created) |
 | `native_shell_destinations_test.cpp` | `lingtai_native_shell_destinations_test` | `native_shell_destinations` | — |
 | `native_shell_presets_test.cpp` | `lingtai_native_shell_presets_test` | `native_shell_presets` | `native-shell-presets-fixture` (CMake-created) |
 | `conversation_surface_typography_test.cpp` | `lingtai_conversation_surface_typography_test` | `conversation_surface_typography` | — (no fixture) |

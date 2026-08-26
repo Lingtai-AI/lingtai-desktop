@@ -25,15 +25,20 @@
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
+#include <QtCore/QMimeData>
 #include <QtCore/QRegularExpression>
 #include <QtCore/QString>
 #include <QtCore/QThread>
 #include <QtCore/QTimer>
 #include <QtGui/QColor>
+#include <QtGui/QDragEnterEvent>
+#include <QtGui/QDragMoveEvent>
+#include <QtGui/QDropEvent>
 #include <QtGui/QFont>
 #include <QtGui/QFontMetrics>
 #include <QtGui/QImage>
 #include <QtGui/QImageReader>
+#include <QtGui/QInputMethodEvent>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QMouseEvent>
 #include <QtGui/QPalette>
@@ -2541,6 +2546,175 @@ void verify_composer_send_behavior(
     std::error_code cleanup_error;
     fs::remove_all(sandbox, cleanup_error);
     require(!cleanup_error, "composer fixtures must be removed");
+}
+
+// The text-paste contract carries source representations through a real Qt
+// drag/drop MIME event into Ui::InputField's shared insertion path. A separate
+// input-method event exercises the same emoji formatting path; lib_ui wraps a
+// recognized emoji commit in QMimeData internally. The full NativeShell cannot
+// run on Qt's offscreen macOS plugin, so this Cocoa journey deliberately never
+// accesses QClipboard; literal system-paste acceptance remains a manual gate.
+void verify_composer_paste_behavior(
+        lingtai::desktop::NativeShell &shell,
+        const fs::path &sandbox) {
+    auto &window = shell.window();
+    auto *input = static_cast<Ui::InputField *>(
+        required_child<QObject>(window, "lingtai_composer_input"));
+    auto *send_button = static_cast<Ui::RoundButton *>(
+        required_child<QObject>(window, "lingtai_composer_send_button"));
+    auto *surface = required_child<QTextEdit>(
+        window, "lingtai_selected_agent_conversation");
+
+    const auto project = sandbox / "project";
+    const auto outbox = project / ".lingtai/human/mailbox/outbox";
+    write_file(project / ".lingtai/human/.agent.json",
+        R"({"agent_id":"20260101-000000-h001","agent_name":"Ted",)"
+        R"("address":"human","state":"active"})");
+    write_file(project / ".lingtai/paste-agent/.agent.json",
+        R"({"admin":{},"agent_id":"20260826-000000-p001",)"
+        R"("agent_name":"paste-agent","address":"paste-agent","state":"active"})");
+    static_cast<void>(shell.open_project(project, std::nullopt));
+    click_agent(shell, "paste-agent");
+
+    const auto drop_mime_text = [&](Ui::InputField *target_input,
+                                    const QString &plain,
+                                    const QString &html = QString()) {
+        auto mime = QMimeData();
+        mime.setText(plain);
+        if (!html.isEmpty()) mime.setHtml(html);
+        require(mime.hasText() && mime.text() == plain,
+            "the MIME source must expose the declared logical plain text");
+        if (!html.isEmpty()) {
+            require(mime.hasHtml(),
+                "the rich-source fixture must carry both HTML and plain text");
+        }
+        const auto position = target_input->rawTextEdit()->cursorRect().center();
+        auto enter = QDragEnterEvent(
+            position,
+            Qt::CopyAction,
+            &mime,
+            Qt::LeftButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(target_input->rawTextEdit()->viewport(), &enter);
+        auto move = QDragMoveEvent(
+            position,
+            Qt::CopyAction,
+            &mime,
+            Qt::LeftButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(target_input->rawTextEdit()->viewport(), &move);
+        auto drop = QDropEvent(
+            QPointF(position),
+            Qt::CopyAction,
+            &mime,
+            Qt::LeftButton,
+            Qt::NoModifier);
+        QApplication::sendEvent(target_input->rawTextEdit()->viewport(), &drop);
+        QCoreApplication::processEvents();
+        require(enter.isAccepted() && move.isAccepted() && drop.isAccepted(),
+            "the real editor must accept the MIME-carrying Qt event");
+    };
+
+    const auto plain = QString::fromUtf8(
+        "Plain α\nSecond line 😀 👩‍💻");
+    drop_mime_text(input, plain);
+    require(input->getLastText() == plain
+            && input->isEnabled()
+            && !input->rawTextEdit()->isReadOnly()
+            && input->textCursor().atEnd(),
+        "plain, multiline, emoji, and ZWJ paste must preserve exact editable "
+        "logical text with the caret after it");
+
+    input->clear();
+    const auto rich_plain = QString::fromUtf8("Rich fallback 😀");
+    drop_mime_text(input, rich_plain,
+        QStringLiteral("<p>Rich <b>fallback</b> 😀</p>"));
+    require(input->getLastText() == rich_plain,
+        "HTML plus matching plain text must paste its exact logical text");
+
+    const auto selection_draft = QStringLiteral("before DELETE after");
+    input->setText(selection_draft);
+    auto cursor = input->textCursor();
+    const auto selection_start = selection_draft.indexOf(QStringLiteral("DELETE"));
+    cursor.setPosition(selection_start);
+    cursor.setPosition(selection_start + 6, QTextCursor::KeepAnchor);
+    input->setTextCursor(cursor);
+    const auto replacement = QString::fromUtf8("🚀");
+    auto selection_commit = QInputMethodEvent(QString(), {});
+    selection_commit.setCommitString(replacement);
+    QApplication::sendEvent(input->rawTextEdit(), &selection_commit);
+    QCoreApplication::processEvents();
+    const auto replaced = QString::fromUtf8("before 🚀 after");
+    require(input->getLastText() == replaced
+            && !input->textCursor().hasSelection()
+            && input->textCursor().position()
+                == selection_start + 1,
+        "paste must replace the active range and leave the caret after the "
+        "inserted emoji");
+
+    auto suffix = QKeyEvent(
+        QEvent::KeyPress, Qt::Key_Exclam, Qt::NoModifier, QStringLiteral("!"));
+    QApplication::sendEvent(input->rawTextEdit(), &suffix);
+    const auto edited = QString::fromUtf8("before 🚀! after");
+    require(input->getLastText() == edited,
+        "the user must be able to continue typing immediately after paste");
+
+    auto commit = QInputMethodEvent(QString(), {});
+    commit.setCommitString(QString::fromUtf8("🎯"));
+    QApplication::sendEvent(input->rawTextEdit(), &commit);
+    const auto sent_text = QString::fromUtf8("before 🚀!🎯 after");
+    require(input->getLastText() == sent_text,
+        "a real input-method emoji commit must preserve exact logical text");
+
+    {
+        lingtai::desktop::NativeShell second_shell;
+        second_shell.show_offscreen();
+        QCoreApplication::processEvents();
+        auto *second_input = static_cast<Ui::InputField *>(required_child<QObject>(
+            second_shell.window(), "lingtai_composer_input"));
+        static_cast<void>(second_shell.open_project(project, std::nullopt));
+        click_agent(second_shell, "paste-agent");
+        second_input->setFocus();
+        drop_mime_text(second_input, QString::fromUtf8("Second window 😀"));
+        require(second_input->getLastText()
+                    == QString::fromUtf8("Second window 😀")
+                && input->getLastText() == sent_text,
+            "two simultaneous shells must share one emoji runtime while "
+            "preserving independent editable drafts");
+        require(QCoreApplication::instance()->findChildren<QObject *>(
+                    QStringLiteral("lingtai_emoji_runtime")).size() == 1,
+            "two shells must reuse exactly one application-owned emoji runtime");
+    }
+
+    const auto outbox_before = fs::exists(outbox)
+        ? static_cast<std::size_t>(std::distance(
+            fs::directory_iterator(outbox), fs::directory_iterator{}))
+        : std::size_t{0};
+    send_button->clicked(Qt::NoModifier, Qt::LeftButton);
+    require(input->getLastText().isEmpty()
+            && surface->toPlainText().contains(sent_text),
+        "successful Send must clear the draft and render the exact pasted, "
+        "edited, input-method-committed Unicode text");
+    require(fs::exists(outbox), "paste Send must create the fixture outbox");
+    auto outbox_after = std::size_t{0};
+    auto envelope_found = false;
+    for (const auto &entry : fs::directory_iterator(outbox)) {
+        ++outbox_after;
+        const auto document = QJsonDocument::fromJson(QByteArray::fromStdString(
+            read_file(entry.path() / "message.json")));
+        const auto envelope = document.object();
+        if (envelope.value(QStringLiteral("message")).toString() == sent_text
+                && envelope.value(QStringLiteral("to")).toArray()
+                    == QJsonArray{QStringLiteral("paste-agent")}) {
+            envelope_found = true;
+        }
+    }
+    require(outbox_after == outbox_before + 1 && envelope_found,
+        "paste Send must publish one exact Unicode envelope to the selected Agent");
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "paste fixtures must be removed");
 }
 
 // A successful local publication is session truth immediately. Hold the
@@ -7632,6 +7806,13 @@ void run_native_shell_journey(
         });
         return;
     }
+    if (journey == "paste") {
+        with_offscreen_shell([&](NativeShell &shell) {
+            verify_composer_paste_behavior(
+                shell, project_root / "composer-paste-fixture");
+        });
+        return;
+    }
     if (journey == "outgoing") {
         with_offscreen_shell([&](NativeShell &shell) {
             verify_outgoing_message_immediate_presentation(
@@ -7773,7 +7954,7 @@ int main(int argc, char **argv) {
                      "--plain-underline-only|--floating-composer-only|"
                      "--project-setup-only|--setup-rerun-only|--kanban-only]\n"
                      "  journeys: semantics bootstrap roster conversation "
-                     "setup lifecycle layout theme composer outgoing kanban all\n";
+                     "setup lifecycle layout theme composer paste outgoing kanban all\n";
         return 2;
     }
     try {

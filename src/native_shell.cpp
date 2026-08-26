@@ -35,6 +35,7 @@
 #include "styles/palette.h"
 #include "styles/style_widgets.h"
 #include "ui/conversation_surface.h"
+#include "ui/emoji_config.h"
 #include "ui/effects/animations.h"
 #include "ui/integration.h"
 #include "ui/platform/mac/ui_window_title_mac.h"
@@ -50,6 +51,7 @@
 #include <QtCore/QDir>
 #include <QtCore/QLineF>
 #include <QtCore/QPoint>
+#include <QtCore/QPointer>
 #include <QtCore/QProcess>
 #include <QtCore/QJsonArray>
 #include <QtCore/QString>
@@ -1036,6 +1038,35 @@ public:
 
 };
 
+// Emoji formatting is a lib_ui application prerequisite, not window or
+// composer state. QApplication owns this one guard so every NativeShell shares
+// the initialized runtime. Current production and test composition constructs
+// shells after QApplication, so their stack-owned widgets are destroyed first;
+// QApplication then deletes this child and clears emoji state before the
+// process-lifetime Ui::Integration static is torn down.
+class DesktopEmojiRuntime final : public QObject {
+public:
+    explicit DesktopEmojiRuntime(QObject *parent)
+    : QObject(parent) {
+        setObjectName(QStringLiteral("lingtai_emoji_runtime"));
+        Ui::Emoji::Init();
+    }
+
+    ~DesktopEmojiRuntime() override {
+        Ui::Emoji::Clear();
+    }
+};
+
+void ensure_emoji_runtime() {
+    static auto runtime = QPointer<DesktopEmojiRuntime>();
+    if (runtime) return;
+
+    auto *application = QCoreApplication::instance();
+    Q_ASSERT(application != nullptr);
+    runtime = new DesktopEmojiRuntime(application);
+}
+
+
 bool system_prefers_dark_palette() {
     const auto scheme = QGuiApplication::styleHints()->colorScheme();
     if (scheme == Qt::ColorScheme::Dark) return true;
@@ -1154,6 +1185,7 @@ std::unique_ptr<Ui::RpWindow> make_native_window() {
         return true;
     }();
     (void)widget_styles_started;
+    ensure_emoji_runtime();
     // Keep Telegram's real macOS TitleWidget owner. Its height comes from the
     // native contentLayoutRect, so the traffic lights, app brand and body all
     // share one borderless window canvas instead of a Qt label being pasted

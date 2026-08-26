@@ -28,7 +28,7 @@ Entry point and composition root:
 - `native_shell.{h,cpp}` — the C5 composition owner: owns one `Ui::RpWindow`,
   the roster column, the content pane, native dialog orchestration, the
   composer's local slash-command/publisher dispatch, the one-second refresh
-  timer, and the two
+  timer, the application-owned pinned-toolkit emoji lifecycle, and the two
   click-armed pending observations.
   It also owns the `DirectMailboxSnapshotIndex` generation state and its
   cancellation token: the timer performs only a fixed-count mailbox-folder
@@ -281,8 +281,12 @@ they are the shell's presentation layer and own no domain reads or writes.
   owns mechanics only (ownership, flags, one-leaf validation), and every
   bound, parser, candidate choice, and error mapping stays in the owning
   reader.
-- `NativeShell` installs three process-lifetime adapters before any vendored
-  widget is constructed (`base::Integration`, `Ui::Integration`, and the
-  animations manager) and starts the palette before the window is built
-  (`native_shell.cpp:543-548`). This is glue for the pinned toolkit, not product
-  logic.
+- `make_native_window()` installs the process-lifetime `base::Integration`,
+  `Ui::Integration`, and animations manager before any vendored widget, starts
+  palette and widget styles in order, then creates exactly one
+  `DesktopEmojiRuntime` child of the current `QApplication`. That guard calls
+  `Ui::Emoji::Init()` before any composer exists and `Ui::Emoji::Clear()` when
+  the application deletes it after stack-owned shells. This is glue for the
+  pinned toolkit, not composer business logic
+  (`native_shell.cpp:1041-1067`, `native_shell.cpp:1153-1188`;
+  stack construction order at `main.cpp:17-33`).

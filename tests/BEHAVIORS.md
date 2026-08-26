@@ -207,6 +207,14 @@ Qt plugin path set and an 8 s watchdog.
   and marking only index 1; and a general publisher failure retaining the
   draft with no false per-card error. Its event-loop-bounded replacement-timer
   assertion proves an older deadline cannot clear a newer composer notice.
+- The focused `native_shell_paste` journey carries plain and HTML+plain source
+  representations in real `QMimeData`, delivers them through real Qt
+  drag/drop events to the `Ui::InputField` MIME insertion path, and asserts exact
+  multiline Unicode/emoji/ZWJ reconstruction, rich-source logical fallback,
+  selected-range replacement, caret/edit continuation, a distinct emoji IME
+  commit, exact ordinary Send envelope/rendered row/draft clear, and two
+  simultaneous shells sharing exactly one application-owned emoji runtime.
+  It runs on Cocoa but never obtains or changes `QClipboard`.
 - `verify_existing_agent_setup` proves the selected-Agent `/setup` route on a
   synthetic project and hermetic `LINGTAI_TUI_DIR`: full saved/template catalog
   visibility/order, normalized real-row preselection without fallback, shared
@@ -295,6 +303,12 @@ the real shell shown off-screen. None of them establish:
 - **Real platform widgets' OS behavior beyond what the fixture exercises.**
   The real `Ui::RpWindow`/`Ui::RpWidget` composition is exercised, but not
   the OS window-server interaction a visible window would surface.
+- **Literal system paste.** On this macOS Qt build, a full `NativeShell` under
+  the `offscreen` or `minimal` platform crashes before the journey because
+  `QRhiWidget` is unsupported. The automated paste journey therefore proves
+  the shared MIME insertion/input-method formatting and Send behavior without
+  accessing the host clipboard; literal Cmd-V from a real source remains an
+  isolated candidate-App acceptance requirement.
 
 ## Standing evidence discipline
 

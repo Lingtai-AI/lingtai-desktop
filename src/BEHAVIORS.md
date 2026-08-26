@@ -15,6 +15,11 @@ its code.
 - Normal execution constructs one `NativeShell`, shows it, and schedules no
   automatic exit; `--offscreen` and `--smoke` are the only special argv
   (`main.cpp:15`).
+- Application composition initializes the pinned toolkit's emoji runtime once,
+  after widget styles and before the first composer is constructed. Every
+  simultaneous or later `NativeShell` under that `QApplication` reuses it;
+  the application-owned guard clears emoji state only during `QApplication`
+  teardown, after stack-owned `ShellHost`/`NativeShell` widgets are destroyed.
 - The window is named `lingtai_desktop_window`, body `lingtai_desktop_body`,
   with a persistent left sidebar and a right content pane separated by a
   one-pixel `Ui::PlainShadow` (`lingtai_roster_separator`).
@@ -274,6 +279,13 @@ its code.
   focus-free slash-command popup of Desktop commands; an exact unique name
   or ordinary text dismisses it. Arrow keys move the highlight, Tab/Enter
   insert the selected command, and Escape closes the popup.
+- The composer accepts ordinary and multiline Unicode, recognized emoji and
+  emoji sequences, and input-method commits through lib_ui's shared logical-
+  text insertion path. A rich source carrying HTML plus plain text contributes
+  that logical plain text only: the editor does not accept rich text and Send
+  adds no HTML/formatting semantics. Inserted content replaces the active
+  selection, leaves an editable caret after it, and `getLastText()` reconstructs
+  the exact Unicode rather than exposing internal object-replacement markers.
 - The paperclip asks `NativeShell` for the normal native multi-file dialog;
   tests replace that one picker seam. Each selection re-preflights existing
   canonical sources plus new picker paths once, preserving accepted order and
@@ -294,7 +306,8 @@ its code.
   valid. Slash commands do not publish, consume, clear, or mark attachments.
   Queued success clears text/cards/errors, refreshes history/receipt state, and
   scrolls as before; route/publisher failure retains the draft and shows a
-  concise mapped notice. The conversation state
+  concise mapped notice. Pasted or input-method text uses this same ordinary
+  Send path with no paste-specific branch. The conversation state
   line shows `N message(s)` plus ` · N skipped` when the one generic skipped
   count is nonzero.
 - The conversation surface renders rows read-only as plain text (kernel

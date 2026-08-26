@@ -63,6 +63,10 @@ must never be confused:
    Qt-aware tests use the CMake-created `native-shell-no-write-fixture` as
    their working directory and the smoke executable as a subprocess
    argument; both are injected roots, never real user data.
+   Clipboard-sensitive macOS tests must not write the Cocoa host clipboard.
+   If a full shell cannot run with an offscreen platform clipboard, carry the
+   MIME source deterministically and drive the real editor input-method path,
+   then state literal system-paste acceptance as an unautomated gate.
 5. **No real Agent/project mutation.** A test must never start a real kernel,
    open a real Agent's mailbox, sleep a real Agent, or mutate a real
    registry/settings file. All reads and writes happen on fixture trees built
@@ -128,7 +132,10 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   generation-race/capture-incapability liveness seams.
 - `tests/native_shell_test.cpp` — `native_shell_behavior` (links the shell +
   `lib_ui` + `crl_integration.cpp`; the real-Qt layer), including the focused
-  synthetic existing-Agent setup rerun journey.
+  synthetic existing-Agent setup rerun and `native_shell_paste` journeys. The
+  paste journey delivers logical text through a real MIME-carrying Qt event,
+  then proves exact Unicode editor state, emoji input-method formatting,
+  ordinary Send, and two-shell runtime sharing without accessing `QClipboard`.
 - `tests/conversation_surface_typography_test.cpp` —
   `conversation_surface_typography` (the dedicated widget/document typography
   contract on the real `ConversationSurface`).

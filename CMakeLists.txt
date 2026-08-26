@@ -860,6 +860,7 @@ set(NATIVE_SHELL_JOURNEYS
     layout
     theme
     composer
+    paste
     outgoing
     kanban)
 foreach(journey IN LISTS NATIVE_SHELL_JOURNEYS)
