@@ -49,9 +49,11 @@ Entry point and composition root:
   `smoke_ready()` is real product readiness used only by `main.cpp`'s `--smoke`
   path (`native_shell.h:100`).
   `/setup` is its explicit rerun-existing mode: it loads and retains one
-  `AgentSetupState`, hydrates the shared Agents/Review wizard pages, fixes the
-  selected Agent name/directory, and saves through `AgentSetupStore`; its
-  narrow save-result injection exists only for deterministic shell tests.
+  `AgentSetupState`, presents Desktop's full saved/template catalog at Preset,
+  uses the shared editor for real rows, hydrates reference-aware Agents/Review
+  pages, fixes the selected Agent name/directory, and saves through
+  `AgentSetupStore`; its narrow save-result injection exists only for
+  deterministic shell tests.
   The existing New Project mode still owns the independent TUI
   `presets`/`spawn` sequence, and every entry resets the other mode.
   The content pane composes one coherent workspace: the no-project welcome
@@ -99,11 +101,15 @@ Domain models (pure, Qt-light state/derivation owners):
   sole same-root/root-switch transition owner.
 - `agent_setup_store.{h,cpp}` — `AgentSetupState`/`AgentSetupDraft` plus
   `reconcile_agent_setup_presets` (`agent_setup_store.h:15-127`): the
-  UI-independent existing-Agent setup domain. It retains full JSON values,
-  exposes a virtual Keep Current choice, and owns one validated staged
+  UI-independent existing-Agent setup domain. It retains full JSON values and
+  owns one validated staged
   transaction across the selected Agent, descriptor-walked configured env leaf,
   and peer preset/orchestrator propagation. An empty allowed-list request does
   not replace peer preset policy.
+- `preset_catalog.{h,cpp}` — bounded, deterministic Desktop-owned global
+  saved/template catalog loader. It accepts an injected global root, returns
+  exact `PresetEntry` source paths in TUI-equivalent order, treats missing
+  directories as empty, types directory-read failure, and never writes.
 - `posix_descriptor_primitives.{h,cpp}` — `posix_internal` seam: move-only
   descriptor/directory-stream ownership, shared read flags, `safe_leaf`, and
   one-leaf-at-a-time no-follow `openat`-based opens. Internal; links nothing;
@@ -225,6 +231,7 @@ Owned library targets (`CMakeLists.txt`) and their source membership:
 - `lingtai_desktop_mail_publisher` — `direct_mail_publisher.cpp`.
 - `lingtai_desktop_agent_preset_summary` — `agent_preset_summary.cpp`.
 - `lingtai_desktop_agent_setup_store` — `agent_setup_store.cpp`.
+- `lingtai_desktop_preset_catalog` — `preset_catalog.cpp`.
 - `lingtai_desktop_tui_executable` — `tui_executable_resolver.cpp`.
 - `lingtai_desktop_agent_sleep` — `agent_sleep.cpp`.
 - `lingtai_desktop_agent_launch` — `agent_launch.cpp`.

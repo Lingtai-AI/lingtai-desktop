@@ -2,6 +2,7 @@
 
 #include "setup_style.h"
 #include "setup_toggle.h"
+#include "preset_editor_model.h"
 
 #include <QtCore/QEvent>
 #include <QtGui/QFont>
@@ -15,6 +16,8 @@
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QSizePolicy>
 #include <QtWidgets/QVBoxLayout>
+
+#include <algorithm>
 
 namespace lingtai::desktop {
 namespace {
@@ -209,6 +212,7 @@ void AgentPresetsPage::load_from_chooser(
         if (chooser->itemData(index, Qt::UserRole + 4).toBool()) continue;
         Row row;
         row.name = chooser->itemText(index);
+        row.reference = row.name;
         row.summary = chooser->itemData(index, Qt::UserRole).toString();
         row.provider = chooser->itemData(index, Qt::UserRole + 2).toString();
         row.model = chooser->itemData(index, Qt::UserRole + 3).toString();
@@ -230,7 +234,8 @@ void AgentPresetsPage::load_from_chooser(
 }
 
 void AgentPresetsPage::load_existing(const QString &default_name,
-        const QStringList &allowed_names, const QString &active_name) {
+        const QStringList &allowed_names, const QString &active_name,
+        const std::vector<PresetCatalogRow> &catalog_rows) {
     existing_mode_ = true;
     rows_.clear();
     default_index_ = -1;
@@ -243,10 +248,26 @@ void AgentPresetsPage::load_existing(const QString &default_name,
     }
     for (const auto &reference : references) {
         Row row;
+        row.reference = reference;
         row.name = reference;
         row.summary = QStringLiteral("Existing preset reference");
         row.allowed = allowed_names.contains(reference);
         row.active = reference == active_name;
+        const auto normalized = normalize_preset_reference(
+            reference, lingtai_global_dir());
+        const auto known = std::find_if(catalog_rows.begin(), catalog_rows.end(),
+            [&](const PresetCatalogRow &candidate) {
+                return normalize_preset_reference(
+                    QString::fromStdString(candidate.entry.path),
+                    lingtai_global_dir()) == normalized;
+            });
+        if (known != catalog_rows.end()) {
+            row.name = QString::fromStdString(known->entry.name);
+            row.summary = known->summary;
+            row.provider = known->provider;
+            row.model = known->model;
+            row.tags = capability_tags(known->has_vision, known->has_tools);
+        }
         rows_.push_back(row);
         if (reference == default_name) default_index_ = rows_.size() - 1;
     }
@@ -255,17 +276,18 @@ void AgentPresetsPage::load_existing(const QString &default_name,
 
 QString AgentPresetsPage::default_name() const {
     if (default_index_ < 0 || default_index_ >= rows_.size()) return {};
-    return rows_[default_index_].name;
+    return rows_[default_index_].reference;
 }
 
 QStringList AgentPresetsPage::allowed_names() const {
     auto names = QStringList();
-    if (default_index_ >= 0 && default_index_ < rows_.size()) {
-        names.push_back(rows_[default_index_].name);
+    if (default_index_ >= 0 && default_index_ < rows_.size()
+            && rows_[default_index_].allowed) {
+        names.push_back(rows_[default_index_].reference);
     }
     for (auto index = 0; index != rows_.size(); ++index) {
         if (index == default_index_ || !rows_[index].allowed) continue;
-        names.push_back(rows_[index].name);
+        names.push_back(rows_[index].reference);
     }
     return names;
 }

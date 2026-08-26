@@ -25,6 +25,7 @@ ctest --test-dir build --output-on-failure -R '^slash_command$'
 ctest --test-dir build --output-on-failure -R '^direct_conversation_history$'
 ctest --test-dir build --output-on-failure -R '^direct_mail_publisher$'
 ctest --test-dir build --output-on-failure -R '^agent_preset_summary$'
+ctest --test-dir build --output-on-failure -R '^preset_catalog$'
 ctest --test-dir build --output-on-failure -R '^tui_executable_resolver$'
 ctest --test-dir build --output-on-failure -R '^agent_sleep$'
 ctest --test-dir build --output-on-failure -R '^kanban_model$'
@@ -207,10 +208,13 @@ Qt plugin path set and an 8 s watchdog.
   draft with no false per-card error. Its event-loop-bounded replacement-timer
   assertion proves an older deadline cannot clear a newer composer notice.
 - `verify_existing_agent_setup` proves the selected-Agent `/setup` route on a
-  synthetic project: full policy/review hydration, fixed identity/folder,
-  byte-exact no-change and cancellation, owned-field save, selected-project
-  refresh, source-change/rollback failure presentation, no TUI calls, and
-  creation/rerun mode reset in both directions.
+  synthetic project and hermetic `LINGTAI_TUI_DIR`: full saved/template catalog
+  visibility/order, normalized real-row preselection without fallback, shared
+  saved/template editing and materialization, unresolved additive fallback,
+  reference-safe policy with unknown/active round-trip, 1/3→2/3→3/3 and Back
+  routes, full review hydration, fixed identity/folder, byte-exact no-change
+  and cancellation, owned-field save, selected-project refresh, typed
+  source-change/rollback evidence, no sentinel/TUI calls, and both mode resets.
 - `visual_composer_attachments_light` and `_dark` capture the selected-Agent
   detail with one file card and one decoded image thumbnail at the normal
   macOS viewport. Missing baselines preserve the actual PNG as an inspection

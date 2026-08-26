@@ -31,6 +31,9 @@
 
 #include <rpl/lifetime.h>
 
+#include <QtCore/QJsonObject>
+#include <QtCore/QString>
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -159,6 +162,11 @@ private:
     void set_bootstrap_status(const QString &text);
     void show_setup_wizard(const std::vector<PresetEntry> &presets);
     void show_existing_setup_wizard(AgentSetupState state);
+    void populate_setup_preset_catalog(
+        const std::vector<PresetEntry> &presets,
+        const QString &preferred_reference = {},
+        bool include_current_fallback = false);
+    void hydrate_existing_preset_policy(const QString &proposed_default);
     void hide_setup_wizard();
     [[nodiscard]] bool in_project_setup() const;
     void refresh_route();
@@ -388,6 +396,9 @@ private:
     enum class SetupMode { none, create_project, rerun_existing };
     SetupMode setup_mode_ = SetupMode::none;
     std::optional<AgentSetupState> existing_setup_state_;
+    std::vector<PresetEntry> existing_setup_catalog_;
+    QString existing_setup_selected_reference_;
+    QJsonObject existing_setup_selected_manifest_;
     AgentSetupSaveFunction agent_setup_save_function_;
     // The one in-window setup route, built once and shared by explicit New
     // Project creation and selected-Agent rerun modes.

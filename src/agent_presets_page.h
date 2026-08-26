@@ -1,5 +1,7 @@
 #pragma once
 
+#include "preset_catalog_presentation.h"
+
 #include <QtCore/QStringList>
 #include <QtCore/QVector>
 #include <QtWidgets/QWidget>
@@ -19,7 +21,8 @@ public:
 
     void load_from_chooser(QComboBox *chooser, const QString &preferred_default);
     void load_existing(const QString &default_name,
-        const QStringList &allowed_names, const QString &active_name);
+        const QStringList &allowed_names, const QString &active_name,
+        const std::vector<PresetCatalogRow> &catalog_rows = {});
     [[nodiscard]] QString default_name() const;
     [[nodiscard]] QStringList allowed_names() const;
     [[nodiscard]] int allowed_count() const;
@@ -35,6 +38,7 @@ protected:
 private:
     struct Row {
         QString name;
+        QString reference;
         QString summary;
         QString provider;
         QString model;

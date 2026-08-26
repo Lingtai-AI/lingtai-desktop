@@ -85,6 +85,9 @@ touches a real Agent or project, and none depends on a network or provider.
   ON/OFF merge, empty-policy no-propagation, peer orchestrator privilege
   boundaries, unsafe/oversize/type rejection, absent-optional-path no-op bytes,
   and staged/publish rollback against one injected fixture root.
+- `tests/preset_catalog_test.cpp` — `preset_catalog` ctest. Hermetic
+  saved/template library facts, skip rules, canonical order, missing-directory
+  success, typed directory-read failure, ref normalization, and no-write.
 - `tests/tui_executable_resolver_test.cpp` — `tui_executable_resolver` ctest.
   Exact precedence, receipt validation, candidate type/mode/symlink checks,
   and empty fail-closed behavior under one injected fixture root.
@@ -121,9 +124,11 @@ touches a real Agent or project, and none depends on a network or provider.
   seam to prove warm updating, stale retention, Reload coalescing, and
   old-project generation rejection.
 - Its focused `setup` journey opens one synthetic selected Agent and proves
-  direct store hydration/save, immutable identity, no-op bytes, cancellation,
-  typed save failures, selection-preserving refresh, no TUI invocation, and
-  both creation/rerun mode-reset directions through the real shared wizard.
+  the visible full saved/template catalog and normalized preselection, fallback
+  addition only for unresolved refs, shared saved/template editor journeys,
+  reference-safe policy/unknown-active round-trip, all three step/Back routes,
+  direct store save, immutable identity, no-op/cancel bytes, typed failures,
+  selection-preserving refresh, no TUI invocation, and both mode resets.
 - Its focused `outgoing` journey holds the real mailbox worker behind a stale
   generation and proves synchronous text/attachment presentation, rapid-send
   order, Agent isolation, transient-snapshot retention, authoritative

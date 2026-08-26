@@ -447,19 +447,13 @@ AgentSetupPresetPolicy reconcile_agent_setup_presets(
         result.allowed.push_back(reference);
     }
     if (!result.default_ref.empty()
+            && (selection.choice == AgentSetupPresetChoice::select_preset
+                || !requested_allowed.empty())
             && std::ranges::find(result.allowed, result.default_ref)
                 == result.allowed.end()) {
         result.allowed.push_back(result.default_ref);
     }
-    if (requested_allowed.empty() && !current.active.empty()
-            && std::ranges::find(result.allowed, current.active)
-                == result.allowed.end()) {
-        result.allowed.push_back(current.active);
-    }
-    result.active = !current.active.empty()
-            && std::ranges::find(result.allowed, current.active)
-                != result.allowed.end()
-        ? current.active : result.default_ref;
+    result.active = current.active.empty() ? result.default_ref : current.active;
     return result;
 }
 

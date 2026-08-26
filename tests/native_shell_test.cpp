@@ -23,6 +23,7 @@
 #include <QtCore/QEventLoop>
 #include <QtCore/QMetaObject>
 #include <QtCore/QJsonDocument>
+#include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
 #include <QtCore/QRegularExpression>
 #include <QtCore/QString>
@@ -3698,6 +3699,34 @@ void verify_existing_agent_setup(
     const auto project = sandbox / "project";
     const auto agent = project / ".lingtai/alpha";
     const auto env = sandbox / "agent.env";
+    const auto global = sandbox / "global";
+    const auto prior_global_set = qEnvironmentVariableIsSet("LINGTAI_TUI_DIR");
+    const auto prior_global = qgetenv("LINGTAI_TUI_DIR");
+    qputenv("LINGTAI_TUI_DIR", QByteArray::fromStdString(global.string()));
+    const auto preset_document = [](const std::string &name,
+            const std::string &summary, const std::string &provider,
+            const std::string &model) {
+        return std::string(R"({"name":")") + name
+            + R"(","description":{"summary":")" + summary
+            + R"(","tier":"2"},"manifest":{"llm":{"provider":")"
+            + provider + R"(","model":")" + model
+            + R"("},"capabilities":{"email":{}}}})";
+    };
+    write_file(global / "presets/saved/current.json",
+        preset_document("current", "Current friendly preset", "fixture",
+            "fixture-model"));
+    write_file(global / "presets/saved/next.json",
+        preset_document("next", "Next saved preset", "next-provider",
+            "next-model"));
+    write_file(global / "presets/templates/minimax.json",
+        preset_document("minimax", "MiniMax template", "minimax", "m2"));
+    write_file(global / "presets/templates/custom.json",
+        preset_document("custom", "Custom template", "custom", "custom-model"));
+    write_file(global / "presets/saved/malformed.json", "{broken");
+    write_file(global / "presets/saved/_kernel_meta.json",
+        R"({"name":"hidden-meta"})");
+    write_file(global / "presets/saved/backup.json.bak",
+        R"({"name":"hidden-backup"})");
     write_file(project / ".lingtai/human/.agent.json",
         R"({"agent_id":"human-id","agent_name":"Human","address":"human","state":"active"})");
     write_file(agent / ".agent.json",
@@ -3718,8 +3747,8 @@ void verify_existing_agent_setup(
     "soul": {"delay": 321, "unknown": "keep"},
     "preset": {
       "active": "mystery-active",
-      "default": "default-ref",
-      "allowed": ["default-ref", "mystery-active", "alt-ref"]
+      "default": "~/.lingtai-tui/presets/saved/current.json",
+      "allowed": ["~/.lingtai-tui/presets/saved/current.json", "mystery-active", "alt-ref"]
     },
     "llm": {"provider": "fixture", "model": "fixture-model"},
     "capabilities": [{"type": "email"}]
@@ -3744,12 +3773,30 @@ exit 0)",
     auto *wizard = required_child<lingtai::desktop::ProjectSetupWizard>(
         window, "lingtai_project_setup_wizard");
     auto *pages = required_child<QStackedWidget>(window, "lingtai_setup_pages");
+    auto *preset_page = required_child<QWidget>(
+        window, "lingtai_setup_preset_page");
+    auto *editor_page = required_child<QWidget>(
+        window, "lingtai_setup_edit_preset_page");
     auto *agents_page = required_child<QWidget>(
         window, "lingtai_setup_agents_page");
     auto *review_page = required_child<QWidget>(
         window, "lingtai_setup_review_page");
     auto *agents_continue = required_child<QPushButton>(
         window, "lingtai_setup_agents_continue");
+    auto *agents_back = required_child<QPushButton>(
+        window, "lingtai_setup_agents_back");
+    auto *review_back = required_child<QPushButton>(
+        window, "lingtai_setup_review_back");
+    auto *preset_continue = required_child<QPushButton>(
+        window, "lingtai_setup_preset_continue");
+    auto *editor_save = required_child<QPushButton>(
+        window, "lingtai_setup_edit_preset_save");
+    auto *preset_catalog = required_child<QTreeWidget>(
+        window, "lingtai_setup_preset_catalog");
+    auto *preset_chooser = required_child<QComboBox>(
+        window, "lingtai_bootstrap_preset_chooser");
+    auto *step_index = required_child<QLabel>(
+        window, "lingtai_setup_step_index");
     auto *commit = required_child<QPushButton>(
         window, "lingtai_bootstrap_create_start");
     auto *dialog_status = required_ui_child<Ui::FlatLabel>(
@@ -3787,14 +3834,60 @@ exit 0)",
         QCoreApplication::processEvents();
         require(wizard->isVisible(), "/setup must open the existing-Agent wizard");
     };
+    const auto select_catalog_row = [&](const QString &name) {
+        for (auto index = 0; index != preset_catalog->topLevelItemCount(); ++index) {
+            auto *item = preset_catalog->topLevelItem(index);
+            if (item->text(0) == name) {
+                preset_catalog->setCurrentItem(item);
+                QCoreApplication::processEvents();
+                return;
+            }
+        }
+        throw std::runtime_error(
+            "missing visible preset catalog row: " + name.toStdString());
+    };
+    const auto enter_selected_real_preset = [&] {
+        preset_continue->click();
+        QCoreApplication::processEvents();
+        require(pages->currentWidget() == editor_page,
+            "a real saved/template row must enter the shared preset editor");
+        editor_save->click();
+        QCoreApplication::processEvents();
+        require(pages->currentWidget() == agents_page
+                && step_index->text() == QStringLiteral("2 of 3"),
+            "editor save must enter existing-mode Agent policy at step 2 of 3");
+    };
 
     const auto before = tree_snapshot(project);
     const auto env_before = read_file(env);
     submit_setup();
     require(read_file(tui_argv).empty(),
         "/setup must not invoke TUI preset discovery or spawn");
-    require(pages->currentWidget() == agents_page,
-        "rerun setup must enter the hydrated Agent preset-policy page");
+    require(pages->currentWidget() == preset_page
+            && step_index->text() == QStringLiteral("1 of 3")
+            && preset_chooser->count() == 4
+            && preset_chooser->currentText() == QStringLiteral("current"),
+        "rerun setup must show every valid saved/template row at Preset 1 of 3 "
+        "and preselect the normalized real current ref");
+    auto visible_catalog_names = QStringList();
+    auto visible_sections = QStringList();
+    for (auto index = 0; index != preset_catalog->topLevelItemCount(); ++index) {
+        auto *item = preset_catalog->topLevelItem(index);
+        if (item->data(0, Qt::UserRole).isValid()) {
+            visible_catalog_names.push_back(item->text(0));
+        } else {
+            visible_sections.push_back(item->text(0));
+        }
+    }
+    require(visible_sections == QStringList{
+                QStringLiteral("Saved presets"),
+                QStringLiteral("Preset templates")}
+            && visible_catalog_names == QStringList{
+                QStringLiteral("current"), QStringLiteral("next"),
+                QStringLiteral("minimax"), QStringLiteral("custom")},
+        "existing setup must expose the same saved/template sections and order "
+        "without malformed, metadata, or backup entries and without fallback");
+    enter_selected_real_preset();
     auto preset_markers = std::map<QString, QString>();
     auto preset_allowed = std::map<QString, bool>();
     const auto preset_names = agents_page->findChildren<QLabel *>(
@@ -3809,7 +3902,7 @@ exit 0)",
         preset_allowed[preset_name->text()] = allowed->isChecked();
     }
     require(preset_markers.size() == 3
-            && preset_markers[QStringLiteral("default-ref")]
+            && preset_markers[QStringLiteral("current")]
                 == QStringLiteral("Default")
             && preset_markers[QStringLiteral("mystery-active")]
                 == QStringLiteral("Active")
@@ -3817,11 +3910,25 @@ exit 0)",
             && std::ranges::all_of(preset_allowed,
                 [](const auto &entry) { return entry.second; }),
         "rerun setup must preserve default, active, allowed, and unknown refs");
+    agents_back->click();
+    QCoreApplication::processEvents();
+    require(pages->currentWidget() == preset_page
+            && step_index->text() == QStringLiteral("1 of 3"),
+        "Agents Back must return to Preset in existing setup mode");
+    enter_selected_real_preset();
     agents_continue->click();
     QCoreApplication::processEvents();
     require(pages->currentWidget() == review_page
-            && commit->text() == QStringLiteral("Save setup"),
-        "rerun review must use a setup-save action");
+            && commit->text() == QStringLiteral("Save setup")
+            && step_index->text() == QStringLiteral("3 of 3"),
+        "rerun review must use a setup-save action at step 3 of 3");
+    review_back->click();
+    QCoreApplication::processEvents();
+    require(pages->currentWidget() == agents_page
+            && step_index->text() == QStringLiteral("2 of 3"),
+        "Review Back must return to Agents at step 2 of 3");
+    agents_continue->click();
+    QCoreApplication::processEvents();
     require(name->text() == QStringLiteral("Original Agent")
             && name->isReadOnly()
             && folder->text() == QStringLiteral("alpha")
@@ -3851,6 +3958,7 @@ exit 0)",
         "successful no-change setup must preserve the exact selection");
 
     submit_setup();
+    enter_selected_real_preset();
     agents_continue->click();
     QCoreApplication::processEvents();
     context->setValue(777777);
@@ -3883,8 +3991,6 @@ exit 0)",
     const auto after_save = tree_snapshot(project);
     const auto env_after_save = read_file(env);
     submit_setup();
-    agents_continue->click();
-    QCoreApplication::processEvents();
     context->setValue(888888);
     auto escape = QKeyEvent(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
     QApplication::sendEvent(wizard, &escape);
@@ -3894,6 +4000,7 @@ exit 0)",
         "Escape must close rerun setup without writing");
 
     submit_setup();
+    enter_selected_real_preset();
     agents_continue->click();
     QCoreApplication::processEvents();
     context->setValue(999999);
@@ -3920,6 +4027,7 @@ exit 0)",
     const auto before_injected_failure = tree_snapshot(project);
     const auto env_before_injected_failure = read_file(env);
     submit_setup();
+    enter_selected_real_preset();
     agents_continue->click();
     QCoreApplication::processEvents();
     context->setValue(context->value() + 1);
@@ -3937,6 +4045,112 @@ exit 0)",
     wizard->reject();
     QCoreApplication::processEvents();
 
+    submit_setup();
+    select_catalog_row(QStringLiteral("next"));
+    enter_selected_real_preset();
+    auto policy_names = QStringList();
+    for (auto *label : agents_page->findChildren<QLabel *>(
+            "lingtai_setup_agents_row_name")) {
+        policy_names.push_back(label->text());
+    }
+    require(policy_names.contains(QStringLiteral("next"))
+            && policy_names.contains(QStringLiteral("mystery-active"))
+            && policy_names.contains(QStringLiteral("alt-ref")),
+        "choosing another real preset must retain visible unknown refs and show "
+        "the known saved ref with friendly catalog facts");
+    agents_continue->click();
+    QCoreApplication::processEvents();
+    commit->click();
+    QCoreApplication::processEvents();
+    auto selected_document = QJsonDocument::fromJson(
+        QByteArray::fromStdString(read_file(agent / "init.json"))).object();
+    auto selected_manifest = selected_document.value("manifest").toObject();
+    auto selected_policy = selected_manifest.value("preset").toObject();
+    const auto next_ref = path_text(global / "presets/saved/next.json");
+    const auto selected_allowed = selected_policy.value("allowed").toArray();
+    require(selected_policy.value("default").toString() == next_ref
+            && selected_policy.value("active").toString()
+                == QStringLiteral("mystery-active")
+            && selected_allowed.contains(next_ref)
+            && selected_allowed.contains(QStringLiteral("alt-ref"))
+            && selected_allowed.contains(QStringLiteral("mystery-active"))
+            && !selected_allowed.contains(QStringLiteral("next"))
+            && selected_manifest.value("llm").toObject()
+                .value("provider").toString() == QStringLiteral("next-provider"),
+        "a real saved selection must persist a full ref, add it to allowed, "
+        "preserve unknown refs/active, and apply the edited manifest");
+
+    submit_setup();
+    select_catalog_row(QStringLiteral("custom"));
+    enter_selected_real_preset();
+    agents_continue->click();
+    QCoreApplication::processEvents();
+    commit->click();
+    QCoreApplication::processEvents();
+    selected_document = QJsonDocument::fromJson(
+        QByteArray::fromStdString(read_file(agent / "init.json"))).object();
+    selected_policy = selected_document.value("manifest").toObject()
+        .value("preset").toObject();
+    const auto materialized_ref = selected_policy.value("default").toString();
+    const auto materialized = fs::path(materialized_ref.toStdString());
+    require(fs::is_regular_file(materialized)
+            && materialized.parent_path() == global / "presets/saved"
+            && materialized.filename().string().starts_with("custom")
+            && selected_policy.value("active").toString()
+                == QStringLiteral("mystery-active"),
+        "a selected template must use the shared editor, materialize a saved "
+        "preset ref, and preserve active semantics");
+
+    auto unresolved_document = QJsonDocument::fromJson(
+        QByteArray::fromStdString(read_file(agent / "init.json"))).object();
+    auto unresolved_manifest = unresolved_document.value("manifest").toObject();
+    auto unresolved_policy = unresolved_manifest.value("preset").toObject();
+    unresolved_policy.insert("default", QStringLiteral("unresolved-default"));
+    unresolved_policy.insert("active", QStringLiteral("unknown-active"));
+    unresolved_policy.insert("allowed", QJsonArray{
+        QStringLiteral("unresolved-default"), QStringLiteral("unknown-active"),
+        QStringLiteral("unknown-alternative")});
+    unresolved_manifest.insert("preset", unresolved_policy);
+    unresolved_document.insert("manifest", unresolved_manifest);
+    write_file(agent / "init.json",
+        QJsonDocument(unresolved_document).toJson(QJsonDocument::Indented)
+            .toStdString());
+    const auto unresolved_before = tree_snapshot(project);
+    const auto unresolved_env_before = read_file(env);
+    submit_setup();
+    require(pages->currentWidget() == preset_page
+            && preset_chooser->currentText() == QStringLiteral("Keep current")
+            && preset_chooser->count() == 6,
+        "an unresolved default must add one selected Current setup fallback "
+        "without hiding the full saved/template catalog");
+    preset_continue->click();
+    QCoreApplication::processEvents();
+    require(pages->currentWidget() == agents_page,
+        "fallback Continue must bypass the editor and hydrate Agent policy");
+    auto fallback_markers = std::map<QString, QString>();
+    for (auto *label : agents_page->findChildren<QLabel *>(
+            "lingtai_setup_agents_row_name")) {
+        auto *row = label->parentWidget()->parentWidget();
+        fallback_markers[label->text()] = required_child<QLabel>(
+            *row, "lingtai_setup_agents_row_default")->text();
+    }
+    require(fallback_markers[QStringLiteral("unresolved-default")]
+                == QStringLiteral("Default")
+            && fallback_markers[QStringLiteral("unknown-active")]
+                == QStringLiteral("Active")
+            && fallback_markers.contains(
+                QStringLiteral("unknown-alternative")),
+        "fallback policy must retain exact unknown default/active/allowed refs");
+    agents_continue->click();
+    QCoreApplication::processEvents();
+    commit->click();
+    QCoreApplication::processEvents();
+    require(tree_snapshot(project) == unresolved_before
+            && read_file(env) == unresolved_env_before
+            && read_file(agent / "init.json").find("keep_current")
+                == std::string::npos,
+        "fallback no-change Save must be byte-identical and serialize no UI sentinel");
+
     shell.request_new_project_at(sandbox / "creation-destination");
     require(wait_for_event_loop([&] { return wizard->isVisible(); }, 3000),
         "New Project must still discover presets and open creation mode");
@@ -3947,6 +4161,10 @@ exit 0)",
     wizard->reject();
     QCoreApplication::processEvents();
     submit_setup();
+    preset_continue->click();
+    QCoreApplication::processEvents();
+    require(pages->currentWidget() == agents_page,
+        "creation-to-rerun reset must restore fallback navigation semantics");
     agents_continue->click();
     QCoreApplication::processEvents();
     require(commit->text() == QStringLiteral("Save setup")
@@ -3956,6 +4174,11 @@ exit 0)",
     wizard->reject();
     QCoreApplication::processEvents();
 
+    if (prior_global_set) {
+        qputenv("LINGTAI_TUI_DIR", prior_global);
+    } else {
+        qunsetenv("LINGTAI_TUI_DIR");
+    }
     fs::remove_all(sandbox, cleanup_error);
     require(!cleanup_error, "setup rerun fixtures must be removed");
 }

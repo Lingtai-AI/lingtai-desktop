@@ -40,6 +40,7 @@ prefix (`CMakeLists.txt:67-70`), and declares the owned libraries:
 - `lingtai_desktop_agent_projection`, `lingtai_desktop_direct_route`,
   `lingtai_desktop_conversation`, `lingtai_desktop_mail_publisher`,
   `lingtai_desktop_agent_preset_summary`, `lingtai_desktop_agent_setup_store`,
+  `lingtai_desktop_preset_catalog`,
   `lingtai_desktop_tui_executable`,
   `lingtai_desktop_agent_sleep`,
   `lingtai_desktop_agent_launch` — one library per read/write seam
@@ -104,6 +105,9 @@ resolution order and preserves an accepted symlink path.
 - `src/agent_preset_summary.{h,cpp}` — `read_agent_preset_summary`
   (`src/agent_preset_summary.h:67`): stateless read-only
   `system/manifest.resolved.json` policy/effective projection.
+- `src/preset_catalog.{h,cpp}` — `load_preset_catalog`: bounded, read-only
+  saved/template global-library discovery over an injected root, with typed
+  directory-read failure and TUI-equivalent ordering.
 - `src/agent_setup_store.{h,cpp}` — the UI-independent `AgentSetupStore`
   (`src/agent_setup_store.h:117`): bounded lossless setup load, typed draft,
   TUI-parity preset reconciliation, narrow descriptor-walked configured-env

@@ -216,12 +216,12 @@ void test_reconciliation_and_preservation(const fs::path &base) {
             && manifest.value("capabilities").toObject().contains("vision"),
         "selected preset updates only setup-owned llm/capability fields");
     const auto policy = manifest.value("preset").toObject();
-    require(policy.value("active") == "new-default"
+    require(policy.value("active") == "old-active"
             && policy.value("default") == "new-default"
             && policy.value("allowed").toArray()
                 == QJsonArray{"new-default", "other"}
             && policy.value("custom_policy").toObject().value("keep").toBool(),
-        "revoked active deterministically falls back to default and policy extras survive");
+        "existing active remains active while default/allowed policy changes and extras survive");
     require(read_file(project / ".lingtai/alpha/init.json").find("keep_current")
             == std::string::npos,
         "the virtual Keep Current sentinel is never serialized");

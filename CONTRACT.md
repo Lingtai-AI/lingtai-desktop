@@ -44,7 +44,7 @@ its folder.
   `project_agents`, `resolve_direct_conversation_route`,
   `read_direct_conversation`, `revalidate_direct_conversation_attachment`,
   `send_direct_mail`,
-  `read_agent_preset_summary`, `request_agent_sleep`
+  `read_agent_preset_summary`, `load_preset_catalog`, `request_agent_sleep`
   (+ its two observation functions), `start_agent`, `AgentSetupStore`,
   `ProjectBootstrapRunner`.
 - `NativeShell` is the one composition root C5 owns; it proposes transitions
@@ -67,9 +67,11 @@ its folder.
   marker. Outside an explicit `AgentSetupStore` save, Desktop reads Agent
   configuration read-only; its other writers remain limited to its own outbox
   leaf, the `.sleep` marker, and the started Agent's `logs/` directory.
-- The TUI executable (`lingtai-tui`) is invoked only through `NativeShell`'s
-  exact separate-argv `presets`/`spawn` calls and `ProjectBootstrapRunner`;
-  never a shell string, never a joined command line.
+- The TUI executable (`lingtai-tui`) is invoked only for New Project through
+  `ProjectBootstrapRunner`'s exact separate-argv `presets`/`spawn` calls;
+  existing-Agent `/setup` uses Desktop's read-only `load_preset_catalog` and
+  never invokes either command. No TUI call uses a shell string or joined
+  command line.
 - `resolve_tui_executable` is the sole default-executable discovery owner. It
   consumes only injected PATH/home/system roots, validates regular executable
   candidates, and reads only the bounded managed-install receipt.

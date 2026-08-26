@@ -2273,6 +2273,8 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
         const auto is_template = preset_chooser->currentData(Qt::UserRole + 4).toBool();
         const auto has_vision = preset_chooser->currentData(Qt::UserRole + 5).toBool();
         const auto has_tools = preset_chooser->currentData(Qt::UserRole + 6).toBool();
+        const auto is_current_fallback =
+            preset_chooser->currentData(Qt::UserRole + 8).toBool();
         const auto provider_model = provider.isEmpty() && model.isEmpty()
             ? summary
             : (provider.isEmpty() ? model : (model.isEmpty() ? provider
@@ -2284,9 +2286,10 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
                 tokens.selection_accent, tokens.section_text));
         preset_footer_summary->setAccessibleName(
             preset_footer_plain(preset, provider_model, tags));
-        preset_continue->setText(is_template
-            ? QStringLiteral("Configure preset")
-            : QStringLiteral("Use preset"));
+        preset_continue->setText(is_current_fallback
+            ? QStringLiteral("Continue")
+            : (is_template ? QStringLiteral("Configure preset")
+                : QStringLiteral("Use preset")));
         preset_continue->setEnabled(!preset.isEmpty());
     };
     const auto refresh_preset_selection = [update_review, sync_catalog_selection](
@@ -2368,11 +2371,22 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
     QObject::connect(preset_chooser, &QComboBox::currentTextChanged,
         [update_review](const QString &) { update_review(); });
     QObject::connect(preset_continue, &QPushButton::clicked,
-        [open_preset_editor] { open_preset_editor(); });
+        [this, preset_chooser, go_to_page, open_preset_editor] {
+            if (setup_mode_ == SetupMode::rerun_existing
+                    && preset_chooser->currentData(
+                        Qt::UserRole + 8).toBool()) {
+                hydrate_existing_preset_policy(
+                    existing_setup_selected_reference_);
+                go_to_page(2);
+                return;
+            }
+            open_preset_editor();
+        });
     QObject::connect(edit_preset_page, &PresetEditorPage::cancelled,
         [go_to_page] { go_to_page(0); });
     QObject::connect(edit_preset_page, &PresetEditorPage::saved,
-        [preset_chooser, agents_page, go_to_page, update_review](
+        [this, preset_chooser, agents_page, edit_preset_page, go_to_page,
+                update_review](
                 const QString &saved_name) {
             const auto index = preset_chooser->currentIndex();
             if (index >= 0 && !saved_name.isEmpty()) {
@@ -2385,13 +2399,29 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
                     Qt::UserRole + 7);
             }
             update_review();
+            if (setup_mode_ == SetupMode::rerun_existing) {
+                const auto saved_reference =
+                    preset_chooser->currentData(Qt::UserRole + 7).toString();
+                if (normalize_preset_reference(existing_setup_selected_reference_,
+                            lingtai_global_dir())
+                        != normalize_preset_reference(saved_reference,
+                            lingtai_global_dir())) {
+                    existing_setup_selected_reference_ = saved_reference;
+                }
+                existing_setup_selected_manifest_ = edit_preset_page->model()
+                    .document().value(QLatin1String("manifest")).toObject();
+                hydrate_existing_preset_policy(
+                    existing_setup_selected_reference_);
+                go_to_page(2);
+                return;
+            }
             agents_page->load_from_chooser(preset_chooser, saved_name);
             go_to_page(2);
         });
     QObject::connect(agents_page, &AgentPresetsPage::back_requested,
         [this, go_to_page] {
             if (setup_mode_ == SetupMode::rerun_existing) {
-                handle_cancel_bootstrap();
+                go_to_page(0);
             } else {
                 go_to_page(1);
             }
@@ -2676,6 +2706,9 @@ void NativeShell::set_bootstrap_status(const QString &text) {
 void NativeShell::request_new_project() {
     if (bootstrap_pending_) return;
     existing_setup_state_.reset();
+    existing_setup_catalog_.clear();
+    existing_setup_selected_reference_.clear();
+    existing_setup_selected_manifest_ = {};
     setup_mode_ = SetupMode::create_project;
     hide_setup_wizard();
     if (tui_executable_.empty()) {
@@ -2734,55 +2767,14 @@ void NativeShell::show_setup_wizard(
         const std::vector<PresetEntry> &presets) {
     setup_mode_ = SetupMode::create_project;
     existing_setup_state_.reset();
+    existing_setup_catalog_.clear();
+    existing_setup_selected_reference_.clear();
+    existing_setup_selected_manifest_ = {};
     if (auto *review_page = window_->findChild<AgentConfigPage *>(
             "lingtai_setup_review_page")) {
         review_page->set_existing_mode(false);
     }
-    auto *chooser = window_->findChild<QComboBox *>(
-        "lingtai_bootstrap_preset_chooser");
-    if (!chooser) return;
-    auto *catalog = window_->findChild<QTreeWidget *>(
-        "lingtai_setup_preset_catalog");
-    if (!catalog) return;
-    chooser->clear();
-    catalog->clear();
-
-    const auto rows = build_preset_catalog_rows(presets);
-
-    add_preset_section(catalog, QStringLiteral("Saved presets"));
-    auto added_templates_header = false;
-    for (const auto &row : rows) {
-        const auto index = chooser->count();
-        const auto name = QString::fromStdString(row.entry.name);
-        chooser->addItem(name);
-        chooser->setItemData(index, row.summary, Qt::UserRole);
-        chooser->setItemData(index, QString::fromStdString(row.entry.source),
-            Qt::UserRole + 1);
-        chooser->setItemData(index, row.provider, Qt::UserRole + 2);
-        chooser->setItemData(index, row.model, Qt::UserRole + 3);
-        chooser->setItemData(index, row.is_template, Qt::UserRole + 4);
-        chooser->setItemData(index, row.has_vision, Qt::UserRole + 5);
-        chooser->setItemData(index, row.has_tools, Qt::UserRole + 6);
-        chooser->setItemData(index,
-            QString::fromStdString(row.entry.path), Qt::UserRole + 7);
-        if (row.is_template && !added_templates_header) {
-            add_preset_section(catalog, QStringLiteral("Preset templates"));
-            added_templates_header = true;
-        }
-        add_preset_catalog_row(catalog, row, index);
-    }
-    if (!added_templates_header) {
-        add_preset_section(catalog, QStringLiteral("Preset templates"));
-    }
-
-    chooser->setCurrentIndex(-1);
-    for (auto index = 0; index != catalog->topLevelItemCount(); ++index) {
-        auto *item = catalog->topLevelItem(index);
-        if (!is_preset_section(item)) {
-            catalog->setCurrentItem(item);
-            break;
-        }
-    }
+    populate_setup_preset_catalog(presets);
     if (auto *status = find_ui_child<Ui::FlatLabel>(
             *window_, "lingtai_bootstrap_dialog_status")) {
         status->setText(QString());
@@ -2799,31 +2791,87 @@ void NativeShell::show_setup_wizard(
         update_setup_step_indicator(steps, 0);
         steps->show();
     }
-    if (auto *summary = window_->findChild<QLabel *>(
-            "lingtai_setup_preset_footer_summary")) {
-        const auto name = chooser->currentText();
-        const auto provider = chooser->currentData(Qt::UserRole + 2).toString();
-        const auto model = chooser->currentData(Qt::UserRole + 3).toString();
-        const auto has_vision = chooser->currentData(Qt::UserRole + 5).toBool();
-        const auto has_tools = chooser->currentData(Qt::UserRole + 6).toBool();
-        const auto provider_model = provider.isEmpty()
-            ? model
-            : (model.isEmpty() ? provider
-                : provider + QStringLiteral(" · ") + model);
-        const auto tags = preset_capability_tags(has_vision, has_tools);
-        const auto tokens = preset_catalog_tokens(setup_route_->palette());
-        summary->setText(
-            preset_footer_rich(name, provider_model, tags,
-                tokens.selection_accent, tokens.section_text));
-        summary->setAccessibleName(
-            preset_footer_plain(name, provider_model, tags));
-    }
     setup_route_visible_ = true;
     setup_route_->show();
     setup_route_->setFocus();
     refresh_route();
     recompute_layout(window_->body()->width());
     recompute_setup_layout(setup_route_);
+}
+
+void NativeShell::populate_setup_preset_catalog(
+        const std::vector<PresetEntry> &presets,
+        const QString &preferred_reference,
+        bool include_current_fallback) {
+    auto *chooser = window_->findChild<QComboBox *>(
+        "lingtai_bootstrap_preset_chooser");
+    auto *catalog = window_->findChild<QTreeWidget *>(
+        "lingtai_setup_preset_catalog");
+    if (!chooser || !catalog) return;
+    chooser->clear();
+    catalog->clear();
+
+    auto selected_index = -1;
+    const auto add_row = [&](const PresetCatalogRow &row, bool fallback) {
+        const auto index = chooser->count();
+        chooser->addItem(QString::fromStdString(row.entry.name));
+        chooser->setItemData(index, row.summary, Qt::UserRole);
+        chooser->setItemData(index, QString::fromStdString(row.entry.source),
+            Qt::UserRole + 1);
+        chooser->setItemData(index, row.provider, Qt::UserRole + 2);
+        chooser->setItemData(index, row.model, Qt::UserRole + 3);
+        chooser->setItemData(index, row.is_template, Qt::UserRole + 4);
+        chooser->setItemData(index, row.has_vision, Qt::UserRole + 5);
+        chooser->setItemData(index, row.has_tools, Qt::UserRole + 6);
+        chooser->setItemData(index,
+            QString::fromStdString(row.entry.path), Qt::UserRole + 7);
+        chooser->setItemData(index, fallback, Qt::UserRole + 8);
+        add_preset_catalog_row(catalog, row, index);
+        return index;
+    };
+
+    if (include_current_fallback) {
+        add_preset_section(catalog, QStringLiteral("Current setup"));
+        PresetCatalogRow current{
+            PresetEntry{"Keep current", "Preserve the loaded preset references",
+                {}, "current", {}},
+            QStringLiteral("Preserve the loaded preset references"), {}, {},
+            QStringLiteral("Current Agent configuration"), false, false, false};
+        selected_index = add_row(current, true);
+    }
+
+    const auto rows = build_preset_catalog_rows(presets);
+    add_preset_section(catalog, QStringLiteral("Saved presets"));
+    auto added_templates_header = false;
+    const auto preferred = normalize_preset_reference(
+        preferred_reference, lingtai_global_dir());
+    for (const auto &row : rows) {
+        if (row.is_template && !added_templates_header) {
+            add_preset_section(catalog, QStringLiteral("Preset templates"));
+            added_templates_header = true;
+        }
+        const auto index = add_row(row, false);
+        if (!preferred.isEmpty()
+                && normalize_preset_reference(
+                    QString::fromStdString(row.entry.path),
+                    lingtai_global_dir()) == preferred) {
+            selected_index = index;
+        }
+    }
+    if (!added_templates_header) {
+        add_preset_section(catalog, QStringLiteral("Preset templates"));
+    }
+
+    if (selected_index < 0 && chooser->count() > 0) selected_index = 0;
+    chooser->setCurrentIndex(-1);
+    for (auto index = 0; index != catalog->topLevelItemCount(); ++index) {
+        auto *item = catalog->topLevelItem(index);
+        if (!is_preset_section(item)
+                && item->data(0, Qt::UserRole).toInt() == selected_index) {
+            catalog->setCurrentItem(item);
+            break;
+        }
+    }
 }
 
 void NativeShell::request_existing_agent_setup() {
@@ -2847,6 +2895,15 @@ void NativeShell::request_existing_agent_setup() {
         recompute_layout(window_->body()->width());
         return;
     }
+    const auto catalog = load_preset_catalog(lingtai_global_dir());
+    if (!catalog) {
+        set_bootstrap_status(QStringLiteral("Preset catalog load failed: %1")
+            .arg(QString::fromStdString(catalog.detail)));
+        refresh_route();
+        recompute_layout(window_->body()->width());
+        return;
+    }
+    existing_setup_catalog_ = catalog.presets;
     show_existing_setup_wizard(std::move(*loaded.state));
 }
 
@@ -2856,45 +2913,35 @@ void NativeShell::show_existing_setup_wizard(AgentSetupState state) {
     const auto active = preset.value("active").toString();
     auto default_name = preset.value("default").toString();
     if (default_name.isEmpty()) default_name = active;
-    auto allowed = QStringList();
-    const auto allowed_value = preset.value("allowed").toArray();
-    for (const auto &value : allowed_value) {
-        if (value.isString() && !value.toString().isEmpty()
-                && !allowed.contains(value.toString())) {
-            allowed.push_back(value.toString());
-        }
-    }
-    if (!default_name.isEmpty() && !allowed.contains(default_name)) {
-        allowed.push_back(default_name);
-    }
-    if (!active.isEmpty() && !allowed.contains(active)) {
-        allowed.push_back(active);
-    }
-
     setup_mode_ = SetupMode::rerun_existing;
     existing_setup_state_ = std::move(state);
+    existing_setup_selected_reference_ = default_name;
+    existing_setup_selected_manifest_ = {};
     bootstrap_pending_ = false;
     set_bootstrap_status(QString());
-    if (auto *agents_page = window_->findChild<AgentPresetsPage *>(
-            "lingtai_setup_agents_page")) {
-        agents_page->load_existing(default_name, allowed, active);
-    }
-    if (auto *review_page = window_->findChild<AgentConfigPage *>(
-            "lingtai_setup_review_page")) {
-        review_page->load_existing(existing_setup_state_->draft,
-            path_text(existing_setup_state_->agent_key), default_name,
-            allowed.size());
-    }
+    const auto catalog_rows = build_preset_catalog_rows(existing_setup_catalog_);
+    const auto normalized_default = normalize_preset_reference(
+        default_name, lingtai_global_dir());
+    const auto resolved = std::ranges::any_of(catalog_rows,
+        [&](const PresetCatalogRow &row) {
+            return !normalized_default.isEmpty()
+                && normalize_preset_reference(
+                    QString::fromStdString(row.entry.path),
+                    lingtai_global_dir()) == normalized_default;
+        });
+    populate_setup_preset_catalog(
+        existing_setup_catalog_, default_name, !resolved);
+    hydrate_existing_preset_policy(default_name);
     if (auto *dialog_status = find_ui_child<Ui::FlatLabel>(
             *window_, "lingtai_bootstrap_dialog_status")) {
         dialog_status->setText(QString());
     }
     if (auto *pages = window_->findChild<QStackedWidget *>(
             "lingtai_setup_pages")) {
-        pages->setCurrentIndex(2);
+        pages->setCurrentIndex(0);
     }
     if (auto *steps = window_->findChild<QWidget *>("lingtai_setup_steps")) {
-        update_setup_step_indicator(steps, 1);
+        update_setup_step_indicator(steps, 0);
         steps->show();
     }
     setup_route_visible_ = true;
@@ -2903,6 +2950,41 @@ void NativeShell::show_existing_setup_wizard(AgentSetupState state) {
     refresh_route();
     recompute_layout(window_->body()->width());
     recompute_setup_layout(setup_route_);
+}
+
+void NativeShell::hydrate_existing_preset_policy(
+        const QString &proposed_default) {
+    if (!existing_setup_state_) return;
+    const auto manifest = existing_setup_state_->init_document
+        .value("manifest").toObject();
+    const auto preset = manifest.value("preset").toObject();
+    const auto active = preset.value("active").toString();
+    auto current_default = preset.value("default").toString();
+    if (current_default.isEmpty()) current_default = active;
+    auto allowed = QStringList();
+    for (const auto &value : preset.value("allowed").toArray()) {
+        if (value.isString() && !value.toString().isEmpty()
+                && !allowed.contains(value.toString())) {
+            allowed.push_back(value.toString());
+        }
+    }
+    if (!proposed_default.isEmpty() && proposed_default != current_default
+            && !allowed.contains(proposed_default)) {
+        allowed.push_back(proposed_default);
+    }
+    const auto effective_default = proposed_default.isEmpty()
+        ? current_default : proposed_default;
+    if (auto *agents_page = window_->findChild<AgentPresetsPage *>(
+            "lingtai_setup_agents_page")) {
+        agents_page->load_existing(effective_default, allowed, active,
+            build_preset_catalog_rows(existing_setup_catalog_));
+    }
+    if (auto *review_page = window_->findChild<AgentConfigPage *>(
+            "lingtai_setup_review_page")) {
+        review_page->load_existing(existing_setup_state_->draft,
+            path_text(existing_setup_state_->agent_key), effective_default,
+            allowed.size());
+    }
 }
 
 void NativeShell::handle_save_existing_setup() {
@@ -2942,10 +3024,11 @@ void NativeShell::handle_save_existing_setup() {
             && requested_default != current_default) {
         draft.preset.choice = AgentSetupPresetChoice::select_preset;
         draft.preset.reference = requested_default.toStdString();
-        // The rerun route intentionally performs no global/TUI preset read.
-        // Preserve the loaded effective llm/capabilities while changing only
-        // the stored reference policy.
-        draft.preset.manifest = manifest;
+        draft.preset.manifest = requested_default
+                    == existing_setup_selected_reference_
+                && !existing_setup_selected_manifest_.isEmpty()
+            ? existing_setup_selected_manifest_
+            : manifest;
     } else {
         draft.preset.choice = AgentSetupPresetChoice::keep_current;
         draft.preset.reference.clear();
@@ -2968,6 +3051,9 @@ void NativeShell::handle_save_existing_setup() {
         : QStringLiteral("Setup already up to date (no change).");
     setup_mode_ = SetupMode::none;
     existing_setup_state_.reset();
+    existing_setup_catalog_.clear();
+    existing_setup_selected_reference_.clear();
+    existing_setup_selected_manifest_ = {};
     hide_setup_wizard();
     agents_ = project_agents(*selection_state_.active_project());
     render_roster();
@@ -3066,6 +3152,9 @@ void NativeShell::handle_cancel_bootstrap() {
     bootstrap_pending_ = false;
     setup_mode_ = SetupMode::none;
     existing_setup_state_.reset();
+    existing_setup_catalog_.clear();
+    existing_setup_selected_reference_.clear();
+    existing_setup_selected_manifest_ = {};
     hide_setup_wizard();
     refresh_route();
     recompute_layout(window_->body()->width());
@@ -3077,6 +3166,9 @@ void NativeShell::handle_spawn_finished(SpawnOutcome outcome) {
     bootstrap_pending_ = false;
     setup_mode_ = SetupMode::none;
     existing_setup_state_.reset();
+    existing_setup_catalog_.clear();
+    existing_setup_selected_reference_.clear();
+    existing_setup_selected_manifest_ = {};
     hide_setup_wizard();
     refresh_route();
     recompute_layout(window_->body()->width());

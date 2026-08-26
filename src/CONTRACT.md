@@ -69,6 +69,10 @@ Reads (no writes, no durable state):
   match the presentation-time observation.
 - `read_agent_preset_summary(attachment, key)` → `AgentPresetSummary`
   (`agent_preset_summary.h`).
+- `load_preset_catalog(global_dir)` → `PresetCatalogLoadResult`
+  (`preset_catalog.h`) — bounded read-only saved/template discovery under the
+  injected Desktop global root; missing directories are empty and directory
+  read failure is typed. It writes and bootstraps nothing.
 - `KanbanSnapshotIndex::refresh(attachment, snapshot, force)` →
   `KanbanRefreshResult` (`kanban_model.h`) — the session-only complete-board
   owner. Cold/forced reads may rebuild; unchanged refreshes perform fixed
@@ -107,11 +111,11 @@ bounded side-effect scope):
   It does not scaffold or add an Agent.
 
 `NativeShell` routes `/setup` for the exact current selection through that
-existing-Agent store and the shared in-window setup wizard. It retains the
-loaded state until Save or cancellation, never invokes TUI preset discovery or
-spawn for this route, and refreshes the selected project only after `saved` or
-`no_change`. New Project remains the separate `ProjectBootstrapRunner`
-`presets`/`spawn` flow.
+existing-Agent store, Desktop's full saved/template catalog reader, and the
+shared in-window setup wizard/editor. It retains the loaded state until Save
+or cancellation, never invokes TUI preset discovery or spawn for this route,
+and refreshes the selected project only after `saved` or `no_change`. New
+Project remains the separate `ProjectBootstrapRunner` `presets`/`spawn` flow.
 
 State models: `WorkspaceSelectionState` (`workspace_selection.h`) is the only
 owner of the accepted active project and the selected Agent directory key. A
@@ -231,6 +235,7 @@ paths and names are in [`../ANATOMY.md`](../ANATOMY.md) and `CMakeLists.txt`:
 - `tests/direct_mail_publisher_test.cpp` — `direct_mail_publisher`.
 - `tests/agent_preset_summary_test.cpp` — `agent_preset_summary`.
 - `tests/agent_setup_store_test.cpp` — `agent_setup_store`.
+- `tests/preset_catalog_test.cpp` — `preset_catalog`.
 - `tests/agent_sleep_test.cpp` — `agent_sleep`.
 - `tests/kanban_model_test.cpp` — `kanban_model`.
 - `tests/posix_descriptor_primitives_test.cpp` — `posix_descriptor_primitives`.

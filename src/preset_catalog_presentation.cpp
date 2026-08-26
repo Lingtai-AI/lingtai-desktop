@@ -9,7 +9,6 @@
 #include <QtCore/QJsonParseError>
 
 #include <algorithm>
-#include <map>
 
 namespace lingtai::desktop {
 namespace {
@@ -90,17 +89,6 @@ QString format_provider_model(const QString &provider, const QString &model) {
     return provider + QStringLiteral(" · ") + model;
 }
 
-int template_sort_rank(const std::string &name) {
-    // Keep in sync with preset.List() templateOrder in lingtai-tui.
-    static const auto ranks = std::map<std::string, int>{
-        {"minimax", 0}, {"zhipu", 1}, {"mimo", 2}, {"deepseek", 3},
-        {"kimi", 4}, {"grok", 5}, {"nvidia", 6}, {"openrouter", 7},
-        {"codex", 8}, {"codex-pool", 9}, {"claude", 10}, {"custom", 11},
-    };
-    const auto found = ranks.find(name);
-    return found == ranks.end() ? 999 : found->second;
-}
-
 } // namespace
 
 std::vector<PresetCatalogRow> build_preset_catalog_rows(
@@ -120,17 +108,7 @@ std::vector<PresetCatalogRow> build_preset_catalog_rows(
     }
     std::stable_sort(rows.begin(), rows.end(),
         [](const PresetCatalogRow &left, const PresetCatalogRow &right) {
-            if (left.is_template != right.is_template) {
-                return !left.is_template;
-            }
-            if (left.is_template) {
-                const auto left_rank = template_sort_rank(left.entry.name);
-                const auto right_rank = template_sort_rank(right.entry.name);
-                if (left_rank != right_rank) {
-                    return left_rank < right_rank;
-                }
-            }
-            return left.entry.name < right.entry.name;
+            return preset_catalog_order_less(left.entry, right.entry);
         });
     return rows;
 }

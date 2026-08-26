@@ -213,8 +213,17 @@ its code.
 
 - `/setup` requires the active project's exact selected Agent and reuses the
   in-window setup wizard in an explicit existing-Agent mode. It loads one
-  `AgentSetupState` through `AgentSetupStore`, hydrates preset policy plus all
-  setup-owned review fields, and keeps Agent name/folder visibly read-only.
+  `AgentSetupState` through `AgentSetupStore` plus every valid saved/template
+  row through Desktop's injected-root catalog loader, starts at Preset 1 of 3,
+  and preselects the normalized real default/active row. Only an unresolved
+  ref adds a selected Current setup fallback; the saved/template sections stay
+  visible. Real rows use the shared editor before reference-aware Agent policy;
+  fallback Continue bypasses the editor. Agent name/folder remain read-only.
+- Existing policy stores full refs separately from friendly catalog display
+  names. Editing a real row proposes its materialized saved ref, adds that ref
+  to allowed, and preserves loaded unknown allowed/default/active refs and
+  active semantics. Agents Back returns to Preset; Review Back returns to
+  Agents.
 - Save calls `AgentSetupStore::save` directly. `saved` and `no_change` close
   the route, refresh the selected project, and preserve selection; every typed
   failure stays open with its detail. Cancel, Back, and Escape write nothing.

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "preset_catalog.h"
+
 #include <QtCore/QProcess>
 #include <QtCore/QStringList>
 
@@ -9,14 +11,6 @@
 #include <vector>
 
 namespace lingtai::desktop {
-
-struct PresetEntry {
-    std::string name;
-    std::string description;
-    std::string tier;
-    std::string source;
-    std::string path;
-};
 
 enum class PresetDiscoveryKind {
     succeeded,

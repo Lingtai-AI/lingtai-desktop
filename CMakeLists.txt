@@ -185,6 +185,18 @@ target_include_directories(lingtai_desktop_attachment_selection PUBLIC
 target_compile_options(lingtai_desktop_attachment_selection PRIVATE
     -Wall -Wextra -Werror -pedantic)
 
+# Read-only Desktop owner for the global saved/template preset catalog. The
+# caller injects the global root; missing directories are empty and unreadable
+# directory scans return typed evidence without bootstrapping any files.
+add_library(lingtai_desktop_preset_catalog STATIC
+    src/preset_catalog.cpp)
+init_target(lingtai_desktop_preset_catalog)
+target_include_directories(lingtai_desktop_preset_catalog PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(lingtai_desktop_preset_catalog PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_desktop_preset_catalog PRIVATE Qt6::Core)
+
 add_library(lingtai_desktop_native_shell STATIC
     src/attachment_thumbnail.cpp
     src/native_shell.cpp
@@ -237,6 +249,7 @@ target_link_libraries(lingtai_desktop_native_shell
         lingtai_desktop_agent_launch lingtai_desktop_agent_prompt_actions
         lingtai_desktop_agent_preset_summary
         lingtai_desktop_agent_setup_store
+        lingtai_desktop_preset_catalog
         lingtai_desktop_tui_executable
         lingtai_desktop_kanban)
 
@@ -503,6 +516,14 @@ target_compile_options(lingtai_agent_setup_store_test PRIVATE
 target_link_libraries(lingtai_agent_setup_store_test PRIVATE
     lingtai_desktop_agent_setup_store Qt6::Core)
 
+add_executable(lingtai_preset_catalog_test
+    tests/preset_catalog_test.cpp)
+init_target(lingtai_preset_catalog_test)
+target_compile_options(lingtai_preset_catalog_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_preset_catalog_test PRIVATE
+    lingtai_desktop_preset_catalog Qt6::Core)
+
 add_executable(lingtai_tui_executable_resolver_test
     tests/tui_executable_resolver_test.cpp)
 init_target(lingtai_tui_executable_resolver_test)
@@ -762,6 +783,9 @@ add_test(NAME agent_preset_summary
 add_test(NAME agent_setup_store
     COMMAND lingtai_agent_setup_store_test
         "${CMAKE_CURRENT_BINARY_DIR}/agent-setup-store-fixture")
+add_test(NAME preset_catalog
+    COMMAND lingtai_preset_catalog_test
+        "${CMAKE_CURRENT_BINARY_DIR}/preset-catalog-fixture")
 add_test(NAME tui_executable_resolver
     COMMAND lingtai_tui_executable_resolver_test
         "${CMAKE_CURRENT_BINARY_DIR}/tui-executable-resolver-fixture")
@@ -943,6 +967,7 @@ set(LINGTAI_UNIT_TESTS
     conversation_session
     direct_mail_publisher
     agent_preset_summary
+    preset_catalog
     kanban_model
     agent_sleep
     agent_prompt_actions

@@ -116,6 +116,9 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
 - `tests/agent_setup_store_test.cpp` — `agent_setup_store`; bounded load,
   owned-field preservation, TUI preset/peer-orchestrator parity, external
   configured-env merge, and atomic rollback/no-mutation failure evidence.
+- `tests/preset_catalog_test.cpp` — `preset_catalog`; injected global-root
+  saved/template discovery, validation/skips, canonical ordering, exact facts,
+  missing-directory behavior, typed scan failure, normalization, and no-write.
 - `tests/tui_executable_resolver_test.cpp` — `tui_executable_resolver`; all
   PATH/home/system inputs and candidate files live below one injected fixture,
   with no process environment mutation or host installation dependency.
