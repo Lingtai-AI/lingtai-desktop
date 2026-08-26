@@ -216,12 +216,12 @@ void test_reconciliation_and_preservation(const fs::path &base) {
             && manifest.value("capabilities").toObject().contains("vision"),
         "selected preset updates only setup-owned llm/capability fields");
     const auto policy = manifest.value("preset").toObject();
-    require(policy.value("active") == "old-active"
+    require(policy.value("active") == "new-default"
             && policy.value("default") == "new-default"
             && policy.value("allowed").toArray()
                 == QJsonArray{"new-default", "other"}
             && policy.value("custom_policy").toObject().value("keep").toBool(),
-        "existing active remains active while default/allowed policy changes and extras survive");
+        "revoked active deterministically falls back to default and policy extras survive");
     require(read_file(project / ".lingtai/alpha/init.json").find("keep_current")
             == std::string::npos,
         "the virtual Keep Current sentinel is never serialized");
@@ -351,7 +351,7 @@ void test_empty_allowed_preserves_selected_and_peers(const fs::path &base) {
     const auto env = project / ".lingtai/.env";
     write_file(env, "SECRET=x\n");
     make_valid_agent(project, "alpha",
-        preset_block("active", "default", {"default", "active", "extra"}), env, false);
+        preset_block("active", "default", {"default", "extra"}), env, false);
     make_valid_agent(project, "beta",
         preset_block("peer-active", "peer-default", {"peer-active", "peer-default"}), env, false);
     AgentSetupStore store(attach(project));
@@ -368,8 +368,8 @@ void test_empty_allowed_preserves_selected_and_peers(const fs::path &base) {
     require(policy.value("active") == "active"
             && policy.value("default") == "default"
             && policy.value("allowed").toArray()
-                == QJsonArray{"default", "active", "extra"},
-        "empty allowed request preserves and normalizes selected policy");
+                == QJsonArray{"default", "extra", "active"},
+        "empty allowed request preserves active by adding it to allowed");
     require(read_file(project / ".lingtai/beta/init.json") == peer_before,
         "empty allowed request does not propagate preset policy to peers");
 }
