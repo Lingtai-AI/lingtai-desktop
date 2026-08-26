@@ -4083,6 +4083,22 @@ exit 0)",
     submit_setup();
     select_catalog_row(QStringLiteral("custom"));
     enter_selected_real_preset();
+    auto materialized_friendly_facts = false;
+    for (auto *label : agents_page->findChildren<QLabel *>(
+            "lingtai_setup_agents_row_name")) {
+        auto *row = label->parentWidget()->parentWidget();
+        const auto provider = required_child<QLabel>(
+            *row, "lingtai_setup_agents_row_provider")->text();
+        const auto model = required_child<QLabel>(
+            *row, "lingtai_setup_agents_row_model")->text();
+        materialized_friendly_facts = materialized_friendly_facts
+            || (label->text().startsWith(QStringLiteral("custom"))
+                && provider == QStringLiteral("custom")
+                && model == QStringLiteral("custom-model"));
+    }
+    require(materialized_friendly_facts,
+        "a materialized template must refresh the Desktop catalog so Agents "
+        "shows its friendly name, provider, and model instead of a raw path");
     agents_continue->click();
     QCoreApplication::processEvents();
     commit->click();
@@ -4123,10 +4139,16 @@ exit 0)",
             && preset_chooser->count() == 6,
         "an unresolved default must add one selected Current setup fallback "
         "without hiding the full saved/template catalog");
+    select_catalog_row(QStringLiteral("next"));
+    enter_selected_real_preset();
+    agents_back->click();
+    QCoreApplication::processEvents();
+    select_catalog_row(QStringLiteral("Keep current"));
     preset_continue->click();
     QCoreApplication::processEvents();
     require(pages->currentWidget() == agents_page,
-        "fallback Continue must bypass the editor and hydrate Agent policy");
+        "fallback Continue after editing a real preset must bypass the editor "
+        "and hydrate the originally loaded Agent policy");
     auto fallback_markers = std::map<QString, QString>();
     for (auto *label : agents_page->findChildren<QLabel *>(
             "lingtai_setup_agents_row_name")) {

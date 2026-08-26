@@ -2375,8 +2375,9 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
             if (setup_mode_ == SetupMode::rerun_existing
                     && preset_chooser->currentData(
                         Qt::UserRole + 8).toBool()) {
-                hydrate_existing_preset_policy(
-                    existing_setup_selected_reference_);
+                existing_setup_selected_reference_.clear();
+                existing_setup_selected_manifest_ = {};
+                hydrate_existing_preset_policy({});
                 go_to_page(2);
                 return;
             }
@@ -2410,6 +2411,9 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
                 }
                 existing_setup_selected_manifest_ = edit_preset_page->model()
                     .document().value(QLatin1String("manifest")).toObject();
+                if (auto refreshed = load_preset_catalog(lingtai_global_dir())) {
+                    existing_setup_catalog_ = std::move(refreshed.presets);
+                }
                 hydrate_existing_preset_policy(
                     existing_setup_selected_reference_);
                 go_to_page(2);
