@@ -82,6 +82,28 @@ class ManagedPaths:
     launcher: Path
 
 
+@dataclasses.dataclass(frozen=True)
+class UninstallEntry:
+    version: str
+    receipt: dict[str, object]
+    version_identity: tuple[int, int]
+    receipt_identity: tuple[int, int]
+
+
+@dataclasses.dataclass(frozen=True)
+class UninstallPlan:
+    entries: tuple[UninstallEntry, ...]
+    root_identity: tuple[int, int]
+    cli_identity: tuple[int, int]
+    versions_identity: tuple[int, int]
+    receipts_identity: tuple[int, int]
+    launcher_identity: tuple[int, int]
+    module_identity: tuple[int, int]
+    verifier_identity: tuple[int, int]
+    current_target: str | None
+    current_identity: tuple[int, int] | None
+
+
 def _run(arguments: Sequence[os.PathLike[str] | str], *, label: str,
          environment: Mapping[str, str] | None = None, timeout: int | None = None) -> str:
     try:
@@ -286,14 +308,17 @@ def _require_nonroot(effective_uid: int | None) -> None:
         raise DesktopCLIError("mutating commands refuse effective uid 0")
 
 
-def _ensure_directory(path: Path, mode: int) -> None:
+def _ensure_directory(path: Path, mode: int, *, preserve_existing_mode: bool = False) -> None:
+    created = False
     if path.exists() or path.is_symlink():
         facts = path.lstat()
         if stat.S_ISLNK(facts.st_mode) or not stat.S_ISDIR(facts.st_mode):
             raise DesktopCLIError(f"managed directory is not a real directory (symlink refused): {path.name}")
     else:
         path.mkdir(mode=mode)
-    os.chmod(path, mode, follow_symlinks=False)
+        created = True
+    if created or not preserve_existing_mode:
+        os.chmod(path, mode, follow_symlinks=False)
 
 
 def _require_real_directory(path: Path, label: str) -> None:
@@ -306,9 +331,9 @@ def _require_real_directory(path: Path, label: str) -> None:
 
 
 def _prepare_layout(paths: ManagedPaths) -> None:
-    _ensure_directory(paths.local, 0o700)
-    _ensure_directory(paths.bin, 0o700)
-    _ensure_directory(paths.local / "share", 0o700)
+    _ensure_directory(paths.local, 0o700, preserve_existing_mode=True)
+    _ensure_directory(paths.bin, 0o700, preserve_existing_mode=True)
+    _ensure_directory(paths.local / "share", 0o700, preserve_existing_mode=True)
     _ensure_directory(paths.root, 0o700)
     _ensure_directory(paths.cli, 0o700)
     _ensure_directory(paths.versions, 0o700)
@@ -418,14 +443,38 @@ def _launcher_bytes(module_bytes: bytes | None = None, verifier_bytes: bytes | N
             "raise SystemExit(installed_main())\n").encode()
 
 
-def _publish_file_exclusive(source: Path, destination: Path, mode: int) -> None:
+def _identity(path: Path) -> tuple[int, int]:
+    facts = path.lstat()
+    return facts.st_dev, facts.st_ino
+
+
+def _matches_identity(path: Path, expected: tuple[int, int]) -> bool:
     try:
+        return _identity(path) == expected
+    except OSError:
+        return False
+
+
+def _publish_file_exclusive(source: Path, destination: Path, mode: int) -> tuple[int, int]:
+    try:
+        os.chmod(source, mode, follow_symlinks=False)
+        facts = _regular_nofollow(source, f"staged {destination.name}")
+        if stat.S_IMODE(facts.st_mode) != mode:
+            raise DesktopCLIError(f"staged {destination.name} has an incorrect mode")
+        identity = (facts.st_dev, facts.st_ino)
         os.link(source, destination, follow_symlinks=False)
-        os.chmod(destination, mode, follow_symlinks=False)
     except FileExistsError as error:
         raise DesktopCLIError(f"refusing to overwrite existing {destination.name}") from error
+    except DesktopCLIError:
+        raise
     except OSError as error:
         raise DesktopCLIError(f"could not publish {destination.name}") from error
+    return identity
+
+
+def _unlink_if_identity(path: Path, expected: tuple[int, int] | None) -> None:
+    if expected is not None and _matches_identity(path, expected):
+        path.unlink()
 
 
 def _rename_exclusive(source: Path, destination: Path) -> None:
@@ -444,7 +493,10 @@ def _rename_exclusive(source: Path, destination: Path) -> None:
         os.rename(source, destination)
 
 
-def _remove_owned_version(path: Path, expected_digest: str) -> None:
+def _remove_owned_version(path: Path, expected_digest: str,
+                          expected_identity: tuple[int, int] | None = None) -> None:
+    if expected_identity is not None and not _matches_identity(path, expected_identity):
+        raise DesktopCLIError("refusing to remove a replaced managed version")
     if path.is_symlink() or not path.is_dir() or bundle_tree_digest(path / APP_NAME) != expected_digest:
         raise DesktopCLIError("refusing to remove an unproven or tampered managed version")
     if sorted(item.name for item in path.iterdir()) != [APP_NAME]:
@@ -541,6 +593,91 @@ def _active(paths: ManagedPaths) -> tuple[str, Path, dict[str, object]]:
     return version, app, receipt
 
 
+def _preflight_uninstall(paths: ManagedPaths) -> UninstallPlan:
+    for directory, label in (
+        (paths.local, "managed .local"), (paths.bin, "managed bin"),
+        (paths.local / "share", "managed share"), (paths.root, "managed root"),
+        (paths.cli, "managed CLI directory"), (paths.versions, "managed versions"),
+        (paths.receipts, "managed receipts"),
+    ):
+        _require_real_directory(directory, label)
+
+    current_target: str | None = None
+    current_identity: tuple[int, int] | None = None
+    if paths.current.is_symlink():
+        current_target = os.readlink(paths.current)
+        current_identity = _identity(paths.current)
+        if re.fullmatch(r"versions/[0-9]+\.[0-9]+\.[0-9]+", current_target) is None:
+            raise DesktopCLIError("managed current symlink escapes or is malformed")
+    elif paths.current.exists():
+        raise DesktopCLIError("managed current is not a symlink")
+
+    allowed_root = {"cli", "versions", "receipts"}
+    if current_target is not None:
+        allowed_root.add("current")
+    actual_root = {path.name for path in paths.root.iterdir()}
+    if actual_root != allowed_root:
+        raise DesktopCLIError("managed root contains unknown or missing files")
+
+    module = paths.cli / "desktop_user_cli.py"
+    verifier = paths.cli / "verify-macos-package.py"
+    if {path.name for path in paths.cli.iterdir()} != {module.name, verifier.name}:
+        raise DesktopCLIError("managed CLI directory contains unknown files")
+    _validate_owned_cli(paths)
+
+    receipt_paths = sorted(paths.receipts.iterdir(), key=lambda path: path.name)
+    version_paths = sorted(paths.versions.iterdir(), key=lambda path: path.name)
+    receipt_by_version: dict[str, Path] = {}
+    for receipt_path in receipt_paths:
+        match = re.fullmatch(r"([0-9]+\.[0-9]+\.[0-9]+)\.json", receipt_path.name)
+        facts = receipt_path.lstat()
+        if match is None or stat.S_ISLNK(facts.st_mode) or not stat.S_ISREG(facts.st_mode):
+            raise DesktopCLIError("receipts contains unknown files")
+        receipt_by_version[match.group(1)] = receipt_path
+    version_by_name: dict[str, Path] = {}
+    for version_path in version_paths:
+        if VERSION_PATTERN.fullmatch(version_path.name) is None:
+            raise DesktopCLIError("versions contains unknown files")
+        _require_real_directory(version_path, "managed version")
+        version_by_name[version_path.name] = version_path
+    if set(receipt_by_version) != set(version_by_name):
+        raise DesktopCLIError("managed versions and receipts do not match")
+    if current_target is not None and current_target.removeprefix("versions/") not in version_by_name:
+        raise DesktopCLIError("managed current does not name an installed version")
+
+    entries: list[UninstallEntry] = []
+    for version in sorted(version_by_name, key=_version_tuple):
+        receipt_path = receipt_by_version[version]
+        version_path = version_by_name[version]
+        receipt = _read_receipt(paths, version)
+        if {path.name for path in version_path.iterdir()} != {APP_NAME}:
+            raise DesktopCLIError("managed version contains unknown files")
+        app = version_path / APP_NAME
+        _inspect_app(app, version)
+        if bundle_tree_digest(app) != receipt["bundle_tree_sha256"]:
+            raise DesktopCLIError("installed bundle digest does not match receipt")
+        entries.append(UninstallEntry(
+            version, receipt, _identity(version_path), _identity(receipt_path)
+        ))
+    return UninstallPlan(
+        tuple(entries), _identity(paths.root), _identity(paths.cli),
+        _identity(paths.versions), _identity(paths.receipts), _identity(paths.launcher),
+        _identity(module), _identity(verifier), current_target, current_identity,
+    )
+
+
+def _revalidate_uninstall_ancestors(paths: ManagedPaths, plan: UninstallPlan) -> None:
+    for directory, identity, label in (
+        (paths.root, plan.root_identity, "managed root"),
+        (paths.cli, plan.cli_identity, "managed CLI directory"),
+        (paths.versions, plan.versions_identity, "managed versions"),
+        (paths.receipts, plan.receipts_identity, "managed receipts"),
+    ):
+        _require_real_directory(directory, label)
+        if not _matches_identity(directory, identity):
+            raise DesktopCLIError(f"refusing mutation through replaced {label}")
+
+
 def _version_tuple(version: str) -> tuple[int, int, int]:
     if VERSION_PATTERN.fullmatch(version) is None:
         raise DesktopCLIError("version must be a safe x.y.z value")
@@ -597,8 +734,14 @@ def install(dmg: Path, manifest_path: Path, *, home: Path | None = None,
     final_receipt = paths.receipts / f"{manifest.version}.json"
     if final_version.exists() or final_version.is_symlink() or final_receipt.exists() or final_receipt.is_symlink():
         raise DesktopCLIError("version collision: managed version already exists")
+    managed_root_identity = _identity(paths.root)
     scratch = Path(tempfile.mkdtemp(prefix=".staging-", dir=paths.root))
-    published_receipt = published_version = created_cli = created_launcher = False
+    scratch_identity = _identity(scratch)
+    receipt_identity: tuple[int, int] | None = None
+    version_identity: tuple[int, int] | None = None
+    cli_identity: tuple[int, int] | None = None
+    verifier_identity: tuple[int, int] | None = None
+    launcher_identity: tuple[int, int] | None = None
     digest = ""
     try:
         staged_version = scratch / "version"
@@ -618,10 +761,10 @@ def install(dmg: Path, manifest_path: Path, *, home: Path | None = None,
         staged_receipt.chmod(0o600)
         if _FAILPOINT == "receipt":
             raise DesktopCLIError("injected receipt publication failure")
-        _publish_file_exclusive(staged_receipt, final_receipt, 0o600)
-        published_receipt = True
+        receipt_identity = _publish_file_exclusive(staged_receipt, final_receipt, 0o600)
+        staged_version_identity = _identity(staged_version)
         _rename_exclusive(staged_version, final_version)
-        published_version = True
+        version_identity = staged_version_identity
         module_bytes = Path(__file__).read_bytes()
         verifier_source = (
             repository_root / "scripts/verify-macos-package.py"
@@ -640,17 +783,15 @@ def install(dmg: Path, manifest_path: Path, *, home: Path | None = None,
         if not cli_exists:
             staged_cli = scratch / "desktop_user_cli.py"
             staged_cli.write_bytes(module_bytes)
-            _publish_file_exclusive(staged_cli, cli_path, 0o600)
-            created_cli = True
+            cli_identity = _publish_file_exclusive(staged_cli, cli_path, 0o600)
         if not verifier_exists:
             staged_verifier = scratch / "verify-macos-package.py"
             staged_verifier.write_bytes(verifier_bytes)
-            _publish_file_exclusive(staged_verifier, verifier_path, 0o600)
+            verifier_identity = _publish_file_exclusive(staged_verifier, verifier_path, 0o600)
         if not launcher_exists:
             staged_launcher = scratch / "lingtai-desktop"
             staged_launcher.write_bytes(launcher_bytes)
-            _publish_file_exclusive(staged_launcher, paths.launcher, 0o755)
-            created_launcher = True
+            launcher_identity = _publish_file_exclusive(staged_launcher, paths.launcher, 0o755)
         old_target = os.readlink(paths.current) if paths.current.is_symlink() else None
         if paths.current.exists() and not paths.current.is_symlink():
             raise DesktopCLIError("managed current is not a symlink")
@@ -666,20 +807,20 @@ def install(dmg: Path, manifest_path: Path, *, home: Path | None = None,
         if old_target is not None and os.readlink(paths.current) == old_target:
             raise DesktopCLIError("current switch did not take effect")
     except BaseException:
-        if created_launcher and paths.launcher.exists() and _read_bytes_nofollow(paths.launcher, "launcher") == _launcher_bytes():
-            paths.launcher.unlink()
-        cli_path = paths.cli / "desktop_user_cli.py"
-        if created_cli and cli_path.exists() and _read_bytes_nofollow(cli_path, "managed CLI") == Path(__file__).read_bytes():
-            cli_path.unlink()
-        if 'verifier_exists' in locals() and not verifier_exists and verifier_path.exists() and _read_bytes_nofollow(verifier_path, "managed verifier") == verifier_bytes:
-            verifier_path.unlink()
-        if published_version and final_version.exists():
-            _remove_owned_version(final_version, digest)
-        if published_receipt and final_receipt.exists() and _read_bytes_nofollow(final_receipt, "receipt") == receipt_bytes:
-            final_receipt.unlink()
+        _unlink_if_identity(paths.launcher, launcher_identity)
+        if _matches_identity(paths.root, managed_root_identity):
+            if 'cli_path' in locals():
+                _unlink_if_identity(cli_path, cli_identity)
+            if 'verifier_path' in locals():
+                _unlink_if_identity(verifier_path, verifier_identity)
+            if version_identity is not None and _matches_identity(final_version, version_identity):
+                _remove_owned_version(final_version, digest, version_identity)
+            _unlink_if_identity(final_receipt, receipt_identity)
         raise
     finally:
-        if scratch.exists() and not scratch.is_symlink():
+        if (_matches_identity(paths.root, managed_root_identity)
+                and _matches_identity(scratch, scratch_identity)
+                and not scratch.is_symlink()):
             shutil.rmtree(scratch)
     return manifest.version
 
@@ -760,46 +901,53 @@ def uninstall_version(version: str, *, home: Path | None = None,
                       effective_uid: int | None = None) -> None:
     _require_nonroot(effective_uid)
     paths = _paths(home)
-    receipt = _read_receipt(paths, version)
-    is_current = paths.current.is_symlink() and os.readlink(paths.current) == f"versions/{version}"
+    _version_tuple(version)
+    plan = _preflight_uninstall(paths)
+    entry = next((item for item in plan.entries if item.version == version), None)
+    if entry is None:
+        raise DesktopCLIError("requested managed version is not installed")
+    is_current = plan.current_target == f"versions/{version}"
     version_path = paths.versions / version
-    _remove_owned_version(version_path, receipt["bundle_tree_sha256"])  # type: ignore[arg-type]
-    (paths.receipts / f"{version}.json").unlink()
+    _revalidate_uninstall_ancestors(paths, plan)
+    _remove_owned_version(version_path, entry.receipt["bundle_tree_sha256"], entry.version_identity)  # type: ignore[arg-type]
+    receipt_path = paths.receipts / f"{version}.json"
+    _revalidate_uninstall_ancestors(paths, plan)
+    if not _matches_identity(receipt_path, entry.receipt_identity):
+        raise DesktopCLIError("refusing to remove a replaced receipt")
+    receipt_path.unlink()
     if is_current:
-        paths.current.unlink()
+        _unlink_if_identity(paths.current, plan.current_identity)
 
 
 def uninstall_all(*, home: Path | None = None, effective_uid: int | None = None) -> None:
     _require_nonroot(effective_uid)
     paths = _paths(home)
-    _validate_owned_cli(paths)
-    if not paths.current.is_symlink():
-        raise DesktopCLIError("managed current is missing or not a symlink")
-    target = os.readlink(paths.current)
-    if re.fullmatch(r"versions/[0-9]+\.[0-9]+\.[0-9]+", target) is None:
-        raise DesktopCLIError("managed current symlink escapes or is malformed")
-    receipt_files = sorted(paths.receipts.iterdir())
-    versions = sorted(paths.versions.iterdir())
-    expected_versions = {path.stem for path in receipt_files if path.suffix == ".json"}
-    if any(path.is_symlink() or not path.is_file() or path.suffix != ".json" for path in receipt_files):
-        raise DesktopCLIError("receipts contains unknown files")
-    if any(path.is_symlink() or not path.is_dir() or path.name not in expected_versions for path in versions):
-        raise DesktopCLIError("versions contains unknown files")
-    if {path.name for path in versions} != expected_versions:
-        raise DesktopCLIError("managed versions and receipts do not match")
+    plan = _preflight_uninstall(paths)
     module = paths.cli / "desktop_user_cli.py"
     verifier = paths.cli / "verify-macos-package.py"
-    if {path.name for path in paths.cli.iterdir()} != {module.name, verifier.name}:
-        raise DesktopCLIError("managed CLI directory contains unknown files")
-    for version in sorted(expected_versions):
-        receipt = _read_receipt(paths, version)
-        _remove_owned_version(paths.versions / version, receipt["bundle_tree_sha256"])  # type: ignore[arg-type]
-        (paths.receipts / f"{version}.json").unlink()
-    paths.current.unlink()
-    paths.launcher.unlink()
-    module.unlink()
-    verifier.unlink()
-    for directory in (paths.cli, paths.receipts, paths.versions, paths.root):
+    for entry in plan.entries:
+        _revalidate_uninstall_ancestors(paths, plan)
+        _remove_owned_version(
+            paths.versions / entry.version,
+            entry.receipt["bundle_tree_sha256"],  # type: ignore[arg-type]
+            entry.version_identity,
+        )
+        receipt_path = paths.receipts / f"{entry.version}.json"
+        _revalidate_uninstall_ancestors(paths, plan)
+        if not _matches_identity(receipt_path, entry.receipt_identity):
+            raise DesktopCLIError("refusing to remove a replaced receipt")
+        receipt_path.unlink()
+    _revalidate_uninstall_ancestors(paths, plan)
+    _unlink_if_identity(paths.current, plan.current_identity)
+    _unlink_if_identity(paths.launcher, plan.launcher_identity)
+    _unlink_if_identity(module, plan.module_identity)
+    _unlink_if_identity(verifier, plan.verifier_identity)
+    for directory, identity in (
+        (paths.cli, plan.cli_identity), (paths.receipts, plan.receipts_identity),
+        (paths.versions, plan.versions_identity), (paths.root, plan.root_identity),
+    ):
+        if not _matches_identity(directory, identity):
+            raise DesktopCLIError(f"refusing to remove replaced managed directory: {directory.name}")
         try:
             directory.rmdir()
         except OSError as error:
@@ -835,11 +983,12 @@ def bootstrap_main(argv: Sequence[str] | None = None) -> int:
     values = bootstrap_parser().parse_args(argv)
     try:
         version = install(values.dmg, values.manifest, allow_diagnostic=values.allow_diagnostic)
+        _, receipt = doctor()
     except DesktopCLIError as error:
         print(f"install-macos-app: {error}", file=sys.stderr)
         return 1
     print(f"installed LingTai Desktop {version}")
-    if values.allow_diagnostic:
+    if receipt["classification"] == "diagnostic":
         print("WARNING: diagnostic developer preview; NOT RELEASE READY")
     print("launcher: $HOME/.local/bin/lingtai-desktop (PATH was not modified)")
     return 0

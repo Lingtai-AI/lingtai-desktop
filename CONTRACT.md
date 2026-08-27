@@ -31,6 +31,11 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
   `scripts/install-macos-app.py` is a thin bootstrap and duplicates no policy.
   The managed command accepts only explicit local update artifacts, never
   mutates PATH/profiles, and never weakens quarantine or Gatekeeper.
+  Existing shared `.local` parent modes are outside its ownership. Managed
+  publication becomes visible only after mode preparation, rollback removes
+  only invocation-created inode identities, and uninstall rejects the entire
+  transaction before deletion if any ancestor, root child, receipt, version,
+  bundle digest, CLI file, verifier, or launcher is unknown or substituted.
 - `ShellHost` owns application composition: the one fallback interpreter and
   the one configured TUI executable; `main.cpp` owns the `--smoke` path. The shell performs no
   project, registry, or settings writes beyond the explicit user-triggered

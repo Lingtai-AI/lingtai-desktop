@@ -164,6 +164,10 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   local-artifact user install/update/launch/doctor/uninstall transaction,
   including authentic filesystem type/collision/tamper checks and injected
   macOS process boundaries.
+  Publication and uninstall tests must assert the complete before/after tree,
+  not only the raised error: a refusal is evidence only when shared-parent
+  metadata, racer-owned leaves, outside trees, every managed version/current,
+  and the launcher remain byte/type/mode identical as applicable.
 
 ## Maintenance
 

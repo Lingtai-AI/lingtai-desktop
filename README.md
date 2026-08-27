@@ -95,7 +95,12 @@ same-version update is reverified and is an idempotent no-op; lower versions are
 refused. The bootstrap does not use sudo, change PATH or shell profiles, clear
 quarantine, bypass Gatekeeper, contact an update service, or claim a public
 release. If `$HOME/.local/bin` is not already on PATH, invoke the launcher by
-its full path.
+its full path. Existing shared `.local`, `.local/bin`, and `.local/share`
+directory modes and unrelated contents are preserved; only newly created
+shared parents and the exclusively managed root use restrictive defaults.
+Uninstall preflights the complete managed tree—including every installed
+version—before deleting anything and refuses unknown, tampered, or substituted
+paths without a partial cleanup.
 
 ## First project
 

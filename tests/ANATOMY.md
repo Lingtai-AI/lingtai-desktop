@@ -43,6 +43,10 @@ test proves. This file descends into `tests/` itself.
   receipt/digest tamper rejection, atomic current preservation, collisions,
   symlink/traversal refusal, root refusal, and owned-only uninstall without
   invoking Finder, an App, Apple services, or the network.
+  Authentic filesystem regressions additionally pin shared-parent mode/content
+  preservation, pre-link mode-preparation failure, identical verifier races,
+  symlink-root uninstall containment, and no-partial-delete behavior for an
+  unknown root child or a tampered later version.
 - Compile-time guards embedded in unit tests: `workspace_selection_test.cpp`
   and `direct_conversation_route_test.cpp` start with
   `#ifdef QT_CORE_LIB / #error` so a Qt-core dependency leaking into a

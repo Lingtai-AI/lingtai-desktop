@@ -52,6 +52,26 @@ def make_app(path: Path, version: str) -> None:
         }, stream)
 
 
+def tree_snapshot(root: Path) -> tuple[tuple[str, str, int, bytes], ...]:
+    result: list[tuple[str, str, int, bytes]] = []
+    if not root.exists() and not root.is_symlink():
+        return tuple()
+    for path in sorted([root, *root.rglob("*")], key=lambda value: os.fspath(value)):
+        relative = "." if path == root else os.fspath(path.relative_to(root))
+        facts = path.lstat()
+        mode = stat.S_IMODE(facts.st_mode)
+        if path.is_symlink():
+            kind, content = "symlink", os.fsencode(os.readlink(path))
+        elif path.is_dir():
+            kind, content = "directory", b""
+        elif path.is_file():
+            kind, content = "file", path.read_bytes()
+        else:
+            kind, content = "other", b""
+        result.append((relative, kind, mode, content))
+    return tuple(result)
+
+
 class FakePlatform(cli.Platform):
     def __init__(self) -> None:
         self.calls: list[list[str]] = []
@@ -89,6 +109,127 @@ class FakePlatform(cli.Platform):
 
 
 class DesktopUserCLIContractTest(unittest.TestCase):
+    def test_existing_shared_parent_modes_and_contents_are_preserved(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            shared = (home / ".local", home / ".local/bin", home / ".local/share")
+            for directory in shared:
+                directory.mkdir(parents=True, exist_ok=True)
+                directory.chmod(0o755)
+            unrelated = home / ".local/share/unrelated.txt"
+            unrelated.write_text("keep me")
+            before = tuple(stat.S_IMODE(path.stat().st_mode) for path in shared), unrelated.read_bytes()
+            dmg, manifest = write_artifacts(root)
+            cli.install(dmg, manifest, home=home, allow_diagnostic=True,
+                        platform=FakePlatform(), effective_uid=501)
+            self.assertEqual(
+                (tuple(stat.S_IMODE(path.stat().st_mode) for path in shared), unrelated.read_bytes()),
+                before,
+            )
+            managed = home / ".local/share/lingtai-desktop"
+            self.assertTrue(all(stat.S_IMODE(path.stat().st_mode) == 0o700 for path in (
+                managed, managed / "cli", managed / "versions", managed / "receipts"
+            )))
+
+    def test_publication_preparation_failure_leaves_no_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "staged"
+            destination = root / "published"
+            source.write_bytes(b"complete")
+            with mock.patch.object(cli.os, "chmod", side_effect=PermissionError("injected")):
+                with self.assertRaises(cli.DesktopCLIError):
+                    cli._publish_file_exclusive(source, destination, 0o600)
+            self.assertFalse(destination.exists())
+
+    def test_identical_verifier_racer_survives_failed_publication_rollback(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            home.mkdir()
+            dmg, manifest = write_artifacts(root)
+            verifier = home / ".local/share/lingtai-desktop/cli/verify-macos-package.py"
+            real_link = os.link
+            racer_bytes: bytes | None = None
+
+            def race_verifier(source: Path, destination: Path, **kwargs: object) -> None:
+                nonlocal racer_bytes
+                if Path(destination) == verifier:
+                    racer_bytes = Path(source).read_bytes()
+                    verifier.write_bytes(racer_bytes)
+                    verifier.chmod(0o600)
+                real_link(source, destination, **kwargs)
+
+            with mock.patch.object(cli.os, "link", side_effect=race_verifier):
+                with self.assertRaisesRegex(cli.DesktopCLIError, "refusing to overwrite"):
+                    cli.install(dmg, manifest, home=home, allow_diagnostic=True,
+                                platform=FakePlatform(), effective_uid=501)
+            self.assertIsNotNone(racer_bytes)
+            self.assertEqual(verifier.read_bytes(), racer_bytes)
+
+    def test_uninstall_refuses_symlinked_managed_root_without_touching_outside_or_launcher(self) -> None:
+        for command in ("version", "all"):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                home = root / "home"
+                home.mkdir()
+                dmg, manifest = write_artifacts(root)
+                cli.install(dmg, manifest, home=home, allow_diagnostic=True,
+                            platform=FakePlatform(), effective_uid=501)
+                managed = home / ".local/share/lingtai-desktop"
+                outside = root / "outside-managed"
+                managed.rename(outside)
+                managed.symlink_to(outside, target_is_directory=True)
+                launcher = home / ".local/bin/lingtai-desktop"
+                outside_before, launcher_before = tree_snapshot(outside), launcher.read_bytes()
+                with self.assertRaisesRegex(cli.DesktopCLIError, "symlink"):
+                    if command == "version":
+                        cli.uninstall_version("0.1.5", home=home, effective_uid=501)
+                    else:
+                        cli.uninstall_all(home=home, effective_uid=501)
+                self.assertEqual(tree_snapshot(outside), outside_before)
+                self.assertEqual(launcher.read_bytes(), launcher_before)
+
+    def test_uninstall_all_fully_preflights_unknown_root_and_later_tamper(self) -> None:
+        for corruption in ("unknown-root", "later-version-tamper"):
+            with self.subTest(corruption=corruption), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                home = root / "home"
+                home.mkdir()
+                platform = FakePlatform()
+                dmg1, manifest1 = write_artifacts(root, "0.1.5")
+                cli.install(dmg1, manifest1, home=home, allow_diagnostic=True,
+                            platform=platform, effective_uid=501)
+                if corruption == "unknown-root":
+                    (home / ".local/share/lingtai-desktop/KEEP").write_text("unknown")
+                else:
+                    newer = root / "newer"
+                    newer.mkdir()
+                    dmg2, manifest2 = write_artifacts(newer, "0.1.6")
+                    cli.install(dmg2, manifest2, home=home, allow_diagnostic=True,
+                                platform=platform, effective_uid=501, update=True)
+                    executable = home / ".local/share/lingtai-desktop/versions/0.1.6/LingTai.app/Contents/MacOS/LingTai"
+                    executable.chmod(0o700)
+                managed = home / ".local/share/lingtai-desktop"
+                launcher = home / ".local/bin/lingtai-desktop"
+                before, launcher_before = tree_snapshot(managed), launcher.read_bytes()
+                with self.assertRaises(cli.DesktopCLIError):
+                    cli.uninstall_all(home=home, effective_uid=501)
+                self.assertEqual(tree_snapshot(managed), before)
+                self.assertEqual(launcher.read_bytes(), launcher_before)
+
+    def test_bootstrap_warning_uses_validated_classification_not_opt_in_flag(self) -> None:
+        release_receipt = {"classification": "release-ready"}
+        with mock.patch.object(cli, "install", return_value="0.1.5"), \
+             mock.patch.object(cli, "doctor", return_value=("0.1.5", release_receipt)), \
+             mock.patch("builtins.print") as output:
+            self.assertEqual(cli.bootstrap_main([
+                "--dmg", "/tmp/release.dmg", "--manifest", "/tmp/release.json",
+                "--allow-diagnostic",
+            ]), 0)
+        self.assertFalse(any("WARNING" in str(call) for call in output.call_args_list))
+
     def test_manifest_exact_schema_hash_size_state_and_symlink_refusal(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

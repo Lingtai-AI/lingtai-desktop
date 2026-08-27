@@ -77,6 +77,11 @@ HOME. Never run it against a developer's real HOME during validation.
 `scripts/install-macos-app.py` is only a bootstrap wrapper. Updates consume only
 explicit local DMG/manifest paths. Do not add PATH/profile mutation, sudo,
 quarantine/Gatekeeper bypass, remote discovery, or a release claim.
+Preserve existing modes and unrelated contents in the shared `.local`,
+`.local/bin`, and `.local/share` parents. File publication must be fully
+prepared before its no-clobber link becomes visible, rollback may remove only
+the exact inode created by that invocation, and uninstall must complete its
+whole-tree no-symlink/digest/known-child preflight before its first deletion.
 
 Keep the one focused repository-contract test focused on pinned dependency
 provenance and tracked-artifact hygiene. Add a test only for a clearly

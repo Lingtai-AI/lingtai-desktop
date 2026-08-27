@@ -207,6 +207,9 @@ binds each version to a bounded receipt and deterministic bundle-tree digest,
 and switches the relative `current` symlink only after exclusive publication.
 Open and foreground launch only that receipt-validated current App by exact
 argv. Diagnostic opt-in preserves the diagnostic classification.
+Shared `.local` parents retain existing modes. Managed file modes are prepared
+before exclusive publication, rollback identity is inode-bound, and uninstall
+uses a complete exact-child/receipt/digest/ancestor preflight before mutation.
 Persistent Desktop state is deliberately minimal: the one composer outbox
 leaf, fixed lifecycle markers, an authorized refresh's atomic active-preset
 update, the started Agent's own `logs/` directory, and an explicit setup
