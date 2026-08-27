@@ -23,9 +23,11 @@ enum class AgentSignalWriteResult { written, refused };
 enum class AgentSignalRemoveResult { removed, absent, refused };
 enum class AgentSignalObservation { present, absent, refused };
 
-// Descriptor-relative, no-follow create-or-truncate of exactly one signal
-// leaf below an already accepted project and exact Agent key. Neither the
-// `.lingtai` directory nor the Agent directory is ever created.
+// Descriptor-relative, no-follow create-or-truncate of exactly one
+// singly-linked regular signal leaf below an already accepted project and
+// exact Agent key.
+// Non-regular or multiply-linked leaves are refused before truncation. Neither
+// the `.lingtai` directory nor the Agent directory is ever created.
 [[nodiscard]] AgentSignalWriteResult write_agent_signal(
     const ProjectAttachment &attachment,
     const std::filesystem::path &agent_key,

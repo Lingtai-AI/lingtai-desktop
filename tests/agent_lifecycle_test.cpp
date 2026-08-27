@@ -243,6 +243,12 @@ void test_signal_safety(const fs::path &sandbox) {
         "clear marker writes through the same seam");
     expect(read_file(fixture.agent("main") / ".clear") == "desktop\n",
         "clear marker carries the exact Desktop source tag");
+    write_file(fixture.agent("main") / ".clear", "stale marker bytes\n");
+    expect(lingtai::desktop::write_agent_signal(fixture.attachment, "main",
+               AgentSignalKind::clear) == AgentSignalWriteResult::written,
+        "an existing regular marker is rewritten through the descriptor seam");
+    expect(read_file(fixture.agent("main") / ".clear") == "desktop\n",
+        "an existing regular marker is truncated to the fixed content");
 
     fs::remove(fixture.agent("main") / ".clear");
     fs::create_symlink(outside, fixture.agent("main") / ".clear");
@@ -254,6 +260,57 @@ void test_signal_safety(const fs::path &sandbox) {
     expect(lingtai::desktop::remove_agent_signal(fixture.attachment, "main",
                AgentSignalKind::clear) == AgentSignalRemoveResult::refused,
         "cleanup refuses rather than unlinking a symlink signal leaf");
+
+    fs::remove(fixture.agent("main") / ".clear");
+    const auto hardlink_target = sandbox / "hardlink-signal-target";
+    write_file(hardlink_target, "hardlink target stays intact\n");
+    fs::create_hard_link(hardlink_target, fixture.agent("main") / ".clear");
+    expect(lingtai::desktop::write_agent_signal(fixture.attachment, "main",
+               AgentSignalKind::clear) == AgentSignalWriteResult::refused,
+        "a hardlinked signal leaf is refused");
+    expect(read_file(hardlink_target) == "hardlink target stays intact\n",
+        "a refused hardlink never truncates or overwrites its target");
+
+    fs::remove(fixture.agent("main") / ".clear");
+    const auto fifo = fixture.agent("main") / ".clear";
+    require(::mkfifo(fifo.c_str(), 0600) == 0,
+        "signal FIFO fixture is created");
+    struct stat fifo_before {};
+    require(::lstat(fifo.c_str(), &fifo_before) == 0
+            && S_ISFIFO(fifo_before.st_mode),
+        "signal FIFO fixture is observed");
+    const auto fifo_child = ::fork();
+    require(fifo_child >= 0, "FIFO refusal child starts");
+    if (fifo_child == 0) {
+        const auto result = lingtai::desktop::write_agent_signal(
+            fixture.attachment, "main", AgentSignalKind::clear);
+        std::_Exit(result == AgentSignalWriteResult::refused ? 0 : 1);
+    }
+    auto fifo_status = 0;
+    auto fifo_waited = pid_t{0};
+    const auto fifo_deadline = std::chrono::steady_clock::now() + 1s;
+    while (std::chrono::steady_clock::now() < fifo_deadline) {
+        fifo_waited = ::waitpid(fifo_child, &fifo_status, WNOHANG);
+        if (fifo_waited != 0) break;
+        std::this_thread::sleep_for(10ms);
+    }
+    const auto fifo_prompt = fifo_waited == fifo_child;
+    if (!fifo_prompt) {
+        static_cast<void>(::kill(fifo_child, SIGKILL));
+        static_cast<void>(::waitpid(fifo_child, &fifo_status, 0));
+    }
+    expect(fifo_prompt && WIFEXITED(fifo_status)
+            && WEXITSTATUS(fifo_status) == 0,
+        "a FIFO signal leaf is refused promptly");
+    struct stat fifo_observed {};
+    expect(::lstat(fifo.c_str(), &fifo_observed) == 0
+            && S_ISFIFO(fifo_observed.st_mode)
+            && fifo_observed.st_dev == fifo_before.st_dev
+            && fifo_observed.st_ino == fifo_before.st_ino
+            && fifo_observed.st_mode == fifo_before.st_mode
+            && fifo_observed.st_nlink == fifo_before.st_nlink,
+        "a refused FIFO remains an unchanged special leaf");
+
     expect(lingtai::desktop::write_agent_signal(fixture.attachment, "../main",
                AgentSignalKind::sleep) == AgentSignalWriteResult::refused,
         "an unsafe Agent key is refused");

@@ -71,14 +71,15 @@ AgentSignalWriteResult write_agent_signal(
             return AgentSignalWriteResult::refused;
         }
         const auto raw_fd = ::openat(agent.get(), leaf_name(kind),
-            O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC
+            O_WRONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC
                 | O_NONBLOCK,
             0666);
         if (raw_fd < 0) return AgentSignalWriteResult::refused;
         struct stat opened {};
         const auto regular = ::fstat(raw_fd, &opened) == 0
-            && S_ISREG(opened.st_mode);
-        const auto wrote = regular && write_all(raw_fd, marker_content(kind));
+            && S_ISREG(opened.st_mode) && opened.st_nlink == 1;
+        const auto wrote = regular && ::ftruncate(raw_fd, 0) == 0
+            && write_all(raw_fd, marker_content(kind));
         const auto closed = ::close(raw_fd) == 0;
         return wrote && closed
             ? AgentSignalWriteResult::written
