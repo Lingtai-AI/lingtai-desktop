@@ -15,7 +15,8 @@ prove itself.
 `tests/` holds two kinds of proof with two different lifecycles, and they
 must never be confused:
 
-- **Repository/static contracts** — `tests/test_repository_contract.py` and
+- **Repository/static contracts** — `tests/test_repository_contract.py`,
+  `tests/test_macos_packaging.py`, and
   the compile-time guards and `static_assert`s inside the unit tests. These
   pin provenance, enforce build edges (a Qt-free consumer stays Qt-free), and
   pin `noexcept`/exact return types. They protect the shape of the build and
@@ -152,7 +153,10 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
 - `tests/test_native_shell.py` — `native_shell` (process persistence and
   smoke-order via the built smoke executable).
 - `tests/test_repository_contract.py` — manual `python3 -m unittest
-  tests.test_repository_contract`; the sole repository/static contract.
+  tests.test_repository_contract`; the pinned-provenance and tracked-artifact
+  repository contract.
+- `tests/test_macos_packaging.py` — manual `python3 -m unittest
+  tests.test_macos_packaging`; the offline package-production boundary contract.
 
 ## Maintenance
 

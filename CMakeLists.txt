@@ -1,9 +1,18 @@
 cmake_minimum_required(VERSION 3.25)
+if(NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET OR
+        CMAKE_OSX_DEPLOYMENT_TARGET STREQUAL "")
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "13.0" CACHE STRING
+        "Minimum macOS version" FORCE)
+endif()
+if(CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS "13.0")
+    message(FATAL_ERROR
+        "Qt 6.11.1 requires macOS 13.0 or newer; "
+        "CMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET} is unsupported.")
+endif()
 project(lingtai_desktop VERSION 0.1.5 LANGUAGES C CXX OBJC OBJCXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_OSX_DEPLOYMENT_TARGET 10.13 CACHE STRING "Minimum macOS version")
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC OFF)
@@ -856,6 +865,7 @@ set_source_files_properties(
 init_target(lingtai_desktop_smoke)
 set_target_properties(lingtai_desktop_smoke PROPERTIES
     OUTPUT_NAME LingTai
+    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/cmake/macos/Info.plist.in"
     MACOSX_BUNDLE_BUNDLE_NAME "LingTai"
     MACOSX_BUNDLE_GUI_IDENTIFIER "ai.lingtai.desktop"
     MACOSX_BUNDLE_ICON_FILE AppIcon.icns

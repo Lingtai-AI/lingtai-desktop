@@ -17,7 +17,7 @@ Desktop delegates project creation and preset/spawn operations to `lingtai-tui` 
 
 ## Requirements
 
-- macOS (validated on macOS 15 in CI)
+- macOS 13.0 or newer (validated on macOS 15 in CI)
 - CMake 3.25+, Ninja, Git, curl, Python 3, Xcode command-line tools
 - Qt 6.11.1 macOS universal distribution
 - `lingtai-tui` on `PATH` for setup, presets, and spawn flows
@@ -40,6 +40,25 @@ For a CI-parity check before pushing:
 ```bash
 ./scripts/ci/preflight.sh
 ```
+
+## macOS packages
+
+The repository now has a local foundation for a self-contained, universal,
+versioned DMG. No public downloadable binary is published yet.
+
+`scripts/package-macos.py` has two deliberately separate modes. `diagnostic`
+embeds the pinned Qt frameworks/plugins into a staged copy and ad-hoc signs it
+for local relocation checks; its manifest marks it as diagnostic only.
+`release` refuses to run without a local Developer ID Application identity and
+a named `notarytool` keychain profile, then requires hardened-runtime signing,
+timestamping, Apple notarization, and stapling. It does not upload to GitHub.
+
+After packaging, `scripts/verify-macos-package.py` mounts the DMG read-only,
+checks the drag-to-Applications layout, bundle identity/version/macOS 13.0
+floor, universal Mach-O slices, self-contained linkage, and signing mode, then
+copies the App to a disposable location and runs `--smoke` with no developer Qt
+environment. Pass `--require-release-ready` for strict Developer ID,
+Gatekeeper, and stapled-ticket checks.
 
 ## First project
 

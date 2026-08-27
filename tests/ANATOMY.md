@@ -6,7 +6,7 @@ in the tree proves product behavior automatically. It does not replace
 human-visible acceptance, which stays outside synthetic/offscreen
 automation (see [`tests/BEHAVIORS.md`](BEHAVIORS.md)). The folder is
 deliberately small and deliberately flat —
-one file per owned CMake target, two Python contracts — and every test
+one file per owned CMake target plus focused Python contract gates — and every test
 belongs to exactly one of four proof layers: **repository/build/static
 contracts**, **pure/domain unit tests**, **real-Qt `native_shell_behavior`**,
 or **process-level smoke/persistence**. The layer decides how the test is
@@ -30,6 +30,11 @@ test proves. This file descends into `tests/` itself.
   `python3 -m unittest tests.test_repository_contract`, deliberately not as
   a ctest: it is a repository contract, not a product behavior, and it is
   deliberately not a repository-shape or CMake-source assertion suite.
+- `tests/test_macos_packaging.py` — the offline owner of the package boundary's
+  fail-closed diagnostic/release mode choice, credential-name presence rules,
+  deterministic versioned names, unsafe destination/overwrite refusal, tool
+  absence, parser helpers, and bounded secret-free manifest shape. It invokes
+  no Apple, GitHub, signing, mount, or packaging service.
 - Compile-time guards embedded in unit tests: `workspace_selection_test.cpp`
   and `direct_conversation_route_test.cpp` start with
   `#ifdef QT_CORE_LIB / #error` so a Qt-core dependency leaking into a
@@ -222,6 +227,7 @@ no fixture); the test itself creates and removes its sandbox within that root
 | Test file | Target / executable | ctest name | Fixture (build dir) |
 | --- | --- | --- | --- |
 | `test_repository_contract.py` | Python `unittest` (no target) | manual: `python3 -m unittest tests.test_repository_contract` | — |
+| `test_macos_packaging.py` | Python `unittest` (no target) | manual: `python3 -m unittest tests.test_macos_packaging` | temporary injected directories only |
 | `posix_descriptor_primitives_test.cpp` | `lingtai_posix_descriptor_primitives_test` | `posix_descriptor_primitives` | `posix-descriptor-primitives-fixture` |
 | `project_attachment_test.cpp` | `lingtai_project_attachment_test` | `project_attachment` | `project-attachment-fixture` |
 | `attachment_selection_test.cpp` | `lingtai_attachment_selection_test` | `attachment_selection` | `attachment-selection-fixture` |
@@ -277,10 +283,10 @@ no fixture); the test itself creates and removes its sandbox within that root
 
 ## Notes
 
-- `test_repository_contract.py` is the one deliberate non-ctest: keeping it a
-  manual `python3 -m unittest` keeps the automated product-behavior suite
-  purely CMake/ctest-driven while still guarding the lock file and
-  tracked-artifact hygiene on every validation pass (`../AGENTS.md`).
+- The repository and packaging Python contracts are deliberate non-ctests:
+  keeping them as manual `python3 -m unittest` gates keeps product behavior
+  purely CMake/ctest-driven while still guarding provenance, tracked artifacts,
+  and offline packaging invariants on every validation pass (`../AGENTS.md`).
 - The `-Wall -Wextra -Werror -pedantic` flags apply to every owned test
   target, so a Qt dependency sneaking into a Qt-free consumer (or any
   unused/ambiguous construct) fails at compile time, not at runtime.

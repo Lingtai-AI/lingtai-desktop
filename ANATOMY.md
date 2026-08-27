@@ -17,6 +17,10 @@ scripts/bootstrap-deps.sh              verified local source/resource bootstrap
 scripts/configure.sh                   Qt-aware CMake configure wrapper
 scripts/build.sh                       target build wrapper
 scripts/smoke.py                       bounded offscreen native-shell smoke runner
+scripts/macos_packaging.py             testable fail-closed macOS package owner
+scripts/package-macos.py               diagnostic/release package CLI
+scripts/verify-macos-package.py        independent mounted-DMG/linkage/smoke verifier
+cmake/macos/Info.plist.in              bundle metadata including the macOS floor
 src/                                  owned Qt adaptation surface (see src/ANATOMY.md)
 src/ui/                               owned LingTai widgets (see src/ui/ANATOMY.md)
 tests/                                owned C++ contracts + Python gates (see tests/ANATOMY.md)
@@ -157,9 +161,10 @@ Each C++ contract executable maps to one ctest name (declared in
 `agent_process`, `agent_launch`, `agent_lifecycle`,
 `posix_descriptor_primitives`,
 `workspace_selection`, `native_shell_behavior`, plus the Python gates
-`native_shell` (process persistence + smoke-order, `tests/test_native_shell.py`)
-and `test_repository_contract.py` (pinned toolkit provenance + tracked-artifact
-guard, run via `python3 -m unittest tests.test_repository_contract`). Route
+`native_shell` (process persistence + smoke-order, `tests/test_native_shell.py`),
+`test_repository_contract.py` (pinned toolkit provenance + tracked-artifact
+guard), and `test_macos_packaging.py` (offline package-mode, naming, path, and
+manifest contract). Route
 into `tests/ANATOMY.md` for the per-test contract mapping.
 
 ## Kernel artifacts Desktop reads
@@ -186,6 +191,10 @@ subprocess surfaces. Producer-side contracts live in the kernel repo
 
 The root composes `src/` (owned Qt adaptation), `tests/` (owned contracts),
 `scripts/` + `cmake/` (build governance), and external `.deps/`/Qt inputs.
+The package boundary always stages a copy: diagnostic mode embeds Qt and
+ad-hoc signs only, while release mode fails closed unless Developer ID signing,
+hardened runtime, timestamping, notarization, stapling, and strict independent
+verification all succeed. The canonical bundle/compiled minimum is macOS 13.0.
 Persistent Desktop state is deliberately minimal: the one composer outbox
 leaf, fixed lifecycle markers, an authorized refresh's atomic active-preset
 update, the started Agent's own `logs/` directory, and an explicit setup

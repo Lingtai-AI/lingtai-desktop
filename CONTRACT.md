@@ -13,13 +13,17 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
   (declared `CMakeLists.txt:211-308`).
 - `src/ui/` owns the two LingTai widgets: `AgentRoster` and
   `ConversationSurface`. They are owned product UI, not Telegram screens.
-- `tests/` owns the repository's observable-behavior contracts and the two
-  Python gates.
+- `tests/` owns the repository's observable-behavior contracts and the Python
+  repository, packaging, and process-smoke gates.
 - `cmake/desktop-app-toolkit-lock.json` is the exact, authoritative source of
   dependency provenance. Changing a pin is a reviewed, coherent lock update
   validated by `tests/test_repository_contract.py`.
-- `scripts/` owns the bootstrap/configure/build/smoke entry points;
+- `scripts/` owns the bootstrap/configure/build/smoke and macOS package/verify
+  entry points;
   `scripts/bootstrap-deps.sh` is the only sanctioned way to populate `.deps/`.
+- `scripts/macos_packaging.py` is the sole package-production owner. It never
+  mutates the input App. `scripts/verify-macos-package.py` independently owns
+  mounted-DMG layout, bundle/linkage/signing checks, and relocated smoke.
 - `ShellHost` owns application composition: the one fallback interpreter and
   the one configured TUI executable; `main.cpp` owns the `--smoke` path. The shell performs no
   project, registry, or settings writes beyond the explicit user-triggered
@@ -97,6 +101,10 @@ its folder.
   Agent's bounded `init.json`, and read seams are `noexcept` and write nothing.
 - **No committed build inputs**: `.deps/`, `build/`, Qt SDK trees, and binary
   icon copies must never be tracked.
+- **No ambiguous release state**: ad-hoc/unsigned diagnostic output is never
+  release-ready. A public package requires Developer ID Application signing,
+  hardened runtime, timestamp, Apple acceptance, stapling, and strict package
+  verification; any absent prerequisite or unsuccessful check is fatal.
 - **No additional first-project machinery**: `AgentSetupStore` updates only
   setup-owned fields of existing Agents and never scaffolds or adds an Agent;
   first-project bootstrap remains delegated to the TUI headless surface.

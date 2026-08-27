@@ -25,6 +25,8 @@ From the repository root:
 
 ```bash
 python3 -m unittest tests.test_repository_contract
+python3 -m unittest tests.test_macos_packaging
+python3 -m py_compile scripts/macos_packaging.py scripts/package-macos.py scripts/verify-macos-package.py
 python3 -m json.tool cmake/desktop-app-toolkit-lock.json >/dev/null
 for script in scripts/*.sh; do bash -n "$script"; done
 export QT_ROOT="$HOME/Qt/6.11.1/macos"
@@ -48,6 +50,22 @@ ctest --test-dir build --output-on-failure -R '^workspace_selection$'
 ctest --test-dir build --output-on-failure -R '^native_shell(_behavior)?$'
 ./scripts/smoke.py
 ```
+
+For macOS packaging, build only from an isolated checkout. Diagnostic output is
+explicitly ad-hoc and is never release-ready:
+
+```bash
+python3 scripts/package-macos.py --mode diagnostic \
+  --app build/LingTai.app --output-dir /private/tmp/lingtai-desktop-package
+python3 scripts/verify-macos-package.py \
+  --dmg /private/tmp/lingtai-desktop-package/LingTai-0.1.5-macOS-universal.dmg \
+  --expected-version 0.1.5
+```
+
+Public `--mode release` additionally requires a locally available Developer ID
+Application identity and a named `notarytool` keychain profile, then must pass
+the verifier with `--require-release-ready`. Never use diagnostic output as a
+release artifact.
 
 Keep the one focused repository-contract test focused on pinned dependency
 provenance and tracked-artifact hygiene. Add a test only for a clearly
