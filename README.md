@@ -68,6 +68,35 @@ environment. Linkage, install IDs, and run paths are checked independently for
 the exact arm64 and x86_64 slices. Pass `--require-release-ready` for strict Developer ID,
 Gatekeeper, and stapled-ticket checks.
 
+### Developer-preview user install
+
+Python 3 can bootstrap a previously verified local DMG/manifest pair into the
+current user's managed layout (it does not download an artifact):
+
+```bash
+python3 scripts/install-macos-app.py \
+  --dmg /path/to/LingTai-0.1.5-macOS-universal.dmg \
+  --manifest /path/to/LingTai-0.1.5-macOS-universal.manifest.json \
+  --allow-diagnostic
+```
+
+The explicit diagnostic flag accepts the manifest's developer-preview state;
+it does not bypass hashes, the independent package verifier, code-signature
+checks, bundle validation, or the installed-tree digest, and it never relabels
+the result release-ready. A public release still requires Developer ID signing,
+Apple notarization/stapling, and a release-ready manifest.
+
+The managed files are `$HOME/.local/bin/lingtai-desktop` and
+`$HOME/.local/share/lingtai-desktop/{cli,versions,receipts,current}`. The command
+supports `open` (also the no-argument default), `foreground [-- APP_ARGS...]`,
+`version`, `doctor`, local-artifact-only `update --dmg ... --manifest ...`, and
+explicit `uninstall --version X.Y.Z` / `uninstall --all`. A byte-identical
+same-version update is reverified and is an idempotent no-op; lower versions are
+refused. The bootstrap does not use sudo, change PATH or shell profiles, clear
+quarantine, bypass Gatekeeper, contact an update service, or claim a public
+release. If `$HOME/.local/bin` is not already on PATH, invoke the launcher by
+its full path.
+
 ## First project
 
 If you have no LingTai project yet, use **Create project** in the app. Desktop runs `lingtai-tui presets` to list choices, then `lingtai-tui spawn <destination> --preset <name>` when you confirm. The new project opens through the normal attach path.

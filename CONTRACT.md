@@ -26,6 +26,11 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
   without replacing a concurrent target. `scripts/verify-macos-package.py`
   independently owns mounted-DMG layout, per-architecture bundle/linkage/signing
   checks, and relocated smoke.
+- `scripts/desktop_user_cli.py` solely owns the unprivileged, HOME-derived
+  install/update/current/receipt/doctor/launch/uninstall transaction.
+  `scripts/install-macos-app.py` is a thin bootstrap and duplicates no policy.
+  The managed command accepts only explicit local update artifacts, never
+  mutates PATH/profiles, and never weakens quarantine or Gatekeeper.
 - `ShellHost` owns application composition: the one fallback interpreter and
   the one configured TUI executable; `main.cpp` owns the `--smoke` path. The shell performs no
   project, registry, or settings writes beyond the explicit user-triggered
@@ -109,6 +114,10 @@ its folder.
   verification; any absent prerequisite or unsuccessful check is fatal.
   `packaging_git_*` manifest facts identify only the clean tracked packaging
   checkout and must never be represented as input-App build provenance.
+- **No privileged or remote install path**: the managed lifecycle refuses
+  effective uid 0, owns only `$HOME/.local/bin/lingtai-desktop` and
+  `$HOME/.local/share/lingtai-desktop`, and has no sudo, system prefix,
+  network discovery, downgrade bypass, or destructive no-argument uninstall.
 - **No additional first-project machinery**: `AgentSetupStore` updates only
   setup-owned fields of existing Agents and never scaffolds or adds an Agent;
   first-project bootstrap remains delegated to the TUI headless surface.

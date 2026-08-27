@@ -20,6 +20,8 @@ scripts/smoke.py                       bounded offscreen native-shell smoke runn
 scripts/macos_packaging.py             testable fail-closed macOS package owner
 scripts/package-macos.py               diagnostic/release package CLI
 scripts/verify-macos-package.py        independent mounted-DMG/linkage/smoke verifier
+scripts/desktop_user_cli.py            user install/update/launch lifecycle policy
+scripts/install-macos-app.py           thin Python 3 initial-bootstrap CLI
 cmake/macos/Info.plist.in              bundle metadata including the macOS floor
 src/                                  owned Qt adaptation surface (see src/ANATOMY.md)
 src/ui/                               owned LingTai widgets (see src/ui/ANATOMY.md)
@@ -199,6 +201,12 @@ scratch and exclusively hard-linked into place as a rollback-safe pair. The
 independent verifier checks linkage per exact arm64 and x86_64 slice. Manifest
 Git facts identify only the packaging checkout. The canonical bundle/compiled
 minimum is macOS 13.0.
+The user-level lifecycle consumes one already-built local pair. It installs
+under `$HOME/.local`, carries the independent verifier with the managed CLI,
+binds each version to a bounded receipt and deterministic bundle-tree digest,
+and switches the relative `current` symlink only after exclusive publication.
+Open and foreground launch only that receipt-validated current App by exact
+argv. Diagnostic opt-in preserves the diagnostic classification.
 Persistent Desktop state is deliberately minimal: the one composer outbox
 leaf, fixed lifecycle markers, an authorized refresh's atomic active-preset
 update, the started Agent's own `logs/` directory, and an explicit setup

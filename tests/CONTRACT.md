@@ -16,7 +16,7 @@ prove itself.
 must never be confused:
 
 - **Repository/static contracts** — `tests/test_repository_contract.py`,
-  `tests/test_macos_packaging.py`, and
+  `tests/test_macos_packaging.py`, `tests/test_desktop_user_cli.py`, and
   the compile-time guards and `static_assert`s inside the unit tests. These
   pin provenance, enforce build edges (a Qt-free consumer stays Qt-free), and
   pin `noexcept`/exact return types. They protect the shape of the build and
@@ -159,6 +159,11 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   tests.test_macos_packaging`; the offline package-production and independent
   per-slice verification boundary contract, including publication races and
   rollback.
+- `tests/test_desktop_user_cli.py` — manual `python3 -m unittest
+  tests.test_desktop_user_cli`; the deterministic fake-HOME contract for the
+  local-artifact user install/update/launch/doctor/uninstall transaction,
+  including authentic filesystem type/collision/tamper checks and injected
+  macOS process boundaries.
 
 ## Maintenance
 

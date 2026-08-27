@@ -26,7 +26,8 @@ From the repository root:
 ```bash
 python3 -m unittest tests.test_repository_contract
 python3 -m unittest tests.test_macos_packaging
-python3 -m py_compile scripts/macos_packaging.py scripts/package-macos.py scripts/verify-macos-package.py
+python3 -m unittest tests.test_desktop_user_cli
+python3 -m py_compile scripts/macos_packaging.py scripts/package-macos.py scripts/verify-macos-package.py scripts/desktop_user_cli.py scripts/install-macos-app.py
 python3 -m json.tool cmake/desktop-app-toolkit-lock.json >/dev/null
 for script in scripts/*.sh; do bash -n "$script"; done
 export QT_ROOT="$HOME/Qt/6.11.1/macos"
@@ -69,6 +70,13 @@ release artifact. Package publication is an exclusive DMG/manifest pair; never
 replace its hard-link no-clobber publication with a final rename. The manifest's
 `packaging_git_*` fields describe the scripts' tracked checkout, not the App's
 build provenance.
+
+The developer-preview installer is always exercised with an injected fake
+HOME. Never run it against a developer's real HOME during validation.
+`scripts/desktop_user_cli.py` owns install/update/launch/doctor/uninstall policy;
+`scripts/install-macos-app.py` is only a bootstrap wrapper. Updates consume only
+explicit local DMG/manifest paths. Do not add PATH/profile mutation, sudo,
+quarantine/Gatekeeper bypass, remote discovery, or a release claim.
 
 Keep the one focused repository-contract test focused on pinned dependency
 provenance and tracked-artifact hygiene. Add a test only for a clearly
