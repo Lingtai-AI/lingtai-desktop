@@ -1,4 +1,5 @@
 #include "agent_sleep.h"
+#include "agent_signal.h"
 #include "posix_descriptor_primitives.h"
 
 #include <QtCore/QByteArray>
@@ -81,32 +82,11 @@ bool read_exact_byte(int fd, off_t offset, char &out) {
 AgentSleepRequestResult request_agent_sleep(
         const ProjectAttachment &attachment,
         const fs::path &selected_directory_key) noexcept {
-    try {
-        posix::FileDescriptor agent;
-        if (!open_selected_agent_directory(
-                attachment, selected_directory_key, agent)) {
-            return AgentSleepRequestResult::failed_local;
-        }
-        // `Path.write_text("", encoding="utf-8")`-equivalent create-or-
-        // truncate: no `O_EXCL`, so an existing marker is overwritten to
-        // zero bytes exactly like the canonical coalescing single-slot
-        // marker. `O_NOFOLLOW` refuses a symlink at this exact leaf.
-        const auto raw_fd = ::openat(agent.get(), ".sleep",
-            O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK,
-            0666);
-        if (raw_fd < 0) return AgentSleepRequestResult::failed_local;
-        struct stat opened {};
-        const auto regular =
-            ::fstat(raw_fd, &opened) == 0 && S_ISREG(opened.st_mode);
-        // Explicit close-and-check before reporting success: a write that
-        // looked successful can still fail to land at close.
-        const auto closed_ok = ::close(raw_fd) == 0;
-        return regular && closed_ok
-            ? AgentSleepRequestResult::requested
-            : AgentSleepRequestResult::failed_local;
-    } catch (...) {
-        return AgentSleepRequestResult::failed_local;
-    }
+    return write_agent_signal(
+            attachment, selected_directory_key, AgentSignalKind::sleep)
+            == AgentSignalWriteResult::written
+        ? AgentSleepRequestResult::requested
+        : AgentSleepRequestResult::failed_local;
 }
 
 AgentSleepEventBaseline capture_agent_sleep_event_baseline(

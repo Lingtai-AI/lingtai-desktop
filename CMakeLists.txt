@@ -245,8 +245,8 @@ target_link_libraries(lingtai_desktop_native_shell
         Qt6::Core
         Qt6::Network
         lingtai_desktop_agent_projection lingtai_desktop_conversation
-        lingtai_desktop_mail_publisher lingtai_desktop_agent_sleep
-        lingtai_desktop_agent_launch lingtai_desktop_agent_prompt_actions
+        lingtai_desktop_mail_publisher lingtai_desktop_agent_lifecycle
+        lingtai_desktop_agent_prompt_actions
         lingtai_desktop_agent_preset_summary
         lingtai_desktop_agent_setup_store
         lingtai_desktop_preset_catalog
@@ -403,7 +403,22 @@ target_compile_options(lingtai_desktop_agent_sleep PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_desktop_agent_sleep
     PUBLIC lingtai_desktop_core
-    PRIVATE Qt6::Core lingtai_desktop_posix_primitives)
+    PRIVATE Qt6::Core lingtai_desktop_agent_signal
+        lingtai_desktop_posix_primitives)
+
+# Descriptor-relative lifecycle signal writer shared by sleep and the complete
+# Desktop-owned lifecycle controller. It owns only the fixed marker leaves and
+# their fixed contents; target/phase policy stays in agent_lifecycle.
+add_library(lingtai_desktop_agent_signal STATIC
+    src/agent_signal.cpp)
+init_target(lingtai_desktop_agent_signal)
+target_include_directories(lingtai_desktop_agent_signal PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(lingtai_desktop_agent_signal PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_desktop_agent_signal
+    PUBLIC lingtai_desktop_core
+    PRIVATE lingtai_desktop_posix_primitives)
 
 # The one in-conversation prompt/inquiry/goal owner: TUI `/btw`, `/insights`,
 # `/molt`, `/export`, and `/goal` write `.prompt`, `.inquiry`, or one
@@ -419,11 +434,11 @@ target_link_libraries(lingtai_desktop_agent_prompt_actions
     PUBLIC lingtai_desktop_core
     PRIVATE Qt6::Core lingtai_desktop_posix_primitives)
 
-# The one Start Agent leaf owner: it turns an already-accepted project
+# The one direct Agent launcher: it turns an already-accepted project
 # attachment, an exact selected Agent key, and one Desktop-supplied fallback
 # interpreter into one detached, shell-free `<python> -m lingtai run <dir>`
-# start. It owns no eligibility policy, UI, timer, PID tracking, or command
-# framework.
+# start and returns detached PID/log facts. It owns no eligibility policy, UI,
+# wait/escalation timer, or command framework.
 add_library(lingtai_desktop_agent_launch STATIC
     src/agent_launch.cpp)
 init_target(lingtai_desktop_agent_launch)
@@ -433,7 +448,26 @@ target_compile_options(lingtai_desktop_agent_launch PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_desktop_agent_launch
     PUBLIC lingtai_desktop_core
-    PRIVATE Qt6::Core)
+    PRIVATE Qt6::Core lingtai_desktop_posix_primitives)
+
+# Desktop-owned lifecycle orchestration: exact process observation/signaling,
+# advisory-lease observation, preset mutation, launch/heartbeat observation,
+# and the nonblocking per-target operation state machine.
+add_library(lingtai_desktop_agent_lifecycle STATIC
+    src/agent_lifecycle.cpp
+    src/agent_process.cpp)
+init_target(lingtai_desktop_agent_lifecycle)
+target_include_directories(lingtai_desktop_agent_lifecycle PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(lingtai_desktop_agent_lifecycle PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_desktop_agent_lifecycle
+    PUBLIC lingtai_desktop_core
+    PRIVATE Qt6::Core
+        lingtai_desktop_agent_signal
+        lingtai_desktop_agent_sleep
+        lingtai_desktop_agent_launch
+        lingtai_desktop_posix_primitives)
 
 add_executable(lingtai_agent_projection_test
     tests/agent_projection_test.cpp)
@@ -702,6 +736,20 @@ target_compile_options(lingtai_agent_sleep_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_agent_sleep_test PRIVATE
     lingtai_desktop_agent_sleep)
+add_executable(lingtai_agent_lifecycle_test
+    tests/agent_lifecycle_test.cpp)
+init_target(lingtai_agent_lifecycle_test)
+target_compile_options(lingtai_agent_lifecycle_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_agent_lifecycle_test PRIVATE
+    lingtai_desktop_agent_lifecycle Qt6::Core)
+add_executable(lingtai_agent_lifecycle_real_smoke
+    tests/agent_lifecycle_real_smoke.cpp)
+init_target(lingtai_agent_lifecycle_real_smoke)
+target_compile_options(lingtai_agent_lifecycle_real_smoke PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_agent_lifecycle_real_smoke PRIVATE
+    lingtai_desktop_agent_lifecycle Qt6::Core)
 add_executable(lingtai_agent_prompt_actions_test
     tests/agent_prompt_actions_test.cpp)
 init_target(lingtai_agent_prompt_actions_test)
@@ -740,15 +788,6 @@ target_compile_options(lingtai_attachment_selection_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_attachment_selection_test PRIVATE
     lingtai_desktop_attachment_selection)
-add_executable(lingtai_agent_command_runner_test
-    tests/agent_command_runner_test.cpp)
-init_target(lingtai_agent_command_runner_test)
-target_include_directories(lingtai_agent_command_runner_test PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}")
-target_compile_options(lingtai_agent_command_runner_test PRIVATE
-    -Wall -Wextra -Werror -pedantic)
-target_link_libraries(lingtai_agent_command_runner_test PRIVATE
-    Qt6::Core)
 enable_testing()
 add_test(NAME project_attachment
     COMMAND lingtai_project_attachment_test
@@ -795,6 +834,9 @@ add_test(NAME kanban_model
 add_test(NAME agent_sleep
     COMMAND lingtai_agent_sleep_test
         "${CMAKE_CURRENT_BINARY_DIR}/agent-sleep-fixture")
+add_test(NAME agent_lifecycle
+    COMMAND lingtai_agent_lifecycle_test
+        "${CMAKE_CURRENT_BINARY_DIR}/agent-lifecycle-fixture")
 add_test(NAME agent_prompt_actions
     COMMAND lingtai_agent_prompt_actions_test
         "${CMAKE_CURRENT_BINARY_DIR}/agent-prompt-actions-fixture")
@@ -804,10 +846,6 @@ add_test(NAME posix_descriptor_primitives
 add_test(NAME workspace_selection
     COMMAND lingtai_workspace_selection_test
         "${CMAKE_CURRENT_BINARY_DIR}/workspace-selection-fixture")
-add_test(NAME agent_command_runner
-    COMMAND lingtai_agent_command_runner_test
-        "${CMAKE_CURRENT_BINARY_DIR}/agent-command-runner-fixture")
-
 add_executable(lingtai_desktop_smoke MACOSX_BUNDLE
     src/main.cpp
     src/crl_integration.cpp
@@ -998,10 +1036,10 @@ set(LINGTAI_UNIT_TESTS
     preset_catalog
     kanban_model
     agent_sleep
+    agent_lifecycle
     agent_prompt_actions
     posix_descriptor_primitives
-    workspace_selection
-    agent_command_runner)
+    workspace_selection)
 foreach(test_name IN LISTS LINGTAI_UNIT_TESTS)
     set_tests_properties(${test_name} PROPERTIES LABELS "unit")
 endforeach()

@@ -1,4 +1,5 @@
 #include "agent_launch.h"
+#include "posix_descriptor_primitives.h"
 
 #include <QtCore/QByteArray>
 #include <QtCore/QIODeviceBase>
@@ -11,15 +12,19 @@
 #include <QtCore/QStringList>
 
 #include <cstddef>
-#include <fstream>
+#include <cerrno>
+#include <fcntl.h>
 #include <optional>
 #include <string>
 #include <system_error>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace lingtai::desktop {
 namespace {
 
 namespace fs = std::filesystem;
+namespace posix = posix_internal;
 
 // Bounds the one ordinary `init.json` read on the actual bytes read, the
 // same shape as discovery's existing per-manifest bound. This is a plain
@@ -34,21 +39,33 @@ constexpr auto kMaxInitBytes = std::size_t{1} << 20;
 // resolves a relative `venv_path` against its own process's working
 // directory rather than the target workdir, a known implementation
 // divergence this slice deliberately does not reproduce.
-std::optional<fs::path> configured_venv_path(const fs::path &agent_directory) {
-    auto stream = std::ifstream(agent_directory / "init.json", std::ios::binary);
-    if (!stream.is_open()) return std::nullopt;
-    auto buffer = std::string(kMaxInitBytes + 1, '\0');
-    stream.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-    const auto read_count = stream.gcount();
-    if (read_count < 0
-        || static_cast<std::size_t>(read_count) > kMaxInitBytes) {
-        return std::nullopt;
+std::optional<std::string> read_bounded(int fd, std::size_t cap) {
+    std::string buffer(cap + 1, '\0');
+    auto total = std::size_t{0};
+    while (total < buffer.size()) {
+        const auto count = ::read(fd, buffer.data() + total,
+            buffer.size() - total);
+        if (count < 0) {
+            if (errno == EINTR) continue;
+            return std::nullopt;
+        }
+        if (count == 0) break;
+        total += static_cast<std::size_t>(count);
     }
-    buffer.resize(static_cast<std::size_t>(read_count));
+    if (total > cap) return std::nullopt;
+    buffer.resize(total);
+    return buffer;
+}
+
+std::optional<fs::path> configured_venv_path(int agent_fd) {
+    auto file = posix::open_regular_file_component(agent_fd, "init.json");
+    if (file.get() < 0) return std::nullopt;
+    const auto content = read_bounded(file.get(), kMaxInitBytes);
+    if (!content) return std::nullopt;
 
     QJsonParseError error;
     const auto document = QJsonDocument::fromJson(
-        QByteArray(buffer.data(), static_cast<int>(buffer.size())), &error);
+        QByteArray(content->data(), static_cast<int>(content->size())), &error);
     if (error.error != QJsonParseError::NoError || !document.isObject()) {
         return std::nullopt;
     }
@@ -68,9 +85,9 @@ fs::path venv_platform_python(const fs::path &venv_path) {
 // otherwise the one Desktop fallback. Existence-only: a present but broken
 // configured interpreter is still selected and simply fails to launch,
 // never silently replaced.
-fs::path select_runtime_python(
-        const fs::path &agent_directory, const fs::path &fallback_python) {
-    if (const auto venv_path = configured_venv_path(agent_directory)) {
+fs::path select_runtime_python(int agent_fd,
+        const fs::path &fallback_python) {
+    if (const auto venv_path = configured_venv_path(agent_fd)) {
         std::error_code error;
         const auto candidate = venv_platform_python(*venv_path);
         if (fs::exists(candidate, error)) return candidate;
@@ -87,41 +104,78 @@ QString path_text(const fs::path &path) {
 
 } // namespace
 
-AgentLaunchResult start_agent(
+AgentLaunchOutcome launch_agent(
         const ProjectAttachment &attachment,
         const fs::path &selected_directory_key,
         const fs::path &fallback_python) noexcept {
     try {
+        if (!posix::safe_leaf(selected_directory_key)) return {};
         const auto target =
             attachment.resolve(fs::path(".lingtai") / selected_directory_key);
-        if (!target) return AgentLaunchResult::refused;
+        if (!target) return {};
+
+        const auto root = posix::open_root_directory(attachment.root());
+        if (root.get() < 0) return {};
+        const auto lingtai =
+            posix::open_directory_component(root.get(), ".lingtai");
+        if (lingtai.get() < 0) return {};
+        const auto agent = posix::open_directory_component(
+            lingtai.get(), selected_directory_key);
+        if (agent.get() < 0) return {};
 
         const auto python =
-            select_runtime_python(target.path, fallback_python);
+            select_runtime_python(agent.get(), fallback_python);
 
         // Matches the current TUI launcher's own `os.MkdirAll(logPath)` plus
         // `os.OpenFile(.../agent.log, O_CREATE|O_WRONLY|O_APPEND)`: the
         // kernel process itself never creates `logs/agent.log`, so the
         // Desktop-shown failure path pointing there must create it.
-        const auto logs_dir = target.path / "logs";
-        std::error_code error;
-        fs::create_directory(logs_dir, error);
-        if (error) return AgentLaunchResult::refused;
-        const auto log_path = path_text(logs_dir / "agent.log");
+        const auto logs =
+            posix::open_directory_component(agent.get(), "logs", true);
+        if (logs.get() < 0) return {};
+        posix::FileDescriptor log(::openat(logs.get(), "agent.log",
+            O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW | O_CLOEXEC,
+            0644));
+        if (log.get() < 0) return {};
+        struct stat opened {};
+        const auto regular = ::fstat(log.get(), &opened) == 0
+            && S_ISREG(opened.st_mode);
+        if (!regular) return {};
+        const auto log_path_fs = target.path / "logs" / "agent.log";
 
         QProcess process;
         process.setProgram(path_text(python));
         process.setArguments(QStringList{
             QStringLiteral("-m"), QStringLiteral("lingtai"),
             QStringLiteral("run"), path_text(target.path)});
-        process.setStandardOutputFile(log_path, QIODeviceBase::Append);
-        process.setStandardErrorFile(log_path, QIODeviceBase::Append);
-        return process.startDetached()
-            ? AgentLaunchResult::started
-            : AgentLaunchResult::refused;
+        // Inherit this descriptor-relative O_NOFOLLOW append descriptor.
+        // Reopening its pathname in QProcess would create a symlink swap race
+        // after validation; dup2 keeps the already-verified inode instead.
+        const auto log_fd = log.get();
+        process.setChildProcessModifier([&process, log_fd] {
+            if (::dup2(log_fd, STDOUT_FILENO) < 0
+                || ::dup2(log_fd, STDERR_FILENO) < 0) {
+                const auto error = errno;
+                process.failChildProcessModifier("dup2 agent.log", error);
+            }
+        });
+        qint64 pid = 0;
+        if (!process.startDetached(&pid)) return {};
+        return {
+            .result = AgentLaunchResult::started,
+            .pid = static_cast<std::int64_t>(pid),
+            .log_path = std::move(log_path_fs),
+        };
     } catch (...) {
-        return AgentLaunchResult::refused;
+        return {};
     }
+}
+
+AgentLaunchResult start_agent(const ProjectAttachment &attachment,
+        const fs::path &selected_directory_key,
+        const fs::path &fallback_python) noexcept {
+    return launch_agent(
+        attachment, selected_directory_key, fallback_python).result;
 }
 
 } // namespace lingtai::desktop

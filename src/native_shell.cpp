@@ -1218,7 +1218,8 @@ std::unique_ptr<Ui::RpWindow> make_native_window() {
 
 NativeShell::NativeShell(RuntimeOptions runtime_options)
 : runtime_options_(runtime_options)
-, window_(make_native_window()) {
+, window_(make_native_window())
+, lifecycle_controller_(std::make_unique<AgentLifecycleController>()) {
     window_->setObjectName("lingtai_desktop_window");
     window_->setTitle(QString());
     window_->setWindowTitle(QStringLiteral("LingTai Desktop"));
@@ -2034,17 +2035,9 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
     activity_timer_->setInterval(1000);
     QObject::connect(activity_timer_, &QTimer::timeout, [this] {
         render_agent_preset_summary();
-        if (pending_sleep_observation_) {
-            render_conversation();
-            tick_agent_sleep_observation();
-        } else if (pending_start_observation_) {
-            render_conversation();
-            tick_agent_start_observation();
-        } else if (selection_state_.active_project()) {
-            // No click-armed observation is pending. Rerun the same stateless
-            // projection the shell already uses at every click/settle
-            // boundary so manifest lifecycle state and heartbeat-derived
-            // eligibility stay current without reselection.
+        if (selection_state_.active_project()) {
+            // Lifecycle waits advance on the controller's own short timer;
+            // this ambient timer remains presentation-only.
             agents_ = project_agents(*selection_state_.active_project());
             render_roster();
         } else {
@@ -2584,6 +2577,7 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
 }
 
 NativeShell::~NativeShell() {
+    if (lifecycle_controller_) lifecycle_controller_->cancel();
     if (mailbox_load_token_) {
         mailbox_load_token_->cancelled.store(true, std::memory_order_release);
     }
@@ -2727,6 +2721,13 @@ void NativeShell::request_new_project_at(const fs::path &destination) {
 void NativeShell::set_agent_start_fallback_python(
         fs::path fallback_python) {
     agent_start_fallback_python_ = std::move(fallback_python);
+}
+
+void NativeShell::set_agent_lifecycle_dependencies(
+        AgentLifecycleDependencies dependencies) {
+    if (lifecycle_controller_) lifecycle_controller_->cancel();
+    lifecycle_controller_ = std::make_unique<AgentLifecycleController>(
+        std::move(dependencies));
 }
 
 void NativeShell::set_tui_executable(fs::path executable) {
@@ -3352,10 +3353,6 @@ ProjectOpenOutcome NativeShell::open_project(
     open_error_surface_->hide();
     reset_composer();
     invalidate_kanban_cache();
-    // A fresh open must never let a prior target's pending sleep or Start
-    // observation surface under the newly opened project/selection.
-    pending_sleep_observation_.reset();
-    pending_start_observation_.reset();
     if (auto *start_status = window_->findChild<QLabel *>(
             "lingtai_selected_agent_start_status")) {
         start_status->clear();
@@ -4485,8 +4482,6 @@ void NativeShell::handle_kanban_agent_selected(const fs::path &directory_key) {
     }
     reset_composer();
     bump_lifecycle_generation();
-    pending_sleep_observation_.reset();
-    pending_start_observation_.reset();
     if (auto *start_status = window_->findChild<QLabel *>(
             "lingtai_selected_agent_start_status")) {
         start_status->clear();
@@ -4515,7 +4510,8 @@ void NativeShell::handle_send_message() {
     const auto raw_text = input->getLastText();
     if (const auto command = parse_slash_command(raw_text.toStdString())) {
         input->clear();
-        if (command->name == "suspend" || command->name == "clear"
+        if (command->name == "sleep" || command->name == "suspend"
+            || command->name == "cpr" || command->name == "clear"
             || command->name == "refresh") {
             handle_lifecycle_command(command->name, command->args);
             return;
@@ -4551,16 +4547,6 @@ void NativeShell::handle_send_message() {
                 agent_roster_->focus_row(
                     selection_state_.selected_agent_directory_key());
             }
-            return;
-        }
-        if (command->name == "sleep") {
-            status->clear();
-            handle_request_sleep();
-            return;
-        }
-        if (command->name == "cpr") {
-            status->clear();
-            handle_start_agent();
             return;
         }
         if (command->name == "help") {
@@ -4666,11 +4652,6 @@ void NativeShell::handle_agent_selection(const fs::path &directory_key) {
     bump_lifecycle_generation();
     reaction_store_.clear();
     injected_mail_journal_.reset();
-    // A selection change must never let a prior target's pending sleep or
-    // Start observation or terminal result surface under the newly selected
-    // Agent.
-    pending_sleep_observation_.reset();
-    pending_start_observation_.reset();
     if (auto *start_status = window_->findChild<QLabel *>(
             "lingtai_selected_agent_start_status")) {
         start_status->clear();
@@ -4769,79 +4750,90 @@ bool NativeShell::handle_prompt_command(
     return true;
 }
 
-// The one selected-Agent lifecycle owner for `/suspend`, `/clear`, and
-// `/refresh [preset]`. Only the empty forms and a zero-or-one raw preset
-// argument are accepted; extra or invalid arguments are rejected locally
-// without launching. Dispatch always rides the already-injected
-// `tui_executable_` with the exact separate argv through the one owned
-// AgentCommandRunner; a duplicate lifecycle slash while pending is rejected
-// with the exact truthful status, and ordinary chat send is never disabled.
+// One Desktop-owned lifecycle dispatcher. The controller validates the exact
+// command matrix (including Main fallback and supported `all` forms) before
+// any destructive work, then advances waits on its own timer without blocking
+// the UI thread. `tui_executable_` is deliberately absent from this path.
 void NativeShell::handle_lifecycle_command(
         const std::string &name, const std::string &args) {
     auto *status = window_->findChild<QLabel *>("lingtai_composer_status");
     if (!status) return;
-    if (!selection_state_.active_project()
-        || !selection_state_.selected_agent_directory_key()) {
+    if (!selection_state_.active_project() || !lifecycle_controller_) {
+        status->setText(QStringLiteral("Open a LingTai project first."));
+        return;
+    }
+    const auto command = [&]() -> std::optional<AgentLifecycleCommand> {
+        if (name == "sleep") return AgentLifecycleCommand::sleep;
+        if (name == "suspend") return AgentLifecycleCommand::suspend;
+        if (name == "cpr") return AgentLifecycleCommand::cpr;
+        if (name == "clear") return AgentLifecycleCommand::clear;
+        if (name == "refresh") return AgentLifecycleCommand::refresh;
+        return std::nullopt;
+    }();
+    if (!command) {
         status->setText(QStringLiteral(
             "Command not available in this Desktop build."));
         return;
     }
-    std::string optional_arg;
-    const auto single_preset = !args.empty()
-        && args.find(' ') == std::string::npos;
-    const auto valid = ((name == "suspend" || name == "clear") && args.empty())
-        || (name == "refresh" && (args.empty() || single_preset));
-    if (!valid) {
+    const auto &attachment = *selection_state_.active_project();
+    agents_ = project_agents(attachment);
+    render_roster();
+    status->setText(QStringLiteral("Lifecycle operation pending."));
+    const auto started = lifecycle_controller_->run(AgentLifecycleRequest{
+        .attachment = attachment,
+        .snapshot = agents_,
+        .selected_agent_key =
+            selection_state_.selected_agent_directory_key(),
+        .command = *command,
+        .argument = args,
+        .fallback_python = agent_start_fallback_python_,
+        .generation = lifecycle_generation(),
+    }, [this](AgentLifecycleResult result) {
+        handle_lifecycle_finished(std::move(result));
+    });
+    switch (started) {
+    case AgentLifecycleStartResult::started:
+        return;
+    case AgentLifecycleStartResult::busy:
         status->setText(QStringLiteral(
-            "Command not available in this Desktop build."));
+            "Agent lifecycle operation already pending."));
+        return;
+    case AgentLifecycleStartResult::invalid_argument:
+        status->setText(QStringLiteral("Invalid lifecycle command arguments."));
+        return;
+    case AgentLifecycleStartResult::no_target:
+        status->setText(QStringLiteral("No eligible Agent target."));
         return;
     }
-    if (single_preset) {
-        optional_arg = args;
-    }
-    const auto project_root =
-        path_text(selection_state_.active_project()->root() / ".lingtai")
-            .toStdString();
-    const auto agent_key =
-        selection_state_.selected_agent_directory_key()->string();
-    if (!command_runner_.run(tui_executable_, project_root, agent_key, name,
-            optional_arg, lifecycle_generation(),
-            [this](AgentCommandResult result) {
-                handle_lifecycle_finished(std::move(result));
-            })) {
-        status->setText(QStringLiteral("Agent command already pending."));
-        return;
-    }
-    pending_lifecycle_action_ = name;
-    status->setText(QStringLiteral("Agent command pending."));
 }
 
-// The one terminal lifecycle delivery. A completion may update the existing
-// conversation status only when the generation, canonical project root, and
-// selected Agent key captured at dispatch still match the current selection
-// context, so an old completion -- including an away-and-back return to the
-// same key -- can never surface under a later selection.
-void NativeShell::handle_lifecycle_finished(AgentCommandResult result) {
+// A late completion is delivered only to the exact project/selection
+// generation that started it. An away-and-back return has a newer generation,
+// so it cannot surface the old operation's result under the same key.
+void NativeShell::handle_lifecycle_finished(AgentLifecycleResult result) {
     auto *status = window_->findChild<QLabel *>("lingtai_composer_status");
     if (!status) return;
     const auto matching_context = selection_state_.active_project()
-        && selection_state_.selected_agent_directory_key()
         && result.bound_generation == lifecycle_generation()
         && result.bound_project_root
-            == path_text(selection_state_.active_project()->root()
-                / ".lingtai").toStdString()
-        && result.bound_agent_key
-            == selection_state_.selected_agent_directory_key()->string();
-    if (!matching_context || pending_lifecycle_action_.empty()) {
-        pending_lifecycle_action_.clear();
-        return;
+            == selection_state_.active_project()->root();
+    if (!matching_context) return;
+    agents_ = project_agents(*selection_state_.active_project());
+    render_roster();
+    const auto text = QString::fromStdString(
+        agent_lifecycle_result_text(result));
+    status->setText(text);
+    if (result.command == AgentLifecycleCommand::sleep) {
+        if (auto *sleep = window_->findChild<QLabel *>(
+                "lingtai_selected_agent_sleep_status")) {
+            sleep->setText(text);
+        }
+    } else if (result.command == AgentLifecycleCommand::cpr) {
+        if (auto *start = window_->findChild<QLabel *>(
+                "lingtai_selected_agent_start_status")) {
+            start->setText(text);
+        }
     }
-    auto signaled = QString::fromStdString(pending_lifecycle_action_);
-    signaled[0] = signaled[0].toUpper();
-    status->setText(result.kind == AgentCommandResultKind::succeeded
-        ? signaled + QStringLiteral(" signaled.")
-        : QStringLiteral("Agent command failed."));
-    pending_lifecycle_action_.clear();
 }
 
 std::string NativeShell::lifecycle_generation() const noexcept {
@@ -5012,8 +5004,6 @@ void NativeShell::handle_detail_back() {
     selection_state_.clear_agent_selection();
     bump_lifecycle_generation();
     reset_composer();
-    pending_sleep_observation_.reset();
-    pending_start_observation_.reset();
     render_roster();
     show_detail_page(AgentDetailPage::conversation);
     recompute_layout(window_->body()->width());
@@ -5120,110 +5110,13 @@ void NativeShell::render_agent_sleep_status() {
         : QStringLiteral("Select a live Agent that is not already asleep."));
 }
 
-// The human's explicit click is the local product action. Rerun the sole
-// `project_agents` projection once at the click boundary and use only the
-// fresh exact row for the exact current selection -- never a cached one --
-// before writing anything.
+// The hidden legacy action delegates to the same Desktop-owned controller as
+// `/sleep`; it owns no separate marker writer, timer, or truth model.
 void NativeShell::handle_request_sleep() {
     auto *status = window_->findChild<QLabel *>(
         "lingtai_selected_agent_sleep_status");
-    auto *button = window_->findChild<QPushButton *>(
-        "lingtai_selected_agent_request_sleep");
-    if (!status || !button) return;
-    if (pending_sleep_observation_) return; // one observation at a time
-
-    if (!selection_state_.active_project()
-        || !selection_state_.selected_agent_directory_key()) {
-        return;
-    }
-    const auto &attachment = *selection_state_.active_project();
-    const auto key = *selection_state_.selected_agent_directory_key();
-
-    agents_ = project_agents(attachment);
-    render_roster();
-
-    const auto *item = selectable_item(agents_, key);
-    if (!item || !agent_sleep_eligible(*item)) {
-        status->setText(
-            QStringLiteral("Select a live Agent that is not already asleep."));
-        button->setEnabled(false);
-        return;
-    }
-
-    const auto baseline = capture_agent_sleep_event_baseline(attachment, key);
-    const auto result = request_agent_sleep(attachment, key);
-    if (result != AgentSleepRequestResult::requested) {
-        status->setText(QStringLiteral("Sleep request not written."));
-        return;
-    }
-
-    status->setText(QStringLiteral("Sleep requested."));
-    button->setEnabled(false); // disable duplicate click while observing
-    pending_sleep_observation_ = SleepObservation{
-        .project_root = attachment.root(),
-        .directory_key = key,
-        .baseline = baseline,
-        .deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3),
-    };
-}
-
-// Piggybacks on the existing one-second view timer: no new timer, thread, or
-// watcher. Idle unless a click armed a pending observation for the exact
-// current selection.
-void NativeShell::tick_agent_sleep_observation() {
-    if (!pending_sleep_observation_) return;
-    if (!selection_state_.active_project()
-        || selection_state_.active_project()->root()
-            != pending_sleep_observation_->project_root
-        || !selection_state_.selected_agent_directory_key()
-        || *selection_state_.selected_agent_directory_key()
-            != pending_sleep_observation_->directory_key) {
-        // The target changed since the click; a late result must never
-        // appear under a different selection.
-        pending_sleep_observation_.reset();
-        return;
-    }
-
-    const auto &attachment = *selection_state_.active_project();
-    const auto key = pending_sleep_observation_->directory_key;
-    const auto applied = observe_agent_sleep_received(
-        attachment, key, pending_sleep_observation_->baseline);
-    const auto expired = std::chrono::steady_clock::now()
-        >= pending_sleep_observation_->deadline;
-    if (!applied && !expired) return; // keep waiting within the window
-
-    pending_sleep_observation_.reset();
-    agents_ = project_agents(attachment);
-    render_roster();
-
-    auto *status = window_->findChild<QLabel *>(
-        "lingtai_selected_agent_sleep_status");
-    auto *button = window_->findChild<QPushButton *>(
-        "lingtai_selected_agent_request_sleep");
-    if (!status || !button) return;
-    const auto *item = selectable_item(agents_, key);
-    const auto state = item && item->identity && item->identity->state
-        ? QString::fromStdString(*item->identity->state)
-        : QString();
-    if (applied) {
-        const auto woke = state == QStringLiteral("active")
-            || state == QStringLiteral("idle");
-        status->setText(woke
-            ? QStringLiteral("Sleep applied; Agent subsequently woke. "
-                  "Current state: %1.")
-                  .arg(state)
-            : state.isEmpty()
-                ? QStringLiteral("Sleep request applied.")
-                : QStringLiteral("Sleep request applied. Current state: %1.")
-                    .arg(state));
-    } else {
-        status->setText(state.isEmpty()
-            ? QStringLiteral("Sleep requested; application not yet observed.")
-            : QStringLiteral("Sleep requested; application not yet "
-                  "observed. Current state: %1.")
-                  .arg(state));
-    }
-    button->setEnabled(item && agent_sleep_eligible(*item));
+    if (status) status->setText(QStringLiteral("Lifecycle operation pending."));
+    handle_lifecycle_command("sleep", {});
 }
 
 // Reflects only the eligibility of the exact current selection against
@@ -5257,96 +5150,13 @@ void NativeShell::render_agent_start_status() {
     }
 }
 
-// The human's explicit click is the local product action. Rerun the sole
-// `project_agents` projection once at the click boundary and use only the
-// fresh exact row for the exact current selection -- never a cached one --
-// before starting anything. Request sleep is never separately disabled
-// here: it already requires `alive` presence, which a start-eligible
-// (stale/missing) row can never have at this exact instant.
+// The hidden legacy action delegates to the same Desktop-owned controller as
+// `/cpr`; it owns no separate detached launcher or observation timer.
 void NativeShell::handle_start_agent() {
     auto *status = window_->findChild<QLabel *>(
         "lingtai_selected_agent_start_status");
-    auto *button = window_->findChild<QPushButton *>(
-        "lingtai_selected_agent_start_agent");
-    if (!status || !button) return;
-    if (pending_start_observation_) return; // one observation at a time
-
-    if (!selection_state_.active_project()
-        || !selection_state_.selected_agent_directory_key()) {
-        return;
-    }
-    const auto &attachment = *selection_state_.active_project();
-    const auto key = *selection_state_.selected_agent_directory_key();
-
-    agents_ = project_agents(attachment);
-    render_roster();
-
-    const auto *item = selectable_item(agents_, key);
-    if (!item || !agent_start_eligible(*item)) {
-        if (item && item->presence == AgentPresenceKind::alive) {
-            status->setText(QStringLiteral("Agent is already online."));
-        }
-        return; // render_roster() above already reflects fresh eligibility
-    }
-
-    const auto result =
-        start_agent(attachment, key, agent_start_fallback_python_);
-    if (result != AgentLaunchResult::started) {
-        status->setText(QStringLiteral(
-            "Could not start Agent. See %1/logs/agent.log.")
-            .arg(path_text(attachment.root() / ".lingtai" / key)));
-        return;
-    }
-
-    status->setText(QStringLiteral("Starting Agent..."));
-    button->setEnabled(false); // disable duplicate click while observing
-    pending_start_observation_ = StartObservation{
-        .project_root = attachment.root(),
-        .directory_key = key,
-        .deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10),
-    };
-}
-
-// Piggybacks on the existing one-second view timer: no new timer, thread, or
-// watcher, and no second heartbeat parser. Idle unless a click armed a
-// pending observation for the exact current selection. Success is proven
-// solely by the sole `project_agents` projection reporting this exact
-// selection `alive`; `agent_start_eligible()`'s narrowed stale/missing gate
-// is what makes that transition trustworthy without a separate timestamp
-// baseline.
-void NativeShell::tick_agent_start_observation() {
-    if (!pending_start_observation_) return;
-    if (!selection_state_.active_project()
-        || selection_state_.active_project()->root()
-            != pending_start_observation_->project_root
-        || !selection_state_.selected_agent_directory_key()
-        || *selection_state_.selected_agent_directory_key()
-            != pending_start_observation_->directory_key) {
-        // The target changed since the click; a late result must never
-        // appear under a different selection.
-        pending_start_observation_.reset();
-        return;
-    }
-
-    const auto &attachment = *selection_state_.active_project();
-    const auto key = pending_start_observation_->directory_key;
-    agents_ = project_agents(attachment);
-    const auto *item = selectable_item(agents_, key);
-    const auto online = item && item->presence == AgentPresenceKind::alive;
-    const auto expired = std::chrono::steady_clock::now()
-        >= pending_start_observation_->deadline;
-    if (!online && !expired) return; // keep waiting within the window
-
-    pending_start_observation_.reset();
-    render_roster();
-
-    auto *status = window_->findChild<QLabel *>(
-        "lingtai_selected_agent_start_status");
-    if (!status) return;
-    status->setText(online
-        ? QStringLiteral("Agent is online.")
-        : QStringLiteral("Agent did not come online. See %1/logs/agent.log.")
-              .arg(path_text(attachment.root() / ".lingtai" / key)));
+    if (status) status->setText(QStringLiteral("Lifecycle operation pending."));
+    handle_lifecycle_command("cpr", {});
 }
 
 ProjectOpenOutcome NativeShell::show_open_error(

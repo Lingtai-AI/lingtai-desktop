@@ -315,24 +315,14 @@ void write_fixture_python(
     require(!error, "fixture python must be made executable");
 }
 
-// Writes one fake `lingtai-tui control` executable used only by the U5
-// lifecycle-command journey. It never runs a real TUI or Agent: it records
-// its exact separate argv to a file, then -- only after a short deterministic
-// delay -- emits one canonical success JSON object on stdout and writes a
-// completion marker, exactly like a real headless control command would
-// eventually answer. The emitted agent stays `alpha` because the journey only
-// ever runs the control command under the alpha Agent.
-void write_fixture_control(
+// Writes an executable sentinel whose only behavior is recording invocation.
+// Lifecycle tests configure it as the shell's bootstrap-only TUI executable;
+// the record's continued absence proves lifecycle dispatch never reaches it.
+void write_forbidden_executable(
         const fs::path &executable_path,
-        const fs::path &argv_record_path,
-        const fs::path &done_marker_path,
-        int delay_seconds) {
+        const fs::path &invocation_record_path) {
     auto script = std::string("#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"")
-        + argv_record_path.string() + "\"\n"
-        + "sleep " + std::to_string(delay_seconds) + "\n"
-        + "printf '%s\\n' '{\"command\":\"refresh\",\"agent\":\"alpha\","
-          "\"status\":\"signaled\"}'\n"
-        + "printf 'done\\n' > \"" + done_marker_path.string() + "\"\n"
+        + invocation_record_path.string() + "\"\n"
         + "exit 0\n";
     write_file(executable_path, script);
     std::error_code error;
@@ -340,7 +330,7 @@ void write_fixture_control(
         fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec
             | fs::perms::others_read | fs::perms::others_exec,
         fs::perm_options::replace, error);
-    require(!error, "fixture control executable must be made executable");
+    require(!error, "forbidden executable sentinel must be made executable");
 }
 
 std::map<std::string, std::string> tree_snapshot(const fs::path &root) {
@@ -2987,148 +2977,106 @@ void verify_request_sleep_action(
     auto *status = required_child<QLabel>(
         window, "lingtai_selected_agent_sleep_status");
 
-    const auto project = sandbox / "project";
-    const auto fresh_heartbeat = [] {
-        return std::to_string(std::chrono::duration<double>(
-            std::chrono::system_clock::now().time_since_epoch()).count());
-    };
+    // Desktop-owned controller regression: lifecycle remains fully local even
+    // when a configured executable would make any accidental TUI launch
+    // observable. The injected process seam is deterministic and does not
+    // inspect or signal host processes.
+    {
+        const auto project = sandbox / "owned-project";
+        const auto agent_a = project / ".lingtai/agent-a";
+        const auto agent_b = project / ".lingtai/agent-b";
+        write_file(agent_a / ".agent.json",
+            R"({"admin":{},"state":"idle"})");
+        write_file(agent_a / ".agent.heartbeat", std::to_string(
+            std::chrono::duration<double>(
+                std::chrono::system_clock::now().time_since_epoch()).count()));
+        write_file(agent_b / ".agent.json",
+            R"({"admin":{},"state":"idle"})");
+        write_file(agent_b / ".agent.heartbeat", std::to_string(
+            std::chrono::duration<double>(
+                std::chrono::system_clock::now().time_since_epoch()).count()));
 
-    write_file(project / ".lingtai/agent-a/.agent.json",
-        R"({"admin":{},"state":"idle"})");
-    write_file(project / ".lingtai/agent-a/.agent.heartbeat", fresh_heartbeat());
+        const auto tui = sandbox / "must-not-run-tui";
+        const auto tui_record = sandbox / "tui-invoked";
+        write_forbidden_executable(tui, tui_record);
+        shell.set_tui_executable(tui);
 
-    write_file(project / ".lingtai/agent-b/.agent.json",
-        R"({"admin":{},"state":"idle"})");
-    write_file(project / ".lingtai/agent-b/.agent.heartbeat", fresh_heartbeat());
-    write_file(project / ".lingtai/agent-b/logs/events.jsonl", "");
+        auto dependencies =
+            lingtai::desktop::production_agent_lifecycle_dependencies();
+        dependencies.automatic_poll = true;
+        dependencies.poll_interval = std::chrono::milliseconds(10);
+        dependencies.processes.observe = [](const fs::path &) {
+            return lingtai::desktop::AgentProcessObservation{
+                .available = true,
+            };
+        };
+        dependencies.processes.signal = [](const fs::path &,
+                lingtai::desktop::AgentProcessId,
+                lingtai::desktop::AgentTerminationSignal) {
+            return false;
+        };
+        dependencies.launcher.launch = [](const auto &, const auto &,
+                const auto &) {
+            return lingtai::desktop::AgentLaunchOutcome{};
+        };
+        shell.set_agent_lifecycle_dependencies(std::move(dependencies));
 
-    write_file(project / ".lingtai/agent-c/.agent.json",
-        R"({"admin":{},"state":"idle"})");
-    write_file(project / ".lingtai/agent-c/.agent.heartbeat", "0");
+        static_cast<void>(shell.open_project(project, std::nullopt));
+        click_agent(shell, "agent-a");
+        require(button->isEnabled(),
+            "the revalidation fixture must begin with a cached eligible row");
+        write_file(agent_a / ".agent.json",
+            R"({"admin":{},"state":"asleep"})");
+        button->click();
+        QCoreApplication::processEvents();
+        require(!fs::exists(agent_a / ".sleep")
+                && status->text()
+                    == QStringLiteral("Sleep skipped: Agent is not live and awake."),
+            "Desktop sleep must revalidate and reject an asleep Agent without writing");
 
-    static_cast<void>(shell.open_project(project, std::nullopt));
-    require(!button->isEnabled(),
-        "Request sleep must be disabled with no Agent selected");
-    require(status->text() == QStringLiteral(
-                "Select a live Agent that is not already asleep."),
-        "the no-selection status must show the concise eligibility reason");
+        click_agent(shell, "agent-b");
+        const auto started = std::chrono::steady_clock::now();
+        button->click();
+        QCoreApplication::processEvents();
+        require(std::chrono::steady_clock::now() - started
+                < std::chrono::seconds(1),
+            "Desktop sleep must return without blocking the UI thread");
+        require(fs::exists(agent_b / ".sleep")
+                && read_file(agent_b / ".sleep").empty(),
+            "Desktop sleep must write the exact zero-byte selected-Agent marker");
+        std::error_code remove_error;
+        fs::remove(agent_b / ".sleep", remove_error);
+        require(!remove_error, "the simulated kernel must consume .sleep");
+        require(wait_for_event_loop([&] {
+            return status->text() == QStringLiteral("Sleep request applied.");
+        }, 1000),
+            "Desktop sleep must report application only after marker consumption");
 
-    click_agent(shell, "agent-c");
-    require(!button->isEnabled(),
-        "a stale (non-alive) selection must leave Request sleep disabled");
-    require(!fs::exists(project / ".lingtai/agent-c/.sleep"),
-        "a stale ineligible selection must never gain a .sleep marker");
-
-    click_agent(shell, "agent-a");
-    require(button->isEnabled(),
-        "an eligible selected Agent must enable Request sleep");
-
-    // The click-boundary refresh must be load-bearing, not decorative: make
-    // A ineligible on disk without reselecting, so the cached `agents_` row
-    // the button's enabled state was drawn from is now stale. A click must
-    // rerun the projection, see the fresh ineligible row, and write nothing
-    // -- proving the defensive re-check in handle_request_sleep actually
-    // runs rather than trusting the cached snapshot.
-    write_file(project / ".lingtai/agent-a/.agent.json",
-        R"({"admin":{},"state":"asleep"})");
-    const auto stale_cache_before = tree_snapshot(project);
-    button->click();
-    QCoreApplication::processEvents();
-    require(!fs::exists(project / ".lingtai/agent-a/.sleep"),
-        "a click whose cached row went stale before the click must never "
-        "write a marker");
-    require(tree_snapshot(project) == stale_cache_before,
-        "a click-boundary rejection must write nothing at all");
-    require(status->text() == QStringLiteral(
-                "Select a live Agent that is not already asleep."),
-        "a click-boundary rejection must show the concise eligibility "
-        "reason, not a write status");
-    require(!button->isEnabled(),
-        "the button must reflect the freshly discovered ineligibility "
-        "after the rejected click");
-
-    // Restore A to eligible for the later A<->B selection-clearing checks;
-    // this fixture's only remaining job is proving those, not staying
-    // asleep.
-    write_file(project / ".lingtai/agent-a/.agent.json",
-        R"({"admin":{},"state":"idle"})");
-
-    click_agent(shell, "agent-b");
-    require(button->isEnabled(),
-        "the second eligible Agent must also enable Request sleep");
-    require(!fs::exists(project / ".lingtai/agent-a/.sleep"),
-        "selecting B must never have written A's marker");
-
-    button->click();
-    QCoreApplication::processEvents();
-    require(fs::exists(project / ".lingtai/agent-b/.sleep"),
-        "a click on an eligible selection must write exactly B's marker");
-    require(read_file(project / ".lingtai/agent-b/.sleep").empty(),
-        "the written marker must be exactly zero bytes");
-    require(!fs::exists(project / ".lingtai/agent-a/.sleep"),
-        "clicking Request sleep for B must never write A's marker");
-    require(status->text() == QStringLiteral("Sleep requested."),
-        "the immediate status after a successful write must be exactly "
-        "\"Sleep requested.\", not applied or asleep");
-    require(!button->isEnabled(),
-        "the button must disable itself while an observation is pending");
-
-    // Simulate the target kernel's own canonical behavior: it consumes the
-    // marker, updates its own manifest state, and appends its own event.
-    write_file(project / ".lingtai/agent-b/.agent.json",
-        R"({"admin":{},"state":"asleep"})");
-    append_file(project / ".lingtai/agent-b/logs/events.jsonl",
-        R"({"type":"sleep_received","source":"signal_file"})" "\n");
-
-    const auto applied_text = QStringLiteral(
-        "Sleep request applied. Current state: asleep.");
-    const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (status->text() != applied_text
-            && std::chrono::steady_clock::now() < deadline) {
+        // Start another request, change selection, then consume its marker.
+        // The controller may complete, but the old generation must not write
+        // its terminal text under agent-a.
+        button->click();
+        QCoreApplication::processEvents();
+        require(fs::exists(agent_b / ".sleep"),
+            "the stale-delivery fixture must arm a second sleep request");
+        click_agent(shell, "agent-a");
+        fs::remove(agent_b / ".sleep", remove_error);
+        require(wait_for_event_loop([&] {
+            return !fs::exists(agent_b / ".sleep");
+        }, 1000), "the simulated second marker must be consumed");
         QThread::msleep(50);
         QCoreApplication::processEvents();
+        require(status->text() != QStringLiteral("Sleep request applied."),
+            "a late lifecycle completion must be suppressed after selection changes");
+        require(!fs::exists(tui_record),
+            "Desktop lifecycle must never invoke the configured TUI executable");
+
+        shell.set_agent_lifecycle_dependencies(
+            lingtai::desktop::production_agent_lifecycle_dependencies());
+        std::error_code cleanup_error;
+        fs::remove_all(sandbox, cleanup_error);
+        require(!cleanup_error, "Desktop-owned sleep fixtures must be removed");
     }
-    require(status->text() == applied_text,
-        "the real one-second timer must observe the appended sleep_received "
-        "and show the fresh current manifest state, with no reselection");
-    require(!button->isEnabled(),
-        "B is now asleep, so the button must stay disabled after the "
-        "terminal observation");
-
-    click_agent(shell, "agent-a");
-    require(button->isEnabled() && status->text().isEmpty(),
-        "switching back to the still-eligible A must show a fresh, cleared "
-        "status, never B's terminal result");
-
-    click_agent(shell, "agent-b");
-    require(!button->isEnabled()
-            && status->text() == QStringLiteral(
-                   "Select a live Agent that is not already asleep."),
-        "reselecting the now-asleep B must show fresh ineligibility, not "
-        "the stale applied text");
-
-    // Ordinary-message wake: the target kernel later flips B's own manifest
-    // back to an eligible state on its own, entirely outside any pending
-    // observation. With no reselection, only the same real one-second timer
-    // can make Request sleep re-enable for the still-selected B.
-    write_file(project / ".lingtai/agent-b/.agent.json",
-        R"({"admin":{},"state":"idle"})");
-    write_file(project / ".lingtai/agent-b/.agent.heartbeat", fresh_heartbeat());
-    const auto wake_deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (!button->isEnabled()
-            && std::chrono::steady_clock::now() < wake_deadline) {
-        QThread::msleep(50);
-        QCoreApplication::processEvents();
-    }
-    require(button->isEnabled(),
-        "an ordinary-message wake observed with no reselection must "
-        "re-enable Request sleep for the still-selected Agent");
-
-    std::error_code cleanup_error;
-    fs::remove_all(sandbox, cleanup_error);
-    require(!cleanup_error, "Request sleep fixtures must be removed");
 }
 
 // The Step-6 Start Agent action: one explicit, nonblocking start for the
@@ -3148,243 +3096,113 @@ void verify_start_agent_action(
         window, "lingtai_selected_agent_start_agent");
     auto *status = required_child<QLabel>(
         window, "lingtai_selected_agent_start_status");
-    auto *sleep_button = required_child<QPushButton>(
-        window, "lingtai_selected_agent_request_sleep");
+    {
+        const auto project = sandbox / "owned-project";
+        const auto live = project / ".lingtai/agent-live";
+        const auto start = project / ".lingtai/agent-start";
+        const auto switched = project / ".lingtai/agent-switch";
+        const auto fresh_heartbeat = [] {
+            return std::to_string(std::chrono::duration<double>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+        };
+        write_file(live / ".agent.json", R"({"admin":{},"state":"idle"})");
+        write_file(live / ".agent.heartbeat", fresh_heartbeat());
+        write_file(start / ".agent.json", R"({"admin":{},"state":"idle"})");
+        write_file(switched / ".agent.json", R"({"admin":{},"state":"idle"})");
 
-    const auto project = sandbox / "project";
-    const auto fresh_heartbeat = [] {
-        return std::to_string(std::chrono::duration<double>(
-            std::chrono::system_clock::now().time_since_epoch()).count());
-    };
+        auto process_ids = std::map<fs::path,
+            std::vector<lingtai::desktop::AgentProcessId>>();
+        auto launches = std::vector<fs::path>();
+        auto next_pid = lingtai::desktop::AgentProcessId{4100};
+        auto dependencies =
+            lingtai::desktop::production_agent_lifecycle_dependencies();
+        dependencies.automatic_poll = true;
+        dependencies.poll_interval = std::chrono::milliseconds(10);
+        dependencies.processes.observe = [&](const fs::path &directory) {
+            return lingtai::desktop::AgentProcessObservation{
+                .available = true,
+                .pids = process_ids[directory],
+            };
+        };
+        dependencies.processes.signal = [](const fs::path &,
+                lingtai::desktop::AgentProcessId,
+                lingtai::desktop::AgentTerminationSignal) {
+            return false;
+        };
+        dependencies.launcher.launch = [&](const auto &, const auto &key,
+                const auto &) {
+            const auto directory = fs::canonical(project / ".lingtai" / key);
+            launches.push_back(directory);
+            process_ids[directory] = {next_pid};
+            return lingtai::desktop::AgentLaunchOutcome{
+                .result = lingtai::desktop::AgentLaunchResult::started,
+                .pid = next_pid++,
+                .log_path = directory / "logs/agent.log",
+            };
+        };
+        shell.set_agent_lifecycle_dependencies(std::move(dependencies));
 
-    write_file(project / ".lingtai/agent-live/.agent.json",
-        R"({"admin":{},"state":"idle"})");
-    write_file(project / ".lingtai/agent-live/.agent.heartbeat",
-        fresh_heartbeat());
+        auto *composer = required_ui_child<Ui::InputField>(
+            window, "lingtai_composer_input");
+        auto *send = required_ui_child<Ui::RoundButton>(
+            window, "lingtai_composer_send_button");
+        const auto submit_cpr = [&] {
+            composer->setText(QStringLiteral("/cpr"));
+            QCoreApplication::processEvents();
+            send->clicked(Qt::NoModifier, Qt::LeftButton);
+            QCoreApplication::processEvents();
+        };
 
-    const auto success_dir = project / ".lingtai/agent-success";
-    write_file(success_dir / ".agent.json", R"({"admin":{},"state":"idle"})");
-    const auto success_python = sandbox / "runtime-success/bin/python";
-    const auto success_argv = sandbox / "argv-success.txt";
-    write_fixture_python(success_python, success_argv,
-        success_dir / ".agent.heartbeat", 1);
-    write_file(success_dir / "init.json",
-        QStringLiteral(R"({"venv_path":"%1"})")
-            .arg(path_text(success_python.parent_path().parent_path()))
-            .toStdString());
+        static_cast<void>(shell.open_project(project, std::nullopt));
+        click_agent(shell, "agent-live");
+        submit_cpr();
+        const auto *composer_status = required_child<QLabel>(
+            window, "lingtai_composer_status");
+        require(status->text() == QStringLiteral("Agent is already online.")
+                && launches.empty(),
+            "Desktop CPR must refuse a duplicate launch from heartbeat evidence "
+            "(status='" + status->text().toStdString() + "', launches="
+            + std::to_string(launches.size()) + ", composer='"
+            + composer_status->text().toStdString() + "', selected='"
+            + (shell.selection_state().selected_agent_directory_key()
+                    ? shell.selection_state().selected_agent_directory_key()->string()
+                    : std::string("none")) + "')");
 
-    const auto switch_dir = project / ".lingtai/agent-switch";
-    write_file(switch_dir / ".agent.json", R"({"admin":{},"state":"idle"})");
-    const auto switch_python = sandbox / "runtime-switch/bin/python";
-    const auto switch_argv = sandbox / "argv-switch.txt";
-    write_fixture_python(switch_python, switch_argv,
-        switch_dir / ".agent.heartbeat", 2);
-    write_file(switch_dir / "init.json",
-        QStringLiteral(R"({"venv_path":"%1"})")
-            .arg(path_text(switch_python.parent_path().parent_path()))
-            .toStdString());
+        click_agent(shell, "agent-start");
+        const auto started = std::chrono::steady_clock::now();
+        button->click();
+        QCoreApplication::processEvents();
+        require(std::chrono::steady_clock::now() - started
+                < std::chrono::seconds(1),
+            "Desktop CPR must return immediately without a UI-thread wait");
+        require(wait_for_event_loop([&] { return launches.size() == 1; }, 1000),
+            "Desktop CPR must reach the injected direct launcher after a free lease");
+        write_file(start / ".agent.heartbeat", fresh_heartbeat());
+        require(wait_for_event_loop([&] {
+            return status->text()
+                == QStringLiteral("Agent is online with a fresh heartbeat.");
+        }, 1000),
+            "Desktop CPR must claim success only after a fresh heartbeat");
 
-    const auto timeout_dir = project / ".lingtai/agent-timeout";
-    write_file(timeout_dir / ".agent.json", R"({"admin":{},"state":"idle"})");
-    const auto timeout_python = sandbox / "runtime-timeout/bin/python";
-    const auto timeout_argv = sandbox / "argv-timeout.txt";
-    write_fixture_python(timeout_python, timeout_argv, std::nullopt, 0);
-    write_file(timeout_dir / "init.json",
-        QStringLiteral(R"({"venv_path":"%1"})")
-            .arg(path_text(timeout_python.parent_path().parent_path()))
-            .toStdString());
-
-    static_cast<void>(shell.open_project(project, std::nullopt));
-
-    click_agent(shell, "agent-live");
-    require(!button->isVisible(),
-        "a live selected Agent must show no Start action at all");
-
-    click_agent(shell, "agent-success");
-    require(!button->isVisible() && button->isEnabled()
-            && status->text().isEmpty(),
-        "Start Agent stays out of the header; a stale Agent still enables "
-        "the hidden Start owner for /cpr");
-
-    const auto click_start = std::chrono::steady_clock::now();
-    button->click();
-    QCoreApplication::processEvents();
-    const auto click_elapsed = std::chrono::steady_clock::now() - click_start;
-    require(click_elapsed < std::chrono::seconds(1),
-        "the Start click must return immediately, never blocking the GUI "
-        "on the spawned process or the heartbeat wait");
-    require(status->text() == QStringLiteral("Starting Agent..."),
-        "a successful local start must immediately show the pending wording");
-    require(!button->isEnabled(),
-        "Start must disable duplicate activation while an observation is pending");
-    require(!sleep_button->isEnabled(),
-        "Request sleep must stay disabled for a selection with a pending "
-        "Start observation");
-
-    const auto argv_deadline_a =
-        std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (!fs::exists(success_argv)
-            && std::chrono::steady_clock::now() < argv_deadline_a) {
-        QThread::msleep(20);
-    }
-    require(fs::exists(success_argv),
-        "the fixture runtime must have been invoked");
-    require(read_file(success_argv) == QStringLiteral("-m\nlingtai\nrun\n%1\n")
-            .arg(path_text(fs::canonical(success_dir))).toStdString(),
-        "the exact argv must be the four distinct elements `-m`, "
-        "`lingtai`, `run`, <absolute selected Agent dir>, not a joined "
-        "string, using the selected Agent's own configured venv_path "
-        "runtime");
-
-    const auto online_deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (status->text() != QStringLiteral("Agent is online.")
-            && std::chrono::steady_clock::now() < online_deadline) {
+        click_agent(shell, "agent-switch");
+        button->click();
+        QCoreApplication::processEvents();
+        require(wait_for_event_loop([&] { return launches.size() == 2; }, 1000),
+            "the stale-delivery CPR fixture must launch its selected Agent");
+        click_agent(shell, "agent-live");
+        write_file(switched / ".agent.heartbeat", fresh_heartbeat());
         QThread::msleep(50);
         QCoreApplication::processEvents();
+        require(status->text()
+                != QStringLiteral("Agent is online with a fresh heartbeat."),
+            "a late CPR completion must not surface after selection changes");
+
+        shell.set_agent_lifecycle_dependencies(
+            lingtai::desktop::production_agent_lifecycle_dependencies());
+        std::error_code cleanup_error;
+        fs::remove_all(sandbox, cleanup_error);
+        require(!cleanup_error, "Desktop-owned CPR fixtures must be removed");
     }
-    require(status->text() == QStringLiteral("Agent is online."),
-        "the real one-second timer must observe the delayed fresh heartbeat "
-        "through the sole project_agents projection and report success");
-
-    const auto success_log = success_dir / "logs/agent.log";
-    const auto log_deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (!fs::exists(success_log)
-            && std::chrono::steady_clock::now() < log_deadline) {
-        QThread::msleep(20);
-    }
-    const auto success_log_contents = read_file(success_log);
-    require(success_log_contents.find("lingtai-fixture-stdout-marker")
-                != std::string::npos
-            && success_log_contents.find("lingtai-fixture-stderr-marker")
-                != std::string::npos,
-        "the selected Agent's logs/agent.log must actually receive the "
-        "spawned process's real stdout and stderr, proving the redirection "
-        "both failure messages point users to is genuine, not merely "
-        "spawned-and-ignored");
-    require(!button->isVisible(),
-        "a now-live Agent must return to showing no Start action");
-    require(sleep_button->isEnabled(),
-        "normal Request sleep control must return once the Agent is online");
-
-    // The success wording must survive further idle ticks, not just the
-    // instant it first appears: the ambient per-second refresh (armed once
-    // this observation resolves and nothing else is pending) must never
-    // silently erase it.
-    QThread::msleep(2500);
-    QCoreApplication::processEvents();
-    require(status->text() == QStringLiteral("Agent is online."),
-        "\"Agent is online.\" must persist across idle ambient ticks, not "
-        "just the instant it is first observed");
-
-    // Switching selection while a launch is pending must never surface its
-    // result under a different selection, and must never kill the detached
-    // process: agent-switch's own fixture keeps running in the background
-    // the whole time.
-    click_agent(shell, "agent-switch");
-    require(!button->isVisible() && button->isEnabled(),
-        "agent-switch must start fresh and eligible without a header Start action");
-    button->click();
-    QCoreApplication::processEvents();
-    require(status->text() == QStringLiteral("Starting Agent..."),
-        "agent-switch's own click must show its own pending wording");
-
-    click_agent(shell, "agent-timeout");
-    require(!button->isVisible() && button->isEnabled()
-            && status->text().isEmpty(),
-        "switching away from a pending launch must show a fresh, cleared "
-        "status for the newly selected Agent, never the abandoned launch's "
-        "wording");
-
-    // Give agent-switch's detached fixture time to actually write its
-    // heartbeat while this shell remains parked on a different selection.
-    // Wait for a non-empty heartbeat body (not mere path existence): a plain
-    // `>` truncate can briefly create an empty file that projects as
-    // `invalid` before `date` finishes writing.
-    const auto switch_heartbeat = switch_dir / ".agent.heartbeat";
-    const auto isolation_deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    auto heartbeat_ready = false;
-    while (std::chrono::steady_clock::now() < isolation_deadline) {
-        if (fs::exists(switch_heartbeat)
-                && !read_file(switch_heartbeat).empty()) {
-            heartbeat_ready = true;
-            break;
-        }
-        QThread::msleep(50);
-        QCoreApplication::processEvents();
-    }
-    require(heartbeat_ready,
-        "agent-switch's background fixture must write its heartbeat while "
-        "deselected");
-    require(status->text().isEmpty(),
-        "the parked selection must never show agent-switch's result while "
-        "it is not the current selection");
-
-    click_agent(shell, "agent-switch");
-    require(!button->isVisible(),
-        "re-selecting agent-switch after its abandoned observation's "
-        "target actually came online must show the fresh truth, not a "
-        "stale 'Starting Agent...' leftover");
-    require(status->text().isEmpty(),
-        "re-selecting agent-switch must never replay the abandoned "
-        "observation's terminal wording");
-    require(sleep_button->isEnabled(),
-        "agent-switch's real background success must be visible through "
-        "fresh projection once reselected");
-
-    // The concise ten-second no-heartbeat failure: agent-timeout's own
-    // fixture runtime records its argv but never writes a heartbeat.
-    click_agent(shell, "agent-timeout");
-    require(!button->isVisible() && button->isEnabled()
-            && status->text().isEmpty(),
-        "agent-timeout must remain a fresh, eligible, untouched selection");
-    button->click();
-    QCoreApplication::processEvents();
-    require(status->text() == QStringLiteral("Starting Agent..."),
-        "agent-timeout's click must show the pending wording");
-
-    const auto argv_deadline_b =
-        std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (!fs::exists(timeout_argv)
-            && std::chrono::steady_clock::now() < argv_deadline_b) {
-        QThread::msleep(20);
-    }
-    require(fs::exists(timeout_argv),
-        "the fixture runtime must have been invoked");
-    require(read_file(timeout_argv) == QStringLiteral("-m\nlingtai\nrun\n%1\n")
-            .arg(path_text(fs::canonical(timeout_dir))).toStdString(),
-        "the no-heartbeat launch must still use the exact four-element "
-        "canonical argv, not a joined string");
-
-    const auto timeout_deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(15);
-    while (status->text() == QStringLiteral("Starting Agent...")
-            && std::chrono::steady_clock::now() < timeout_deadline) {
-        QThread::msleep(100);
-        QCoreApplication::processEvents();
-    }
-    require(status->text() == QStringLiteral(
-                "Agent did not come online. See %1/logs/agent.log.")
-                .arg(path_text(fs::canonical(timeout_dir))),
-        "a no-heartbeat launch must reach the concise ten-second failure "
-        "with the exact Agent log path, never claiming success");
-    require(!button->isVisible() && button->isEnabled(),
-        "the ten-second failure must allow an explicit retry");
-
-    // The failure wording must likewise survive further idle ticks.
-    QThread::msleep(2500);
-    QCoreApplication::processEvents();
-    require(status->text() == QStringLiteral(
-                "Agent did not come online. See %1/logs/agent.log.")
-                .arg(path_text(fs::canonical(timeout_dir))),
-        "the ten-second failure wording must persist across idle ambient "
-        "ticks, not just the instant it is first shown");
-
-    std::error_code cleanup_error;
-    fs::remove_all(sandbox, cleanup_error);
-    require(!cleanup_error, "Start Agent fixtures must be removed");
 }
 
 // The Step-19 read-only selected-Agent Presets summary panel: one heading,
@@ -6446,6 +6264,7 @@ void verify_responsive_header_priority(
         window, "lingtai_selected_agent_start_status");
     auto *sleep_status = required_child<QLabel>(
         window, "lingtai_selected_agent_sleep_status");
+    static_cast<void>(sleep_status);
     auto *start_row = required_child<Ui::RpWidget>(
         window, "lingtai_selected_agent_start_row");
     auto *sleep_row = required_child<Ui::RpWidget>(
@@ -7013,6 +6832,7 @@ void verify_conversation_slash_interception(
         window, "lingtai_selected_agent_start_status");
     auto *sleep_status = required_child<QLabel>(
         window, "lingtai_selected_agent_sleep_status");
+    static_cast<void>(sleep_status);
     auto *conversation_nav = required_child<QPushButton>(
         window, "lingtai_agent_page_nav_conversation");
     auto *presets_nav = required_child<QPushButton>(
@@ -7154,9 +6974,17 @@ void verify_conversation_slash_interception(
         "lifecycle signal");
     require(read_file(target / ".sleep").empty(),
         "raw empty-form /sleep must create the exact zero-byte .sleep marker");
-    require(sleep_status->text() == QStringLiteral("Sleep requested."),
-        "raw empty-form /sleep must report the existing owner's exact "
-        "Sleep requested. status");
+    require(status->text() == QStringLiteral("Lifecycle operation pending."),
+        "raw empty-form /sleep must report a nonblocking pending state, not "
+        "claim application from the marker write");
+    std::error_code sleep_consume_error;
+    fs::remove(target / ".sleep", sleep_consume_error);
+    require(!sleep_consume_error,
+        "the slash fixture must simulate the kernel consuming .sleep");
+    require(wait_for_event_loop([&] {
+        return status->text() == QStringLiteral("Sleep request applied.");
+    }, 1000),
+        "raw /sleep must report application only after marker consumption");
 
     submit_command(QStringLiteral("/cpr"));
     require(input->getLastText().isEmpty(),
@@ -7165,7 +6993,7 @@ void verify_conversation_slash_interception(
         "raw /cpr on live alpha must stay local and create no outbox leaf");
     require(start_status->text() == QStringLiteral("Agent is already online."),
         "raw empty-form /cpr on live alpha must report the exact truthful "
-        "TUI-equivalent status in the existing Start surface");
+        "Desktop-owned status in the existing Start surface");
     require(!fs::exists(beta_argv)
             && !fs::exists(target / "logs/agent.log"),
         "raw empty-form /cpr on live alpha must launch nothing");
@@ -7237,221 +7065,22 @@ void verify_conversation_slash_interception(
             std::string("raw /help must not claim the unavailable command ")
                 + command);
     }
-    require(fs::exists(target / ".sleep")
+    require(!fs::exists(target / ".sleep")
             && !fs::exists(beta / ".sleep") && !fs::exists(beta_argv),
         "raw /help must not create, remove, or launch any Agent lifecycle signal");
 
-    // The U5 lifecycle-command contract, injected through the same
-    // `set_tui_executable` seam the shipped TUI uses: the fake control
-    // executable never runs a real TUI or Agent, records exact separate argv,
-    // and answers one canonical success JSON after a short deterministic
-    // delay.
-    const auto control_executable = sandbox / "lingtai-tui-control";
-    const auto control_argv = sandbox / "argv-control.txt";
-    const auto control_done = sandbox / "control-done.txt";
-    write_fixture_control(control_executable, control_argv, control_done, 1);
-    shell.set_tui_executable(control_executable);
-
-    const auto exact_control_argv = QStringLiteral(
-        "control\n--project\n%1\n--agent\nalpha\nrefresh\ncodex-preset\n")
-        .arg(path_text(fs::canonical(project / ".lingtai"))).toStdString();
-    const auto pending_status = QStringLiteral("Agent command pending.");
-    const auto duplicate_status =
-        QStringLiteral("Agent command already pending.");
-    const auto success_status = QStringLiteral("Refresh signaled.");
-    const auto failure_status = QStringLiteral("Agent command failed.");
-    const auto wait_for_control_done = [&] {
-        const auto deadline =
-            std::chrono::steady_clock::now() + std::chrono::seconds(8);
-        while (!fs::exists(control_done)
-                && std::chrono::steady_clock::now() < deadline) {
-            QThread::msleep(20);
-            QCoreApplication::processEvents();
-        }
-        require(fs::exists(control_done),
-            "the fake control command must complete within the bound");
-        // The marker is written just before the child exits, so the runner's
-        // QProcess finished callback lands only after a short bounded event
-        // drain; never assert a status while the callback could still arrive.
-        const auto drain_deadline =
-            std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
-        while (std::chrono::steady_clock::now() < drain_deadline) {
-            QThread::msleep(20);
-            QCoreApplication::processEvents();
-        }
-    };
-    const auto remove_control_done = [&] {
-        std::error_code ignore;
-        fs::remove(control_done, ignore);
-    };
-
-    // Exact separate argv for `/refresh codex-preset` through the real
-    // composer/Send path, with the preset argument passed through unchanged.
-    submit_command(QStringLiteral("/refresh codex-preset"));
-    require(input->getLastText().isEmpty(),
-        "raw /refresh codex-preset must clear the composer after local "
-        "submission");
-    require(outbox_leaf_count() == 0,
-        "raw /refresh codex-preset must stay local and create no outbox leaf");
-    const auto refresh_argv_deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (!fs::exists(control_argv)
-            && std::chrono::steady_clock::now() < refresh_argv_deadline) {
-        QThread::msleep(20);
-    }
-    require(fs::exists(control_argv),
-        "raw /refresh codex-preset must invoke the injected fake control "
-        "executable");
-    require(read_file(control_argv) == exact_control_argv,
-        "raw /refresh codex-preset must pass the exact separate argv control, "
-        "--project, the fixture .lingtai root, --agent, alpha, refresh, and "
-        "the unchanged codex-preset argument");
-    require(status->text() == pending_status,
-        "an accepted lifecycle command must show only the exact pending "
-        "status while running, never a predeclared success");
-
-    // A duplicate lifecycle slash while the first command is still pending is
-    // rejected without a second fake invocation.
-    submit_command(QStringLiteral("/clear"));
-    require(input->getLastText().isEmpty(),
-        "raw /clear during a pending lifecycle command must clear the "
-        "composer");
-    require(read_file(control_argv) == exact_control_argv,
-        "a duplicate lifecycle slash while pending must not invoke the fake "
-        "control executable a second time");
-    require(status->text() == duplicate_status,
-        "a duplicate lifecycle slash while pending must report the exact "
-        "truthful already-pending status");
-
-    // Stale-result isolation: the alpha command finishes only after the
-    // roster has moved away to beta, so its success/failure must never
-    // surface under beta. Widen first so the canvas roster can receive a
-    // real click while the detail stays open.
-    window.resize(1200, 800);
-    QCoreApplication::processEvents();
-    click_agent_canvas_row(window, 1);
-    require(shell.selection_state().selected_agent_directory_key()
-                == std::optional<fs::path>("beta"),
-        "beta must be selected while the alpha control command is pending");
-    wait_for_control_done();
-    require(status->text() != success_status
-            && status->text() != failure_status,
-        "an old alpha completion must not surface as a success or failure "
-        "under the later-selected beta");
-
-    // Away-and-back isolation: returning to alpha while the next command is
-    // still pending must also discard the stale completion.
-    click_agent_canvas_row(window, 0);
-    remove_control_done();
-    submit_command(QStringLiteral("/refresh codex-preset"));
-    click_agent_canvas_row(window, 1);
-    click_agent_canvas_row(window, 0);
-    require(shell.selection_state().selected_agent_directory_key()
-                == std::optional<fs::path>("alpha"),
-        "the away-and-back re-selection must leave alpha selected");
-    wait_for_control_done();
-    require(status->text() != success_status
-            && status->text() != failure_status,
-        "an old alpha completion must not surface as a success or failure "
-        "after an away-and-back re-selection");
-
-    // The exact successful refresh outcome is shown only when the project,
-    // Agent, and generation still match.
-    remove_control_done();
-    submit_command(QStringLiteral("/refresh codex-preset"));
-    wait_for_control_done();
-    require(status->text() == success_status,
-        "a matching project/Agent/generation must show the exact successful "
-        "refresh outcome after the callback");
-    require(read_file(control_argv) == exact_control_argv
-            + exact_control_argv + exact_control_argv,
-        "the journey must have invoked the fake control executable exactly "
-        "three times with identical exact separate argv");
-
-    click_agent_canvas_row(window, 1);
-    require(shell.selection_state().selected_agent_directory_key()
-            == std::optional<fs::path>("beta")
-            && input->isEnabled() && !send_button->isEnabled(),
-        "the stale beta fixture must be selected before CPR command checks");
-    submit_command(QStringLiteral("/btw hello from beta"));
+    submit_command(QStringLiteral("/sleep later"));
     require(status->text()
-            == QStringLiteral("Agent is not running. Try /refresh first."),
-        "raw /btw on a not-running Agent must match the TUI not-running status");
-    require(!fs::exists(beta / ".inquiry"),
-        "raw /btw on a not-running Agent must write no inquiry");
-    const auto unavailable = QStringLiteral(
-        "Command not available in this Desktop build.");
-    for (const auto &command : {
-             QStringLiteral("/sleep all"), QStringLiteral("/cpr all"),
-             QStringLiteral("/sleep later"), QStringLiteral("/cpr later")}) {
-        submit_command(command);
-        require(input->getLastText().isEmpty(),
-            "argument-bearing lifecycle commands must remain commands and "
-            "clear the composer");
-        require(outbox_leaf_count() == 0,
-            "argument-bearing lifecycle commands must stay local and create "
-            "no human outbox leaf");
-        require(status->text() == unavailable,
-            "all and other lifecycle arguments must report the exact "
-            "unavailable-in-this-build status");
-    }
-    require(!fs::exists(beta / ".sleep") && !fs::exists(beta_argv),
-        "argument-bearing /sleep and /cpr must neither signal nor launch beta");
+            == QStringLiteral("Invalid lifecycle command arguments."),
+        "an unsupported sleep argument must be rejected by the lifecycle matrix");
+    submit_command(QStringLiteral("/clear all"));
+    require(status->text()
+            == QStringLiteral("Invalid lifecycle command arguments."),
+        "clear all must remain outside the approved lifecycle matrix");
 
-    submit_command(QStringLiteral("/definitely-unknown"));
-    require(input->getLastText().isEmpty(),
-        "an unknown slash command must remain a command and clear the composer");
-    require(outbox_leaf_count() == 0,
-        "an unknown slash command must stay local and create no outbox leaf");
-    require(status->text() == unavailable,
-        "an unknown slash command must keep the exact unavailable status");
-    require(!fs::exists(beta / ".sleep") && !fs::exists(beta_argv),
-        "an unknown slash command must create no Agent lifecycle signal");
-
-    const auto cpr_started = std::chrono::steady_clock::now();
-    submit_command(QStringLiteral("/cpr"));
-    const auto cpr_elapsed = std::chrono::steady_clock::now() - cpr_started;
-    require(input->getLastText().isEmpty(),
-        "raw /cpr must clear the composer after local submission");
-    require(outbox_leaf_count() == 0,
-        "raw /cpr on stale beta must stay local and create no outbox leaf");
-    require(cpr_elapsed < std::chrono::seconds(1),
-        "raw empty-form /cpr must return promptly through the existing Start "
-        "owner, never blocking the composer");
-    require(start_status->text() == QStringLiteral("Starting Agent..."),
-        "raw empty-form /cpr on stale beta must show the existing Start "
-        "owner's exact pending status");
-    require(!fs::exists(beta / ".sleep"),
-        "raw empty-form /cpr must not create a sleep signal");
-
-    const auto argv_deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (!fs::exists(beta_argv)
-            && std::chrono::steady_clock::now() < argv_deadline) {
-        QThread::msleep(20);
-    }
-    require(fs::exists(beta_argv),
-        "raw empty-form /cpr must invoke beta's configured fixture runtime");
-    const auto exact_beta_argv = QStringLiteral("-m\nlingtai\nrun\n%1\n")
-        .arg(path_text(fs::canonical(beta))).toStdString();
-    require(read_file(beta_argv) == exact_beta_argv,
-        "raw empty-form /cpr argv must be the exact separate four lines -m, "
-        "lingtai, run, and beta's absolute canonical directory");
-
-    submit_command(QStringLiteral("/quit"));
-    require(input->getLastText().isEmpty(),
-        "raw /quit must clear the composer after local submission");
-    require(outbox_leaf_count() == 0,
-        "raw /quit must stay local and create no human outbox leaf");
-    require(!fs::exists(beta / ".sleep")
-            && read_file(beta_argv) == exact_beta_argv,
-        "raw /quit must create no additional Agent lifecycle signal");
-    require(!window.isVisible(),
-        "raw /quit must close the real Desktop window locally");
-
-    std::error_code cleanup_error;
-    fs::remove_all(sandbox, cleanup_error);
-    require(!cleanup_error, "slash-interception fixtures must be removed");
+    std::error_code early_cleanup_error;
+    fs::remove_all(sandbox, early_cleanup_error);
+    require(!early_cleanup_error, "slash-interception fixtures must be removed");
 }
 
 // The Stage-1 two-surface shell contract on the single light canvas: every

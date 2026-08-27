@@ -1,9 +1,7 @@
 #pragma once
 
-#include "agent_command_runner.h"
-#include "agent_launch.h"
+#include "agent_lifecycle.h"
 #include "agent_projection.h"
-#include "agent_sleep.h"
 #include "agent_setup_store.h"
 #include "conversation_session.h"
 #include "conversation_unread.h"
@@ -131,6 +129,12 @@ public:
     // when a selected Agent's own `init.json.venv_path` is absent or its
     // platform Python does not exist. Defaults to an empty path.
     void set_agent_start_fallback_python(std::filesystem::path fallback_python);
+    // Deterministic lifecycle seam for the native-shell contract. Empty/default
+    // production dependencies restore real process, launch, clock, and timer
+    // adapters; replacing it cancels only the old controller's pending UI
+    // delivery and never attempts lifecycle rollback.
+    void set_agent_lifecycle_dependencies(
+        AgentLifecycleDependencies dependencies);
     [[nodiscard]] ProjectOpenOutcome open_project(
         const std::filesystem::path &selected_directory,
         const std::optional<std::filesystem::path> &agent_relative_directory
@@ -233,12 +237,12 @@ private:
         const DirectConversationAttachmentRequest &request, bool reveal);
     void handle_send_message();
     void handle_agent_selection(const std::filesystem::path &directory_key);
-    // The one selected-Agent lifecycle slash owner for `/suspend`, `/clear`,
-    // and `/refresh [preset]`, dispatched through the one owned
-    // AgentCommandRunner.
+    // The one Desktop-owned lifecycle slash owner for `/sleep`, `/suspend`,
+    // `/cpr`, `/clear`, and `/refresh`, including their supported Main/all
+    // forms. No lifecycle path invokes the TUI.
     void handle_lifecycle_command(const std::string &name,
         const std::string &args);
-    void handle_lifecycle_finished(AgentCommandResult result);
+    void handle_lifecycle_finished(AgentLifecycleResult result);
     // TUI `/btw`, `/insights`, `/goal`, `/export`, and `/molt`: stay on the
     // conversation and write the same `.inquiry` / `.prompt` /
     // `.notification/system.json` signals. Returns true when the name is
@@ -249,10 +253,8 @@ private:
     void bump_lifecycle_generation() noexcept;
     void render_agent_sleep_status();
     void handle_request_sleep();
-    void tick_agent_sleep_observation();
     void render_agent_start_status();
     void handle_start_agent();
-    void tick_agent_start_observation();
     // Telegram's one mode recompute: derives OneColumn vs Normal from the
     // body's available column space on every real resize, and shows exactly
     // one full-width surface (roster or selected detail + Back) below the
@@ -278,27 +280,6 @@ private:
     [[nodiscard]] ProjectOpenOutcome show_open_error(
         ProjectPathFailure failure,
         std::string message);
-
-    // The one action-local pending sleep observation for at most three
-    // wall-clock seconds after a successful write; discarded whenever the
-    // project or Agent selection changes, and never persisted. It is not a
-    // command ledger.
-    struct SleepObservation {
-        std::filesystem::path project_root, directory_key;
-        AgentSleepEventBaseline baseline;
-        std::chrono::steady_clock::time_point deadline;
-    };
-
-    // The one action-local pending Start observation for at most ten
-    // wall-clock seconds after a successful detached start; discarded
-    // whenever the project or Agent selection changes, and never
-    // persisted. Success is proven solely by the sole `project_agents`
-    // projection later reporting this exact selection `alive`; there is no
-    // separate heartbeat baseline or second reader.
-    struct StartObservation {
-        std::filesystem::path project_root, directory_key;
-        std::chrono::steady_clock::time_point deadline;
-    };
 
     WorkspaceSelectionState selection_state_;
     RuntimeOptions runtime_options_;
@@ -376,20 +357,15 @@ private:
     MailboxSnapshotReadFunction mailbox_snapshot_read_function_ =
         read_direct_mailbox_snapshot;
     std::filesystem::path agent_start_fallback_python_;
-    // One narrow injectable dependency: the configured TUI executable used by
-    // the explicit New Project flow and the selected-Agent lifecycle commands.
+    // The configured TUI executable belongs only to explicit New Project
+    // bootstrap. Lifecycle commands never read or launch it.
     std::filesystem::path tui_executable_;
-    // The one selected-Agent lifecycle owner: one global pending command at a
-    // time through exact separate argv, with the start-time project root,
-    // Agent key, and generation compared before any completion surfaces.
-    AgentCommandRunner command_runner_;
+    // One serial nonblocking Desktop lifecycle owner. Its structured result
+    // carries the start-time project/generation for stale-delivery rejection.
+    std::unique_ptr<AgentLifecycleController> lifecycle_controller_;
     // The one current selection-generation epoch, bumped on every real
     // project open, successful Agent selection, and Back/selection clear.
     std::uint64_t selection_generation_ = 0;
-    // The one accepted lifecycle action awaiting its single callback, so the
-    // terminal status names the exact signaled command without re-parsing the
-    // runner's captured output.
-    std::string pending_lifecycle_action_;
     // The one async owner of the headless `presets`/`spawn` subprocess calls.
     // Owned by the shell; no PID, lock, retry, or rollback machinery.
     std::unique_ptr<ProjectBootstrapRunner> bootstrap_runner_;
@@ -420,8 +396,6 @@ private:
     // same stateless snapshot reader every second, and owns no cursor/offset
     // state of its own.
     QTimer *activity_timer_ = nullptr;
-    std::optional<SleepObservation> pending_sleep_observation_;
-    std::optional<StartObservation> pending_start_observation_;
     // The one compact selected-Agent page navigation: exactly one nav control
     // per AgentDetailPage, wired by the shell to `show_detail_page`. The
     // secondary section owners that the nav reveals are captured in the
