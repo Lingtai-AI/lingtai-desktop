@@ -93,6 +93,13 @@ touches a real Agent or project, and none depends on a network or provider.
   and empty fail-closed behavior under one injected fixture root.
 - `tests/agent_sleep_test.cpp` — `agent_sleep` ctest. Exact-target `.sleep`
   marker write plus the baseline/observe pair.
+- `tests/agent_lifecycle_test.cpp` — `agent_lifecycle` ctest. Deterministic
+  signal/path safety, target/argument matrix, advisory leases, exact-process
+  matching and escalation, every lifecycle flow/timeout, preset validation,
+  clear completion, aggregate results, and generation binding.
+- `tests/agent_lifecycle_real_smoke.cpp` — manually invoked acceptance harness.
+  Drives the production controller, process adapter, and detached launcher
+  against disposable real kernel Agents under a fake HOME and TUI-free PATH.
 - `tests/kanban_model_test.cpp` — `kanban_model` ctest. Full semantic facts
   plus deterministic incremental counters for unchanged cycles, four growing
   JSONL sources, full-read/cursor-capture races, partial/reset handling,
@@ -228,8 +235,10 @@ no fixture); the test itself creates and removes its sandbox within that root
 | `agent_setup_store_test.cpp` | `lingtai_agent_setup_store_test` | `agent_setup_store` | `agent-setup-store-fixture` |
 | `tui_executable_resolver_test.cpp` | `lingtai_tui_executable_resolver_test` | `tui_executable_resolver` | `tui-executable-resolver-fixture` |
 | `agent_sleep_test.cpp` | `lingtai_agent_sleep_test` | `agent_sleep` | `agent-sleep-fixture` |
+| `agent_lifecycle_test.cpp` | `lingtai_agent_lifecycle_test` | `agent_lifecycle` | `agent-lifecycle-fixture` |
+| `agent_lifecycle_real_smoke.cpp` | `lingtai_agent_lifecycle_real_smoke` | manual only | caller-owned isolated project root |
 | `kanban_model_test.cpp` | `lingtai_kanban_model_test` | `kanban_model` | `kanban-model-fixture` |
-| `native_shell_test.cpp` | `lingtai_native_shell_test` | `native_shell_behavior` | `native-shell-no-write-fixture` (CMake-created) |
+| `native_shell_test.cpp` | `lingtai_native_shell_test` | split `native_shell_<journey>` tests, including `native_shell_lifecycle` | per-journey CMake fixture |
 | `native_shell_test.cpp` (paste journey) | `lingtai_native_shell_test` | `native_shell_paste` | `native-shell-paste-fixture` (CMake-created) |
 | `native_shell_destinations_test.cpp` | `lingtai_native_shell_destinations_test` | `native_shell_destinations` | — |
 | `native_shell_presets_test.cpp` | `lingtai_native_shell_presets_test` | `native_shell_presets` | `native-shell-presets-fixture` (CMake-created) |

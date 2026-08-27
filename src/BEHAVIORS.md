@@ -70,17 +70,15 @@ its code.
   text before the ordinary trim/mail path. Every parsed command clears the
   composer and returns through local dispatch, so unknown, unavailable, and
   argument-bearing commands never reach `send_direct_mail`.
-- The argument-free current surfaces are exact and case-sensitive: `/presets`
+- The navigation surfaces are exact and case-sensitive: `/presets`
   selects the existing Presets page; `/agents` uses the existing narrow Back
   path or, in the wide two-column view, preserves selection and focuses its
-  existing roster row; `/sleep` and `/cpr` reuse the existing selected-Agent
-  Request sleep and Start owners and their status surfaces; `/help` reports only
-  `/agents`, `/presets`, `/sleep`, `/cpr`, `/help`, and `/quit`; `/quit` closes
-  only the Desktop window.
-- Every other parsed command, including every argument-bearing form (such as
-  `/sleep all` and `/cpr all`) and later lifecycle command, stays local, sets
-  exactly `Command not available in this Desktop build.`, and performs no mail
-  or Agent lifecycle side effect.
+  existing roster row. `/sleep`, `/suspend`, `/cpr`, `/clear`, and `/refresh`
+  dispatch through the Desktop lifecycle controller; `/help` names them and
+  `/quit` closes only the Desktop window.
+- Lifecycle arguments follow the exact matrix: `all` is accepted for sleep,
+  suspend, CPR, and refresh; clear is single-target; a named refresh preset is
+  single-target. Invalid forms stay local and perform no lifecycle side effect.
 
 ## State and selection
 
@@ -370,44 +368,22 @@ its code.
   yet published`/`Stale`/`Unavailable` state. Every observation is shown
   exactly as read (no last-valid preservation).
 
-## Request sleep
+## Agent lifecycle
 
-- Empty-form exact case-sensitive `/sleep` clears the composer status and calls
-  only the existing selected-Agent Request sleep handler, reusing its
-  `request_agent_sleep` owner, eligibility, observation, and status surface.
-  The Request sleep moon control is not shown in the selected-Agent header.
-- Eligibility at invocation time: valid manifest, main/agent role, `alive`
-  presence, and a known `.agent.json.state` other than `asleep`/`suspended`.
-- The shared handler reruns `project_agents` once, captures a log baseline,
-  writes the `.sleep` marker, shows exactly `Sleep requested.`, disables the
-  button, and
-  observes for at most 3 s via the existing timer. Terminal text reports
-  whether `sleep_received(source="signal_file")` was observed and the
-  re-projected current state — never `queued` or a lifecycle verdict from the
-  write/timeout alone. Anchor: `tests/agent_sleep_test.cpp` /
-  `agent_sleep` ctest.
-
-## Start Agent
-
-- Empty-form exact case-sensitive `/cpr` clears the composer status and calls
-  only the existing selected-Agent Start handler, reusing its `start_agent`
-  owner, eligibility, observation, and status surface.
-- The Start action is not shown in the selected-Agent header. Empty-form
-  `/cpr` is the product affordance; the hidden Start owner still enables
-  for a valid main/agent row with a stale or missing heartbeat so slash
-  dispatch can reuse it. If the shared handler's fresh re-read instead finds the
-  selected row heartbeat-live, it reports exactly `Agent is already online.`;
-  missing, nonselected, and other ineligible cases keep their existing behavior.
-- The shared handler reruns `project_agents` once, then starts
-  `<python> -m lingtai run <agent-dir>` detached and shell-free, redirecting
-  stdout/stderr to the Agent's own `logs/agent.log` (created first). It shows
-  `Starting Agent...` and observes for at most 10 s: success is proven only
-  by the projection later reporting this exact selection `alive`
-  (`Agent is online.`), otherwise `Agent did not come online. See
-  <agent>/logs/agent.log.`. A local refusal shows `Could not start Agent. See
-  <agent>/logs/agent.log.` immediately. Anchor:
-  `tests/native_shell_test.cpp` (`native_shell_behavior` ctest) exercises the
-  shell composition that hosts this control.
+- Every command refreshes the Agent snapshot at dispatch, resolves the selected
+  non-human Agent or Main fallback, and returns immediately. A short controller
+  timer advances explicit deadlines; no sleep/wait runs on the UI thread.
+- Sleep distinguishes marker write from kernel application. Suspend waits for
+  both heartbeat and exact process death. CPR refuses duplicate-live evidence,
+  waits for the real advisory lease, launches directly, and requires a fresh
+  heartbeat. Dead clear temporarily revives, observes molt/event completion,
+  then suspends. Refresh validates the preset before suspend, proves lease
+  release, escalates only exact matching processes, cleans stale handshakes,
+  atomically updates active preset, relaunches, and verifies a fresh heartbeat.
+- `all` targets run serially and return one aggregate retaining every failure's
+  Agent and phase. Results carry project/selection generation; late results are
+  suppressed after any selection transition. Lifecycle never invokes TUI.
+  Anchors: `agent_lifecycle`, `native_shell_lifecycle`.
 
 ## Test anchors
 

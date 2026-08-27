@@ -158,10 +158,16 @@ Direct-operation/side-effect owners (the only writers/launchers):
   temp-then-renamed `message.json` last; success returns only the stamped
   message and descriptor-established copied-file facts needed for immediate
   session presentation, while failures roll back that owned leaf.
-- `agent_sleep.{h,cpp}` — `request_agent_sleep`: creates/truncates one
-  `.sleep` marker; plus the best-effort `sleep_received` baseline/observe pair.
-- `agent_launch.{h,cpp}` — `start_agent`: one detached, shell-free
-  `<python> -m lingtai run <dir>` start with `logs/agent.log` redirection.
+- `agent_signal.{h,cpp}` — descriptor-relative/no-follow fixed-content
+  lifecycle marker writer/remover shared by sleep and the controller.
+- `agent_sleep.{h,cpp}` — sleep event baseline/observation plus the
+  compatibility `.sleep` request wrapper.
+- `agent_process.{h,cpp}` — platform adapter for exact runtime argv discovery
+  and PID-revalidated TERM/KILL.
+- `agent_launch.{h,cpp}` — secure configured-runtime resolution and detached,
+  shell-free `<python> -m lingtai run <dir>` launch with PID/log outcome.
+- `agent_lifecycle.{h,cpp}` — target and argument policy plus the timer-driven
+  sleep/suspend/CPR/clear/hard-refresh state machine.
 - `project_bootstrap.{h,cpp}` — `ProjectBootstrapRunner`: async, shell-free
   owner of the two headless TUI calls `<exe> presets` and
   `<exe> spawn <dir> --preset <name>` with exact separate argv.
@@ -193,8 +199,7 @@ keeps the parent summary):
   `project_agents`, `resolve_direct_conversation_route`,
   `parse_slash_command`, the shared mailbox fingerprint/snapshot projection,
   `send_direct_mail`,
-  `read_agent_preset_summary`,
-  `request_agent_sleep` + the baseline/observe pair, `start_agent`, and the
+  `read_agent_preset_summary`, `AgentLifecycleController`, and the
   `ProjectBootstrapRunner` calls, and `AgentSetupStore` for the selected-Agent
   `/setup` route. The click handlers rerun `project_agents`
   once at the click boundary and update the sole `agents_` snapshot.
@@ -204,7 +209,8 @@ keeps the parent summary):
   the model performs no reads.
 - Readers → `posix_internal`: `agent_projection`, `direct_conversation_history`,
   `direct_mail_publisher`,
-  `agent_preset_summary`, and `agent_sleep` all consume the shared
+  `agent_preset_summary`, `agent_signal`, `agent_sleep`, `agent_launch`, and
+  `agent_lifecycle` consume the shared
   descriptor primitives as a private dependency. `project_attachment` and
   `workspace_selection` do not (pure `std::filesystem`/state), while
   `attachment_selection` opens arbitrary caller-selected absolute sources
@@ -235,6 +241,9 @@ Owned library targets (`CMakeLists.txt`) and their source membership:
 - `lingtai_desktop_tui_executable` — `tui_executable_resolver.cpp`.
 - `lingtai_desktop_agent_sleep` — `agent_sleep.cpp`.
 - `lingtai_desktop_agent_launch` — `agent_launch.cpp`.
+- `lingtai_desktop_agent_signal` — `agent_signal.cpp`.
+- `lingtai_desktop_agent_lifecycle` — `agent_lifecycle.cpp`,
+  `agent_process.cpp`.
 - `lingtai_desktop_kanban` — `kanban_model.cpp`.
 - `lingtai_desktop_native_shell` — `native_shell.cpp`,
   `agent_detail_view.cpp`, `attachment_thumbnail.cpp`,

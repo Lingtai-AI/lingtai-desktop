@@ -103,6 +103,11 @@ bounded side-effect scope):
 - `start_agent(attachment, key, fallback_python)` → `AgentLaunchResult`
   (`agent_launch.h`) — owns the Agent's `logs/agent.log` plus the detached
   launch.
+- `AgentLifecycleController::run(request, done)` (`agent_lifecycle.h`) — the
+  single nonblocking owner for target/Main/`all` resolution, fixed marker
+  writes, real advisory-lease observation, exact process escalation, direct
+  launch/fresh-heartbeat proof, dead-Agent clear, and atomic refresh preset
+  updates. Results are phase-specific and generation-bound.
 - `ProjectBootstrapRunner::run_presets` / `run_spawn`
   (`project_bootstrap.h`) — delegates the entire first-project scaffold/config
   boundary to the TUI headless surface.
@@ -186,7 +191,9 @@ coalescing, and stale-while-revalidate presentation.
    missing, replaced, linked, non-regular, escaping, or identity-mismatched
    files fail closed.
 3. **Publishers/launchers own side effects.** Only `send_direct_mail`,
-   `request_agent_sleep`, `start_agent`, `AgentSetupStore` (composed by the
+   `AgentLifecycleController` (using `write_agent_signal` and `launch_agent`),
+   the compatibility `request_agent_sleep` / `start_agent` seams,
+   `AgentSetupStore` (composed by the
    shell's selected-Agent `/setup` route), and
    `ProjectBootstrapRunner` write or launch. Direct mail `queued` means only
    that the complete human outbox leaf
@@ -198,10 +205,9 @@ coalescing, and stale-while-revalidate presentation.
    application-lifetime prerequisites before `AgentDetailView` can construct
    the composer. It also owns the composer-local dispatch after calling
    `parse_slash_command` on raw text: every parsed command terminates locally
-   before `send_direct_mail`. U2 lifecycle slash dispatch may invoke only the
-   existing `request_agent_sleep` and `start_agent` owners through their
-   existing selected-Agent handlers; `NativeShell` does not reimplement their
-   lifecycle behavior, and this composition changes no public interface.
+   before `send_direct_mail`. `/sleep`, `/suspend`, `/cpr`, `/clear`, and
+   `/refresh` dispatch only through the owned `AgentLifecycleController`;
+   `tui_executable_` is bootstrap-only and absent from lifecycle dispatch.
 5. **UI widgets do not absorb domain/business behavior.** `AgentRoster`
    renders rows and reports clicks; `ConversationSurface` renders rows and
    paints bubbles; `AgentDetailView` owns only the composer draft,

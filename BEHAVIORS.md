@@ -13,10 +13,10 @@ restate per-owner behavior; owner-level detail lives in `src/`, `src/ui/`, and
   behavior, and never imports Telegram account, protocol, chat, message,
   media, contact, cache, or high-level UI code, and never links or depends on
   the Telegram product.
-- **TUI** (`lingtai-tui`) is the *functional oracle*: subprocess argv,
-  envelope/mailbox schema, sleep-marker protocol, preset/spawn JSON contract,
-  and launch redirection semantics are validated against the canonical TUI
-  headless surface, not re-derived by Desktop.
+- **TUI** (`lingtai-tui`) is a *functional reference*, not a lifecycle runtime
+  dependency: envelope/mailbox and first-project preset/spawn behavior are
+  compared against it, while Desktop directly implements kernel marker,
+  lease, process, heartbeat, clear, preset, and launch contracts.
 - **Desktop** is the *Qt adaptation*: it adapts Qt 6.11.1 + the pinned
   `desktop-app::lib_ui` to LingTai's on-disk project model, owning none of
   Telegram's or the kernel's protocol/business logic.
@@ -38,10 +38,11 @@ restate per-owner behavior; owner-level detail lives in `src/`, `src/ui/`, and
   code; `desktop-app::lib_ui` is built unmodified from locked sources. Guarded
   by `AGENTS.md` scope rule and the `lingtai_desktop_native_shell` link set in
   `CMakeLists.txt`; enforced at review, not by a dedicated test.
-- **Repro-4 — Kernel boundary is filesystem + subprocess only.** The
+- **Repro-4 — Kernel boundary is filesystem + exact runtime process only.** The
   repository never links the `lingtai` Python package; kernel contact is
-  exclusively on-disk `.lingtai` artifacts plus the exact-argv
-  `lingtai-tui`/`python -m lingtai run` subprocesses. Enforced by link graph
+  exclusively on-disk `.lingtai` artifacts, advisory lock/process observation,
+  and exact-argv `python -m lingtai run`. TUI is used only for New Project.
+  Enforced by link graph
   (`CMakeLists.txt:169-308`) and review.
 - **Repro-4a — Finder launch resolves the installed TUI without a shell.**
   Normal `ShellHost` composition checks injected inherited PATH order, a valid
@@ -54,11 +55,9 @@ restate per-owner behavior; owner-level detail lives in `src/`, `src/ui/`, and
   `read_agent_preset_summary`,
   `resolve_direct_conversation_route`) is `noexcept` and writes no project
   tree, proven per seam by its C++ contract test below.
-- **Repro-6 — No pending-observation lies.** A Request-sleep or Start-Agent
-  result observed after a project/selection change can never surface under a
-  different selection. Proven by `tests/agent_sleep_test.cpp` (ctest
-  `agent_sleep`) and `tests/native_shell_test.cpp` (ctest
-  `native_shell_behavior`).
+- **Repro-6 — No pending-lifecycle lies.** A lifecycle result observed after a
+  project/selection generation change can never surface under the later
+  selection. Proven by `agent_lifecycle` and `native_shell_lifecycle`.
 
 ## Test / oracle routing
 
@@ -79,6 +78,8 @@ restate per-owner behavior; owner-level detail lives in `src/`, `src/ui/`, and
 | Presets summary projection | `tests/agent_preset_summary_test.cpp` (`agent_preset_summary`) | `ctest --test-dir build -R '^agent_preset_summary$'` |
 | Global preset catalog projection | `tests/preset_catalog_test.cpp` (`preset_catalog`) | `ctest --test-dir build -R '^preset_catalog$'` |
 | Sleep marker + observation | `tests/agent_sleep_test.cpp` (`agent_sleep`) | `ctest --test-dir build -R '^agent_sleep$'` |
+| Desktop lifecycle matrix/state machine/process safety | `tests/agent_lifecycle_test.cpp` (`agent_lifecycle`) | `ctest --test-dir build -R '^agent_lifecycle$'` |
+| No-TUI dispatch + stale UI delivery | `tests/native_shell_test.cpp` (`native_shell_lifecycle`) | `ctest --test-dir build -R '^native_shell_lifecycle$'` |
 | Incremental Kanban snapshot/index | `tests/kanban_model_test.cpp` (`kanban_model`) | `ctest --test-dir build -R '^kanban_model$'` |
 | Kanban SWR/single-flight generation | `tests/native_shell_test.cpp` (`native_shell_kanban`) | `ctest --test-dir build -R '^native_shell_kanban$'` |
 | Repro-6 stale-observation rule | `tests/agent_sleep_test.cpp`, `tests/native_shell_test.cpp` | ctest names above |

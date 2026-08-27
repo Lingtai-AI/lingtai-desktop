@@ -116,12 +116,19 @@ resolution order and preserves an accepted symlink path.
 - `src/kanban_model.{h,cpp}` + `src/kanban_page.{h,cpp}` — session-owned
   incremental Kanban source index and its stale-while-revalidate presentation;
   the shell supplies the one coalesced low-priority worker.
-- `src/agent_sleep.{h,cpp}` — `request_agent_sleep` /
-  `capture_agent_sleep_event_baseline` / `observe_agent_sleep_received`
-  (`src/agent_sleep.h:24-51`): one `.sleep` leaf write + best-effort
-  observation.
-- `src/agent_launch.{h,cpp}` — `start_agent` (`src/agent_launch.h:26`): one
-  detached `<python> -m lingtai run <dir>` start.
+- `src/agent_signal.{h,cpp}` — descriptor-relative, no-follow fixed-content
+  lifecycle marker writes/removals. `.clear` is exactly `desktop\n`; unsafe
+  keys, symlinks, and non-regular leaves fail closed.
+- `src/agent_sleep.{h,cpp}` — sleep event baseline/observation plus the
+  compatibility `request_agent_sleep` wrapper over `agent_signal`.
+- `src/agent_process.{h,cpp}` — exact argv discovery and revalidated TERM/KILL
+  for only `python -m lingtai run <canonical-agent-dir>`.
+- `src/agent_launch.{h,cpp}` — secure configured-runtime resolution and one
+  detached `<python> -m lingtai run <dir>` launch with PID/log facts.
+- `src/agent_lifecycle.{h,cpp}` — target/Main/`all` policy and the serial,
+  timer-driven `/sleep`, `/suspend`, `/cpr`, `/clear`, `/refresh` state machine,
+  including lease waits, preset updates, clear completion, hard-refresh
+  escalation, aggregate results, and generation binding.
 - `src/project_bootstrap.{h,cpp}` — `ProjectBootstrapRunner`
   (`src/project_bootstrap.h:54`): async exact-argv `presets`/`spawn` headless
   TUI calls + JSON parse.
@@ -146,7 +153,8 @@ Each C++ contract executable maps to one ctest name (declared in
 `CMakeLists.txt`): `project_attachment`, `attachment_selection`, `agent_projection`,
 `direct_conversation_route`, `direct_conversation_history`,
 `direct_mail_publisher`,
-`agent_preset_summary`, `agent_setup_store`, `agent_sleep`,
+`agent_preset_summary`, `agent_setup_store`, `agent_signal`, `agent_sleep`,
+`agent_process`, `agent_launch`, `agent_lifecycle`,
 `posix_descriptor_primitives`,
 `workspace_selection`, `native_shell_behavior`, plus the Python gates
 `native_shell` (process persistence + smoke-order, `tests/test_native_shell.py`)
@@ -166,18 +174,21 @@ subprocess surfaces. Producer-side contracts live in the kernel repo
   `init.json` — read by `agent_projection` / `agent_launch`.
 - `.lingtai/<human key>/mailbox/{inbox,sent,outbox}` — read/written by
   `direct_conversation_history` / `direct_mail_publisher`.
-- `.lingtai/<key>/logs/events.jsonl` — read by `agent_sleep` (sleep
-  observation) as the selected Agent's own event journal.
+- `.lingtai/<key>/logs/events.jsonl` — bounded suffix read by lifecycle sleep
+  and clear completion observation.
 - `.lingtai/<key>/system/manifest.resolved.json` — read by
   `agent_preset_summary`.
-- `.lingtai/<key>/.sleep` — the one sleep leaf written by `agent_sleep`.
+- `.lingtai/<key>/{.sleep,.suspend,.clear,.refresh,.refresh.taken}` — fixed
+  lifecycle signal/cleanup leaves; `.agent.lock`, heartbeat, manifest, and
+  molt count are observed by `agent_lifecycle`.
 
 ## Composition and state
 
 The root composes `src/` (owned Qt adaptation), `tests/` (owned contracts),
 `scripts/` + `cmake/` (build governance), and external `.deps/`/Qt inputs.
 Persistent Desktop state is deliberately minimal: the one composer outbox
-leaf, the one `.sleep` marker, the started Agent's own `logs/` directory, and
-an explicit setup transaction's bounded existing-Agent configuration leaves;
+leaf, fixed lifecycle markers, an authorized refresh's atomic active-preset
+update, the started Agent's own `logs/` directory, and an explicit setup
+transaction's bounded existing-Agent configuration leaves;
 the shell performs no implicit project, registry, or settings writes. No Telegram
 account, protocol, chat, message, media, contact, or cache state exists here.

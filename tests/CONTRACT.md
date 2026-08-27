@@ -127,12 +127,18 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   PATH/home/system inputs and candidate files live below one injected fixture,
   with no process environment mutation or host installation dependency.
 - `tests/agent_sleep_test.cpp` — `agent_sleep`.
+- `tests/agent_lifecycle_test.cpp` — `agent_lifecycle`; the complete
+  Desktop-owned lifecycle component contract with injected process, launcher,
+  and clock adapters.
 - `tests/kanban_model_test.cpp` — `kanban_model`; complete-board parity plus
   deterministic payload/cursor/daemon incrementality counters and rebuild
   generation-race/capture-incapability liveness seams.
-- `tests/native_shell_test.cpp` — `native_shell_behavior` (links the shell +
+- `tests/native_shell_test.cpp` — split `native_shell_<journey>` tests (links the shell +
   `lib_ui` + `crl_integration.cpp`; the real-Qt layer), including the focused
-  synthetic existing-Agent setup rerun and `native_shell_paste` journeys. The
+  synthetic existing-Agent setup rerun, `native_shell_paste`, and
+  `native_shell_lifecycle` journeys. Lifecycle UI coverage includes
+  nonblocking delivery, stale-generation suppression, and a configured
+  executable sentinel that must remain uninvoked. The
   paste journey delivers logical text through a real MIME-carrying Qt event,
   then proves exact Unicode editor state, emoji input-method formatting,
   ordinary Send, and two-shell runtime sharing without accessing `QClipboard`.

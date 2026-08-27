@@ -28,6 +28,7 @@ ctest --test-dir build --output-on-failure -R '^agent_preset_summary$'
 ctest --test-dir build --output-on-failure -R '^preset_catalog$'
 ctest --test-dir build --output-on-failure -R '^tui_executable_resolver$'
 ctest --test-dir build --output-on-failure -R '^agent_sleep$'
+ctest --test-dir build --output-on-failure -R '^agent_lifecycle$'
 ctest --test-dir build --output-on-failure -R '^kanban_model$'
 ctest --test-dir build --output-on-failure -R '^posix_descriptor_primitives$'
 ctest --test-dir build --output-on-failure -R '^workspace_selection$'
@@ -149,6 +150,12 @@ Qt plugin path set and an 8 s watchdog.
   post-baseline complete row is, and symlinked/non-regular leaves or
   intermediate directories fail closed with nothing written outside
   (`agent_sleep_test.cpp:90-233`).
+- `agent_lifecycle` proves the complete command matrix and Desktop-owned
+  nonblocking protocol: descriptor/no-follow markers, held/free/stale advisory
+  locks, exact argv process safety, TERM/KILL bounds, CPR launch outcomes,
+  live/dead clear completion, default/allowed refresh presets, per-phase
+  timeouts, and aggregate `all` results. `native_shell_lifecycle` additionally
+  proves stale UI result suppression and absence of lifecycle TUI invocation.
 - `kanban_model` proves complete cold-board semantics and deterministic
   incremental behavior: two unchanged generations open zero payloads and do
   not enumerate daemon runs; token/event/chat/delegate appends consume only

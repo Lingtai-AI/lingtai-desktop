@@ -44,8 +44,9 @@ its folder.
   `project_agents`, `resolve_direct_conversation_route`,
   `read_direct_conversation`, `revalidate_direct_conversation_attachment`,
   `send_direct_mail`,
-  `read_agent_preset_summary`, `load_preset_catalog`, `request_agent_sleep`
-  (+ its two observation functions), `start_agent`, `AgentSetupStore`,
+  `read_agent_preset_summary`, `load_preset_catalog`, `write_agent_signal`,
+  `request_agent_sleep` (+ its two observation functions), `launch_agent`,
+  `AgentLifecycleController`, `AgentSetupStore`,
   `ProjectBootstrapRunner`.
 - `NativeShell` is the one composition root C5 owns; it proposes transitions
   only through `WorkspaceSelectionState`. It also owns the injectable
@@ -59,19 +60,25 @@ its folder.
 - Desktop has **no link edge** into the `lingtai` kernel package (no Python
   import, no protocol, no account). Its interface is on-disk artifacts under
   an accepted `.lingtai` project, the exact configured env leaf named by a
-  selected Agent's bounded `init.json`, plus two subprocess surfaces.
+  selected Agent's bounded `init.json`, advisory lock/process observation,
+  and the exact detached kernel-runtime launch.
 - Producer-side artifact contracts live in the kernel repo and are normative
   for shape: the append-only `logs/events.jsonl` journal
   (`src/lingtai/kernel/event_journal/CONTRACT.md`), the mailbox envelope,
-  `system/manifest.resolved.json`, and the `.sleep`
+  `system/manifest.resolved.json`, lifecycle markers, heartbeat, lock, and
+  context-completion artifacts.
   marker. Outside an explicit `AgentSetupStore` save, Desktop reads Agent
-  configuration read-only; its other writers remain limited to its own outbox
-  leaf, the `.sleep` marker, and the started Agent's `logs/` directory.
+  configuration read-only except the lifecycle controller's atomic
+  `manifest.preset.active` update during an authorized hard refresh. Its other
+  writers remain limited to its own outbox leaf, fixed lifecycle markers, and
+  the started Agent's `logs/` directory.
 - The TUI executable (`lingtai-tui`) is invoked only for New Project through
   `ProjectBootstrapRunner`'s exact separate-argv `presets`/`spawn` calls;
   existing-Agent `/setup` uses Desktop's read-only `load_preset_catalog` and
   never invokes either command. No TUI call uses a shell string or joined
-  command line.
+  command line. `/sleep`, `/suspend`, `/cpr`, `/clear`, and `/refresh` never
+  invoke or discover the TUI; `AgentLifecycleController` implements those
+  kernel filesystem/process contracts directly.
 - `resolve_tui_executable` is the sole default-executable discovery owner. It
   consumes only injected PATH/home/system roots, validates regular executable
   candidates, and reads only the bounded managed-install receipt.
