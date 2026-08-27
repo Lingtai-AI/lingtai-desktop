@@ -33,8 +33,10 @@ test proves. This file descends into `tests/` itself.
 - `tests/test_macos_packaging.py` — the offline owner of the package boundary's
   fail-closed diagnostic/release mode choice, credential-name presence rules,
   deterministic versioned names, unsafe destination/overwrite refusal, tool
-  absence, parser helpers, and bounded secret-free manifest shape. It invokes
-  no Apple, GitHub, signing, mount, or packaging service.
+  absence, exact-MACOS parser helpers, per-slice otool linkage calls,
+  no-clobber pair publication/rollback races, tracked packaging-Git provenance,
+  and bounded secret-free manifest shape. It invokes no Apple, GitHub, signing,
+  mount, or packaging service.
 - Compile-time guards embedded in unit tests: `workspace_selection_test.cpp`
   and `direct_conversation_route_test.cpp` start with
   `#ifdef QT_CORE_LIB / #error` so a Qt-core dependency leaking into a

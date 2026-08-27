@@ -194,7 +194,11 @@ The root composes `src/` (owned Qt adaptation), `tests/` (owned contracts),
 The package boundary always stages a copy: diagnostic mode embeds Qt and
 ad-hoc signs only, while release mode fails closed unless Developer ID signing,
 hardened runtime, timestamping, notarization, stapling, and strict independent
-verification all succeed. The canonical bundle/compiled minimum is macOS 13.0.
+verification all succeed. DMG and manifest are completed in same-filesystem
+scratch and exclusively hard-linked into place as a rollback-safe pair. The
+independent verifier checks linkage per exact arm64 and x86_64 slice. Manifest
+Git facts identify only the packaging checkout. The canonical bundle/compiled
+minimum is macOS 13.0.
 Persistent Desktop state is deliberately minimal: the one composer outbox
 leaf, fixed lifecycle markers, an authorized refresh's atomic active-preset
 update, the started Agent's own `logs/` directory, and an explicit setup

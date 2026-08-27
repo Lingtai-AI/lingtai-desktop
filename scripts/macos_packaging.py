@@ -52,6 +52,13 @@ class AppFacts:
     minimum_macos: str
 
 
+@dataclasses.dataclass(frozen=True)
+class PackagingGitFacts:
+    sha: str | None
+    tree: str | None
+    dirty: bool | None
+
+
 def artifact_names(version: str) -> ArtifactNames:
     if VERSION_PATTERN.fullmatch(version) is None:
         raise PackagingError("unsafe version; expected three numeric components")
@@ -110,14 +117,21 @@ def parse_architectures(output: str) -> tuple[str, ...]:
 
 def parse_minos(output: str) -> dict[str, str]:
     facts: dict[str, str] = {}
+    platforms: dict[str, str] = {}
     architecture: str | None = None
     for line in output.splitlines():
         match = re.search(r"\(architecture ([^)]+)\):$", line.strip())
         if match:
             architecture = match.group(1)
             continue
+        match = re.fullmatch(r"\s*platform\s+(\S+)\s*", line)
+        if match and architecture:
+            platforms[architecture] = match.group(1)
+            continue
         match = re.fullmatch(r"\s*minos\s+([0-9]+(?:\.[0-9]+){1,2})\s*", line)
         if match and architecture:
+            if platforms.get(architecture) != "MACOS":
+                raise PackagingError("vtool slice must declare platform MACOS")
             facts[architecture] = match.group(1)
     if not facts:
         raise PackagingError("vtool returned no macOS minimum-version facts")
@@ -181,7 +195,9 @@ def validate_output_paths(
 def render_manifest(
     *,
     version: str,
-    git_sha: str | None,
+    packaging_git_sha: str | None,
+    packaging_git_tree: str | None,
+    packaging_git_dirty: bool | None,
     file_name: str,
     size_bytes: int,
     sha256: str,
@@ -193,9 +209,11 @@ def render_manifest(
     payload = {
         "architectures": list(architectures),
         "file_name": file_name,
-        "git_sha": git_sha,
         "minimum_macos": minimum_macos,
         "notarization": notarization_state,
+        "packaging_git_dirty": packaging_git_dirty,
+        "packaging_git_sha": packaging_git_sha,
+        "packaging_git_tree": packaging_git_tree,
         "sha256": sha256,
         "signing": signing_state,
         "size_bytes": size_bytes,
@@ -280,15 +298,42 @@ def _normalize_mtimes(root: Path, epoch: int) -> None:
         os.utime(path, (epoch, epoch), follow_symlinks=False)
 
 
-def _git_sha(repository_root: Path) -> str | None:
+def _git_object(repository_root: Path, revision: str) -> str | None:
     try:
         value = run_checked(
-            ["git", "-C", repository_root, "rev-parse", "HEAD"],
-            label="git revision check",
+            ["git", "-C", repository_root, "rev-parse", revision],
+            label="packaging Git object check",
         ).strip()
     except PackagingError:
         return None
     return value if re.fullmatch(r"[0-9a-f]{40}", value) else None
+
+
+def packaging_git_facts(repository_root: Path) -> PackagingGitFacts:
+    sha = _git_object(repository_root, "HEAD")
+    tree = _git_object(repository_root, "HEAD^{tree}")
+    try:
+        tracked_status = run_checked(
+            [
+                "git",
+                "-C",
+                repository_root,
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=no",
+            ],
+            label="packaging Git tracked-diff check",
+        )
+    except PackagingError:
+        dirty: bool | None = None
+    else:
+        dirty = bool(tracked_status.strip())
+    return PackagingGitFacts(sha=sha, tree=tree, dirty=dirty)
+
+
+def validate_packaging_git_facts(facts: PackagingGitFacts, *, release: bool) -> None:
+    if release and (facts.sha is None or facts.tree is None or facts.dirty is not False):
+        raise PackagingError("release mode requires clean packaging Git provenance")
 
 
 def _sha256(path: Path) -> str:
@@ -342,6 +387,54 @@ def _notary_environment(environment: Mapping[str, str]) -> dict[str, str]:
     return {key: environment[key] for key in allowed if key in environment}
 
 
+def _file_identity(path: Path) -> tuple[int, int]:
+    status = path.stat(follow_symlinks=False)
+    return status.st_dev, status.st_ino
+
+
+def _rollback_published_link(path: Path, identity: tuple[int, int]) -> None:
+    try:
+        current_identity = _file_identity(path)
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise PackagingError("artifact publication rollback could not inspect DMG") from error
+    if current_identity != identity:
+        return
+    try:
+        path.unlink()
+    except OSError as error:
+        raise PackagingError("artifact publication rollback failed") from error
+
+
+def publish_artifact_pair(
+    staged_dmg: Path,
+    staged_manifest: Path,
+    final_dmg: Path,
+    final_manifest: Path,
+) -> None:
+    """Publish a complete pair without replacing any concurrently created target."""
+
+    dmg_identity = _file_identity(staged_dmg)
+    try:
+        os.link(staged_dmg, final_dmg, follow_symlinks=False)
+    except FileExistsError as error:
+        raise PackagingError("DMG appeared during packaging; refusing overwrite") from error
+    except OSError as error:
+        raise PackagingError("artifact publication failed while creating DMG") from error
+
+    try:
+        os.link(staged_manifest, final_manifest, follow_symlinks=False)
+    except FileExistsError as error:
+        _rollback_published_link(final_dmg, dmg_identity)
+        raise PackagingError(
+            "manifest appeared during packaging; refusing overwrite"
+        ) from error
+    except OSError as error:
+        _rollback_published_link(final_dmg, dmg_identity)
+        raise PackagingError("artifact publication failed while creating manifest") from error
+
+
 def package(arguments: argparse.Namespace, environment: Mapping[str, str]) -> tuple[Path, Path]:
     if sys.platform != "darwin":
         raise PackagingError("macOS packaging is supported only on macOS")
@@ -383,16 +476,27 @@ def package(arguments: argparse.Namespace, environment: Mapping[str, str]) -> tu
     if not deploy_tool.is_file() or not os.access(deploy_tool, os.X_OK):
         raise PackagingError("pinned Qt root has no executable bin/macdeployqt")
     names = artifact_names(facts.version)
-    arguments.output_dir.mkdir(parents=True, exist_ok=True)
-    if arguments.output_dir.is_symlink() or not arguments.output_dir.is_dir():
+    repository_root = Path(__file__).resolve().parents[1]
+    packaging_git = packaging_git_facts(repository_root)
+    validate_packaging_git_facts(packaging_git, release=credentials is not None)
+
+    if arguments.output_dir.is_symlink():
         raise PackagingError("--output-dir must be a real directory, not a symlink")
-    dmg_path, manifest_path = validate_output_paths(app, arguments.output_dir, names)
+    output_directory = arguments.output_dir.resolve(strict=False)
+    dmg_path, manifest_path = validate_output_paths(app, output_directory, names)
+    output_directory.mkdir(parents=True, exist_ok=True)
+    if arguments.output_dir.is_symlink() or not output_directory.is_dir():
+        raise PackagingError("--output-dir must be a real directory, not a symlink")
+    checked_dmg_path, checked_manifest_path = validate_output_paths(
+        app, output_directory, names
+    )
+    if (checked_dmg_path, checked_manifest_path) != (dmg_path, manifest_path):
+        raise PackagingError("output directory changed during validation")
     before = _input_snapshot(app)
 
     if credentials:
         _validate_identity(credentials.identity, tools["security"])
 
-    repository_root = Path(__file__).resolve().parents[1]
     epoch = arguments.source_date_epoch
     if epoch is None:
         try:
@@ -406,7 +510,7 @@ def package(arguments: argparse.Namespace, environment: Mapping[str, str]) -> tu
             epoch = 946684800
 
     with tempfile.TemporaryDirectory(
-        prefix=".lingtai-macos-package-", dir=arguments.output_dir
+        prefix=".lingtai-macos-package-", dir=output_directory
     ) as temporary:
         scratch = Path(temporary)
         staged_app = scratch / APP_NAME
@@ -530,24 +634,34 @@ def package(arguments: argparse.Namespace, environment: Mapping[str, str]) -> tu
         )
         if before != _input_snapshot(app):
             raise PackagingError("input App changed during packaging; artifact is untrusted")
-        shutil.move(os.fspath(temporary_dmg), dmg_path)
-
-    manifest = render_manifest(
-        version=facts.version,
-        git_sha=_git_sha(repository_root),
-        file_name=dmg_path.name,
-        size_bytes=dmg_path.stat().st_size,
-        sha256=_sha256(dmg_path),
-        architectures=facts.architectures,
-        minimum_macos=facts.minimum_macos,
-        signing_state=signing_state,
-        notarization_state=notarization_state,
-    )
-    try:
-        with manifest_path.open("x", encoding="utf-8") as stream:
-            stream.write(manifest)
-    except FileExistsError as error:
-        raise PackagingError("manifest appeared during packaging; refusing overwrite") from error
+        final_packaging_git = packaging_git_facts(repository_root)
+        validate_packaging_git_facts(
+            final_packaging_git, release=credentials is not None
+        )
+        if credentials and final_packaging_git != packaging_git:
+            raise PackagingError("packaging Git provenance changed during release packaging")
+        packaging_git = final_packaging_git
+        manifest = render_manifest(
+            version=facts.version,
+            packaging_git_sha=packaging_git.sha,
+            packaging_git_tree=packaging_git.tree,
+            packaging_git_dirty=packaging_git.dirty,
+            file_name=dmg_path.name,
+            size_bytes=temporary_dmg.stat().st_size,
+            sha256=_sha256(temporary_dmg),
+            architectures=facts.architectures,
+            minimum_macos=facts.minimum_macos,
+            signing_state=signing_state,
+            notarization_state=notarization_state,
+        )
+        temporary_manifest = scratch / names.manifest
+        temporary_manifest.write_text(manifest, encoding="utf-8")
+        publish_artifact_pair(
+            temporary_dmg,
+            temporary_manifest,
+            dmg_path,
+            manifest_path,
+        )
     return dmg_path, manifest_path
 
 

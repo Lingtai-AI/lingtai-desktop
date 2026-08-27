@@ -73,14 +73,21 @@ def _parse_architectures(output: str) -> tuple[str, ...]:
 
 def _parse_minos(output: str) -> dict[str, str]:
     facts: dict[str, str] = {}
+    platforms: dict[str, str] = {}
     architecture: str | None = None
     for line in output.splitlines():
         match = re.search(r"\(architecture ([^)]+)\):$", line.strip())
         if match:
             architecture = match.group(1)
             continue
+        match = re.fullmatch(r"\s*platform\s+(\S+)\s*", line)
+        if match and architecture:
+            platforms[architecture] = match.group(1)
+            continue
         match = re.fullmatch(r"\s*minos\s+([0-9]+(?:\.[0-9]+){1,2})\s*", line)
         if match and architecture:
+            if platforms.get(architecture) != "MACOS":
+                raise VerificationError("vtool slice must declare platform MACOS")
             facts[architecture] = match.group(1)
     return facts
 
@@ -119,8 +126,11 @@ def _macho_files(app: Path, file_tool: Path) -> list[Path]:
     return files
 
 
-def _rpaths(binary: Path, otool: Path) -> list[str]:
-    output = run_checked([otool, "-l", binary], label="Mach-O rpath inspection")
+def _rpaths(binary: Path, otool: Path, architecture: str) -> list[str]:
+    output = run_checked(
+        [otool, "-arch", architecture, "-l", binary],
+        label=f"{architecture} Mach-O rpath inspection",
+    )
     result: list[str] = []
     awaiting_path = False
     for line in output.splitlines():
@@ -133,21 +143,27 @@ def _rpaths(binary: Path, otool: Path) -> list[str]:
     return result
 
 
-def _install_id(binary: Path, otool: Path) -> str | None:
-    output = run_checked([otool, "-D", binary], label="Mach-O install-id inspection")
+def _install_id(binary: Path, otool: Path, architecture: str) -> str | None:
+    output = run_checked(
+        [otool, "-arch", architecture, "-D", binary],
+        label=f"{architecture} Mach-O install-id inspection",
+    )
     lines = [line.strip() for line in output.splitlines() if line.strip()]
     return lines[1] if len(lines) > 1 else None
 
 
-def _dependencies(binary: Path, otool: Path) -> list[str]:
-    output = run_checked([otool, "-L", binary], label="Mach-O dependency inspection")
+def _dependencies(binary: Path, otool: Path, architecture: str) -> list[str]:
+    output = run_checked(
+        [otool, "-arch", architecture, "-L", binary],
+        label=f"{architecture} Mach-O dependency inspection",
+    )
     dependencies: list[str] = []
     for line in output.splitlines()[1:]:
         stripped = line.strip()
         if not stripped:
             continue
         dependencies.append(stripped.split(" (compatibility version", 1)[0])
-    install_id = _install_id(binary, otool)
+    install_id = _install_id(binary, otool, architecture)
     return [dependency for dependency in dependencies if dependency != install_id]
 
 
@@ -171,8 +187,9 @@ def _verify_binary_links(
     executable_directory: Path,
     executable_rpaths: Sequence[str],
     otool: Path,
+    architecture: str,
 ) -> None:
-    rpaths = _rpaths(binary, otool)
+    rpaths = _rpaths(binary, otool, architecture)
     for rpath in rpaths:
         if rpath.startswith("/") and not rpath.startswith(SYSTEM_PREFIXES):
             raise VerificationError(
@@ -182,7 +199,7 @@ def _verify_binary_links(
         if expanded is None and not rpath.startswith(SYSTEM_PREFIXES):
             raise VerificationError(f"unsupported rpath in {binary.relative_to(app)}")
 
-    for dependency in _dependencies(binary, otool):
+    for dependency in _dependencies(binary, otool, architecture):
         if dependency.startswith(SYSTEM_PREFIXES):
             continue
         if dependency.startswith("/"):
@@ -240,7 +257,10 @@ def verify_app(
         raise VerificationError("packaged App is not arm64+x86_64 universal")
 
     macho_files = _macho_files(app, tools["file"])
-    executable_rpaths = _rpaths(executable, tools["otool"])
+    executable_rpaths = {
+        architecture: _rpaths(executable, tools["otool"], architecture)
+        for architecture in REQUIRED_ARCHITECTURES
+    }
     for binary in macho_files:
         binary_architectures = _parse_architectures(
             run_checked(
@@ -260,13 +280,15 @@ def verify_app(
             raise VerificationError(
                 f"incorrect bundled minimum macOS in {binary.relative_to(app)}"
             )
-        _verify_binary_links(
-            binary,
-            app,
-            executable.parent,
-            executable_rpaths,
-            tools["otool"],
-        )
+        for architecture in REQUIRED_ARCHITECTURES:
+            _verify_binary_links(
+                binary,
+                app,
+                executable.parent,
+                executable_rpaths[architecture],
+                tools["otool"],
+                architecture,
+            )
 
     run_checked(
         [tools["codesign"], "--verify", "--deep", "--strict", "--verbose=2", app],

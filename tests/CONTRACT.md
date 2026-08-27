@@ -156,7 +156,9 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   tests.test_repository_contract`; the pinned-provenance and tracked-artifact
   repository contract.
 - `tests/test_macos_packaging.py` — manual `python3 -m unittest
-  tests.test_macos_packaging`; the offline package-production boundary contract.
+  tests.test_macos_packaging`; the offline package-production and independent
+  per-slice verification boundary contract, including publication races and
+  rollback.
 
 ## Maintenance
 

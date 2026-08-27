@@ -22,8 +22,10 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
   entry points;
   `scripts/bootstrap-deps.sh` is the only sanctioned way to populate `.deps/`.
 - `scripts/macos_packaging.py` is the sole package-production owner. It never
-  mutates the input App. `scripts/verify-macos-package.py` independently owns
-  mounted-DMG layout, bundle/linkage/signing checks, and relocated smoke.
+  mutates the input App and exclusively publishes a complete DMG/manifest pair
+  without replacing a concurrent target. `scripts/verify-macos-package.py`
+  independently owns mounted-DMG layout, per-architecture bundle/linkage/signing
+  checks, and relocated smoke.
 - `ShellHost` owns application composition: the one fallback interpreter and
   the one configured TUI executable; `main.cpp` owns the `--smoke` path. The shell performs no
   project, registry, or settings writes beyond the explicit user-triggered
@@ -105,6 +107,8 @@ its folder.
   release-ready. A public package requires Developer ID Application signing,
   hardened runtime, timestamp, Apple acceptance, stapling, and strict package
   verification; any absent prerequisite or unsuccessful check is fatal.
+  `packaging_git_*` manifest facts identify only the clean tracked packaging
+  checkout and must never be represented as input-App build provenance.
 - **No additional first-project machinery**: `AgentSetupStore` updates only
   setup-owned fields of existing Agents and never scaffolds or adds an Agent;
   first-project bootstrap remains delegated to the TUI headless surface.

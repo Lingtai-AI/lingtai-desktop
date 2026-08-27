@@ -65,7 +65,10 @@ python3 scripts/verify-macos-package.py \
 Public `--mode release` additionally requires a locally available Developer ID
 Application identity and a named `notarytool` keychain profile, then must pass
 the verifier with `--require-release-ready`. Never use diagnostic output as a
-release artifact.
+release artifact. Package publication is an exclusive DMG/manifest pair; never
+replace its hard-link no-clobber publication with a final rename. The manifest's
+`packaging_git_*` fields describe the scripts' tracked checkout, not the App's
+build provenance.
 
 Keep the one focused repository-contract test focused on pinned dependency
 provenance and tracked-artifact hygiene. Add a test only for a clearly

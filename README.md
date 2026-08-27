@@ -52,12 +52,20 @@ for local relocation checks; its manifest marks it as diagnostic only.
 `release` refuses to run without a local Developer ID Application identity and
 a named `notarytool` keychain profile, then requires hardened-runtime signing,
 timestamping, Apple notarization, and stapling. It does not upload to GitHub.
+The completed DMG and manifest are published as one no-clobber pair; a file
+that appears during packaging is preserved and causes the command to fail.
+
+Manifest fields `packaging_git_sha`, `packaging_git_tree`, and
+`packaging_git_dirty` describe the checkout that ran the packaging scripts.
+They are not the input App's build provenance. Embedding and verifying App
+build provenance is a separate deferred release gate.
 
 After packaging, `scripts/verify-macos-package.py` mounts the DMG read-only,
 checks the drag-to-Applications layout, bundle identity/version/macOS 13.0
 floor, universal Mach-O slices, self-contained linkage, and signing mode, then
 copies the App to a disposable location and runs `--smoke` with no developer Qt
-environment. Pass `--require-release-ready` for strict Developer ID,
+environment. Linkage, install IDs, and run paths are checked independently for
+the exact arm64 and x86_64 slices. Pass `--require-release-ready` for strict Developer ID,
 Gatekeeper, and stapled-ticket checks.
 
 ## First project
