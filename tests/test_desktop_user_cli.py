@@ -170,6 +170,12 @@ def official_release_transport(archive: Path, manifest: Path, version: str) -> F
     })
 
 
+def unavailable_release_transport() -> FakeReleaseTransport:
+    return FakeReleaseTransport({
+        cli.OFFICIAL_LATEST_RELEASE_URL: (429, {}, b"offline test boundary"),
+    })
+
+
 class DesktopUserCLIContractTest(unittest.TestCase):
     def test_official_latest_and_exact_bootstrap_download_verified_release(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -441,6 +447,149 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                         self.assertEqual(tree_snapshot(home), before)
                         self.assertEqual(list(downloads.iterdir()), [])
 
+    def test_normal_commands_use_cached_offer_and_only_confirmed_tty_updates(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            release_root = root / "release"
+            release_root.mkdir()
+            old_archive, old_manifest = write_artifacts(root, "0.1.5")
+            new_archive, new_manifest = write_artifacts(release_root, "0.1.6")
+            home = root / "home"
+            home.mkdir()
+            platform = FakePlatform()
+            cli.install(old_archive, old_manifest, home=home,
+                        platform=platform, effective_uid=501)
+            managed = home / ".local/share/lingtai-desktop"
+
+            refreshed = official_release_transport(new_archive, new_manifest, "0.1.6")
+            first_output: list[str] = []
+            cli.run_installed(
+                ["version"], home=home, platform=platform,
+                transport=refreshed, output=first_output.append,
+                clock=lambda: 1_000.0, tty=lambda: False,
+                prompt=lambda _: (_ for _ in ()).throw(AssertionError("non-TTY prompted")),
+            )
+            self.assertEqual([call[0] for call in refreshed.calls], [cli.OFFICIAL_LATEST_RELEASE_URL])
+            cache = managed / "update-check.json"
+            self.assertEqual(stat.S_IMODE(cache.stat().st_mode), 0o600)
+            self.assertEqual(json.loads(cache.read_text()), {
+                "checked_at": 1000, "latest_version": "0.1.6", "schema_version": 1,
+            })
+            self.assertTrue(any("Update available: 0.1.6" in line for line in first_output))
+            self.assertEqual(os.readlink(managed / "current"), "versions/0.1.5")
+
+            for arguments in (["open"], ["foreground", "--", "--probe"],
+                              ["version"], ["doctor"]):
+                with self.subTest(command=arguments[0]):
+                    no_network = FakeReleaseTransport({})
+                    output: list[str] = []
+                    cli.run_installed(
+                        arguments, home=home, platform=platform,
+                        transport=no_network, output=output.append,
+                        clock=lambda: 1_001.0, tty=lambda: False,
+                        prompt=lambda _: (_ for _ in ()).throw(AssertionError("non-TTY prompted")),
+                    )
+                    self.assertEqual(no_network.calls, [])
+                    self.assertTrue(any("Update available: 0.1.6" in line for line in output))
+            self.assertTrue(platform.calls[-2][0] == "/usr/bin/open" or
+                            any(call[0] == "/usr/bin/open" for call in platform.calls))
+            self.assertEqual(platform.exec_calls[-1][-1], "--probe")
+
+            before_declines = tree_snapshot(managed)
+            for answer in ("", "n", "not now", EOFError()):
+                with self.subTest(answer=type(answer).__name__ if isinstance(answer, EOFError) else answer):
+                    prompts: list[str] = []
+
+                    def decline(message: str, value: str | EOFError = answer) -> str:
+                        prompts.append(message)
+                        if isinstance(value, EOFError):
+                            raise value
+                        return value
+
+                    cli.run_installed(
+                        ["version"], home=home, platform=platform,
+                        transport=FakeReleaseTransport({}), output=lambda _: None,
+                        clock=lambda: 1_001.0, tty=lambda: True, prompt=decline,
+                    )
+                    self.assertEqual(len(prompts), 1)
+                    self.assertEqual(tree_snapshot(managed), before_declines)
+
+            confirmed_transport = official_release_transport(new_archive, new_manifest, "0.1.6")
+            confirmed_output: list[str] = []
+            cli.run_installed(
+                ["version"], home=home, platform=platform,
+                transport=confirmed_transport, output=confirmed_output.append,
+                clock=lambda: 1_002.0, tty=lambda: True, prompt=lambda _: "YES",
+                effective_uid=501,
+            )
+            self.assertEqual(os.readlink(managed / "current"), "versions/0.1.6")
+            self.assertIn("version: 0.1.6", confirmed_output)
+            self.assertEqual(json.loads(cache.read_text())["latest_version"], "0.1.6")
+
+            explicit_home = root / "explicit-home"
+            explicit_home.mkdir()
+            explicit_platform = FakePlatform()
+            cli.install(old_archive, old_manifest, home=explicit_home,
+                        platform=explicit_platform, effective_uid=501)
+            cli.run_installed(
+                ["update"], home=explicit_home, platform=explicit_platform,
+                transport=official_release_transport(new_archive, new_manifest, "0.1.6"),
+                output=lambda _: None, clock=lambda: 2_000.0, tty=lambda: True,
+                prompt=lambda _: (_ for _ in ()).throw(AssertionError("explicit update prompted")),
+                effective_uid=501,
+            )
+            explicit_cache = explicit_home / ".local/share/lingtai-desktop/update-check.json"
+            self.assertEqual(json.loads(explicit_cache.read_text())["checked_at"], 2000)
+            cli.run_installed(
+                ["uninstall", "--version", "0.1.5"], home=explicit_home,
+                platform=explicit_platform, transport=FakeReleaseTransport({}),
+                tty=lambda: True,
+                prompt=lambda _: (_ for _ in ()).throw(AssertionError("uninstall prompted")),
+                effective_uid=501, output=lambda _: None,
+            )
+
+            failure_home = root / "failure-home"
+            failure_home.mkdir()
+            cli.install(old_archive, old_manifest, home=failure_home,
+                        platform=FakePlatform(), effective_uid=501)
+            initial_check = official_release_transport(new_archive, new_manifest, "0.1.6")
+            cli.run_installed(
+                ["version"], home=failure_home, platform=FakePlatform(),
+                transport=initial_check, output=lambda _: None,
+                clock=lambda: 3_000.0, tty=lambda: False,
+            )
+            failure_managed = failure_home / ".local/share/lingtai-desktop"
+            failure_before = tree_snapshot(failure_managed)
+            failing_platform = FakePlatform()
+            failing_platform.fail = "verifier"
+            failure_output: list[str] = []
+            cli.run_installed(
+                ["open"], home=failure_home, platform=failing_platform,
+                transport=official_release_transport(new_archive, new_manifest, "0.1.6"),
+                output=failure_output.append, clock=lambda: 3_001.0,
+                tty=lambda: True, prompt=lambda _: "y", effective_uid=501,
+            )
+            self.assertEqual(tree_snapshot(failure_managed), failure_before)
+            old_app = failure_managed / "versions/0.1.5/LingTai.app"
+            self.assertEqual(failing_platform.calls[-1], ["/usr/bin/open", str(old_app)])
+            self.assertTrue(any("Update failed" in line and "continuing" in line
+                                for line in failure_output))
+
+            stale_cache_before = (failure_managed / "update-check.json").read_bytes()
+            offline_output: list[str] = []
+            rate_limited = FakeReleaseTransport({
+                cli.OFFICIAL_LATEST_RELEASE_URL: (429, {}, b"rate limited"),
+            })
+            cli.run_installed(
+                ["version"], home=failure_home, platform=FakePlatform(),
+                transport=rate_limited, output=offline_output.append,
+                clock=lambda: 3_000.0 + cli.DEFAULT_UPDATE_CHECK_INTERVAL + 1,
+                tty=lambda: False,
+            )
+            self.assertIn("version: 0.1.5", offline_output)
+            self.assertEqual((failure_managed / "update-check.json").read_bytes(),
+                             stale_cache_before)
+
     def test_existing_shared_parent_modes_and_contents_are_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -620,26 +769,36 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             home.mkdir()
             archive, manifest = write_artifacts(root)
             platform = FakePlatform()
+            transport = unavailable_release_transport()
             cli.install(archive, manifest, home=home, platform=platform, effective_uid=501)
             out: list[str] = []
-            cli.run_installed([], home=home, platform=platform, output=out.append)
+            cli.run_installed([], home=home, platform=platform, transport=transport,
+                              tty=lambda: False, output=out.append)
             app = home / ".local/share/lingtai-desktop/versions/0.1.5/LingTai.app"
             self.assertEqual(platform.calls[-1], ["/usr/bin/open", str(app)])
-            cli.run_installed(["foreground", "--", "--smoke"], home=home, platform=platform, output=out.append)
+            cli.run_installed(["foreground", "--", "--smoke"], home=home,
+                              platform=platform, transport=transport,
+                              tty=lambda: False, output=out.append)
             self.assertEqual(platform.exec_calls[-1], [str(app / "Contents/MacOS/LingTai"), "--smoke"])
-            cli.run_installed(["version"], home=home, platform=platform, output=out.append)
-            cli.run_installed(["doctor"], home=home, platform=platform, output=out.append)
+            cli.run_installed(["version"], home=home, platform=platform,
+                              transport=transport, tty=lambda: False, output=out.append)
+            cli.run_installed(["doctor"], home=home, platform=platform,
+                              transport=transport, tty=lambda: False, output=out.append)
             self.assertIn("INTEGRITY PASS", "\n".join(out))
             self.assertIn("archive binding", "\n".join(out))
             (app / "Contents/MacOS/LingTai").write_bytes(b"tampered")
             with self.assertRaisesRegex(cli.DesktopCLIError, "executable facts|bundle digest"):
-                cli.run_installed(["open"], home=home, platform=platform, output=out.append)
+                cli.run_installed(["open"], home=home, platform=platform,
+                                  transport=transport, tty=lambda: False,
+                                  output=out.append)
 
             make_app(app, "0.1.5")
             verifier = home / ".local/share/lingtai-desktop/cli/verify-app-archive.py"
             verifier.write_text("tampered verifier")
             with self.assertRaisesRegex(cli.DesktopCLIError, "unrelated launcher"):
-                cli.run_installed(["doctor"], home=home, platform=platform, output=out.append)
+                cli.run_installed(["doctor"], home=home, platform=platform,
+                                  transport=transport, tty=lambda: False,
+                                  output=out.append)
 
     def test_update_failure_matrix_preserves_old_current_and_owned_bytes(self) -> None:
         for failure in ("verifier", "extract", "receipt", "launcher", "current"):

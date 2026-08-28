@@ -18,6 +18,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.parse
 import uuid
 from pathlib import Path
@@ -54,6 +55,11 @@ RELEASE_USER_AGENT = "lingtai-desktop/official-release-downloader"
 RELEASE_ACCEPT = "application/vnd.github+json"
 EXPLICIT_RELEASE_TIMEOUT = 15.0
 MAX_REDIRECTS = 5
+UPDATE_CACHE_SCHEMA = 1
+UPDATE_CACHE_KEYS = {"schema_version", "checked_at", "latest_version"}
+MAX_UPDATE_CACHE_BYTES = 512
+DEFAULT_UPDATE_CHECK_INTERVAL = 24 * 60 * 60
+AUTOMATIC_RELEASE_TIMEOUT = 2.0
 MANIFEST_KEYS = {
     "architectures", "archive_file_name", "archive_sha256",
     "archive_size_bytes", "artifact_kind", "bundle_executable",
@@ -107,6 +113,12 @@ class OfficialRelease:
 
 
 @dataclasses.dataclass(frozen=True)
+class UpdateCheck:
+    checked_at: int
+    latest_version: str
+
+
+@dataclasses.dataclass(frozen=True)
 class ManagedPaths:
     home: Path
     local: Path
@@ -116,6 +128,7 @@ class ManagedPaths:
     versions: Path
     receipts: Path
     current: Path
+    update_cache: Path
     launcher: Path
 
 
@@ -137,6 +150,7 @@ class UninstallPlan:
     launcher_identity: tuple[int, int]
     module_identity: tuple[int, int]
     verifier_identity: tuple[int, int]
+    update_cache_identity: tuple[int, int] | None
     current_target: str | None
     current_identity: tuple[int, int] | None
 
@@ -597,6 +611,7 @@ def _paths(home: Path | None) -> ManagedPaths:
     root = local / "share/lingtai-desktop"
     return ManagedPaths(raw, local, local / "bin", root, root / "cli",
                         root / "versions", root / "receipts", root / "current",
+                        root / "update-check.json",
                         local / "bin/lingtai-desktop")
 
 
@@ -922,6 +937,11 @@ def _preflight_uninstall(paths: ManagedPaths) -> UninstallPlan:
     allowed_root = {"cli", "versions", "receipts"}
     if current_target is not None:
         allowed_root.add("current")
+    update_cache_identity: tuple[int, int] | None = None
+    if paths.update_cache.exists() or paths.update_cache.is_symlink():
+        _read_update_cache(paths)
+        update_cache_identity = _identity(paths.update_cache)
+        allowed_root.add(paths.update_cache.name)
     actual_root = {path.name for path in paths.root.iterdir()}
     if actual_root != allowed_root:
         raise DesktopCLIError("managed root contains unknown or missing files")
@@ -973,7 +993,8 @@ def _preflight_uninstall(paths: ManagedPaths) -> UninstallPlan:
     return UninstallPlan(
         tuple(entries), _identity(paths.root), _identity(paths.cli),
         _identity(paths.versions), _identity(paths.receipts), _identity(paths.launcher),
-        _identity(module), _identity(verifier), current_target, current_identity,
+        _identity(module), _identity(verifier), update_cache_identity,
+        current_target, current_identity,
     )
 
 
@@ -993,6 +1014,88 @@ def _version_tuple(version: str) -> tuple[int, int, int]:
     if VERSION_PATTERN.fullmatch(version) is None:
         raise DesktopCLIError("version must be a safe x.y.z value")
     return tuple(int(value) for value in version.split("."))  # type: ignore[return-value]
+
+
+def _read_update_cache(paths: ManagedPaths) -> UpdateCheck | None:
+    path = paths.update_cache
+    if not path.exists() and not path.is_symlink():
+        return None
+    facts = _regular_nofollow(path, "managed update-check cache")
+    if stat.S_IMODE(facts.st_mode) != 0o600:
+        raise DesktopCLIError("managed update-check cache mode is invalid")
+    raw = _read_bytes_nofollow(path, "managed update-check cache", MAX_UPDATE_CACHE_BYTES)
+    try:
+        value = json.loads(raw, object_pairs_hook=_exact_json_object)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        raise DesktopCLIError("managed update-check cache is invalid") from error
+    if (not isinstance(value, dict) or set(value) != UPDATE_CACHE_KEYS
+            or type(value.get("schema_version")) is not int
+            or value.get("schema_version") != UPDATE_CACHE_SCHEMA
+            or type(value.get("checked_at")) is not int
+            or value["checked_at"] < 0
+            or not isinstance(value.get("latest_version"), str)
+            or VERSION_PATTERN.fullmatch(value["latest_version"]) is None):
+        raise DesktopCLIError("managed update-check cache does not match the bounded exact schema")
+    return UpdateCheck(value["checked_at"], value["latest_version"])
+
+
+def _update_cache_bytes(latest_version: str, checked_at: int) -> bytes:
+    _version_tuple(latest_version)
+    if type(checked_at) is not int or checked_at < 0:
+        raise DesktopCLIError("update-check time is invalid")
+    return (json.dumps({
+        "checked_at": checked_at,
+        "latest_version": latest_version,
+        "schema_version": UPDATE_CACHE_SCHEMA,
+    }, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def _write_update_cache(paths: ManagedPaths, latest_version: str,
+                        checked_at: int) -> None:
+    _require_real_directory(paths.root, "managed root")
+    previous_identity: tuple[int, int] | None = None
+    if paths.update_cache.exists() or paths.update_cache.is_symlink():
+        _read_update_cache(paths)
+        previous_identity = _identity(paths.update_cache)
+    payload = _update_cache_bytes(latest_version, checked_at)
+    temporary = paths.root / f".update-check-{uuid.uuid4().hex}"
+    temporary_identity: tuple[int, int] | None = None
+    descriptor: int | None = None
+    try:
+        flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                 | getattr(os, "O_NOFOLLOW", 0))
+        descriptor = os.open(temporary, flags, 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            descriptor = None
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, 0o600, follow_symlinks=False)
+        facts = _regular_nofollow(temporary, "staged update-check cache")
+        temporary_identity = (facts.st_dev, facts.st_ino)
+        if facts.st_size != len(payload) or stat.S_IMODE(facts.st_mode) != 0o600:
+            raise DesktopCLIError("staged update-check cache facts are invalid")
+        if previous_identity is None:
+            try:
+                os.link(temporary, paths.update_cache, follow_symlinks=False)
+            except FileExistsError as error:
+                raise DesktopCLIError("refusing to replace a raced update-check cache") from error
+            temporary.unlink()
+        else:
+            if not _matches_identity(paths.update_cache, previous_identity):
+                raise DesktopCLIError("refusing to replace a raced update-check cache")
+            os.replace(temporary, paths.update_cache)
+        published = _regular_nofollow(paths.update_cache, "managed update-check cache")
+        if (published.st_dev, published.st_ino) != temporary_identity:
+            raise DesktopCLIError("update-check cache publication was replaced")
+    except DesktopCLIError:
+        raise
+    except OSError as error:
+        raise DesktopCLIError("could not publish managed update-check cache") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        _unlink_if_identity(temporary, temporary_identity)
 
 
 def install(archive: Path, manifest_path: Path, *, home: Path | None = None,
@@ -1146,12 +1249,99 @@ def install_official(version: str | None = None, *, home: Path | None = None,
         return installed
 
 
+def _default_tty() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _automatic_update_offer(*, paths: ManagedPaths, installed_version: str,
+                            home: Path | None, platform: Platform,
+                            transport: ReleaseTransport | None,
+                            effective_uid: int | None, now: int,
+                            interval: int, tty: Callable[[], bool],
+                            prompt: Callable[[str], str],
+                            output: Callable[[str], None]) -> bool:
+    try:
+        cached = _read_update_cache(paths)
+    except DesktopCLIError:
+        return False
+    refreshed = False
+    if (cached is not None and 0 <= now - cached.checked_at < interval):
+        latest_version = cached.latest_version
+    else:
+        try:
+            release = discover_official_release(
+                transport=transport, timeout=AUTOMATIC_RELEASE_TIMEOUT,
+            )
+        except DesktopCLIError:
+            return False
+        latest_version = release.version
+        refreshed = True
+    if _version_tuple(latest_version) <= _version_tuple(installed_version):
+        if refreshed:
+            try:
+                _write_update_cache(paths, latest_version, now)
+            except DesktopCLIError:
+                pass
+        return False
+
+    notice = (
+        f"Update available: {latest_version} (installed {installed_version}); "
+        "run 'lingtai-desktop update'."
+    )
+    try:
+        interactive = bool(tty())
+    except Exception:
+        interactive = False
+    if not interactive:
+        if refreshed:
+            try:
+                _write_update_cache(paths, latest_version, now)
+            except DesktopCLIError:
+                pass
+        output(notice)
+        return False
+
+    try:
+        answer = prompt(
+            f"LingTai Desktop {latest_version} is available "
+            f"(installed {installed_version}). Update now? [y/N] "
+        )
+    except (EOFError, OSError):
+        answer = ""
+    if answer.strip().lower() not in {"y", "yes"}:
+        if refreshed:
+            try:
+                _write_update_cache(paths, latest_version, now)
+            except DesktopCLIError:
+                pass
+        return False
+
+    try:
+        updated_version = install_official(
+            home=home, platform=platform, transport=transport,
+            effective_uid=effective_uid, update=True,
+        )
+    except DesktopCLIError as error:
+        output(
+            f"Update failed; continuing with LingTai Desktop {installed_version}: {error}"
+        )
+        return False
+    try:
+        _write_update_cache(paths, updated_version, now)
+    except DesktopCLIError as error:
+        output(f"Updated to {updated_version}, but update-check cache was not recorded: {error}")
+    else:
+        output(f"Updated LingTai Desktop to {updated_version}")
+    return True
+
+
 def doctor(*, home: Path | None = None) -> tuple[str, dict[str, object]]:
     paths = _paths(home)
     for path in (paths.local, paths.bin, paths.root, paths.cli, paths.versions, paths.receipts):
         if path.is_symlink() or not path.is_dir():
             raise DesktopCLIError("managed layout contains a missing/non-directory/symlink root")
     _validate_owned_cli(paths)
+    _read_update_cache(paths)
     version, _, receipt = _active(paths)
     source = receipt.get("source_archive")
     if not isinstance(source, dict) or set(source) != {"file_name", "size_bytes", "sha256"}:
@@ -1163,14 +1353,31 @@ def run_installed(arguments: Sequence[str], *, home: Path | None = None,
                   platform: Platform | None = None,
                   transport: ReleaseTransport | None = None,
                   effective_uid: int | None = None,
+                  clock: Callable[[], float] | None = None,
+                  check_interval: int = DEFAULT_UPDATE_CHECK_INTERVAL,
+                  tty: Callable[[], bool] | None = None,
+                  prompt: Callable[[str], str] | None = None,
                   output: Callable[[str], None] = print) -> int:
     platform = platform or Platform()
+    clock = clock or time.time
+    tty = tty or _default_tty
+    prompt = prompt or input
     paths = _paths(home)
     command = "open" if not arguments else arguments[0]
     rest = list(arguments[1:])
     if command in {"open", "foreground", "version", "doctor"}:
         version, app, receipt = _active(paths)
         _validate_owned_cli(paths)
+        now = max(0, int(clock()))
+        if _automatic_update_offer(
+            paths=paths, installed_version=version, home=home,
+            platform=platform, transport=transport,
+            effective_uid=effective_uid, now=now,
+            interval=check_interval, tty=tty, prompt=prompt,
+            output=output,
+        ):
+            version, app, receipt = _active(paths)
+            _validate_owned_cli(paths)
         if command == "open":
             if rest:
                 raise DesktopCLIError("open takes no arguments")
@@ -1209,10 +1416,12 @@ def run_installed(arguments: Sequence[str], *, home: Path | None = None,
                 effective_uid=effective_uid, update=True,
             )
         else:
+            _read_update_cache(paths)
             version = install_official(
                 values.version, home=home, platform=platform,
                 transport=transport, effective_uid=effective_uid, update=True,
             )
+            _write_update_cache(paths, version, max(0, int(clock())))
         output(f"updated LingTai Desktop to {version}")
         return 0
     if command == "uninstall":
@@ -1221,7 +1430,10 @@ def run_installed(arguments: Sequence[str], *, home: Path | None = None,
         group.add_argument("--version")
         group.add_argument("--all", action="store_true")
         values = parser.parse_args(rest)
-        uninstall_all(home=home) if values.all else uninstall_version(values.version, home=home)
+        if values.all:
+            uninstall_all(home=home, effective_uid=effective_uid)
+        else:
+            uninstall_version(values.version, home=home, effective_uid=effective_uid)
         output("uninstalled managed LingTai Desktop files")
         return 0
     raise DesktopCLIError(f"unknown command: {command}; expected open, foreground, version, doctor, update, or uninstall")
@@ -1269,6 +1481,7 @@ def uninstall_all(*, home: Path | None = None, effective_uid: int | None = None)
         receipt_path.unlink()
     _revalidate_uninstall_ancestors(paths, plan)
     _unlink_if_identity(paths.current, plan.current_identity)
+    _unlink_if_identity(paths.update_cache, plan.update_cache_identity)
     _unlink_if_identity(paths.launcher, plan.launcher_identity)
     _unlink_if_identity(module, plan.module_identity)
     _unlink_if_identity(verifier, plan.verifier_identity)
