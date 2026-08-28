@@ -251,6 +251,30 @@ class AppArchiveContractTest(unittest.TestCase):
                     verify_app_archive._preflight_members(members)
                 self.assertEqual(members.calls, 1)
 
+    def test_directory_without_owner_access_is_rejected_before_extraction(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, manifest, _ = self._package(root)
+            app_root = tarfile.TarInfo("LingTai.app")
+            app_root.type = tarfile.DIRTYPE
+            app_root.mode = 0o755
+            locked = tarfile.TarInfo("LingTai.app/locked")
+            locked.type = tarfile.DIRTYPE
+            locked.mode = 0o000
+            self._write_members(archive, [app_root, locked])
+            self._rewrite_archive_binding(archive, manifest)
+            destination = root / "must-not-survive"
+            with self.assertRaisesRegex(
+                verify_app_archive.VerificationError, "required owner permissions"
+            ):
+                verify_app_archive.verify_pair(
+                    archive,
+                    manifest,
+                    extract_to=destination,
+                    architecture_reader=self._architectures,
+                )
+            self.assertFalse(destination.exists())
+
     def test_recursive_bundle_digests_stream_regular_files(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             app = Path(temporary) / "LingTai.app"
@@ -273,8 +297,8 @@ class AppArchiveContractTest(unittest.TestCase):
                 stream.truncate(verify_app_archive.MAX_ARCHIVE_BYTES + 1)
             manifest = root / "manifest.json"
             manifest.write_text("{}")
-            for module, loader, error_type in (
-                (verify_app_archive, verify_app_archive.load_manifest,
+            for module, verify, error_type in (
+                (verify_app_archive, verify_app_archive.verify_pair,
                  verify_app_archive.VerificationError),
                 (desktop_user_cli, desktop_user_cli.load_manifest,
                  desktop_user_cli.DesktopCLIError),
@@ -284,7 +308,7 @@ class AppArchiveContractTest(unittest.TestCase):
                          module.hashlib, "sha256",
                          side_effect=AssertionError("oversized archive was hashed"),
                      ), self.assertRaisesRegex(error_type, "archive is too large"):
-                    loader(archive, manifest)
+                    verify(archive, manifest)
 
     def test_nonregular_open_descriptor_is_rejected_for_archive_and_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

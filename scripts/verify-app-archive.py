@@ -218,6 +218,8 @@ def _preflight_members(members: Iterable[tarfile.TarInfo]) -> tuple[dict[str, ta
         elif member.isdir():
             if member.size not in (0,):
                 raise VerificationError("archive directory has conflicting data")
+            if (member.mode & 0o700) != 0o700:
+                raise VerificationError("archive directory lacks required owner permissions")
         elif member.issym():
             if member.size != 0:
                 raise VerificationError("archive link has conflicting data")
