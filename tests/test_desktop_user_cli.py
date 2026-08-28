@@ -246,6 +246,28 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             self.assertEqual(transport.calls[0][0], cli.OFFICIAL_LATEST_RELEASE_URL)
             self.assertIn("updated LingTai Desktop to 0.1.6", output)
 
+            transaction_before = (
+                os.readlink(managed / "current"),
+                tree_snapshot(managed / "versions/0.1.6"),
+                (managed / "receipts/0.1.6.json").read_bytes(),
+            )
+            verify_count = [call[0] for call in platform.calls].count("verify")
+            same_transport = official_release_transport(new_archive, new_manifest, "0.1.6")
+            cli.run_installed(
+                ["update"], home=home, platform=platform,
+                transport=same_transport, effective_uid=501,
+                clock=lambda: 1_500.0, output=lambda _: None,
+            )
+            self.assertEqual((
+                os.readlink(managed / "current"),
+                tree_snapshot(managed / "versions/0.1.6"),
+                (managed / "receipts/0.1.6.json").read_bytes(),
+            ), transaction_before)
+            self.assertEqual([call[0] for call in platform.calls].count("verify"),
+                             verify_count + 1)
+            same_verify = [call for call in platform.calls if call[0] == "verify"][-1]
+            self.assertFalse(Path(same_verify[1]).parent.exists())
+
             exact_home = root / "exact-home"
             exact_home.mkdir()
             exact_platform = FakePlatform()
