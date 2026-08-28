@@ -222,6 +222,23 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                                 and Path(call[2]).name == manifest.name for call in verify_calls))
             self.assertTrue(all(not Path(call[1]).parent.exists() for call in verify_calls))
 
+            refused_home = root / "refused-home"
+            refused_home.mkdir()
+            refused_before = tree_snapshot(refused_home)
+            with mock.patch("sys.stderr", new=io.StringIO()):
+                self.assertEqual(cli.bootstrap_main([
+                    "--version", "0.1.6", "--archive", str(archive),
+                    "--manifest", str(manifest),
+                ], home=refused_home, platform=FakePlatform(),
+                    transport=FakeReleaseTransport({}), effective_uid=501,
+                    output=lambda _: None), 1)
+                self.assertEqual(cli.bootstrap_main([
+                    "--archive", str(archive),
+                ], home=refused_home, platform=FakePlatform(),
+                    transport=FakeReleaseTransport({}), effective_uid=501,
+                    output=lambda _: None), 1)
+            self.assertEqual(tree_snapshot(refused_home), refused_before)
+
     def test_explicit_update_forces_official_install_and_preserves_local_pair_mode(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
