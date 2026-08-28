@@ -294,6 +294,153 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                 ], home=home, platform=platform, transport=transport,
                     effective_uid=501)
 
+    def test_official_downloader_rejects_untrusted_metadata_redirects_and_stream_bounds(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            release_root = root / "release"
+            release_root.mkdir()
+            archive, manifest = write_artifacts(release_root, "0.1.6")
+            exact_url = cli.OFFICIAL_RELEASE_TAG_URL.format("0.1.6")
+            archive_url = (
+                "https://github.com/Lingtai-AI/lingtai-desktop/releases/download/"
+                f"v0.1.6/{archive.name}"
+            )
+            manifest_url = (
+                "https://github.com/Lingtai-AI/lingtai-desktop/releases/download/"
+                f"v0.1.6/{manifest.name}"
+            )
+
+            base_transport = official_release_transport(archive, manifest, "0.1.6")
+            base_metadata = json.loads(base_transport.routes[exact_url][2])
+
+            metadata_cases: list[tuple[str, dict[str, object] | bytes | int]] = []
+            for label, replacement in (
+                ("draft", {**base_metadata, "draft": True}),
+                ("prerelease", {**base_metadata, "prerelease": True}),
+                ("wrong-tag", {**base_metadata, "tag_name": "v0.1.7"}),
+                ("missing-asset", {**base_metadata, "assets": base_metadata["assets"][:1]}),
+                ("duplicate-asset", {**base_metadata, "assets": [
+                    *base_metadata["assets"], base_metadata["assets"][0],
+                ]}),
+            ):
+                metadata_cases.append((label, replacement))
+            for label, bad_url in (
+                ("http-asset", archive_url.replace("https://", "http://")),
+                ("foreign-asset", archive_url.replace("github.com", "example.com")),
+                ("port-asset", archive_url.replace("github.com", "github.com:443")),
+                ("mismatched-name", archive_url.replace(archive.name, "other.tar.gz")),
+            ):
+                changed = json.loads(json.dumps(base_metadata))
+                changed["assets"][0]["browser_download_url"] = bad_url
+                metadata_cases.append((label, changed))
+            oversized = json.loads(json.dumps(base_metadata))
+            oversized["assets"][0]["size"] = cli.MAX_ARCHIVE_BYTES + 1
+            metadata_cases.append(("archive-asset-size", oversized))
+            oversized_manifest = json.loads(json.dumps(base_metadata))
+            oversized_manifest["assets"][1]["size"] = cli.MAX_MANIFEST_BYTES + 1
+            metadata_cases.append(("manifest-asset-size", oversized_manifest))
+            metadata_cases.extend((
+                ("duplicate-json-key", (
+                    b'{"tag_name":"v0.1.6","tag_name":"v0.1.7",'
+                    b'"draft":false,"prerelease":false,"assets":[]}'
+                )),
+                ("metadata-status", 429),
+                ("metadata-bound", b"x" * (cli.MAX_RELEASE_METADATA_BYTES + 1)),
+            ))
+
+            stream_cases: list[tuple[str, FakeReleaseTransport]] = []
+            partial = official_release_transport(archive, manifest, "0.1.6")
+            archive_final = partial.routes[archive_url][1]["Location"]
+            partial.routes[archive_final] = (
+                206, {"Content-Length": str(archive.stat().st_size)}, archive.read_bytes(),
+            )
+            stream_cases.append(("partial-status", partial))
+
+            for label, location in (
+                ("http-redirect", "http://release-assets.githubusercontent.com/file"),
+                ("foreign-redirect", "https://example.com/file"),
+                ("credential-redirect", "https://user:secret@release-assets.githubusercontent.com/file"),
+                ("port-redirect", "https://release-assets.githubusercontent.com:444/file"),
+                ("malformed-redirect", "https://[invalid"),
+            ):
+                candidate = official_release_transport(archive, manifest, "0.1.6")
+                candidate.routes[archive_url] = (302, {"Location": location}, b"")
+                stream_cases.append((label, candidate))
+
+            length_mismatch = official_release_transport(archive, manifest, "0.1.6")
+            final_url = length_mismatch.routes[archive_url][1]["Location"]
+            length_mismatch.routes[final_url] = (
+                200, {"Content-Length": str(archive.stat().st_size + 1)}, archive.read_bytes(),
+            )
+            stream_cases.append(("content-length", length_mismatch))
+
+            truncated = official_release_transport(archive, manifest, "0.1.6")
+            final_url = truncated.routes[archive_url][1]["Location"]
+            truncated.routes[final_url] = (
+                200, {"Content-Length": str(archive.stat().st_size)}, archive.read_bytes()[:-1],
+            )
+            stream_cases.append(("truncated", truncated))
+
+            overrun = official_release_transport(archive, manifest, "0.1.6")
+            final_url = overrun.routes[archive_url][1]["Location"]
+            overrun.routes[final_url] = (200, {}, archive.read_bytes() + b"overrun")
+            stream_cases.append(("overrun", overrun))
+
+            manifest_truncated = official_release_transport(archive, manifest, "0.1.6")
+            manifest_final = manifest_truncated.routes[manifest_url][1]["Location"]
+            manifest_truncated.routes[manifest_final] = (
+                200, {"Content-Length": str(manifest.stat().st_size)},
+                manifest.read_bytes()[:-1],
+            )
+            stream_cases.append(("manifest-truncated", manifest_truncated))
+
+            manifest_overrun = official_release_transport(archive, manifest, "0.1.6")
+            manifest_final = manifest_overrun.routes[manifest_url][1]["Location"]
+            manifest_overrun.routes[manifest_final] = (200, {}, manifest.read_bytes() + b"overrun")
+            stream_cases.append(("manifest-overrun", manifest_overrun))
+
+            downloads = root / "downloads"
+            downloads.mkdir()
+            case_number = 0
+            with mock.patch.object(cli.tempfile, "tempdir", str(downloads)):
+                for label, replacement in metadata_cases:
+                    case_number += 1
+                    with self.subTest(case=label):
+                        candidate = official_release_transport(archive, manifest, "0.1.6")
+                        if isinstance(replacement, int):
+                            candidate.routes[exact_url] = (replacement, {}, b"")
+                        else:
+                            body = replacement if isinstance(replacement, bytes) else json.dumps(replacement).encode()
+                            candidate.routes[exact_url] = (
+                                200, {"Content-Length": str(len(body))}, body,
+                            )
+                        home = root / f"metadata-home-{case_number}"
+                        home.mkdir()
+                        before = tree_snapshot(home)
+                        with self.assertRaises(cli.DesktopCLIError) as raised:
+                            cli.install_official(
+                                "0.1.6", home=home, platform=FakePlatform(),
+                                transport=candidate, effective_uid=501,
+                            )
+                        self.assertNotIn("token=", str(raised.exception))
+                        self.assertEqual(tree_snapshot(home), before)
+                        self.assertEqual(list(downloads.iterdir()), [])
+
+                for label, candidate in stream_cases:
+                    case_number += 1
+                    with self.subTest(case=label):
+                        home = root / f"stream-home-{case_number}"
+                        home.mkdir()
+                        before = tree_snapshot(home)
+                        with self.assertRaises(cli.DesktopCLIError) as raised:
+                            cli.install_official(
+                                "0.1.6", home=home, platform=FakePlatform(),
+                                transport=candidate, effective_uid=501,
+                            )
+                        self.assertNotIn("token=", str(raised.exception))
+                        self.assertEqual(tree_snapshot(home), before)
+                        self.assertEqual(list(downloads.iterdir()), [])
+
     def test_existing_shared_parent_modes_and_contents_are_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

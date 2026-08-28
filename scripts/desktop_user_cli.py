@@ -292,10 +292,13 @@ def _open_official_response(url: str, transport: ReleaseTransport,
                 raise DesktopCLIError("official release redirect is malformed")
             if redirect_count == MAX_REDIRECTS:
                 raise DesktopCLIError("official release redirected too many times")
-            current = urllib.parse.urljoin(current, location)
+            try:
+                current = urllib.parse.urljoin(current, location)
+            except ValueError as error:
+                raise DesktopCLIError("official release redirect is malformed") from error
             _validate_official_url(current, "official release redirect")
             continue
-        if type(status) is not int or status < 200 or status >= 300:
+        if status != 200:
             response.close()
             raise DesktopCLIError("official release request returned a non-success status")
         return response
@@ -344,6 +347,15 @@ def _asset_from_metadata(value: object, expected_name: str,
     return ReleaseAsset(expected_name, url, size_bytes)
 
 
+def _exact_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key")
+        result[key] = value
+    return result
+
+
 def discover_official_release(version: str | None = None, *,
                               transport: ReleaseTransport | None = None,
                               timeout: float = EXPLICIT_RELEASE_TIMEOUT) -> OfficialRelease:
@@ -353,8 +365,8 @@ def discover_official_release(version: str | None = None, *,
     url = OFFICIAL_LATEST_RELEASE_URL if version is None else OFFICIAL_RELEASE_TAG_URL.format(version)
     raw = _read_official_bytes(url, transport, MAX_RELEASE_METADATA_BYTES, timeout)
     try:
-        metadata = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        metadata = json.loads(raw, object_pairs_hook=_exact_json_object)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
         raise DesktopCLIError("official release metadata is not bounded valid JSON") from error
     if not isinstance(metadata, dict):
         raise DesktopCLIError("official release metadata must be an object")
