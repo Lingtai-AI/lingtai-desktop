@@ -116,8 +116,12 @@ touches a real Agent or project, and none depends on a network or provider.
   saved/template library facts, skip rules, canonical order, missing-directory
   success, typed directory-read failure, ref normalization, and no-write.
 - `tests/project_creation_test.cpp` — `project_creation` ctest. Exact project
-  shape/setup policy, exclusive publication, bounded rollback, conflicting
+  shape/setup policy, exclusive publication, descriptor rollback across marker
+  removal/publish refusal, join-on-destruction callback suppression, conflicting
   state preservation, and no-follow path rejection under one injected root.
+- `tests/test_project_creation_source_contract.py` — manual Python unittest
+  proving production rollback has descriptor primitives and no path-recursive
+  `remove_all` call.
 - `tests/agent_sleep_test.cpp` — `agent_sleep` ctest. Exact-target `.sleep`
   marker write plus the baseline/observe pair.
 - `tests/agent_lifecycle_test.cpp` — `agent_lifecycle` ctest. Deterministic
@@ -250,6 +254,7 @@ no fixture); the test itself creates and removes its sandbox within that root
 | Test file | Target / executable | ctest name | Fixture (build dir) |
 | --- | --- | --- | --- |
 | `test_repository_contract.py` | Python `unittest` (no target) | manual: `python3 -m unittest tests.test_repository_contract` | — |
+| `test_project_creation_source_contract.py` | Python `unittest` (no target) | manual: `python3 -m unittest tests.test_project_creation_source_contract` | — |
 | `test_app_archive.py` | Python `unittest` (no target) | manual: `python3 -m unittest tests.test_app_archive` | temporary injected directories only |
 | `test_macos_packaging.py` | Python `unittest` (no target) | manual: `python3 -m unittest tests.test_macos_packaging` | temporary injected directories only |
 | `test_desktop_user_cli.py` | Python `unittest` (no target) | manual: `python3 -m unittest tests.test_desktop_user_cli` | fake HOME + injected transport/platform/clock/TTY/prompt boundaries |

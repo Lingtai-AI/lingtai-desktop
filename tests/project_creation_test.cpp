@@ -3,6 +3,7 @@
 #include "project_attachment.h"
 #include "project_creation.h"
 
+#include <QtCore/QCoreApplication>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
@@ -140,6 +141,7 @@ void assert_creation_shape(const fs::path &destination,
 
 int main(int argc, char **argv) {
     try {
+        QCoreApplication application(argc, argv);
         require(argc == 2, "usage: project_creation_test <fixture-root>");
         auto root = fs::canonical(fs::path(argv[1]).parent_path())
             / fs::path(argv[1]).filename();
@@ -227,18 +229,53 @@ int main(int argc, char **argv) {
 
         for (const auto point : {
                 lingtai::desktop::ProjectCreationFailurePoint::after_staging,
-                lingtai::desktop::ProjectCreationFailurePoint::before_publish}) {
+                lingtai::desktop::ProjectCreationFailurePoint::after_marker_removal,
+                lingtai::desktop::ProjectCreationFailurePoint::publish_refused}) {
             const auto failed_destination = root
                 / (point == lingtai::desktop::ProjectCreationFailurePoint::after_staging
-                    ? "fail-stage" : "fail-publish");
+                    ? "fail-stage"
+                    : point == lingtai::desktop::ProjectCreationFailurePoint::after_marker_removal
+                        ? "fail-marker-removed" : "fail-publish-refused");
             fs::create_directories(failed_destination);
+            write_file(failed_destination / "keep.txt", "unrelated\n");
             request = request_for(failed_destination, global, runtime);
             request.failure_point = point;
             const auto failed = lingtai::desktop::create_project(request);
             require(!failed && !fs::exists(failed_destination / ".lingtai")
-                    && !has_stage(failed_destination),
+                    && !has_stage(failed_destination)
+                    && read_file(failed_destination / "keep.txt")
+                        == "unrelated\n",
                 "pre-commit failure left partial project or staging residue");
         }
+
+        auto suppressed_callbacks = 0;
+        {
+            lingtai::desktop::ProjectCreationRunner runner;
+            runner.run_catalog(QString::fromStdString(global.string()),
+                [&](auto) { ++suppressed_callbacks; });
+        }
+        QCoreApplication::processEvents();
+        require(suppressed_callbacks == 0,
+            "catalog callback ran after runner destruction");
+
+        const auto destroyed_runner_destination = root / "runner-destroy";
+        fs::create_directories(destroyed_runner_destination);
+        write_file(destroyed_runner_destination / "keep.txt", "unrelated\n");
+        request = request_for(destroyed_runner_destination, global, runtime);
+        request.failure_point =
+            lingtai::desktop::ProjectCreationFailurePoint::after_marker_removal;
+        {
+            lingtai::desktop::ProjectCreationRunner runner;
+            runner.run_create(request,
+                [&](auto) { ++suppressed_callbacks; });
+        }
+        QCoreApplication::processEvents();
+        require(suppressed_callbacks == 0
+                && !fs::exists(destroyed_runner_destination / ".lingtai")
+                && !has_stage(destroyed_runner_destination)
+                && read_file(destroyed_runner_destination / "keep.txt")
+                    == "unrelated\n",
+            "create worker destruction raced cleanup or callback suppression");
 
         const auto outside = root / "outside";
         const auto symlink_destination = root / "destination-link";

@@ -138,7 +138,8 @@ kernel interpreter.
   escalation, aggregate results, and generation binding.
 - `src/project_creation.{h,cpp}` — `create_project` plus
   `ProjectCreationRunner`: validated descriptor-relative staging, shared setup
-  policy shaping, exclusive atomic `.lingtai` publication, and asynchronous
+  policy shaping, descriptor-relative rollback before/after marker removal,
+  exclusive atomic `.lingtai` publication, and joinable asynchronous
   preset/creation delivery for the New Project wizard.
 
 ## Owned UI owners (`src/ui/`)

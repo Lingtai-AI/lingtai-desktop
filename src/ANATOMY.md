@@ -113,8 +113,9 @@ Domain models (pure, Qt-light state/derivation owners):
   no domain policy.
 - `project_creation.{h,cpp}` — `create_project` and `ProjectCreationRunner`:
   validated no-follow inputs, one owned sibling stage, shared preset-policy
-  reconciliation, exclusive atomic `.lingtai` publication, and queued
-  exactly-once delivery to the UI thread.
+  reconciliation, fd-anchored recursive rollback before or after ownership
+  marker removal, exclusive atomic `.lingtai` publication, and joinable queued
+  exactly-once delivery to the UI thread with destruction-time suppression.
 
 Domain readers/projections (stateless, read-only, one source each):
 

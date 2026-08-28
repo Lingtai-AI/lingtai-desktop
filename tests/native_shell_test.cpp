@@ -3432,6 +3432,8 @@ void verify_first_project_bootstrap(
         window, "lingtai_setup_pages");
     auto *agents_page = required_child<QWidget>(
         window, "lingtai_setup_agents_page");
+    auto *review_page = required_child<QWidget>(
+        window, "lingtai_setup_review_page");
     auto *preset_error = required_child<QLabel>(
         window, "lingtai_setup_edit_preset_error");
     auto *agents_continue = required_child<QPushButton>(
@@ -3440,6 +3442,12 @@ void verify_first_project_bootstrap(
         window, "lingtai_bootstrap_create_start");
     auto *dialog_status = required_ui_child<Ui::FlatLabel>(
         window, "lingtai_bootstrap_dialog_status");
+    auto *soul_flow = required_child<QCheckBox>(
+        *review_page, "lingtai_setup_review_soul_flow");
+    auto *soul_cadence = required_child<QSpinBox>(
+        *review_page, "lingtai_setup_review_soul_cadence");
+    auto *soul_flow_help = required_child<QLabel>(
+        *review_page, "lingtai_setup_review_soul_flow_help");
 
     auto open_requests = std::size_t{0};
     shell.set_open_project_request_handler([&] {
@@ -3459,6 +3467,11 @@ void verify_first_project_bootstrap(
             && preset_chooser->itemText(0) == "alpha"
             && preset_chooser->itemText(1) == "beta",
         "New Project must use the Desktop-owned saved preset catalog");
+    require(!soul_flow->isEnabled() && !soul_cadence->isEnabled()
+            && soul_flow_help->text().contains(QStringLiteral("/setup"))
+            && soul_flow_help->text().contains(
+                QStringLiteral("does not change shared runtime Soul flow")),
+        "New Project must disable nonfunctional Soul flow controls and explain /setup");
 
     preset_chooser->setCurrentIndex(0);
     preset_continue->click();
@@ -3693,6 +3706,8 @@ void verify_existing_agent_setup(
         *review_page, "lingtai_setup_review_nirvana");
     auto *soul_flow = required_child<QCheckBox>(
         *review_page, "lingtai_setup_review_soul_flow");
+    auto *soul_flow_help = required_child<QLabel>(
+        *review_page, "lingtai_setup_review_soul_flow_help");
     auto *covenant = required_child<QLineEdit>(
         *review_page, "lingtai_setup_review_covenant");
     auto *comment = required_child<QPlainTextEdit>(
@@ -3812,7 +3827,11 @@ void verify_existing_agent_setup(
             && max_rpm->value() == 17
             && max_aed->value() == 9
             && karma->isChecked() && nirvana->isChecked()
-            && soul_flow->isChecked()
+            && soul_flow->isChecked() && soul_flow->isEnabled()
+            && cadence->isEnabled()
+            && soul_flow_help->text()
+                == QStringLiteral(
+                    "Autonomous reflection on recent work and prior selves.")
             && covenant->text() == QStringLiteral("/prompts/covenant.md")
             && comment->toPlainText() == QStringLiteral("/prompts/comment.md"),
         "rerun review must hydrate every setup-owned draft field");
@@ -4131,7 +4150,9 @@ void verify_existing_agent_setup(
     require(wait_for_event_loop([&] { return wizard->isVisible(); }, 3000),
         "New Project must still discover presets and open creation mode");
     require(commit->text() == QStringLiteral("Create orchestrator")
-            && !name->isReadOnly() && !folder->isReadOnly(),
+            && !name->isReadOnly() && !folder->isReadOnly()
+            && !soul_flow->isEnabled() && !cadence->isEnabled()
+            && soul_flow_help->text().contains(QStringLiteral("/setup")),
         "rerun-to-creation mode reset must restore presets and editable identity");
     wizard->reject();
     QCoreApplication::processEvents();
@@ -4143,7 +4164,8 @@ void verify_existing_agent_setup(
     agents_continue->click();
     QCoreApplication::processEvents();
     require(commit->text() == QStringLiteral("Save setup")
-            && name->isReadOnly() && folder->isReadOnly(),
+            && name->isReadOnly() && folder->isReadOnly()
+            && soul_flow->isEnabled(),
         "creation-to-rerun reset must restore fixed identity without discovery");
     wizard->reject();
     QCoreApplication::processEvents();

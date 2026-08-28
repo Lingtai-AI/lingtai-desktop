@@ -205,9 +205,13 @@ its code.
 - `Create` validates every external path and prerequisite before building one
   marker-owned sibling stage. It writes the canonical minimum human, first
   Agent, mailbox, and shared-library tree, reconciles selected/default/allowed
-  references through the same setup policy, syncs it, and exclusively renames
-  it to `.lingtai`. Conflicts and pre-commit failures preserve existing state
-  and remove only the owned stage; symlinked inputs fail closed.
+  references through the same setup policy, syncs every directory before
+  removing the marker, and exclusively renames it to `.lingtai`. Conflicts and
+  pre-commit failures preserve existing state and remove only the exact open
+  stage through descriptor-relative recursion; symlinked inputs fail closed.
+- New Project disables Soul flow and cadence with `/setup` guidance because
+  creation does not mutate shared runtime Soul-flow state. Existing-Agent
+  `/setup` keeps the enabled toggle and its existing save semantics.
 - After publication, the shell attaches only through `open_project` and starts
   the first Agent through `AgentLifecycleController`. Launch failure reports a
   recoverable created-but-not-started project; it never rolls back committed

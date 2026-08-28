@@ -25,6 +25,7 @@ From the repository root:
 
 ```bash
 python3 -m unittest tests.test_repository_contract
+python3 -m unittest tests.test_project_creation_source_contract
 python3 -m unittest tests.test_macos_packaging
 python3 -m unittest tests.test_app_archive
 python3 -m unittest tests.test_desktop_user_cli

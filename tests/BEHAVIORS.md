@@ -77,7 +77,10 @@ Qt plugin path set and an 8 s watchdog.
   selected-preset default/allowed parity, reviewed setup fields, normal
   attachment/setup compatibility, byte-preserving no-change save, preservation
   of pre-existing destination contents, conflicting `.lingtai` refusal,
-  injected pre-commit rollback, and destination/preset symlink rejection.
+  injected rollback before and after marker removal, publish-refusal cleanup,
+  joined runner destruction with no late callback, and destination/preset
+  symlink rejection. `test_project_creation_source_contract` separately proves
+  production rollback contains no path-recursive `remove_all` call.
 
 - `posix_descriptor_primitives` proves the descriptor seam: exactly-once
   ownership with a real recycled-descriptor double-close probe

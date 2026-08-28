@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace lingtai::desktop {
@@ -29,7 +30,8 @@ enum class ProjectCreationFailure {
 enum class ProjectCreationFailurePoint {
     none,
     after_staging,
-    before_publish,
+    after_marker_removal,
+    publish_refused,
 };
 
 struct ProjectCreationRequest {
@@ -67,7 +69,8 @@ struct ProjectCreationResult {
 
 // The UI-facing serial worker. Preset scans and creation both run away from
 // the Qt UI thread and deliver at most one queued completion while the runner
-// remains alive.
+// remains alive. Destruction joins the single owned worker before its QObject
+// delivery context is released.
 class ProjectCreationRunner final {
 public:
     using PresetDone = std::function<void(PresetCatalogLoadResult)>;
@@ -87,6 +90,7 @@ private:
     struct DeliveryState;
     QObject delivery_context_;
     std::shared_ptr<DeliveryState> delivery_;
+    std::thread worker_;
     bool pending_ = false;
 };
 

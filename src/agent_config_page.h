@@ -49,11 +49,13 @@ private:
     QComboBox *language_ = nullptr;
     QSpinBox *context_limit_ = nullptr;
     QSpinBox *soul_cadence_ = nullptr;
+    QWidget *soul_cadence_block_ = nullptr;
     QSpinBox *max_rpm_ = nullptr;
     QSpinBox *max_aed_ = nullptr;
     QCheckBox *karma_ = nullptr;
     QCheckBox *nirvana_ = nullptr;
     QCheckBox *soul_flow_ = nullptr;
+    QLabel *soul_flow_help_ = nullptr;
     QLineEdit *covenant_ = nullptr;
     QLineEdit *soul_path_ = nullptr;
     QPlainTextEdit *comment_ = nullptr;

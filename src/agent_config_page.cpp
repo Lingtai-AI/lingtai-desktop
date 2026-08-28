@@ -276,9 +276,10 @@ AgentConfigPage::AgentConfigPage(QWidget *parent)
     runtime_grid->addWidget(make_field_block(runtime, QStringLiteral("Context limit"),
         make_stepper_spin(runtime, context_limit_),
         QStringLiteral("Maximum shared context window.")), 0, 0);
-    runtime_grid->addWidget(make_field_block(runtime, QStringLiteral("Soul cadence"),
+    soul_cadence_block_ = make_field_block(runtime, QStringLiteral("Soul cadence"),
         make_stepper_spin(runtime, soul_cadence_),
-        QStringLiteral("Seconds between autonomous reflections.")), 0, 1);
+        QStringLiteral("Seconds between autonomous reflections."));
+    runtime_grid->addWidget(soul_cadence_block_, 0, 1);
     runtime_grid->addWidget(make_field_block(runtime, QStringLiteral("Max RPM"),
         make_stepper_spin(runtime, max_rpm_),
         QStringLiteral("Shared request limit for agents using the same provider; 0 means no limit.")),
@@ -312,6 +313,7 @@ AgentConfigPage::AgentConfigPage(QWidget *parent)
         row_layout->addWidget(copy, 1);
         row_layout->addWidget(*slot, 0, Qt::AlignRight | Qt::AlignVCenter);
         layout->addWidget(row);
+        return note;
     };
     add_authority(QStringLiteral("Karma"),
         QStringLiteral("May manage other agents."),
@@ -319,9 +321,10 @@ AgentConfigPage::AgentConfigPage(QWidget *parent)
     add_authority(QStringLiteral("Nirvana"),
         QStringLiteral("May permanently destroy agents."),
         "lingtai_setup_review_nirvana", &nirvana_);
-    add_authority(QStringLiteral("Soul flow"),
+    soul_flow_help_ = add_authority(QStringLiteral("Soul flow"),
         QStringLiteral("Autonomous reflection on recent work and prior selves."),
         "lingtai_setup_review_soul_flow", &soul_flow_);
+    soul_flow_help_->setObjectName("lingtai_setup_review_soul_flow_help");
 
     layout->addWidget(make_rule(body));
     layout->addWidget(make_label(body, QStringLiteral("Prompts"),
@@ -416,8 +419,9 @@ AgentConfigPage::AgentConfigPage(QWidget *parent)
         soul_path_dirty_ = true;
     });
     connect(soul_flow_, &QCheckBox::toggled, this, [this](bool on) {
-        soul_cadence_->setEnabled(on);
-        if (auto *wrap = soul_cadence_->parentWidget()) wrap->setEnabled(on);
+        const auto enabled = on && soul_flow_->isEnabled();
+        soul_cadence_->setEnabled(enabled);
+        if (soul_cadence_block_) soul_cadence_block_->setEnabled(enabled);
     });
     context_limit_->setValue(300000);
     max_rpm_->setValue(60);
@@ -426,7 +430,7 @@ AgentConfigPage::AgentConfigPage(QWidget *parent)
     nirvana_->setChecked(false);
     soul_flow_->setChecked(false);
     soul_cadence_->setEnabled(false);
-    if (auto *wrap = soul_cadence_->parentWidget()) wrap->setEnabled(false);
+    if (soul_cadence_block_) soul_cadence_block_->setEnabled(false);
     apply_chrome();
 }
 
@@ -505,7 +509,7 @@ void AgentConfigPage::load(const QString &default_preset, int allowed_count) {
     nirvana_->setChecked(false);
     soul_flow_->setChecked(false);
     soul_cadence_->setEnabled(false);
-    if (auto *wrap = soul_cadence_->parentWidget()) wrap->setEnabled(false);
+    if (soul_cadence_block_) soul_cadence_block_->setEnabled(false);
     comment_->clear();
     update_prompt_paths();
     update_status(default_preset, allowed_count);
@@ -539,8 +543,8 @@ void AgentConfigPage::load_existing(const AgentSetupDraft &draft,
     nirvana_->setChecked(draft.nirvana);
     soul_flow_->setChecked(draft.soul_flow_enabled);
     soul_cadence_->setEnabled(draft.soul_flow_enabled);
-    if (auto *wrap = soul_cadence_->parentWidget()) {
-        wrap->setEnabled(draft.soul_flow_enabled);
+    if (soul_cadence_block_) {
+        soul_cadence_block_->setEnabled(draft.soul_flow_enabled);
     }
     covenant_->setText(QString::fromStdString(draft.covenant_file));
     // Existing setup owns comment_file, not free-form comment content.
@@ -578,6 +582,20 @@ void AgentConfigPage::set_existing_mode(bool existing) {
         ? QStringLiteral("Existing Agent folder; cannot be changed during setup.")
         : QString());
     soul_path_->setReadOnly(existing);
+    soul_flow_->setEnabled(existing);
+    if (soul_flow_help_) {
+        soul_flow_help_->setText(existing
+            ? QStringLiteral(
+                "Autonomous reflection on recent work and prior selves.")
+            : QStringLiteral(
+                "Available after creation from /setup; New Project does not "
+                "change shared runtime Soul flow."));
+    }
+    const auto cadence_enabled = existing && soul_flow_->isChecked();
+    soul_cadence_->setEnabled(cadence_enabled);
+    if (soul_cadence_block_) {
+        soul_cadence_block_->setEnabled(cadence_enabled);
+    }
     if (commit_) {
         const auto text = existing
             ? QStringLiteral("Save setup")

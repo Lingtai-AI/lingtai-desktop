@@ -107,8 +107,9 @@ bounded side-effect scope):
   updates. Results are phase-specific and generation-bound.
 - `create_project(request)` / `ProjectCreationRunner::run_create`
   (`project_creation.h`) — validates all external inputs, builds one owned
-  sibling staging tree, and exclusively publishes `.lingtai`; the runner keeps
-  filesystem work off the UI thread.
+  sibling staging tree, rolls it back only through held descriptors, and
+  exclusively publishes `.lingtai`; the runner keeps filesystem work off the
+  UI thread and joins its worker before destruction.
 - `AgentSetupStore::load` / `save` (`agent_setup_store.h`) — one bounded
   existing-Agent setup snapshot/draft and one staged transaction over the
   selected `init.json`, `.agent.json`, exact configured env leaf, peer

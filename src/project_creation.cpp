@@ -7,12 +7,12 @@
 #include <QtCore/QJsonObject>
 #include <QtCore/QJsonParseError>
 #include <QtCore/QMetaObject>
-#include <QtCore/QPointer>
 
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <cstddef>
+#include <dirent.h>
 #include <fcntl.h>
 #include <ranges>
 #include <string_view>
@@ -82,6 +82,31 @@ std::optional<std::string> read_absolute_regular(
             || opened.st_size < 0
             || static_cast<std::uintmax_t>(opened.st_size) > cap
             || (require_executable && (opened.st_mode & 0111) == 0)) {
+        return std::nullopt;
+    }
+    std::string bytes(static_cast<std::size_t>(opened.st_size), '\0');
+    auto total = std::size_t{0};
+    while (total < bytes.size()) {
+        const auto count = ::read(
+            file.get(), bytes.data() + total, bytes.size() - total);
+        if (count < 0) {
+            if (errno == EINTR) continue;
+            return std::nullopt;
+        }
+        if (count == 0) break;
+        total += static_cast<std::size_t>(count);
+    }
+    if (total != bytes.size()) return std::nullopt;
+    return bytes;
+}
+
+std::optional<std::string> read_regular_component(
+        int parent, const fs::path &leaf, std::size_t cap) {
+    auto file = posix::open_regular_file_component(parent, leaf);
+    if (file.get() < 0) return std::nullopt;
+    struct stat opened {};
+    if (::fstat(file.get(), &opened) != 0 || opened.st_size < 0
+            || static_cast<std::uintmax_t>(opened.st_size) > cap) {
         return std::nullopt;
     }
     std::string bytes(static_cast<std::size_t>(opened.st_size), '\0');
@@ -199,7 +224,8 @@ bool make_mailbox(int owner) {
     return mailbox.get() >= 0
         && make_directory(mailbox.get(), "inbox", 0755)
         && make_directory(mailbox.get(), "sent", 0755)
-        && make_directory(mailbox.get(), "archive", 0755);
+        && make_directory(mailbox.get(), "archive", 0755)
+        && ::fsync(mailbox.get()) == 0;
 }
 
 std::atomic_uint64_t next_stage{0};
@@ -209,19 +235,80 @@ std::string stage_name() {
         + std::to_string(next_stage.fetch_add(1, std::memory_order_relaxed));
 }
 
-void remove_owned_stage(const fs::path &destination,
-        const std::string &stage, dev_t device, ino_t inode) {
-    struct stat current {};
-    if (::lstat((destination / stage).c_str(), &current) != 0
-            || !S_ISDIR(current.st_mode) || current.st_dev != device
-            || current.st_ino != inode) {
-        return;
+bool same_directory(const struct stat &value, dev_t device, ino_t inode) {
+    return S_ISDIR(value.st_mode) && value.st_dev == device
+        && value.st_ino == inode;
+}
+
+bool remove_directory_children(int directory) {
+    const auto scan_fd = ::openat(directory, ".",
+        posix::read_flags() | O_DIRECTORY);
+    if (scan_fd < 0) return false;
+    posix::DirectoryStream entries(::fdopendir(scan_fd));
+    if (!entries.get()) {
+        ::close(scan_fd);
+        return false;
     }
-    const auto marker = destination / stage / kStagingMarker;
-    const auto marker_bytes = read_absolute_regular(marker, 512);
-    if (!marker_bytes || *marker_bytes != stage + "\n") return;
-    std::error_code ignored;
-    fs::remove_all(destination / stage, ignored);
+
+    auto leaves = std::vector<std::string>();
+    errno = 0;
+    while (const auto *entry = ::readdir(entries.get())) {
+        const auto leaf = std::string(entry->d_name);
+        if (leaf == "." || leaf == "..") continue;
+        if (!posix::safe_leaf(fs::path(leaf))) return false;
+        leaves.push_back(leaf);
+    }
+    if (errno != 0) return false;
+
+    for (const auto &leaf : leaves) {
+        struct stat observed {};
+        if (::fstatat(directory, leaf.c_str(), &observed,
+                AT_SYMLINK_NOFOLLOW) != 0) {
+            return false;
+        }
+        if (!S_ISDIR(observed.st_mode)) {
+            if (::unlinkat(directory, leaf.c_str(), 0) != 0) return false;
+            continue;
+        }
+        auto child = posix::open_directory_component(directory, leaf);
+        struct stat opened {};
+        if (child.get() < 0 || ::fstat(child.get(), &opened) != 0
+                || !same_directory(opened, observed.st_dev, observed.st_ino)
+                || !remove_directory_children(child.get())) {
+            return false;
+        }
+        struct stat current {};
+        if (::fstatat(directory, leaf.c_str(), &current,
+                AT_SYMLINK_NOFOLLOW) != 0
+                || !same_directory(current, opened.st_dev, opened.st_ino)
+                || ::unlinkat(directory, leaf.c_str(), AT_REMOVEDIR) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool remove_owned_stage(int destination, int staging,
+        const std::string &stage, dev_t device, ino_t inode,
+        bool require_marker) {
+    struct stat opened {};
+    if (::fstat(staging, &opened) != 0
+            || !same_directory(opened, device, inode)) {
+        return false;
+    }
+    if (require_marker) {
+        const auto marker = read_regular_component(
+            staging, kStagingMarker, 512);
+        if (!marker || *marker != stage + "\n") return false;
+    }
+    if (!remove_directory_children(staging)) return false;
+    struct stat current {};
+    if (::fstatat(destination, stage.c_str(), &current,
+            AT_SYMLINK_NOFOLLOW) != 0
+            || !same_directory(current, device, inode)) {
+        return false;
+    }
+    return ::unlinkat(destination, stage.c_str(), AT_REMOVEDIR) == 0;
 }
 
 bool publish_no_replace(int parent, const std::string &from,
@@ -332,24 +419,19 @@ ProjectCreationResult create_project(
             return failure(ProjectCreationFailure::staging_failed,
                 "could not identify the owned project staging directory");
         }
+        auto marker_present = false;
         const auto cleanup = [&] {
-            remove_owned_stage(request.destination, stage,
-                staging_identity.st_dev, staging_identity.st_ino);
+            static_cast<void>(remove_owned_stage(destination.get(), staging.get(),
+                stage, staging_identity.st_dev, staging_identity.st_ino,
+                marker_present));
         };
         if (!write_new_file(staging.get(), kStagingMarker,
                 stage + "\n", 0600)) {
-            struct stat current {};
-            if (::fstatat(destination.get(), stage.c_str(), &current,
-                    AT_SYMLINK_NOFOLLOW) == 0
-                    && S_ISDIR(current.st_mode)
-                    && current.st_dev == staging_identity.st_dev
-                    && current.st_ino == staging_identity.st_ino) {
-                static_cast<void>(::unlinkat(
-                    destination.get(), stage.c_str(), AT_REMOVEDIR));
-            }
+            cleanup();
             return failure(ProjectCreationFailure::staging_failed,
                 "could not mark the owned project staging directory");
         }
+        marker_present = true;
         if (request.failure_point == ProjectCreationFailurePoint::after_staging) {
             cleanup();
             return failure(ProjectCreationFailure::staging_failed,
@@ -374,7 +456,8 @@ ProjectCreationResult create_project(
         if (!write_new_file(human.get(), ".agent.json",
                 json_bytes(human_identity))
                 || human_mailbox.get() < 0
-                || !write_new_file(human_mailbox.get(), "contacts.json", "[]")) {
+                || !write_new_file(human_mailbox.get(), "contacts.json", "[]")
+                || ::fsync(human_mailbox.get()) != 0) {
             cleanup();
             return failure(ProjectCreationFailure::staging_failed,
                 "could not build the staged human mailbox");
@@ -438,28 +521,41 @@ ProjectCreationResult create_project(
             return failure(ProjectCreationFailure::staging_failed,
                 "could not write the staged Agent configuration");
         }
-        if (::unlinkat(staging.get(), kStagingMarker.data(), 0) != 0
+        if (::fsync(human.get()) != 0 || ::fsync(shared.get()) != 0
+                || ::fsync(agent.get()) != 0
                 || ::fchmod(staging.get(), 0755) != 0
                 || ::fsync(staging.get()) != 0) {
             cleanup();
             return failure(ProjectCreationFailure::staging_failed,
                 "could not finalize the staged project");
         }
-        if (request.failure_point == ProjectCreationFailurePoint::before_publish) {
-            // Restore the marker solely so bounded cleanup can prove ownership.
-            static_cast<void>(write_new_file(staging.get(), kStagingMarker,
-                stage + "\n", 0600));
+        // Everything below the stage is durable before the marker is removed.
+        // Publication follows immediately, leaving no ordinary fallible work
+        // in the crash-only interval between these two namespace operations.
+        if (::unlinkat(staging.get(), kStagingMarker.data(), 0) != 0) {
+            cleanup();
+            return failure(ProjectCreationFailure::staging_failed,
+                "could not finalize staged project ownership");
+        }
+        marker_present = false;
+        if (request.failure_point
+                == ProjectCreationFailurePoint::after_marker_removal) {
             cleanup();
             return failure(ProjectCreationFailure::publish_failed,
-                "injected failure before publication");
+                "injected failure after marker removal");
         }
-        if (!publish_no_replace(destination.get(), stage, ".lingtai")) {
-            static_cast<void>(write_new_file(staging.get(), kStagingMarker,
-                stage + "\n", 0600));
+        const auto published = request.failure_point
+                == ProjectCreationFailurePoint::publish_refused
+            ? false
+            : publish_no_replace(destination.get(), stage, ".lingtai");
+        if (!published) {
             cleanup();
             return failure(ProjectCreationFailure::publish_failed,
-                "project publication was refused; destination state was preserved");
+                request.failure_point == ProjectCreationFailurePoint::publish_refused
+                    ? "injected project publication refusal"
+                    : "project publication was refused; destination state was preserved");
         }
+        static_cast<void>(::fsync(staging.get()));
         static_cast<void>(::fsync(destination.get()));
         return {
             .created = true,
@@ -485,6 +581,7 @@ ProjectCreationRunner::ProjectCreationRunner()
 
 ProjectCreationRunner::~ProjectCreationRunner() {
     delivery_->alive.store(false, std::memory_order_release);
+    if (worker_.joinable()) worker_.join();
 }
 
 bool ProjectCreationRunner::is_pending() const noexcept { return pending_; }
@@ -492,38 +589,41 @@ bool ProjectCreationRunner::is_pending() const noexcept { return pending_; }
 void ProjectCreationRunner::run_catalog(
         const QString &global_dir, PresetDone done) {
     if (pending_) return;
+    if (worker_.joinable()) worker_.join();
     pending_ = true;
     auto state = delivery_;
-    auto context = QPointer<QObject>(&delivery_context_);
-    std::thread([this, state, context, global_dir, done = std::move(done)]() mutable {
+    auto *context = &delivery_context_;
+    worker_ = std::thread(
+            [this, state, context, global_dir, done = std::move(done)]() mutable {
         auto result = load_preset_catalog(global_dir);
-        if (!state->alive.load(std::memory_order_acquire) || !context) return;
+        if (!state->alive.load(std::memory_order_acquire)) return;
         QMetaObject::invokeMethod(context, [this, state, done = std::move(done),
                 result = std::move(result)]() mutable {
             if (!state->alive.load(std::memory_order_acquire)) return;
             pending_ = false;
             if (done) done(std::move(result));
         }, Qt::QueuedConnection);
-    }).detach();
+    });
 }
 
 void ProjectCreationRunner::run_create(
         ProjectCreationRequest request, CreateDone done) {
     if (pending_) return;
+    if (worker_.joinable()) worker_.join();
     pending_ = true;
     auto state = delivery_;
-    auto context = QPointer<QObject>(&delivery_context_);
-    std::thread([this, state, context, request = std::move(request),
+    auto *context = &delivery_context_;
+    worker_ = std::thread([this, state, context, request = std::move(request),
             done = std::move(done)]() mutable {
         auto result = create_project(request);
-        if (!state->alive.load(std::memory_order_acquire) || !context) return;
+        if (!state->alive.load(std::memory_order_acquire)) return;
         QMetaObject::invokeMethod(context, [this, state, done = std::move(done),
                 result = std::move(result)]() mutable {
             if (!state->alive.load(std::memory_order_acquire)) return;
             pending_ = false;
             if (done) done(std::move(result));
         }, Qt::QueuedConnection);
-    }).detach();
+    });
 }
 
 } // namespace lingtai::desktop
