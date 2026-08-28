@@ -576,19 +576,31 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                                 for line in failure_output))
 
             stale_cache_before = (failure_managed / "update-check.json").read_bytes()
-            offline_output: list[str] = []
-            rate_limited = FakeReleaseTransport({
-                cli.OFFICIAL_LATEST_RELEASE_URL: (429, {}, b"rate limited"),
-            })
-            cli.run_installed(
-                ["version"], home=failure_home, platform=FakePlatform(),
-                transport=rate_limited, output=offline_output.append,
-                clock=lambda: 3_000.0 + cli.DEFAULT_UPDATE_CHECK_INTERVAL + 1,
-                tty=lambda: False,
-            )
-            self.assertIn("version: 0.1.5", offline_output)
-            self.assertEqual((failure_managed / "update-check.json").read_bytes(),
-                             stale_cache_before)
+            timeout_transport = mock.Mock()
+            timeout_transport.open.side_effect = TimeoutError("offline timeout")
+            connection_transport = mock.Mock()
+            connection_transport.open.side_effect = ConnectionError("offline")
+            for label, failed_check in (
+                ("timeout", timeout_transport),
+                ("offline", connection_transport),
+                ("rate-limit", FakeReleaseTransport({
+                    cli.OFFICIAL_LATEST_RELEASE_URL: (429, {}, b"rate limited"),
+                })),
+                ("malformed", FakeReleaseTransport({
+                    cli.OFFICIAL_LATEST_RELEASE_URL: (200, {"Content-Length": "1"}, b"{"),
+                })),
+            ):
+                with self.subTest(check_failure=label):
+                    offline_output: list[str] = []
+                    cli.run_installed(
+                        ["version"], home=failure_home, platform=FakePlatform(),
+                        transport=failed_check, output=offline_output.append,
+                        clock=lambda: 3_000.0 + cli.DEFAULT_UPDATE_CHECK_INTERVAL + 1,
+                        tty=lambda: False,
+                    )
+                    self.assertIn("version: 0.1.5", offline_output)
+                    self.assertEqual((failure_managed / "update-check.json").read_bytes(),
+                                     stale_cache_before)
 
     def test_update_cache_tamper_is_non_destructive_and_fully_owned_by_uninstall(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
