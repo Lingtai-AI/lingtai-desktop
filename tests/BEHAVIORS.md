@@ -10,13 +10,14 @@ its code and its proof.
 
 ## Runnable command surface
 
-All repository-owned automated product-behavior proof is CMake/ctest-driven;
-the repository contract is one manual Python command. The exact validation
-surface is in
+Repository/package/lifecycle Python contracts complement the CMake/ctest
+product-behavior proofs. The exact validation surface is in
 [`../AGENTS.md`](../AGENTS.md):
 
 ```bash
 python3 -m unittest tests.test_repository_contract
+python3 -m unittest tests.test_app_archive
+python3 -m unittest tests.test_desktop_user_cli
 ctest --test-dir build --output-on-failure -R '^project_attachment$'
 ctest --test-dir build --output-on-failure -R '^attachment_selection$'
 ctest --test-dir build --output-on-failure -R '^agent_projection$'
@@ -48,6 +49,17 @@ Qt plugin path set and an 8 s watchdog.
   the exact `tdesktop_commit`, and the seven exact toolkit commits, and that
   no dependency/build/validation artifact is tracked by git. It is the sole
   owner of pinned provenance (`test_repository_contract.py:2-8`).
+- `test_app_archive.py` proves the portable archive/manifest producer and
+  independent extractor/verifier remain the authoritative artifact boundary.
+- `test_desktop_user_cli.py` proves entirely offline that bootstrap and explicit
+  update select exact stable assets from the fixed official GitHub Release
+  source, reject hostile metadata/redirects/statuses/stream sizes, clean partial
+  downloads, and feed the existing installer. It also proves the owned private
+  cache, 24-hour zero-network freshness, normal-command noninteractive notices,
+  interactive default-No offers, deliberate `y`/`yes` verified update followed
+  by the original command, prompt-free explicit update/uninstall, failure-open
+  availability, failure rollback, cache tamper refusal, and full uninstall under
+  fake HOME plus injected transport/platform/clock/TTY/prompt boundaries.
 - The compile-time guards prove the Qt-free consumers stay Qt-free (a
   `#ifdef QT_CORE_LIB`/`#error` in `workspace_selection_test.cpp:1-3`,
   `direct_conversation_route_test.cpp:1-3`, and

@@ -58,6 +58,14 @@ restate per-owner behavior; owner-level detail lives in `src/`, `src/ui/`, and
 - **Repro-6 — No pending-lifecycle lies.** A lifecycle result observed after a
   project/selection generation change can never surface under the later
   selection. Proven by `agent_lifecycle` and `native_shell_lifecycle`.
+- **Repro-7 — Official updates are never silent.** Normal installed commands
+  use one bounded 24-hour cache: noninteractive invocations notice only, and an
+  interactive invocation installs only after deliberate `y`/`yes`, then
+  continues its original command against the verified current App. Explicit
+  `update` forces fresh official stable-release discovery without prompting;
+  uninstall never offers. The fixed GitHub source, hostile response rejection,
+  cache ownership, rollback, and fake-HOME behavior are proven offline by
+  `tests/test_desktop_user_cli.py`.
 
 ## Test / oracle routing
 
@@ -83,6 +91,7 @@ restate per-owner behavior; owner-level detail lives in `src/`, `src/ui/`, and
 | Incremental Kanban snapshot/index | `tests/kanban_model_test.cpp` (`kanban_model`) | `ctest --test-dir build -R '^kanban_model$'` |
 | Kanban SWR/single-flight generation | `tests/native_shell_test.cpp` (`native_shell_kanban`) | `ctest --test-dir build -R '^native_shell_kanban$'` |
 | Repro-6 stale-observation rule | `tests/agent_sleep_test.cpp`, `tests/native_shell_test.cpp` | ctest names above |
+| Repro-7 official checked/confirmed update lifecycle | `tests/test_desktop_user_cli.py` | `python3 -m unittest tests.test_desktop_user_cli` |
 
 Visual fidelity against Telegram and functional fidelity against the TUI are
 compared at review against the oracle behavior, not automated in this

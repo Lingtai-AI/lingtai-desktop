@@ -44,7 +44,11 @@ test proves. This file descends into `tests/` itself.
   and bounded secret-free manifest shape. It invokes no Apple, GitHub, signing,
   mount, or packaging service.
 - `tests/test_desktop_user_cli.py` — the fake-HOME user-install lifecycle
-  contract. Its injected platform boundary proves exact independent archive
+  contract. Its injected transport proves fixed official stable-release
+  metadata/asset selection, per-hop HTTPS policy, bounded streaming/cleanup,
+  cache freshness, noninteractive notices, default-No TTY offers, confirmed
+  update continuation, and offline/rate-limit failure behavior without live
+  GitHub. Its injected platform boundary proves exact independent archive
   verification/extraction and smoke failures, exact open/foreground argv, managed modes/layout,
   receipt/digest tamper rejection, atomic current preservation, collisions,
   symlink/traversal refusal, root refusal, and owned-only uninstall without
@@ -247,7 +251,7 @@ no fixture); the test itself creates and removes its sandbox within that root
 | `test_repository_contract.py` | Python `unittest` (no target) | manual: `python3 -m unittest tests.test_repository_contract` | — |
 | `test_app_archive.py` | Python `unittest` (no target) | manual: `python3 -m unittest tests.test_app_archive` | temporary injected directories only |
 | `test_macos_packaging.py` | Python `unittest` (no target) | manual: `python3 -m unittest tests.test_macos_packaging` | temporary injected directories only |
-| `test_desktop_user_cli.py` | Python `unittest` (no target) | manual: `python3 -m unittest tests.test_desktop_user_cli` | fake HOME + injected platform boundary |
+| `test_desktop_user_cli.py` | Python `unittest` (no target) | manual: `python3 -m unittest tests.test_desktop_user_cli` | fake HOME + injected transport/platform/clock/TTY/prompt boundaries |
 | `posix_descriptor_primitives_test.cpp` | `lingtai_posix_descriptor_primitives_test` | `posix_descriptor_primitives` | `posix-descriptor-primitives-fixture` |
 | `project_attachment_test.cpp` | `lingtai_project_attachment_test` | `project_attachment` | `project-attachment-fixture` |
 | `attachment_selection_test.cpp` | `lingtai_attachment_selection_test` | `attachment_selection` | `attachment-selection-fixture` |

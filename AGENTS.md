@@ -73,9 +73,15 @@ experiment; it is not an input to `lingtai-desktop` install or update.
 The developer-preview installer is always exercised with an injected fake
 HOME. Never run it against a developer's real HOME during validation.
 `scripts/desktop_user_cli.py` owns install/update/launch/doctor/uninstall policy;
-`scripts/install-macos-app.py` is only a bootstrap wrapper. Updates consume only
-explicit local App-archive/manifest paths. Do not add PATH/profile mutation, sudo,
-quarantine/Gatekeeper bypass, remote discovery, or a release claim.
+`scripts/install-macos-app.py` is only a bootstrap wrapper. Default bootstrap and
+explicit updates discover only stable releases from the fixed official
+`Lingtai-AI/lingtai-desktop` GitHub source; the injected transport keeps every
+test offline. Preserve the explicit paired local-artifact path. Normal installed
+commands use the owned 24-hour cache and may install only after an interactive
+default-No `y`/`yes` confirmation; noninteractive commands notice only, and
+explicit `update` forces a fresh check without prompting. Do not add PATH/profile
+mutation, sudo, quarantine/Gatekeeper bypass, another remote source, or a release
+claim.
 Preserve existing modes and unrelated contents in the shared `.local`,
 `.local/bin`, and `.local/share` parents. File publication must be fully
 prepared before its no-clobber link becomes visible, rollback may remove only

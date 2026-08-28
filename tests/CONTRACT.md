@@ -166,10 +166,12 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   internal links, streaming digests, incremental hostile-member/resource
   rejection, bounded cleanup, and no-clobber publication races.
 - `tests/test_desktop_user_cli.py` — manual `python3 -m unittest
-  tests.test_desktop_user_cli`; the deterministic fake-HOME contract for the
-  local App-archive user install/update/launch/doctor/uninstall transaction,
-  including authentic filesystem type/collision/tamper checks and injected
-  macOS process boundaries.
+  tests.test_desktop_user_cli`; the deterministic fake-HOME contract for fixed
+  official GitHub Release discovery/download, cached confirmed offers, and the
+  App-archive install/update/launch/doctor/uninstall transaction. Its injected
+  transport and macOS process boundaries make every response, clock, prompt,
+  TTY fact, App action, and failure offline and deterministic; explicit local
+  pairs remain covered.
   Publication and uninstall tests must assert the complete before/after tree,
   not only the raised error: a refusal is evidence only when shared-parent
   metadata, racer-owned leaves, outside trees, every managed version/current,

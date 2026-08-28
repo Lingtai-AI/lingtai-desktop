@@ -44,9 +44,10 @@ For a CI-parity check before pushing:
 ## Portable App archive and terminal install
 
 The Puffo-inspired product boundary is a thin terminal command plus a portable,
-self-contained universal `LingTai.app`. The primary local artifact is a
+self-contained universal `LingTai.app`. The primary release artifact is a
 versioned `.tar.gz` containing exactly one top-level `LingTai.app/`, paired with
-an exact JSON manifest. No public downloadable binary is published yet.
+an exact JSON manifest. Public release publication and signing remain separate
+release gates; this repository does not claim that an unsigned App is ready.
 
 Package an already verified App, then run the independent verifier:
 
@@ -65,7 +66,14 @@ and packaging-checkout HEAD/tree/dirty facts. Packaging provenance is not
 claimed as App-build provenance. The producer independently verifies the pair
 before exclusively publishing it, and preserves any racer-created destination.
 
-Install a local pair without a DMG, mount, download, or privileged operation:
+Install the latest official stable GitHub Release without a DMG, mount, or
+privileged operation (or select an exact stable version with `--version X.Y.Z`):
+
+```bash
+python3 scripts/install-macos-app.py
+```
+
+For offline/diagnostic use, preserve the explicit local pair:
 
 ```bash
 python3 scripts/install-macos-app.py \
@@ -79,14 +87,20 @@ extra top-level content. Verification and smoke run in private disposable
 directories before version publication.
 
 The managed files are `$HOME/.local/bin/lingtai-desktop` and
-`$HOME/.local/share/lingtai-desktop/{cli,versions,receipts,current}`. The command
+`$HOME/.local/share/lingtai-desktop/{cli,versions,receipts,current,update-check.json}`.
+The command
 supports `open` (also the no-argument default), `foreground [-- APP_ARGS...]`,
-`version`, `doctor`, local-artifact-only `update --archive ... --manifest ...`, and
+`version`, `doctor`, official `update [--version X.Y.Z]`, paired local-artifact
+`update --archive ... --manifest ...`, and
 explicit `uninstall --version X.Y.Z` / `uninstall --all`. A byte-identical
 same-version update is reverified and is an idempotent no-op; lower versions are
-refused. The bootstrap does not use sudo, change PATH or shell profiles, clear
-quarantine, bypass Gatekeeper, contact an update service, or claim a public
-release. If `$HOME/.local/bin` is not already on PATH, invoke the launcher by
+refused. Normal commands use a private fixed-schema 24-hour cache. When a newer
+stable version is known, noninteractive calls print a notice only; an interactive
+terminal offers a default-No prompt and only `y`/`yes` downloads, verifies, and
+atomically installs before continuing the requested command. Explicit `update`
+always performs a fresh official check and never prompts. The bootstrap does not
+use sudo, change PATH or shell profiles, clear quarantine, bypass Gatekeeper, or
+claim a public release. If `$HOME/.local/bin` is not already on PATH, invoke the launcher by
 its full path. Existing shared `.local`, `.local/bin`, and `.local/share`
 directory modes and unrelated contents are preserved; only newly created
 shared parents and the exclusively managed root use restrictive defaults.

@@ -23,7 +23,7 @@ scripts/verify-app-archive.py          independent safe archive verifier/extract
 scripts/macos_packaging.py             testable fail-closed macOS package owner
 scripts/package-macos.py               optional diagnostic/release DMG CLI
 scripts/verify-macos-package.py        optional independent DMG verifier
-scripts/desktop_user_cli.py            user install/update/launch lifecycle policy
+scripts/desktop_user_cli.py            official download/check + user lifecycle policy
 scripts/install-macos-app.py           thin Python 3 initial-bootstrap CLI
 cmake/macos/Info.plist.in              bundle metadata including the macOS floor
 src/                                  owned Qt adaptation surface (see src/ANATOMY.md)
@@ -209,12 +209,19 @@ App/executable facts, universal architectures, and the recursive tree digest.
 Manifest Git facts identify only the packaging checkout. The older DMG boundary
 is an optional diagnostic/release experiment. The canonical bundle/compiled
 minimum is macOS 13.0.
-The user-level lifecycle consumes one already-built local archive pair. It installs
-under `$HOME/.local`, carries the independent verifier with the managed CLI,
+The user-level lifecycle acquires stable releases only from the fixed official
+`Lingtai-AI/lingtai-desktop` GitHub API/asset hosts, through a per-hop validated
+injectable HTTPS boundary, or consumes an explicit local archive pair. Downloads
+remain private temporary inputs to the unchanged authoritative installer. It
+installs under `$HOME/.local`, carries the independent verifier with the managed CLI,
 binds each version to a bounded receipt and deterministic bundle-tree digest,
 and switches the relative `current` symlink only after exclusive publication.
 Open and foreground launch only that receipt-validated current App by exact
-argv. Diagnostic opt-in preserves the diagnostic classification.
+argv. Normal commands consult the owned mode-0600 `update-check.json` at most
+once per 24 hours: noninteractive calls notice only, and interactive calls use a
+default-No offer whose deliberate `y`/`yes` runs the verified update before the
+original command continues. Explicit `update` bypasses cache freshness and the
+offer. Diagnostic local-pair opt-in preserves the diagnostic classification.
 Shared `.local` parents retain existing modes. Managed file modes are prepared
 before exclusive publication, rollback identity is inode-bound, and uninstall
 uses a complete exact-child/receipt/digest/ancestor preflight before mutation.

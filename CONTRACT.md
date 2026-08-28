@@ -30,10 +30,17 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
   verification. The older DMG producer/verifier remains an optional release
   experiment and is not an installer input.
 - `scripts/desktop_user_cli.py` solely owns the unprivileged, HOME-derived
+  official-release discovery/download, cached update offer, and
   install/update/current/receipt/doctor/launch/uninstall transaction.
   `scripts/install-macos-app.py` is a thin bootstrap and duplicates no policy.
-  The managed command accepts only explicit local App-archive/manifest pairs, never
-  mutates PATH/profiles, and never weakens quarantine or Gatekeeper.
+  Remote acquisition is fixed to stable `Lingtai-AI/lingtai-desktop` GitHub
+  Releases behind an injected HTTPS transport, and stops at a private temporary
+  archive/manifest pair consumed by the existing authoritative `install()` seam.
+  Explicit local pairs remain supported. Normal commands use the owned bounded
+  `update-check.json`: noninteractive calls notice only, while interactive calls
+  require an explicit default-No `y`/`yes` before the same verified transaction.
+  Explicit `update` forces fresh discovery and never prompts. The command never
+  mutates PATH/profiles and never weakens quarantine or Gatekeeper.
   Existing shared `.local` parent modes are outside its ownership. Managed
   publication becomes visible only after mode preparation, rollback removes
   only invocation-created inode identities, and uninstall rejects the entire
@@ -126,10 +133,11 @@ its folder.
   consumes a portable App archive and never mounts or detaches a disk image.
   Archive packaging Git facts describe the packaging checkout only; they never
   claim to identify the App build.
-- **No privileged or remote install path**: the managed lifecycle refuses
+- **No privileged or unscoped remote install path**: the managed lifecycle refuses
   effective uid 0, owns only `$HOME/.local/bin/lingtai-desktop` and
   `$HOME/.local/share/lingtai-desktop`, and has no sudo, system prefix,
-  network discovery, downgrade bypass, or destructive no-argument uninstall.
+  non-official release source, silent update, downgrade bypass, or destructive
+  no-argument uninstall.
 - **No additional first-project machinery**: `AgentSetupStore` updates only
   setup-owned fields of existing Agents and never scaffolds or adds an Agent;
   first-project bootstrap remains delegated to the TUI headless surface.
