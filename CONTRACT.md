@@ -128,14 +128,20 @@ its folder.
   Agent's bounded `init.json`, and read seams are `noexcept` and write nothing.
 - **No committed build inputs**: `.deps/`, `build/`, Qt SDK trees, and binary
   icon copies must never be tracked.
-- **No ambiguous release state**: ad-hoc/unsigned diagnostic output is never
-  release-ready. A public package requires Developer ID Application signing,
-  hardened runtime, timestamp, Apple acceptance, stapling, and strict package
-  verification; any absent prerequisite or unsuccessful check is fatal.
-  `packaging_git_*` manifest facts identify only the clean tracked packaging
-  checkout and must never be represented as input-App build provenance.
+- **One primary public release contract**: the terminal-installed
+  `lingtai-desktop` command downloads exactly one versioned universal
+  `LingTai.app` archive and its exact JSON manifest from the fixed official
+  stable GitHub Release, then independently and fail-closed verifies the pair
+  and App before atomically publishing it under the user-level managed root.
+  Developer ID signing, hardened runtime, timestamping, notarization, stapling,
+  a DMG, `/Applications`, sudo, and quarantine bypass are not prerequisites for
+  this primary archive publication route. `packaging_git_*` manifest facts
+  identify only the clean tracked packaging checkout and must never be
+  represented as input-App build provenance.
 - **No DMG-bound managed lifecycle**: the primary terminal install/update path
   consumes a portable App archive and never mounts or detaches a disk image.
+  The optional DMG experiment may enforce its own signing and notarization
+  gates, but it neither defines nor gates primary archive publication.
   Archive packaging Git facts describe the packaging checkout only; they never
   claim to identify the App build.
 - **No privileged or unscoped remote install path**: the managed lifecycle refuses
