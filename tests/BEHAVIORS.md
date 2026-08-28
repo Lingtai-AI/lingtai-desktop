@@ -54,8 +54,11 @@ Qt plugin path set and an 8 s watchdog.
 - `test_desktop_user_cli.py` proves entirely offline that bootstrap and explicit
   update select exact stable assets from the fixed official GitHub Release
   source, reject hostile metadata/redirects/statuses/stream sizes, clean partial
-  downloads, and feed the existing installer. It also proves the owned private
-  cache, 24-hour zero-network freshness, normal-command noninteractive notices,
+  downloads, bound every remote/managed version seam, and feed the existing
+  installer. It also proves pre-transport URL encoding rejection, pre-update
+  command syntax validation, the owned private single-link cache and its
+  hardlink-publication rollback, 24-hour zero-network freshness, normal-command
+  noninteractive notices,
   interactive default-No offers, deliberate `y`/`yes` verified update followed
   by the original command, prompt-free explicit update/uninstall, failure-open
   availability, failure rollback, cache tamper refusal, and full uninstall under

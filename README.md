@@ -94,7 +94,9 @@ supports `open` (also the no-argument default), `foreground [-- APP_ARGS...]`,
 `update --archive ... --manifest ...`, and
 explicit `uninstall --version X.Y.Z` / `uninstall --all`. A byte-identical
 same-version update is reverified and is an idempotent no-op; lower versions are
-refused. Normal commands use a private fixed-schema 24-hour cache. When a newer
+refused. Each numeric version component is limited to nine ASCII decimal digits.
+Normal commands validate their syntax before consulting a private, single-link,
+fixed-schema 24-hour cache. When a newer
 stable version is known, noninteractive calls print a notice only; an interactive
 terminal offers a default-No prompt and only `y`/`yes` downloads, verifies, and
 atomically installs before continuing the requested command. Explicit `update`

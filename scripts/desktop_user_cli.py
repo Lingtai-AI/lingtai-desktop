@@ -29,7 +29,13 @@ APP_NAME = "LingTai.app"
 BUNDLE_ID = "ai.lingtai.desktop"
 MINIMUM_MACOS = "13.0"
 ARCHITECTURES = ("arm64", "x86_64")
-VERSION_PATTERN = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
+MAX_VERSION_COMPONENT_DIGITS = 9
+MAX_VERSION_LENGTH = 3 * MAX_VERSION_COMPONENT_DIGITS + 2
+VERSION_PATTERN = re.compile(
+    rf"[0-9]{{1,{MAX_VERSION_COMPONENT_DIGITS}}}\."
+    rf"[0-9]{{1,{MAX_VERSION_COMPONENT_DIGITS}}}\."
+    rf"[0-9]{{1,{MAX_VERSION_COMPONENT_DIGITS}}}"
+)
 SHA_PATTERN = re.compile(r"[0-9a-f]{64}")
 GIT_SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 RECEIPT_SCHEMA = 2
@@ -81,6 +87,11 @@ _FAILPOINT: str | None = None  # Tests inject failures without production flags.
 
 class DesktopCLIError(RuntimeError):
     """A bounded installer/launcher failure safe to print to a terminal."""
+
+
+def _is_safe_version(value: object) -> bool:
+    return (isinstance(value, str) and len(value) <= MAX_VERSION_LENGTH
+            and value.isascii() and VERSION_PATTERN.fullmatch(value) is not None)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -252,6 +263,8 @@ class ReleaseTransport:
 
 
 def _validate_official_url(url: str, label: str) -> urllib.parse.SplitResult:
+    if not isinstance(url, str) or not url.isascii():
+        raise DesktopCLIError(f"{label} URL is malformed")
     try:
         parts = urllib.parse.urlsplit(url)
         port = parts.port
@@ -373,7 +386,7 @@ def _exact_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
 def discover_official_release(version: str | None = None, *,
                               transport: ReleaseTransport | None = None,
                               timeout: float = EXPLICIT_RELEASE_TIMEOUT) -> OfficialRelease:
-    if version is not None and VERSION_PATTERN.fullmatch(version) is None:
+    if version is not None and not _is_safe_version(version):
         raise DesktopCLIError("release version must be a safe x.y.z value")
     transport = transport or ReleaseTransport()
     url = OFFICIAL_LATEST_RELEASE_URL if version is None else OFFICIAL_RELEASE_TAG_URL.format(version)
@@ -387,7 +400,7 @@ def discover_official_release(version: str | None = None, *,
     tag = metadata.get("tag_name")
     draft, prerelease, assets = metadata.get("draft"), metadata.get("prerelease"), metadata.get("assets")
     if (not isinstance(tag, str) or not tag.startswith("v")
-            or VERSION_PATTERN.fullmatch(tag[1:]) is None
+            or not _is_safe_version(tag[1:])
             or type(draft) is not bool or type(prerelease) is not bool
             or draft or prerelease or not isinstance(assets, list)):
         raise DesktopCLIError("official release metadata is not a stable release")
@@ -551,7 +564,7 @@ def load_manifest(archive: Path, manifest: Path) -> Manifest:
     if type(data["schema_version"]) is not int or data["schema_version"] != MANIFEST_SCHEMA:
         raise DesktopCLIError("manifest schema version is invalid")
     version = data["version"]
-    if not isinstance(version, str) or VERSION_PATTERN.fullmatch(version) is None:
+    if not _is_safe_version(version):
         raise DesktopCLIError("manifest version is not a safe x.y.z value")
     expected_name = f"LingTai-{version}-macOS-universal.app.tar.gz"
     if data["archive_file_name"] != expected_name or archive.name != expected_name:
@@ -840,7 +853,7 @@ def _validate_owned_cli(paths: ManagedPaths) -> None:
 
 
 def _read_receipt(paths: ManagedPaths, version: str) -> dict[str, object]:
-    if VERSION_PATTERN.fullmatch(version) is None:
+    if not _is_safe_version(version):
         raise DesktopCLIError("version must be a safe x.y.z value")
     receipt_path = paths.receipts / f"{version}.json"
     raw = _read_bytes_nofollow(receipt_path, "receipt", 8192)
@@ -897,10 +910,10 @@ def _active(paths: ManagedPaths) -> tuple[str, Path, dict[str, object]]:
                              (paths.versions, "managed versions"), (paths.receipts, "managed receipts")):
         _require_real_directory(directory, label)
     target = os.readlink(paths.current)
-    match = re.fullmatch(r"versions/([0-9]+\.[0-9]+\.[0-9]+)", target)
-    if match is None:
+    prefix = "versions/"
+    version = target[len(prefix):] if target.startswith(prefix) else ""
+    if not _is_safe_version(version):
         raise DesktopCLIError("managed current symlink escapes or is malformed")
-    version = match.group(1)
     version_directory = paths.versions / version
     _require_real_directory(version_directory, "managed version")
     app = version_directory / APP_NAME
@@ -929,7 +942,9 @@ def _preflight_uninstall(paths: ManagedPaths) -> UninstallPlan:
     if paths.current.is_symlink():
         current_target = os.readlink(paths.current)
         current_identity = _identity(paths.current)
-        if re.fullmatch(r"versions/[0-9]+\.[0-9]+\.[0-9]+", current_target) is None:
+        current_version = current_target.removeprefix("versions/")
+        if (not current_target.startswith("versions/")
+                or not _is_safe_version(current_version)):
             raise DesktopCLIError("managed current symlink escapes or is malformed")
     elif paths.current.exists():
         raise DesktopCLIError("managed current is not a symlink")
@@ -956,14 +971,15 @@ def _preflight_uninstall(paths: ManagedPaths) -> UninstallPlan:
     version_paths = sorted(paths.versions.iterdir(), key=lambda path: path.name)
     receipt_by_version: dict[str, Path] = {}
     for receipt_path in receipt_paths:
-        match = re.fullmatch(r"([0-9]+\.[0-9]+\.[0-9]+)\.json", receipt_path.name)
+        version = receipt_path.name.removesuffix(".json")
         facts = receipt_path.lstat()
-        if match is None or stat.S_ISLNK(facts.st_mode) or not stat.S_ISREG(facts.st_mode):
+        if (not receipt_path.name.endswith(".json") or not _is_safe_version(version)
+                or stat.S_ISLNK(facts.st_mode) or not stat.S_ISREG(facts.st_mode)):
             raise DesktopCLIError("receipts contains unknown files")
-        receipt_by_version[match.group(1)] = receipt_path
+        receipt_by_version[version] = receipt_path
     version_by_name: dict[str, Path] = {}
     for version_path in version_paths:
-        if VERSION_PATTERN.fullmatch(version_path.name) is None:
+        if not _is_safe_version(version_path.name):
             raise DesktopCLIError("versions contains unknown files")
         _require_real_directory(version_path, "managed version")
         version_by_name[version_path.name] = version_path
@@ -1011,7 +1027,7 @@ def _revalidate_uninstall_ancestors(paths: ManagedPaths, plan: UninstallPlan) ->
 
 
 def _version_tuple(version: str) -> tuple[int, int, int]:
-    if VERSION_PATTERN.fullmatch(version) is None:
+    if not _is_safe_version(version):
         raise DesktopCLIError("version must be a safe x.y.z value")
     return tuple(int(value) for value in version.split("."))  # type: ignore[return-value]
 
@@ -1033,8 +1049,7 @@ def _read_update_cache(paths: ManagedPaths) -> UpdateCheck | None:
             or value.get("schema_version") != UPDATE_CACHE_SCHEMA
             or type(value.get("checked_at")) is not int
             or value["checked_at"] < 0
-            or not isinstance(value.get("latest_version"), str)
-            or VERSION_PATTERN.fullmatch(value["latest_version"]) is None):
+            or not _is_safe_version(value.get("latest_version"))):
         raise DesktopCLIError("managed update-check cache does not match the bounded exact schema")
     return UpdateCheck(value["checked_at"], value["latest_version"])
 
@@ -1043,11 +1058,14 @@ def _update_cache_bytes(latest_version: str, checked_at: int) -> bytes:
     _version_tuple(latest_version)
     if type(checked_at) is not int or checked_at < 0:
         raise DesktopCLIError("update-check time is invalid")
-    return (json.dumps({
+    payload = (json.dumps({
         "checked_at": checked_at,
         "latest_version": latest_version,
         "schema_version": UPDATE_CACHE_SCHEMA,
     }, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    if len(payload) > MAX_UPDATE_CACHE_BYTES:
+        raise DesktopCLIError("update-check cache payload is too large")
+    return payload
 
 
 def _write_update_cache(paths: ManagedPaths, latest_version: str,
@@ -1060,6 +1078,7 @@ def _write_update_cache(paths: ManagedPaths, latest_version: str,
     payload = _update_cache_bytes(latest_version, checked_at)
     temporary = paths.root / f".update-check-{uuid.uuid4().hex}"
     temporary_identity: tuple[int, int] | None = None
+    publication_valid = False
     descriptor: int | None = None
     try:
         flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL
@@ -1073,7 +1092,8 @@ def _write_update_cache(paths: ManagedPaths, latest_version: str,
         os.chmod(temporary, 0o600, follow_symlinks=False)
         facts = _regular_nofollow(temporary, "staged update-check cache")
         temporary_identity = (facts.st_dev, facts.st_ino)
-        if facts.st_size != len(payload) or stat.S_IMODE(facts.st_mode) != 0o600:
+        if (facts.st_size != len(payload) or stat.S_IMODE(facts.st_mode) != 0o600
+                or facts.st_nlink != 1):
             raise DesktopCLIError("staged update-check cache facts are invalid")
         if previous_identity is None:
             try:
@@ -1086,8 +1106,12 @@ def _write_update_cache(paths: ManagedPaths, latest_version: str,
                 raise DesktopCLIError("refusing to replace a raced update-check cache")
             os.replace(temporary, paths.update_cache)
         published = _regular_nofollow(paths.update_cache, "managed update-check cache")
-        if (published.st_dev, published.st_ino) != temporary_identity:
+        if ((published.st_dev, published.st_ino) != temporary_identity
+                or published.st_size != len(payload)
+                or stat.S_IMODE(published.st_mode) != 0o600
+                or published.st_nlink != 1):
             raise DesktopCLIError("update-check cache publication was replaced")
+        publication_valid = True
     except DesktopCLIError:
         raise
     except OSError as error:
@@ -1096,6 +1120,8 @@ def _write_update_cache(paths: ManagedPaths, latest_version: str,
         if descriptor is not None:
             os.close(descriptor)
         _unlink_if_identity(temporary, temporary_identity)
+        if not publication_valid:
+            _unlink_if_identity(paths.update_cache, temporary_identity)
 
 
 def install(archive: Path, manifest_path: Path, *, home: Path | None = None,
@@ -1365,6 +1391,8 @@ def run_installed(arguments: Sequence[str], *, home: Path | None = None,
     paths = _paths(home)
     command = "open" if not arguments else arguments[0]
     rest = list(arguments[1:])
+    if command in {"open", "version", "doctor"} and rest:
+        raise DesktopCLIError(f"{command} takes no arguments")
     if command in {"open", "foreground", "version", "doctor"}:
         version, app, receipt = _active(paths)
         _validate_owned_cli(paths)
@@ -1379,22 +1407,16 @@ def run_installed(arguments: Sequence[str], *, home: Path | None = None,
             version, app, receipt = _active(paths)
             _validate_owned_cli(paths)
         if command == "open":
-            if rest:
-                raise DesktopCLIError("open takes no arguments")
             platform.open_app(app)
         elif command == "foreground":
             if rest[:1] == ["--"]:
                 rest = rest[1:]
             platform.exec_app(app / "Contents/MacOS/LingTai", rest)
         elif command == "version":
-            if rest:
-                raise DesktopCLIError("version takes no arguments")
             output(f"version: {version}")
             output(f"archive sha256: {receipt['source_archive']['sha256']}")  # type: ignore[index]
             output(f"bundle sha256: {receipt['bundle_tree_sha256']}")
         else:
-            if rest:
-                raise DesktopCLIError("doctor takes no arguments")
             version, receipt = doctor(home=home)
             output(f"INTEGRITY PASS: managed LingTai Desktop {version}")
             output(f"archive binding: {receipt['source_archive']['sha256']}")  # type: ignore[index]

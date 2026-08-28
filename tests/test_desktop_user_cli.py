@@ -177,6 +177,27 @@ def unavailable_release_transport() -> FakeReleaseTransport:
 
 
 class DesktopUserCLIContractTest(unittest.TestCase):
+    def test_official_url_rejects_unicode_before_production_transport(self) -> None:
+        connection = mock.Mock()
+        connection.request.side_effect = UnicodeEncodeError(
+            "ascii", "\N{SNOWMAN}", 0, 1, "ordinal not in range(128)",
+        )
+        with mock.patch.object(
+                cli.http.client, "HTTPSConnection", return_value=connection,
+        ) as connection_constructor:
+            with self.assertRaises(cli.DesktopCLIError):
+                cli._open_official_response(
+                    "https://release-assets.githubusercontent.com/\N{SNOWMAN}",
+                    cli.ReleaseTransport(), 1.0,
+                )
+        connection_constructor.assert_not_called()
+
+        encoded = cli._validate_official_url(
+            "https://release-assets.githubusercontent.com/%E2%98%83",
+            "official release",
+        )
+        self.assertEqual(encoded.path, "/%E2%98%83")
+
     def test_official_latest_and_exact_bootstrap_download_verified_release(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -640,6 +661,143 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                     self.assertIn("version: 0.1.5", offline_output)
                     self.assertEqual((failure_managed / "update-check.json").read_bytes(),
                                      stale_cache_before)
+
+    def test_version_policy_bounds_every_remote_and_managed_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            home.mkdir()
+            archive, manifest = write_artifacts(root, "0.1.5")
+            cli.install(archive, manifest, home=home,
+                        platform=FakePlatform(), effective_uid=501)
+            managed = home / ".local/share/lingtai-desktop"
+            before = tree_snapshot(managed)
+
+            huge = f"{'1' * 5000}.2.3"
+            archive_name = f"LingTai-{huge}-macOS-universal.app.tar.gz"
+            manifest_name = f"LingTai-{huge}-macOS-universal.app.manifest.json"
+            metadata = json.dumps({
+                "tag_name": f"v{huge}",
+                "draft": False,
+                "prerelease": False,
+                "assets": [
+                    {
+                        "name": archive_name,
+                        "browser_download_url": (
+                            "https://github.com/Lingtai-AI/lingtai-desktop/releases/"
+                            f"download/v{huge}/{archive_name}"
+                        ),
+                        "size": 1,
+                    },
+                    {
+                        "name": manifest_name,
+                        "browser_download_url": (
+                            "https://github.com/Lingtai-AI/lingtai-desktop/releases/"
+                            f"download/v{huge}/{manifest_name}"
+                        ),
+                        "size": 1,
+                    },
+                ],
+            }).encode()
+            remote = FakeReleaseTransport({
+                cli.OFFICIAL_LATEST_RELEASE_URL: (
+                    200, {"Content-Length": str(len(metadata))}, metadata,
+                ),
+            })
+            output: list[str] = []
+            self.assertEqual(cli.run_installed(
+                ["version"], home=home, platform=FakePlatform(),
+                transport=remote, output=output.append,
+                clock=lambda: 1_000.0, tty=lambda: False,
+            ), 0)
+            self.assertIn("version: 0.1.5", output)
+            self.assertEqual(tree_snapshot(managed), before)
+            self.assertFalse((managed / "update-check.json").exists())
+
+            explicit = FakeReleaseTransport({})
+            with self.assertRaises(cli.DesktopCLIError):
+                cli.discover_official_release(huge, transport=explicit)
+            self.assertEqual(explicit.calls, [])
+
+            long_component = "1234567890.1.2"
+            long_archive, long_manifest = write_artifacts(root, long_component)
+            with self.assertRaises(cli.DesktopCLIError):
+                cli.load_manifest(long_archive, long_manifest)
+            with self.assertRaises(cli.DesktopCLIError):
+                cli._version_tuple(long_component)
+
+            cache = managed / "update-check.json"
+            cache.write_text(json.dumps({
+                "checked_at": 1000,
+                "latest_version": long_component,
+                "schema_version": cli.UPDATE_CACHE_SCHEMA,
+            }))
+            cache.chmod(0o600)
+            with self.assertRaises(cli.DesktopCLIError):
+                cli._read_update_cache(cli._paths(home))
+
+    def test_invalid_normal_command_syntax_has_no_side_effects(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            old_archive, old_manifest = write_artifacts(root, "0.1.5")
+            release_root = root / "release"
+            release_root.mkdir()
+            new_archive, new_manifest = write_artifacts(release_root, "0.1.6")
+
+            for command in ("open", "version", "doctor"):
+                with self.subTest(command=command):
+                    home = root / f"{command}-home"
+                    home.mkdir()
+                    platform = FakePlatform()
+                    cli.install(old_archive, old_manifest, home=home,
+                                platform=platform, effective_uid=501)
+                    before = tree_snapshot(home)
+                    platform_calls = list(platform.calls)
+                    transport = official_release_transport(
+                        new_archive, new_manifest, "0.1.6",
+                    )
+                    prompts: list[str] = []
+                    with self.assertRaisesRegex(
+                            cli.DesktopCLIError, f"{command} takes no arguments",
+                    ):
+                        cli.run_installed(
+                            [command, "unexpected"], home=home, platform=platform,
+                            transport=transport, output=lambda _: None,
+                            clock=lambda: 1_000.0, tty=lambda: True,
+                            prompt=lambda message: prompts.append(message) or "n",
+                            effective_uid=501,
+                        )
+                    self.assertEqual(transport.calls, [])
+                    self.assertEqual(prompts, [])
+                    self.assertEqual(platform.calls, platform_calls)
+                    self.assertEqual(tree_snapshot(home), before)
+
+    def test_update_cache_hardlink_publication_race_rolls_back_owned_name(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            home.mkdir()
+            archive, manifest = write_artifacts(root, "0.1.5")
+            cli.install(archive, manifest, home=home,
+                        platform=FakePlatform(), effective_uid=501)
+            paths = cli._paths(home)
+            managed_before = tree_snapshot(paths.root)
+            outside = root / "racer-owned-cache-link"
+            real_link = os.link
+
+            def inject_hardlink(source: Path, destination: Path, **kwargs: object) -> None:
+                real_link(source, destination, **kwargs)
+                real_link(destination, outside)
+
+            with mock.patch.object(cli.os, "link", side_effect=inject_hardlink):
+                with self.assertRaises(cli.DesktopCLIError):
+                    cli._write_update_cache(paths, "0.1.6", 1_000)
+
+            self.assertEqual(tree_snapshot(paths.root), managed_before)
+            self.assertFalse(paths.update_cache.exists())
+            self.assertTrue(outside.is_file())
+            self.assertEqual(outside.stat().st_nlink, 1)
+            self.assertEqual(json.loads(outside.read_text())["latest_version"], "0.1.6")
 
     def test_update_cache_tamper_is_non_destructive_and_fully_owned_by_uninstall(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

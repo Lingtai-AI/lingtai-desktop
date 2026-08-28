@@ -36,8 +36,12 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
   Remote acquisition is fixed to stable `Lingtai-AI/lingtai-desktop` GitHub
   Releases behind an injected HTTPS transport, and stops at a private temporary
   archive/manifest pair consumed by the existing authoritative `install()` seam.
-  Explicit local pairs remain supported. Normal commands use the owned bounded
-  `update-check.json`: noninteractive calls notice only, while interactive calls
+  Each URL hop must already be ASCII (ordinary percent-encoded paths remain
+  accepted), and every numeric version component is bounded to nine ASCII
+  decimal digits before integer, path, or cache use. Explicit local pairs remain
+  supported. Normal commands validate syntax before update side effects and use
+  the owned bounded, single-link `update-check.json`: noninteractive calls notice
+  only, while interactive calls
   require an explicit default-No `y`/`yes` before the same verified transaction.
   Explicit `update` forces fresh discovery and never prompts. The command never
   mutates PATH/profiles and never weakens quarantine or Gatekeeper.
