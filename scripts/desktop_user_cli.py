@@ -1149,6 +1149,8 @@ def doctor(*, home: Path | None = None) -> tuple[str, dict[str, object]]:
 
 def run_installed(arguments: Sequence[str], *, home: Path | None = None,
                   platform: Platform | None = None,
+                  transport: ReleaseTransport | None = None,
+                  effective_uid: int | None = None,
                   output: Callable[[str], None] = print) -> int:
     platform = platform or Platform()
     paths = _paths(home)
@@ -1180,11 +1182,25 @@ def run_installed(arguments: Sequence[str], *, home: Path | None = None,
         return 0
     if command == "update":
         parser = argparse.ArgumentParser(prog="lingtai-desktop update")
-        parser.add_argument("--archive", required=True, type=Path)
-        parser.add_argument("--manifest", required=True, type=Path)
+        parser.add_argument("--version")
+        parser.add_argument("--archive", type=Path)
+        parser.add_argument("--manifest", type=Path)
         values = parser.parse_args(rest)
-        version = install(values.archive, values.manifest, home=home,
-                          platform=platform, update=True)
+        local_pair = values.archive is not None or values.manifest is not None
+        if (values.archive is None) != (values.manifest is None):
+            raise DesktopCLIError("--archive and --manifest must be supplied together")
+        if local_pair and values.version is not None:
+            raise DesktopCLIError("--version is mutually exclusive with --archive/--manifest")
+        if local_pair:
+            version = install(
+                values.archive, values.manifest, home=home, platform=platform,
+                effective_uid=effective_uid, update=True,
+            )
+        else:
+            version = install_official(
+                values.version, home=home, platform=platform,
+                transport=transport, effective_uid=effective_uid, update=True,
+            )
         output(f"updated LingTai Desktop to {version}")
         return 0
     if command == "uninstall":

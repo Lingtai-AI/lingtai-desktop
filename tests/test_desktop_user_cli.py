@@ -216,6 +216,84 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                                 and Path(call[2]).name == manifest.name for call in verify_calls))
             self.assertTrue(all(not Path(call[1]).parent.exists() for call in verify_calls))
 
+    def test_explicit_update_forces_official_install_and_preserves_local_pair_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            release_root = root / "release"
+            release_root.mkdir()
+            old_archive, old_manifest = write_artifacts(root, "0.1.5")
+            new_archive, new_manifest = write_artifacts(release_root, "0.1.6")
+
+            home = root / "home"
+            home.mkdir()
+            platform = FakePlatform()
+            cli.install(old_archive, old_manifest, home=home,
+                        platform=platform, effective_uid=501)
+            transport = official_release_transport(new_archive, new_manifest, "0.1.6")
+            output: list[str] = []
+            self.assertEqual(cli.run_installed(
+                ["update"], home=home, platform=platform, output=output.append,
+                transport=transport, effective_uid=501,
+            ), 0)
+            managed = home / ".local/share/lingtai-desktop"
+            self.assertEqual(os.readlink(managed / "current"), "versions/0.1.6")
+            self.assertEqual(transport.calls[0][0], cli.OFFICIAL_LATEST_RELEASE_URL)
+            self.assertIn("updated LingTai Desktop to 0.1.6", output)
+
+            exact_home = root / "exact-home"
+            exact_home.mkdir()
+            exact_platform = FakePlatform()
+            cli.install(old_archive, old_manifest, home=exact_home,
+                        platform=exact_platform, effective_uid=501)
+            exact_transport = official_release_transport(new_archive, new_manifest, "0.1.6")
+            cli.run_installed(
+                ["update", "--version", "0.1.6"], home=exact_home,
+                platform=exact_platform, transport=exact_transport,
+                effective_uid=501,
+            )
+            self.assertEqual(
+                exact_transport.calls[0][0],
+                "https://api.github.com/repos/Lingtai-AI/lingtai-desktop/releases/tags/v0.1.6",
+            )
+
+            local_home = root / "local-home"
+            local_home.mkdir()
+            local_platform = FakePlatform()
+            cli.install(old_archive, old_manifest, home=local_home,
+                        platform=local_platform, effective_uid=501)
+            unused_transport = FakeReleaseTransport({})
+            cli.run_installed([
+                "update", "--archive", str(new_archive),
+                "--manifest", str(new_manifest),
+            ], home=local_home, platform=local_platform,
+                transport=unused_transport, effective_uid=501)
+            self.assertEqual(unused_transport.calls, [])
+            self.assertEqual(
+                os.readlink(local_home / ".local/share/lingtai-desktop/current"),
+                "versions/0.1.6",
+            )
+
+            before_failure = tree_snapshot(managed)
+            failing_platform = FakePlatform()
+            failing_platform.fail = "verifier"
+            failing_transport = official_release_transport(new_archive, new_manifest, "0.1.6")
+            with self.assertRaisesRegex(cli.DesktopCLIError, "verifier failure"):
+                cli.run_installed(
+                    ["update"], home=home, platform=failing_platform,
+                    transport=failing_transport, effective_uid=501,
+                )
+            self.assertEqual(tree_snapshot(managed), before_failure)
+            downloaded = [call for call in failing_platform.calls if call[0] == "verify"]
+            self.assertEqual(len(downloaded), 1)
+            self.assertFalse(Path(downloaded[0][1]).parent.exists())
+
+            with self.assertRaisesRegex(cli.DesktopCLIError, "mutually exclusive"):
+                cli.run_installed([
+                    "update", "--version", "0.1.6",
+                    "--archive", str(new_archive), "--manifest", str(new_manifest),
+                ], home=home, platform=platform, transport=transport,
+                    effective_uid=501)
+
     def test_existing_shared_parent_modes_and_contents_are_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
