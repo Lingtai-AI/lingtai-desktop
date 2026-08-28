@@ -201,12 +201,14 @@ The root composes `src/` (owned Qt adaptation), `tests/` (owned contracts),
 The primary package boundary turns one already verified self-contained
 universal App into a portable tar.gz and exact manifest. Both are completed in
 same-filesystem scratch, independently verified, and exclusively hard-linked
-into place as a rollback-safe pair. The verifier preflights every untrusted tar
-member before private extraction and binds archive bytes, App/executable facts,
-universal architectures, and the recursive tree digest. Manifest Git facts
-identify only the packaging checkout. The older DMG boundary is an optional
-diagnostic/release experiment. The canonical bundle/compiled minimum is macOS
-13.0.
+into place as a rollback-safe pair. The verifier incrementally preflights every
+untrusted tar header before private extraction, rejects payload-bearing links
+without advancing past their header, and caps the compressed archive at 512 MiB
+(over 20 times the current roughly 23 MiB artifact). It binds archive bytes,
+App/executable facts, universal architectures, and the recursive tree digest.
+Manifest Git facts identify only the packaging checkout. The older DMG boundary
+is an optional diagnostic/release experiment. The canonical bundle/compiled
+minimum is macOS 13.0.
 The user-level lifecycle consumes one already-built local archive pair. It installs
 under `$HOME/.local`, carries the independent verifier with the managed CLI,
 binds each version to a bounded receipt and deterministic bundle-tree digest,

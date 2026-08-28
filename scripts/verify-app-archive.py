@@ -17,7 +17,7 @@ import sys
 import tarfile
 import tempfile
 from pathlib import Path, PurePosixPath
-from typing import Callable, Sequence
+from typing import Callable, Iterable, Sequence
 
 
 APP_NAME = "LingTai.app"
@@ -31,6 +31,8 @@ VERSION_PATTERN = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 SHA_PATTERN = re.compile(r"[0-9a-f]{64}")
 GIT_PATTERN = re.compile(r"[0-9a-f]{40}")
 MAX_MANIFEST_BYTES = 16 * 1024
+# 512 MiB leaves more than 20x headroom over the current roughly 23 MiB archive.
+MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
 MAX_MEMBERS = 100_000
 MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024
 MAX_TOTAL_BYTES = 4 * 1024 * 1024 * 1024
@@ -70,13 +72,37 @@ def _regular_nofollow(path: Path, label: str) -> os.stat_result:
     return facts
 
 
-def _read_nofollow(path: Path, label: str, limit: int) -> bytes:
-    _regular_nofollow(path, label)
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+def _open_regular_nofollow(path: Path, label: str) -> tuple[int, os.stat_result]:
+    flags = (os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+             | getattr(os, "O_NONBLOCK", 0))
+    descriptor: int | None = None
     try:
         descriptor = os.open(path, flags)
+        facts = os.fstat(descriptor)
+    except OSError as error:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        raise VerificationError(
+            f"{label} must be an existing regular file, not a symlink"
+        ) from error
+    if not stat.S_ISREG(facts.st_mode):
+        os.close(descriptor)
+        raise VerificationError(f"{label} must be an existing regular file, not a symlink")
+    return descriptor, facts
+
+
+def _read_nofollow(path: Path, label: str, limit: int) -> bytes:
+    try:
+        descriptor, facts = _open_regular_nofollow(path, label)
         with os.fdopen(descriptor, "rb") as stream:
+            if facts.st_size > limit:
+                raise VerificationError(f"{label} is too large")
             value = stream.read(limit + 1)
+    except VerificationError:
+        raise
     except OSError as error:
         raise VerificationError(f"could not read {label}") from error
     if len(value) > limit:
@@ -86,7 +112,10 @@ def _read_nofollow(path: Path, label: str, limit: int) -> bytes:
 
 def load_manifest(archive: Path, manifest: Path) -> tuple[dict[str, object], bytes]:
     archive = Path(archive)
-    archive_facts = _regular_nofollow(archive, "App archive")
+    archive_descriptor, archive_facts = _open_regular_nofollow(archive, "App archive")
+    os.close(archive_descriptor)
+    if archive_facts.st_size > MAX_ARCHIVE_BYTES:
+        raise VerificationError("App archive is too large")
     raw = _read_nofollow(Path(manifest), "manifest", MAX_MANIFEST_BYTES)
     try:
         data = json.loads(raw)
@@ -168,13 +197,15 @@ def _hardlink_target(target: str) -> str:
     return "/".join(parts)
 
 
-def _preflight_members(members: list[tarfile.TarInfo]) -> tuple[dict[str, tarfile.TarInfo], dict[str, str]]:
-    if not members or len(members) > MAX_MEMBERS:
-        raise VerificationError("archive has an invalid or excessive member count")
+def _preflight_members(members: Iterable[tarfile.TarInfo]) -> tuple[dict[str, tarfile.TarInfo], dict[str, str]]:
     by_name: dict[str, tarfile.TarInfo] = {}
     link_targets: dict[str, str] = {}
     total_size = 0
+    member_count = 0
     for member in members:
+        member_count += 1
+        if member_count > MAX_MEMBERS:
+            raise VerificationError("archive has an invalid or excessive member count")
         name = _canonical_member_name(member)
         if name in by_name:
             raise VerificationError("archive contains duplicate or conflicting members")
@@ -188,14 +219,20 @@ def _preflight_members(members: list[tarfile.TarInfo]) -> tuple[dict[str, tarfil
             if member.size not in (0,):
                 raise VerificationError("archive directory has conflicting data")
         elif member.issym():
+            if member.size != 0:
+                raise VerificationError("archive link has conflicting data")
             link_targets[name] = _symlink_target(name, member.linkname)
         elif member.islnk():
+            if member.size != 0:
+                raise VerificationError("archive link has conflicting data")
             link_targets[name] = _hardlink_target(member.linkname)
         else:
             raise VerificationError("archive contains a device, FIFO, socket, or unsupported member")
         if total_size > MAX_TOTAL_BYTES:
             raise VerificationError("archive expands beyond the bounded size")
         by_name[name] = member
+    if member_count == 0:
+        raise VerificationError("archive has an invalid or excessive member count")
     root = by_name.get(APP_NAME)
     if root is None or not root.isdir():
         raise VerificationError("archive must contain one exact top-level LingTai.app directory")
@@ -225,7 +262,16 @@ def _extract_members(archive: tarfile.TarFile, destination: Path,
             path.mkdir(mode=0o700)
         except OSError as error:
             raise VerificationError("could not create private archive directory") from error
-    for name, member in sorted(by_name.items()):
+    expected_members = iter(by_name.items())
+    for member in archive:
+        try:
+            name, expected = next(expected_members)
+        except StopIteration as error:
+            raise VerificationError("archive changed after member preflight") from error
+        if (_canonical_member_name(member) != name
+                or (member.type, member.mode, member.size, member.linkname)
+                != (expected.type, expected.mode, expected.size, expected.linkname)):
+            raise VerificationError("archive changed after member preflight")
         if not member.isfile():
             continue
         path = destination / name
@@ -244,6 +290,12 @@ def _extract_members(archive: tarfile.TarFile, destination: Path,
             raise
         except OSError as error:
             raise VerificationError("could not extract regular archive member") from error
+    try:
+        next(expected_members)
+    except StopIteration:
+        pass
+    else:
+        raise VerificationError("archive changed after member preflight")
     for name, member in sorted(by_name.items()):
         if member.issym():
             try:
@@ -281,7 +333,7 @@ def _bundle_tree_digest(app: Path) -> str:
             if stat.S_ISDIR(facts.st_mode):
                 kind, payload = "directory", b""
             elif stat.S_ISREG(facts.st_mode):
-                kind, payload = "file", path.read_bytes()
+                kind, payload = "file", bytes.fromhex(_sha256_file(path, "bundle file"))
             elif stat.S_ISLNK(facts.st_mode):
                 kind = "symlink"
                 target = os.readlink(path)
@@ -292,7 +344,7 @@ def _bundle_tree_digest(app: Path) -> str:
             else:
                 raise VerificationError("extracted App contains an unsupported filesystem object")
             digest.update(relative.encode() + b"\0" + kind.encode() + b"\0" + f"{mode:o}".encode() + b"\0")
-            digest.update(hashlib.sha256(payload).digest() if kind == "file" else payload)
+            digest.update(payload)
             digest.update(b"\0")
             if kind == "directory":
                 visit(path)
@@ -317,6 +369,20 @@ def _default_architecture_reader(executable: Path) -> tuple[str, ...]:
     return tuple(sorted(set(result.stdout.split())))
 
 
+def _sha256_file(path: Path, label: str) -> str:
+    try:
+        descriptor, _ = _open_regular_nofollow(path, label)
+        digest = hashlib.sha256()
+        with os.fdopen(descriptor, "rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(block)
+    except VerificationError:
+        raise
+    except OSError as error:
+        raise VerificationError(f"could not hash {label}") from error
+    return digest.hexdigest()
+
+
 def _verify_app(app: Path, manifest: dict[str, object],
                 architecture_reader: Callable[[Path], tuple[str, ...]]) -> None:
     plist_path = app / "Contents/Info.plist"
@@ -338,7 +404,7 @@ def _verify_app(app: Path, manifest: dict[str, object],
     facts = _regular_nofollow(executable, "App executable")
     if not facts.st_mode & stat.S_IXUSR:
         raise VerificationError("App executable is not executable")
-    executable_digest = hashlib.sha256(executable.read_bytes()).hexdigest()
+    executable_digest = _sha256_file(executable, "App executable")
     if facts.st_size != manifest["executable_size_bytes"] or executable_digest != manifest["executable_sha256"]:
         raise VerificationError("App executable size or SHA-256 does not match manifest")
     if architecture_reader(executable) != REQUIRED_ARCHITECTURES:
@@ -349,11 +415,11 @@ def _verify_app(app: Path, manifest: dict[str, object],
 
 def _extract_verified(archive_path: Path, manifest: dict[str, object], destination: Path,
                       architecture_reader: Callable[[Path], tuple[str, ...]]) -> None:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
-        descriptor = os.open(archive_path, flags)
+        descriptor, facts = _open_regular_nofollow(archive_path, "App archive")
         with os.fdopen(descriptor, "rb") as stream:
-            facts = os.fstat(stream.fileno())
+            if facts.st_size > MAX_ARCHIVE_BYTES:
+                raise VerificationError("App archive is too large")
             digest = hashlib.sha256()
             for block in iter(lambda: stream.read(1024 * 1024), b""):
                 digest.update(block)
@@ -361,8 +427,10 @@ def _extract_verified(archive_path: Path, manifest: dict[str, object], destinati
                 raise VerificationError("archive size or SHA-256 does not match manifest")
             stream.seek(0)
             try:
-                with tarfile.open(fileobj=stream, mode="r:gz") as tar:
-                    by_name, links = _preflight_members(tar.getmembers())
+                with tarfile.open(fileobj=stream, mode="r|gz") as tar:
+                    by_name, links = _preflight_members(tar)
+                stream.seek(0)
+                with tarfile.open(fileobj=stream, mode="r|gz") as tar:
                     _extract_members(tar, destination, by_name, links)
             except (tarfile.TarError, EOFError, OSError) as error:
                 raise VerificationError("archive is malformed or truncated") from error

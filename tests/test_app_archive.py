@@ -14,7 +14,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from scripts import app_archive
+from scripts import app_archive, desktop_user_cli
 
 
 _VERIFIER_SPEC = importlib.util.spec_from_file_location(
@@ -223,6 +223,102 @@ class AppArchiveContractTest(unittest.TestCase):
                     )
                 self.assertFalse(destination.exists())
 
+    def test_link_payload_is_rejected_without_advancing_member_scan(self) -> None:
+        for link_type in (tarfile.SYMTYPE, tarfile.LNKTYPE):
+            with self.subTest(link_type=link_type):
+                link = tarfile.TarInfo("LingTai.app/bad-link")
+                link.type = link_type
+                link.linkname = "LingTai.app/target" if link_type == tarfile.LNKTYPE else "target"
+                link.size = verify_app_archive.MAX_TOTAL_BYTES + 1
+
+                class SentinelMembers:
+                    def __init__(self) -> None:
+                        self.calls = 0
+
+                    def __iter__(self) -> SentinelMembers:
+                        return self
+
+                    def __next__(self) -> tarfile.TarInfo:
+                        self.calls += 1
+                        if self.calls == 1:
+                            return link
+                        raise AssertionError("preflight advanced beyond the invalid link header")
+
+                members = SentinelMembers()
+                with self.assertRaisesRegex(
+                    verify_app_archive.VerificationError, "link has conflicting data"
+                ):
+                    verify_app_archive._preflight_members(members)
+                self.assertEqual(members.calls, 1)
+
+    def test_recursive_bundle_digests_stream_regular_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            app = Path(temporary) / "LingTai.app"
+            make_app(app)
+            expected = app_archive._bundle_tree_digest(app)
+            self.assertEqual(verify_app_archive._bundle_tree_digest(app), expected)
+            self.assertEqual(desktop_user_cli.bundle_tree_digest(app), expected)
+            with mock.patch.object(
+                Path, "read_bytes", side_effect=AssertionError("whole-file read forbidden")
+            ):
+                self.assertEqual(app_archive._bundle_tree_digest(app), expected)
+                self.assertEqual(verify_app_archive._bundle_tree_digest(app), expected)
+                self.assertEqual(desktop_user_cli.bundle_tree_digest(app), expected)
+
+    def test_oversized_sparse_archive_is_rejected_before_hashing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "LingTai-0.1.5-macOS-universal.app.tar.gz"
+            with archive.open("wb") as stream:
+                stream.truncate(verify_app_archive.MAX_ARCHIVE_BYTES + 1)
+            manifest = root / "manifest.json"
+            manifest.write_text("{}")
+            for module, loader, error_type in (
+                (verify_app_archive, verify_app_archive.load_manifest,
+                 verify_app_archive.VerificationError),
+                (desktop_user_cli, desktop_user_cli.load_manifest,
+                 desktop_user_cli.DesktopCLIError),
+            ):
+                with self.subTest(module=module.__name__), \
+                     mock.patch.object(
+                         module.hashlib, "sha256",
+                         side_effect=AssertionError("oversized archive was hashed"),
+                     ), self.assertRaisesRegex(error_type, "archive is too large"):
+                    loader(archive, manifest)
+
+    def test_nonregular_open_descriptor_is_rejected_for_archive_and_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "LingTai-0.1.5-macOS-universal.app.tar.gz"
+            archive.write_bytes(b"archive")
+            manifest = root / "manifest.json"
+            manifest.write_text("{}")
+            original_open = os.open
+            read_descriptor, write_descriptor = os.pipe()
+            os.set_blocking(read_descriptor, False)
+            try:
+                for module, loader, error_type in (
+                    (verify_app_archive, verify_app_archive.load_manifest,
+                     verify_app_archive.VerificationError),
+                    (desktop_user_cli, desktop_user_cli.load_manifest,
+                     desktop_user_cli.DesktopCLIError),
+                ):
+                    for target, label in ((archive, "App archive"), (manifest, "manifest")):
+                        with self.subTest(module=module.__name__, label=label):
+                            def open_with_fifo(path: os.PathLike[str] | str, flags: int,
+                                               *args: object, **kwargs: object) -> int:
+                                if Path(path) == target:
+                                    self.assertTrue(flags & getattr(os, "O_NONBLOCK", 0))
+                                    return os.dup(read_descriptor)
+                                return original_open(path, flags, *args, **kwargs)
+
+                            with mock.patch.object(module.os, "open", side_effect=open_with_fifo), \
+                                 self.assertRaisesRegex(error_type, "regular file"):
+                                loader(archive, manifest)
+            finally:
+                os.close(read_descriptor)
+                os.close(write_descriptor)
+
     def test_malformed_and_truncated_archives_are_rejected_and_cleaned(self) -> None:
         for form in ("malformed", "truncated"):
             with self.subTest(form=form), tempfile.TemporaryDirectory() as temporary:
@@ -276,6 +372,36 @@ class AppArchiveContractTest(unittest.TestCase):
                 )
             self.assertEqual(final_archive.read_bytes(), b"foreign replacement")
             self.assertEqual(final_manifest.read_bytes(), b"racer")
+
+    def test_pair_publication_rejects_successful_second_link_archive_race(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            staged_archive = root / "staged.tar.gz"
+            staged_manifest = root / "staged.json"
+            final_archive = root / "final.tar.gz"
+            final_manifest = root / "final.json"
+            staged_archive.write_bytes(b"archive")
+            staged_manifest.write_bytes(b"manifest")
+            real_link = os.link
+
+            def replace_archive_then_publish_manifest(
+                source: Path, destination: Path, **kwargs: object
+            ) -> None:
+                if Path(destination) == final_manifest:
+                    final_archive.unlink()
+                    final_archive.write_bytes(b"foreign replacement")
+                real_link(source, destination, **kwargs)
+
+            with mock.patch.object(
+                app_archive.os, "link", side_effect=replace_archive_then_publish_manifest
+            ), self.assertRaisesRegex(
+                app_archive.ArchivePackagingError, "pair changed during publication"
+            ):
+                app_archive.publish_pair(
+                    staged_archive, staged_manifest, final_archive, final_manifest
+                )
+            self.assertEqual(final_archive.read_bytes(), b"foreign replacement")
+            self.assertFalse(final_manifest.exists())
 
 
 if __name__ == "__main__":

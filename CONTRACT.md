@@ -24,8 +24,9 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
 - `scripts/app_archive.py` owns the primary portable-App archive production
   boundary. It never mutates the input App and exclusively publishes a complete
   archive/manifest pair without replacing a concurrent target.
-  `scripts/verify-app-archive.py` independently owns untrusted-member preflight,
-  private extraction, exact archive/App-tree binding, and universal executable
+  `scripts/verify-app-archive.py` independently owns incremental untrusted-member
+  preflight before extraction, a 512 MiB compressed-archive ceiling, private
+  extraction, exact archive/App-tree binding, and universal executable
   verification. The older DMG producer/verifier remains an optional release
   experiment and is not an installer input.
 - `scripts/desktop_user_cli.py` solely owns the unprivileged, HOME-derived

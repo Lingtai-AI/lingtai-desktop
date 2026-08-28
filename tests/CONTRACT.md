@@ -163,8 +163,8 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
 - `tests/test_app_archive.py` — manual `python3 -m unittest
   tests.test_app_archive`; the primary portable-App producer and independent
   verifier contract, including exact App/manifest facts, executable modes,
-  internal links, hostile archive members, bounded cleanup, and no-clobber
-  publication races.
+  internal links, streaming digests, incremental hostile-member/resource
+  rejection, bounded cleanup, and no-clobber publication races.
 - `tests/test_desktop_user_cli.py` — manual `python3 -m unittest
   tests.test_desktop_user_cli`; the deterministic fake-HOME contract for the
   local App-archive user install/update/launch/doctor/uninstall transaction,

@@ -120,7 +120,7 @@ def _bundle_tree_digest(app: Path) -> str:
                 kind, payload = "directory", b""
             elif stat.S_ISREG(facts.st_mode):
                 kind = "file"
-                payload = path.read_bytes()
+                payload = bytes.fromhex(_sha256_file(path))
             elif stat.S_ISLNK(facts.st_mode):
                 kind = "symlink"
                 target = os.readlink(path)
@@ -140,7 +140,7 @@ def _bundle_tree_digest(app: Path) -> str:
                 + f"{mode:o}".encode()
                 + b"\0"
             )
-            digest.update(hashlib.sha256(payload).digest() if kind == "file" else payload)
+            digest.update(payload)
             digest.update(b"\0")
             if kind == "directory":
                 visit(path)
@@ -271,9 +271,17 @@ def _rollback_if_owned(path: Path, identity: tuple[int, int]) -> None:
         return
 
 
+def _matches_identity(path: Path, identity: tuple[int, int]) -> bool:
+    try:
+        return _identity(path) == identity
+    except OSError:
+        return False
+
+
 def publish_pair(staged_archive: Path, staged_manifest: Path,
                  final_archive: Path, final_manifest: Path) -> None:
     archive_identity = _identity(staged_archive)
+    manifest_identity = _identity(staged_manifest)
     try:
         os.link(staged_archive, final_archive, follow_symlinks=False)
     except FileExistsError as error:
@@ -288,6 +296,11 @@ def publish_pair(staged_archive: Path, staged_manifest: Path,
     except OSError as error:
         _rollback_if_owned(final_archive, archive_identity)
         raise ArchivePackagingError("artifact publication failed while creating manifest") from error
+    if (not _matches_identity(final_archive, archive_identity)
+            or not _matches_identity(final_manifest, manifest_identity)):
+        _rollback_if_owned(final_archive, archive_identity)
+        _rollback_if_owned(final_manifest, manifest_identity)
+        raise ArchivePackagingError("artifact pair changed during publication")
 
 
 def _default_verifier_runner(archive: Path, manifest: Path) -> None:

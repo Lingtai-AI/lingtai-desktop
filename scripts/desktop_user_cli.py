@@ -33,6 +33,8 @@ LAUNCHER_MARKER = "# lingtai-desktop-owned-v1"
 ARTIFACT_KIND = "lingtai-portable-app-archive"
 MANIFEST_SCHEMA = 1
 EXECUTABLE_RELATIVE = "Contents/MacOS/LingTai"
+# 512 MiB leaves more than 20x headroom over the current roughly 23 MiB archive.
+MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
 MANIFEST_KEYS = {
     "architectures", "archive_file_name", "archive_sha256",
     "archive_size_bytes", "artifact_kind", "bundle_executable",
@@ -179,13 +181,37 @@ def _regular_nofollow(path: Path, label: str) -> os.stat_result:
     return facts
 
 
-def _read_bytes_nofollow(path: Path, label: str, limit: int | None = None) -> bytes:
-    _regular_nofollow(path, label)
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+def _open_regular_nofollow(path: Path, label: str) -> tuple[int, os.stat_result]:
+    flags = (os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+             | getattr(os, "O_NONBLOCK", 0))
+    descriptor: int | None = None
     try:
         descriptor = os.open(path, flags)
+        facts = os.fstat(descriptor)
+    except OSError as error:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        raise DesktopCLIError(
+            f"{label} must be an existing regular file, not a symlink"
+        ) from error
+    if not stat.S_ISREG(facts.st_mode):
+        os.close(descriptor)
+        raise DesktopCLIError(f"{label} must be an existing regular file, not a symlink")
+    return descriptor, facts
+
+
+def _read_bytes_nofollow(path: Path, label: str, limit: int | None = None) -> bytes:
+    try:
+        descriptor, facts = _open_regular_nofollow(path, label)
         with os.fdopen(descriptor, "rb") as stream:
+            if limit is not None and facts.st_size > limit:
+                raise DesktopCLIError(f"{label} is too large")
             data = stream.read(-1 if limit is None else limit + 1)
+    except DesktopCLIError:
+        raise
     except OSError as error:
         raise DesktopCLIError(f"could not read {label}") from error
     if limit is not None and len(data) > limit:
@@ -197,15 +223,17 @@ def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _sha256_file(path: Path, label: str) -> str:
-    _regular_nofollow(path, label)
+def _sha256_file(path: Path, label: str, maximum_bytes: int | None = None) -> str:
     digest = hashlib.sha256()
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
-        descriptor = os.open(path, flags)
+        descriptor, facts = _open_regular_nofollow(path, label)
         with os.fdopen(descriptor, "rb") as stream:
+            if maximum_bytes is not None and facts.st_size > maximum_bytes:
+                raise DesktopCLIError(f"{label} is too large")
             for block in iter(lambda: stream.read(1024 * 1024), b""):
                 digest.update(block)
+    except DesktopCLIError:
+        raise
     except OSError as error:
         raise DesktopCLIError(f"could not hash {label}") from error
     return digest.hexdigest()
@@ -214,7 +242,10 @@ def _sha256_file(path: Path, label: str) -> str:
 def load_manifest(archive: Path, manifest: Path) -> Manifest:
     archive = Path(archive)
     manifest = Path(manifest)
-    archive_stat = _regular_nofollow(archive, "App archive")
+    archive_descriptor, archive_stat = _open_regular_nofollow(archive, "App archive")
+    os.close(archive_descriptor)
+    if archive_stat.st_size > MAX_ARCHIVE_BYTES:
+        raise DesktopCLIError("App archive is too large")
     raw = _read_bytes_nofollow(manifest, "manifest", 16 * 1024)
     try:
         data = json.loads(raw)
@@ -247,7 +278,8 @@ def load_manifest(archive: Path, manifest: Path) -> Manifest:
     if type(size_bytes) is not int or size_bytes <= 0 or size_bytes != archive_stat.st_size:
         raise DesktopCLIError("App archive size does not match manifest")
     sha = data["archive_sha256"]
-    if not isinstance(sha, str) or SHA_PATTERN.fullmatch(sha) is None or _sha256_file(archive, "App archive") != sha:
+    if (not isinstance(sha, str) or SHA_PATTERN.fullmatch(sha) is None
+            or _sha256_file(archive, "App archive", MAX_ARCHIVE_BYTES) != sha):
         raise DesktopCLIError("App archive SHA-256 does not match manifest")
     executable_size = data["executable_size_bytes"]
     executable_sha = data["executable_sha256"]
@@ -366,7 +398,7 @@ def bundle_tree_digest(app: Path) -> str:
             if stat.S_ISDIR(facts.st_mode):
                 kind, payload = "directory", b""
             elif stat.S_ISREG(facts.st_mode):
-                kind, payload = "file", _read_bytes_nofollow(path, "bundle file")
+                kind, payload = "file", bytes.fromhex(_sha256_file(path, "bundle file"))
             elif stat.S_ISLNK(facts.st_mode):
                 kind = "symlink"
                 target = os.readlink(path)
@@ -379,7 +411,7 @@ def bundle_tree_digest(app: Path) -> str:
             else:
                 raise DesktopCLIError("bundle contains an unsupported filesystem object")
             digest.update(relative.encode("utf-8") + b"\0" + kind.encode() + b"\0" + f"{mode:o}".encode() + b"\0")
-            digest.update(hashlib.sha256(payload).digest() if kind == "file" else payload)
+            digest.update(payload)
             digest.update(b"\0")
             if kind == "directory":
                 visit(path)
