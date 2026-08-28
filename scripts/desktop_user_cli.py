@@ -1021,8 +1021,8 @@ def _read_update_cache(paths: ManagedPaths) -> UpdateCheck | None:
     if not path.exists() and not path.is_symlink():
         return None
     facts = _regular_nofollow(path, "managed update-check cache")
-    if stat.S_IMODE(facts.st_mode) != 0o600:
-        raise DesktopCLIError("managed update-check cache mode is invalid")
+    if stat.S_IMODE(facts.st_mode) != 0o600 or facts.st_nlink != 1:
+        raise DesktopCLIError("managed update-check cache ownership or mode is invalid")
     raw = _read_bytes_nofollow(path, "managed update-check cache", MAX_UPDATE_CACHE_BYTES)
     try:
         value = json.loads(raw, object_pairs_hook=_exact_json_object)

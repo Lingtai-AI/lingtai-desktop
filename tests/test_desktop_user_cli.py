@@ -590,6 +590,79 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             self.assertEqual((failure_managed / "update-check.json").read_bytes(),
                              stale_cache_before)
 
+    def test_update_cache_tamper_is_non_destructive_and_fully_owned_by_uninstall(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            release_root = root / "release"
+            release_root.mkdir()
+            archive, manifest = write_artifacts(root, "0.1.5")
+            new_archive, new_manifest = write_artifacts(release_root, "0.1.6")
+
+            def installed_with_cache(name: str) -> tuple[Path, Path]:
+                home = root / name
+                home.mkdir()
+                cli.install(archive, manifest, home=home,
+                            platform=FakePlatform(), effective_uid=501)
+                cli.run_installed(
+                    ["version"], home=home, platform=FakePlatform(),
+                    transport=official_release_transport(new_archive, new_manifest, "0.1.6"),
+                    clock=lambda: 10_000.0, tty=lambda: False, output=lambda _: None,
+                )
+                managed = home / ".local/share/lingtai-desktop"
+                return home, managed
+
+            valid_home, valid_managed = installed_with_cache("valid-home")
+            cli.doctor(home=valid_home)
+            cli.uninstall_all(home=valid_home, effective_uid=501)
+            self.assertFalse(valid_managed.exists())
+            self.assertFalse((valid_home / ".local/bin/lingtai-desktop").exists())
+
+            for corruption in ("symlink", "hardlink", "mode", "schema", "oversize"):
+                with self.subTest(corruption=corruption):
+                    home, managed = installed_with_cache(f"{corruption}-home")
+                    cache = managed / "update-check.json"
+                    outside = root / f"{corruption}-outside-cache"
+                    outside.write_bytes(cache.read_bytes())
+                    outside.chmod(0o600)
+                    if corruption == "symlink":
+                        cache.unlink()
+                        cache.symlink_to(outside)
+                    elif corruption == "hardlink":
+                        cache.unlink()
+                        os.link(outside, cache)
+                    elif corruption == "mode":
+                        cache.chmod(0o644)
+                    elif corruption == "schema":
+                        value = json.loads(cache.read_text())
+                        value["unexpected"] = True
+                        cache.write_text(json.dumps(value))
+                        cache.chmod(0o600)
+                    else:
+                        cache.write_bytes(b"x" * (cli.MAX_UPDATE_CACHE_BYTES + 1))
+                        cache.chmod(0o600)
+
+                    managed_before = tree_snapshot(managed)
+                    outside_before = tree_snapshot(outside)
+                    ordinary_output: list[str] = []
+                    no_network = FakeReleaseTransport({})
+                    cli.run_installed(
+                        ["version"], home=home, platform=FakePlatform(),
+                        transport=no_network, clock=lambda: 10_001.0,
+                        tty=lambda: False, output=ordinary_output.append,
+                    )
+                    self.assertEqual(no_network.calls, [])
+                    self.assertIn("version: 0.1.5", ordinary_output)
+                    self.assertFalse(any("Update available" in line for line in ordinary_output))
+                    self.assertEqual(tree_snapshot(managed), managed_before)
+                    self.assertEqual(tree_snapshot(outside), outside_before)
+
+                    with self.assertRaises(cli.DesktopCLIError):
+                        cli.doctor(home=home)
+                    with self.assertRaises(cli.DesktopCLIError):
+                        cli.uninstall_all(home=home, effective_uid=501)
+                    self.assertEqual(tree_snapshot(managed), managed_before)
+                    self.assertEqual(tree_snapshot(outside), outside_before)
+
     def test_existing_shared_parent_modes_and_contents_are_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
