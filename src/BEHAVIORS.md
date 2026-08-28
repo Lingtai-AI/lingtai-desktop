@@ -1,7 +1,7 @@
 # `src/` current behavior
 
 This file records the current observable behavior of the owned `src/` code as
-it stands in this tree, with the TUI functional boundary (what the kernel/TUI
+it stands in this tree, with the kernel functional boundary
 headless surface owns) and the Telegram visual-oracle boundary (which visual
 facts are inherited from the pinned `lib_ui` palette) stated for each surface.
 It complements [`src/ANATOMY.md`](ANATOMY.md) (structure) and
@@ -194,32 +194,26 @@ its code.
   width restores the fit. The presentation name, Back/Start/Request-sleep
   controls, fonts, and object names are never altered.
 
-## New Project (TUI functional boundary)
+## New Project (Desktop-owned boundary)
 
-- Normal `ShellHost` construction resolves `lingtai-tui` in exact order:
-  inherited PATH, canonical managed receipt `bin_dir`, home-local bin,
-  `/usr/local/bin`, `/opt/homebrew/bin`, then empty. The pure resolver receives
-  PATH/home/system roots as values, ignores empty PATH entries, bounds and
-  validates the receipt schema/shape, and accepts only executable regular-file
-  candidates. A benign symlink is returned as the supplied symlink path.
-
-- `New Project…` runs `<configured-tui> presets` headless (exact separate
-  argv); with no configured executable it fails closed with a single status.
-  While pending, both New/Open actions are disabled and the status shows the
-  current phase.
-- On success a small Desktop-owned dialog shows destination + Browse, a
-  preset chooser populated from returned names (description/tier/source as
-  help), and explicit `Create & Start` / `Cancel`. Any dismissal — Cancel,
-  close control, or Escape — is the same no-spawn cancellation.
-- `Create & Start` requires a nonempty destination and preset, then runs
-  `<configured-tui> spawn <destination> --preset <name>` (no
-  `--agent-name`/`--language`; current TUI defaults control them). Success
-  attaches the returned `project_dir` only through `open_project` and reports
-  `Project created and Agent started.`; failure/nonzero/malformed leaves the
-  current project unchanged and states the destination may contain a
-  partially initialized project. Desktop never writes project/Agent/config.
-  Anchor: `ProjectBootstrapRunner` parse rules (`project_bootstrap.cpp:53`),
-  shell handlers (`native_shell.cpp:1286-1399`).
+- `New Project…` asynchronously calls `load_preset_catalog` against the
+  Desktop global root. While discovery or creation is pending, duplicate
+  New/Open activation is suppressed and the status shows the current phase.
+- The existing setup wizard owns destination, saved/template selection,
+  editor, allowed/default policy, reviewed language/configuration, and explicit
+  Create/Cancel. Any dismissal remains a no-create cancellation.
+- `Create` validates every external path and prerequisite before building one
+  marker-owned sibling stage. It writes the canonical minimum human, first
+  Agent, mailbox, and shared-library tree, reconciles selected/default/allowed
+  references through the same setup policy, syncs it, and exclusively renames
+  it to `.lingtai`. Conflicts and pre-commit failures preserve existing state
+  and remove only the owned stage; symlinked inputs fail closed.
+- After publication, the shell attaches only through `open_project` and starts
+  the first Agent through `AgentLifecycleController`. Launch failure reports a
+  recoverable created-but-not-started project; it never rolls back committed
+  user-visible state. No TUI executable is discovered or invoked.
+  Anchor: `create_project` (`project_creation.cpp`) and shell handoff
+  (`native_shell.cpp`).
 
 ## Existing Agent setup rerun
 
@@ -239,8 +233,8 @@ its code.
 - Save calls `AgentSetupStore::save` directly. `saved` and `no_change` close
   the route, refresh the selected project, and preserve selection; every typed
   failure stays open with its detail. Cancel, Back, and Escape write nothing.
-  This route never runs TUI `presets` or `spawn`; entering New Project resets
-  the same wizard to its existing creation semantics, and vice versa.
+  Entering New Project resets the same wizard to its creation semantics, and
+  vice versa.
 
 ## Composer and conversation
 

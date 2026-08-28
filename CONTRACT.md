@@ -51,11 +51,11 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
   only invocation-created inode identities, and uninstall rejects the entire
   transaction before deletion if any ancestor, root child, receipt, version,
   bundle digest, CLI file, verifier, or launcher is unknown or substituted.
-- `ShellHost` owns application composition: the one fallback interpreter and
-  the one configured TUI executable; `main.cpp` owns the `--smoke` path. The shell performs no
+- `ShellHost` owns application composition and the one fallback kernel
+  interpreter; `main.cpp` owns the `--smoke` path. The shell performs no
   project, registry, or settings writes beyond the explicit user-triggered
   actions (composer send, Request sleep, Start Agent, plus the explicit New
-  Project bootstrap delegation).
+  Project creation transaction).
 
 ## Public (cross-folder) interfaces
 
@@ -78,7 +78,7 @@ its folder.
   `read_agent_preset_summary`, `load_preset_catalog`, `write_agent_signal`,
   `request_agent_sleep` (+ its two observation functions), `launch_agent`,
   `AgentLifecycleController`, `AgentSetupStore`,
-  `ProjectBootstrapRunner`.
+  `create_project`, `ProjectCreationRunner`.
 - `NativeShell` is the one composition root C5 owns; it proposes transitions
   only through `WorkspaceSelectionState`. It also owns the injectable
   attachment Open/Reveal external-action seam; the conversation widget only
@@ -103,16 +103,12 @@ its folder.
   `manifest.preset.active` update during an authorized hard refresh. Its other
   writers remain limited to its own outbox leaf, fixed lifecycle markers, and
   the started Agent's `logs/` directory.
-- The TUI executable (`lingtai-tui`) is invoked only for New Project through
-  `ProjectBootstrapRunner`'s exact separate-argv `presets`/`spawn` calls;
-  existing-Agent `/setup` uses Desktop's read-only `load_preset_catalog` and
-  never invokes either command. No TUI call uses a shell string or joined
-  command line. `/sleep`, `/suspend`, `/cpr`, `/clear`, and `/refresh` never
-  invoke or discover the TUI; `AgentLifecycleController` implements those
-  kernel filesystem/process contracts directly.
-- `resolve_tui_executable` is the sole default-executable discovery owner. It
-  consumes only injected PATH/home/system roots, validates regular executable
-  candidates, and reads only the bounded managed-install receipt.
+- New Project and existing-Agent `/setup` both discover presets through
+  Desktop's bounded `load_preset_catalog`. `create_project` owns the initial
+  fail-closed filesystem transaction, and `AgentLifecycleController` owns the
+  first launch plus all later `/sleep`, `/suspend`, `/cpr`, `/clear`, and
+  `/refresh` kernel filesystem/process contracts. No production path executes
+  or discovers a TUI binary.
 
 ## Forbidden dependencies
 
@@ -149,9 +145,9 @@ its folder.
   `$HOME/.local/share/lingtai-desktop`, and has no sudo, system prefix,
   non-official release source, silent update, downgrade bypass, or destructive
   no-argument uninstall.
-- **No additional first-project machinery**: `AgentSetupStore` updates only
-  setup-owned fields of existing Agents and never scaffolds or adds an Agent;
-  first-project bootstrap remains delegated to the TUI headless surface.
+- **One bounded first-project owner**: `AgentSetupStore` updates only
+  setup-owned fields of existing Agents; `create_project` alone may publish the
+  minimum initial tree and creates no global registry or TUI recipe state.
 
 ## Cross-doc graph
 
@@ -159,6 +155,6 @@ its folder.
 - Child doc sets for `src/`, `src/ui/`, and `tests/` are the expected owners
   of the per-folder navigation and interface detail; they list this root set
   and the root set routes into them.
-- TUI is the functional oracle: exact-argv subprocess and envelope semantics
-  are validated against the TUI surface. Telegram is the visual oracle only:
+- TUI is a functional compatibility oracle for shared on-disk semantics, never
+  a runtime process dependency. Telegram is the visual oracle only:
   layout/mature-interaction fidelity is compared, never copied as code.

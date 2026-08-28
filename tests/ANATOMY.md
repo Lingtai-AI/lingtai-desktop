@@ -115,9 +115,9 @@ touches a real Agent or project, and none depends on a network or provider.
 - `tests/preset_catalog_test.cpp` — `preset_catalog` ctest. Hermetic
   saved/template library facts, skip rules, canonical order, missing-directory
   success, typed directory-read failure, ref normalization, and no-write.
-- `tests/tui_executable_resolver_test.cpp` — `tui_executable_resolver` ctest.
-  Exact precedence, receipt validation, candidate type/mode/symlink checks,
-  and empty fail-closed behavior under one injected fixture root.
+- `tests/project_creation_test.cpp` — `project_creation` ctest. Exact project
+  shape/setup policy, exclusive publication, bounded rollback, conflicting
+  state preservation, and no-follow path rejection under one injected root.
 - `tests/agent_sleep_test.cpp` — `agent_sleep` ctest. Exact-target `.sleep`
   marker write plus the baseline/observe pair.
 - `tests/agent_lifecycle_test.cpp` — `agent_lifecycle` ctest. Deterministic
@@ -125,8 +125,9 @@ touches a real Agent or project, and none depends on a network or provider.
   matching and escalation, every lifecycle flow/timeout, preset validation,
   clear completion, aggregate results, and generation binding.
 - `tests/agent_lifecycle_real_smoke.cpp` — manually invoked acceptance harness.
-  Drives the production controller, process adapter, and detached launcher
-  against disposable real kernel Agents under a fake HOME and TUI-free PATH.
+  Drives Desktop creation, attachment/setup, the production controller,
+  process adapter, and detached launcher against disposable real kernel
+  Agents under a fake HOME and TUI-free PATH.
 - `tests/kanban_model_test.cpp` — `kanban_model` ctest. Full semantic facts
   plus deterministic incremental counters for unchanged cycles, four growing
   JSONL sources, full-read/cursor-capture races, partial/reset handling,
@@ -263,7 +264,7 @@ no fixture); the test itself creates and removes its sandbox within that root
 | `direct_mail_publisher_test.cpp` | `lingtai_direct_mail_publisher_test` | `direct_mail_publisher` | `direct-mail-publisher-fixture` |
 | `agent_preset_summary_test.cpp` | `lingtai_agent_preset_summary_test` | `agent_preset_summary` | `agent-preset-summary-fixture` |
 | `agent_setup_store_test.cpp` | `lingtai_agent_setup_store_test` | `agent_setup_store` | `agent-setup-store-fixture` |
-| `tui_executable_resolver_test.cpp` | `lingtai_tui_executable_resolver_test` | `tui_executable_resolver` | `tui-executable-resolver-fixture` |
+| `project_creation_test.cpp` | `lingtai_project_creation_test` | `project_creation` | `project-creation-fixture` |
 | `agent_sleep_test.cpp` | `lingtai_agent_sleep_test` | `agent_sleep` | `agent-sleep-fixture` |
 | `agent_lifecycle_test.cpp` | `lingtai_agent_lifecycle_test` | `agent_lifecycle` | `agent-lifecycle-fixture` |
 | `agent_lifecycle_real_smoke.cpp` | `lingtai_agent_lifecycle_real_smoke` | manual only | caller-owned isolated project root |

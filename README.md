@@ -13,14 +13,15 @@ LingTai Desktop is the macOS client for [LingTai](https://github.com/TZZheng/lin
 - **Track work** — kanban view over agent activity and session windows.
 - **Manage presets** — discover and apply saved orchestrator configurations without leaving the app.
 
-Desktop delegates project creation and preset/spawn operations to `lingtai-tui` subprocesses. It does not hand-edit `.lingtai` trees or invent configuration the TUI would not write.
+Desktop owns project creation, preset setup, and Agent launch directly against
+the shared on-disk model and managed kernel runtime.
 
 ## Requirements
 
 - macOS 13.0 or newer (validated on macOS 15 in CI)
 - CMake 3.25+, Ninja, Git, curl, Python 3, Xcode command-line tools
 - Qt 6.11.1 macOS universal distribution
-- `lingtai-tui` on `PATH` for setup, presets, and spawn flows
+- A managed LingTai kernel runtime for Agent launch
 
 Set `QT_ROOT` to your Qt 6.11.1 prefix (default: `$HOME/Qt/6.11.1/macos`).
 
@@ -126,7 +127,9 @@ accepted by the managed `lingtai-desktop` install/update path.
 
 ## First project
 
-If you have no LingTai project yet, use **Create project** in the app. Desktop runs `lingtai-tui presets` to list choices, then `lingtai-tui spawn <destination> --preset <name>` when you confirm. The new project opens through the normal attach path.
+If you have no LingTai project yet, use **Create project** in the app. Desktop
+discovers your saved/template presets, creates the first orchestrator, opens the
+new project through the normal attach path, and starts its Agent.
 
 ## Architecture
 

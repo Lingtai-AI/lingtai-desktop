@@ -1,7 +1,5 @@
 #include "shell_host.h"
 
-#include "tui_executable_resolver.h"
-
 #include "base/event_filter.h"
 #include "ui/widgets/rp_window.h"
 
@@ -13,7 +11,6 @@
 #include <QtWidgets/QWidget>
 
 #include <algorithm>
-#include <cstdlib>
 #include <utility>
 
 namespace lingtai::desktop {
@@ -24,23 +21,12 @@ std::filesystem::path default_fallback_python() {
         / ".lingtai-tui" / "runtime" / "venv" / "bin" / "python";
 }
 
-std::filesystem::path default_tui_executable() {
-    const auto *inherited_path = std::getenv("PATH");
-    return resolve_tui_executable({
-        .inherited_path = inherited_path ? inherited_path : "",
-        .home = std::filesystem::path(QDir::homePath().toStdU16String()),
-        .usr_local_bin = "/usr/local/bin",
-        .opt_homebrew_bin = "/opt/homebrew/bin",
-    });
-}
-
 } // namespace
 
 ShellHost::ShellHost(RuntimeOptions runtime_options, QObject *parent)
 : QObject(parent)
 , runtime_options_(std::move(runtime_options))
-, agent_start_fallback_python_(default_fallback_python())
-, tui_executable_(default_tui_executable()) {
+, agent_start_fallback_python_(default_fallback_python()) {
     static_cast<void>(spawn_shell());
 }
 
@@ -65,9 +51,6 @@ std::size_t ShellHost::shell_count() const {
 
 void ShellHost::configure_shell(NativeShell &shell) {
     shell.set_agent_start_fallback_python(agent_start_fallback_python_);
-    if (!tui_executable_.empty()) {
-        shell.set_tui_executable(tui_executable_);
-    }
     shell.set_open_project_request_handler([this, &shell] {
         open_project_for(shell);
     });

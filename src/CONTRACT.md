@@ -26,11 +26,11 @@ Obligations and prohibitions for agents working in `src/`:
    project files itself.
 4. Keep the shell's injectable seams narrow: application composition
    (`ShellHost`) is the only place that chooses the concrete fallback
-   interpreter and the configured TUI executable, and it passes them in
-   through the two setters. `make_native_window()` is the application boundary
+   interpreter, and it passes it through the dedicated setter.
+   `make_native_window()` is the application boundary
    for pinned toolkit prerequisites: it initializes process-global emoji state
    once after widget styles and keeps it alive until `QApplication` teardown.
-   Do not hard-code either executable in the shell or any reader, and do not
+   Do not hard-code the interpreter in the shell or any reader, and do not
    move toolkit lifecycle ownership into an individual widget or window.
 5. Report a mismatch between this contract and the code rather than silently
    rewriting the promise to match accidental behavior.
@@ -45,9 +45,6 @@ function returns one coarse result enum.
 
 Reads (no writes, no durable state):
 
-- `resolve_tui_executable(search)` → executable path or empty
-  (`tui_executable_resolver.h`) — host-independent resolution policy over
-  injected PATH/home/system roots; it never mutates PATH or starts a process.
 - `project_agents(attachment)` → `AgentSnapshot` (`agent_projection.h`).
   The snapshot is shared live truth and keeps the human pseudo-agent row
   (routing, mailbox, and selected-detail truth consume it); only the
@@ -108,9 +105,10 @@ bounded side-effect scope):
   writes, real advisory-lease observation, exact process escalation, direct
   launch/fresh-heartbeat proof, dead-Agent clear, and atomic refresh preset
   updates. Results are phase-specific and generation-bound.
-- `ProjectBootstrapRunner::run_presets` / `run_spawn`
-  (`project_bootstrap.h`) — delegates the entire first-project scaffold/config
-  boundary to the TUI headless surface.
+- `create_project(request)` / `ProjectCreationRunner::run_create`
+  (`project_creation.h`) — validates all external inputs, builds one owned
+  sibling staging tree, and exclusively publishes `.lingtai`; the runner keeps
+  filesystem work off the UI thread.
 - `AgentSetupStore::load` / `save` (`agent_setup_store.h`) — one bounded
   existing-Agent setup snapshot/draft and one staged transaction over the
   selected `init.json`, `.agent.json`, exact configured env leaf, peer
@@ -121,9 +119,9 @@ bounded side-effect scope):
 `NativeShell` routes `/setup` for the exact current selection through that
 existing-Agent store, Desktop's full saved/template catalog reader, and the
 shared in-window setup wizard/editor. It retains the loaded state until Save
-or cancellation, never invokes TUI preset discovery or spawn for this route,
-and refreshes the selected project only after `saved` or `no_change`. New
-Project remains the separate `ProjectBootstrapRunner` `presets`/`spawn` flow.
+or cancellation and refreshes the selected project only after `saved` or
+`no_change`. New Project uses the same catalog and preset-policy rules, then
+opens through normal attachment and launches through the lifecycle controller.
 
 State models: `WorkspaceSelectionState` (`workspace_selection.h`) is the only
 owner of the accepted active project and the selected Agent directory key. A
@@ -166,12 +164,9 @@ coalescing, and stale-while-revalidate presentation.
   composition owns its process-global integrations, animations manager,
   palette/styles, and one `QApplication`-owned emoji runtime shared by every
   shell; composer widgets consume those prerequisites but do not own them.
-- The TUI subprocess (`lingtai-tui`) is the outbound adapter for explicit
-  first-project bootstrap, reached only through `ProjectBootstrapRunner` with
-  exact separate argv and a bounded JSON parse.
-- The TUI executable resolver is a separate pre-launch adapter. It returns the
-  supplied candidate path (including an accepted symlink path) only when it
-  resolves to an executable regular file; malformed receipts fail closed.
+- New Project has no subprocess adapter. `load_preset_catalog` reads the
+  Desktop global root and `create_project` publishes the canonical minimum
+  project before the existing lifecycle adapter launches the kernel.
 
 ## Contract rules
 
@@ -195,7 +190,7 @@ coalescing, and stale-while-revalidate presentation.
    the compatibility `request_agent_sleep` / `start_agent` seams,
    `AgentSetupStore` (composed by the
    shell's selected-Agent `/setup` route), and
-   `ProjectBootstrapRunner` write or launch. Direct mail `queued` means only
+   `create_project` write or launch. Direct mail `queued` means only
    that the complete human outbox leaf
    was published; none claims kernel pickup, target acceptance, delivery,
    liveness, or lifecycle from the local write/start alone.
@@ -206,8 +201,7 @@ coalescing, and stale-while-revalidate presentation.
    the composer. It also owns the composer-local dispatch after calling
    `parse_slash_command` on raw text: every parsed command terminates locally
    before `send_direct_mail`. `/sleep`, `/suspend`, `/cpr`, `/clear`, and
-   `/refresh` dispatch only through the owned `AgentLifecycleController`;
-   `tui_executable_` is bootstrap-only and absent from lifecycle dispatch.
+   `/refresh` dispatch only through the owned `AgentLifecycleController`.
 5. **UI widgets do not absorb domain/business behavior.** `AgentRoster`
    renders rows and reports clicks; `ConversationSurface` renders rows and
    paints bubbles; `AgentDetailView` owns only the composer draft,
@@ -221,10 +215,10 @@ coalescing, and stale-while-revalidate presentation.
 7. **Containment is always enforced.** Every project-tree walk anchors at the
    canonical root and refuses intermediate symlinks; `ProjectAttachment::resolve`
    is used where a full path is needed (e.g. `start_agent`).
-8. **No unowned scaffold/config/registry writes.** Desktop never scaffolds an
-   Agent or broadly regenerates its configuration; explicit first-project
-   bootstrap delegates that entire boundary to the TUI headless surface.
-   `AgentSetupStore` is the sole exception for an existing Agent: it preserves
+8. **No unowned scaffold/config/registry writes.** `create_project` is the sole
+   initial scaffold owner and may publish only its validated minimum `.lingtai`
+   transaction; it creates no global registry or TUI recipe metadata.
+   `AgentSetupStore` is the sole existing-Agent configuration owner: it preserves
    the full documents and patches only the fields declared by
    `AgentSetupDraft`, the one soul-flow key in the exact configured env leaf,
    peer preset policy only for a non-empty replacement list, and orchestrator

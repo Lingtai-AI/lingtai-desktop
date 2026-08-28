@@ -10,7 +10,7 @@
 #include "injected_mail_journal.h"
 #include "kanban_model.h"
 #include "message_reactions.h"
-#include "project_bootstrap.h"
+#include "project_creation.h"
 #include "project_setup_wizard.h"
 #include "runtime_options.h"
 #include "ui/agent_roster.h"
@@ -120,11 +120,6 @@ public:
     // Deterministic UI-contract seam. Empty restores AgentSetupStore::save.
     void set_agent_setup_save_function(AgentSetupSaveFunction save);
     void request_new_project_at(const std::filesystem::path &destination);
-    // The one Desktop-configured TUI executable for explicit first-project
-    // bootstrap: the shipped `lingtai-tui` or a focused test fixture. It is
-    // never interpreted as a shell command string; only exact separate argv
-    // is ever passed to it. Defaults to empty (New Project fails closed).
-    void set_tui_executable(std::filesystem::path executable);
     // Application composition's one concrete fallback interpreter, used only
     // when a selected Agent's own `init.json.venv_path` is absent or its
     // platform Python does not exist. Defaults to an empty path.
@@ -155,8 +150,9 @@ private:
     void request_open_project();
     void request_open_project_in_new_window();
     void request_new_project();
-    void handle_presets_finished(PresetDiscoveryResult result);
-    void handle_spawn_finished(SpawnOutcome outcome);
+    void handle_presets_finished(PresetCatalogLoadResult result);
+    void handle_creation_finished(ProjectCreationResult result);
+    void handle_first_agent_launch_finished(AgentLifecycleResult result);
     void handle_create_and_start();
     void request_existing_agent_setup();
     void handle_save_existing_setup();
@@ -357,18 +353,16 @@ private:
     MailboxSnapshotReadFunction mailbox_snapshot_read_function_ =
         read_direct_mailbox_snapshot;
     std::filesystem::path agent_start_fallback_python_;
-    // The configured TUI executable belongs only to explicit New Project
-    // bootstrap. Lifecycle commands never read or launch it.
-    std::filesystem::path tui_executable_;
     // One serial nonblocking Desktop lifecycle owner. Its structured result
     // carries the start-time project/generation for stale-delivery rejection.
     std::unique_ptr<AgentLifecycleController> lifecycle_controller_;
     // The one current selection-generation epoch, bumped on every real
     // project open, successful Agent selection, and Back/selection clear.
     std::uint64_t selection_generation_ = 0;
-    // The one async owner of the headless `presets`/`spawn` subprocess calls.
-    // Owned by the shell; no PID, lock, retry, or rollback machinery.
-    std::unique_ptr<ProjectBootstrapRunner> bootstrap_runner_;
+    // One serial worker for Desktop-owned preset discovery and the bounded
+    // first-project creation transaction.
+    std::unique_ptr<ProjectCreationRunner> creation_runner_;
+    std::optional<std::filesystem::path> created_project_root_;
     enum class SetupMode { none, create_project, rerun_existing };
     SetupMode setup_mode_ = SetupMode::none;
     std::optional<AgentSetupState> existing_setup_state_;

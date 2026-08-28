@@ -27,7 +27,7 @@ ctest --test-dir build --output-on-failure -R '^direct_conversation_history$'
 ctest --test-dir build --output-on-failure -R '^direct_mail_publisher$'
 ctest --test-dir build --output-on-failure -R '^agent_preset_summary$'
 ctest --test-dir build --output-on-failure -R '^preset_catalog$'
-ctest --test-dir build --output-on-failure -R '^tui_executable_resolver$'
+ctest --test-dir build --output-on-failure -R '^project_creation$'
 ctest --test-dir build --output-on-failure -R '^agent_sleep$'
 ctest --test-dir build --output-on-failure -R '^agent_lifecycle$'
 ctest --test-dir build --output-on-failure -R '^kanban_model$'
@@ -73,12 +73,11 @@ Qt plugin path set and an 8 s watchdog.
 
 ### Pure/domain unit tests
 
-- `tui_executable_resolver` proves first-entry PATH precedence over managed and
-  fallback candidates; canonical receipt success and malformed/shape/schema
-  rejection; home-local and both redirected system fallbacks; rejection of
-  absent, directory, non-executable, dangling, and non-regular candidates;
-  symlink-path preservation for an executable regular target; and empty
-  fail-closed behavior without reading or mutating the process PATH.
+- `project_creation` proves the exact human/Agent/shared-library shape,
+  selected-preset default/allowed parity, reviewed setup fields, normal
+  attachment/setup compatibility, byte-preserving no-change save, preservation
+  of pre-existing destination contents, conflicting `.lingtai` refusal,
+  injected pre-commit rollback, and destination/preset symlink rejection.
 
 - `posix_descriptor_primitives` proves the descriptor seam: exactly-once
   ownership with a real recycled-descriptor double-close probe
@@ -170,7 +169,7 @@ Qt plugin path set and an 8 s watchdog.
   locks, exact argv process safety, TERM/KILL bounds, CPR launch outcomes,
   live/dead clear completion, default/allowed refresh presets, per-phase
   timeouts, and aggregate `all` results. `native_shell_lifecycle` additionally
-  proves stale UI result suppression and absence of lifecycle TUI invocation.
+  proves stale UI result suppression through the Desktop-owned controller.
 - `kanban_model` proves complete cold-board semantics and deterministic
   incremental behavior: two unchanged generations open zero payloads and do
   not enumerate daemon runs; token/event/chat/delegate appends consume only
@@ -246,7 +245,12 @@ Qt plugin path set and an 8 s watchdog.
   reference-safe policy with unknown/active round-trip, 1/3→2/3→3/3 and Back
   routes, full review hydration, fixed identity/folder, byte-exact no-change
   and cancellation, owned-field save, selected-project refresh, typed
-  source-change/rollback evidence, no sentinel/TUI calls, and both mode resets.
+  source-change/rollback evidence, and both mode resets.
+- `verify_first_project_bootstrap` uses a fake Desktop global catalog and a
+  PATH with no TUI executable. It proves asynchronous single-pending discovery
+  and creation, normal attach/selection, setup-compatible output, successful
+  first launch, and the recoverable created-but-not-started result after an
+  injected launch refusal.
 - `visual_composer_attachments_light` and `_dark` capture the selected-Agent
   detail with one file card and one decoded image thumbnail at the normal
   macOS viewport. Missing baselines preserve the actual PNG as an inspection

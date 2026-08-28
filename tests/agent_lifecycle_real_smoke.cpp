@@ -1,7 +1,9 @@
 #include "agent_lifecycle.h"
 #include "agent_process.h"
+#include "agent_setup_store.h"
 #include "agent_signal.h"
 #include "project_attachment.h"
+#include "project_creation.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QEventLoop>
@@ -280,16 +282,54 @@ int main(int argc, char **argv) {
                          "a PATH with no executable lingtai-tui\n";
             return 2;
         }
-        fs::create_directories(project / ".lingtai/Main/logs");
-        fs::create_directories(project / ".lingtai/broken/logs");
-        fs::create_directories(project / "presets");
-        const auto default_path = project / "presets/default.json";
-        const auto alternate_path = project / "presets/alternate.json";
+        fs::create_directories(project);
+        const auto isolated_home = fs::path(home_raw);
+        const auto global = isolated_home / ".lingtai-tui";
+        const auto default_path = global / "presets/saved/default.json";
+        const auto alternate_path = global / "presets/saved/alternate.json";
+        const auto env_path = global / ".env";
+        const auto covenant_path = global / "covenant/en/covenant.md";
         write_json(default_path, preset("default"));
         write_json(alternate_path, preset("alternate"));
+        write_file(env_path, "ISOLATED_SMOKE=1\n");
+        write_file(covenant_path, "isolated lifecycle smoke\n");
+
+        lingtai::desktop::AgentSetupDraft setup{
+            .agent_name = "Main",
+            .language = "en",
+            .context_limit = 300000,
+            .max_rpm = 60,
+            .max_aed_attempts = 5,
+            .karma = true,
+            .nirvana = false,
+            .soul_flow_enabled = false,
+            .covenant_file = covenant_path.string(),
+        };
+        const auto created = lingtai::desktop::create_project({
+            .destination = project,
+            .preset_path = default_path,
+            .allowed_preset_paths = {default_path, alternate_path},
+            .runtime_python = runtime_python,
+            .env_file = env_path,
+            .covenant_file = covenant_path,
+            .agent_name = "Main",
+            .agent_directory = "Main",
+            .setup = setup,
+            .comment = "isolated lifecycle smoke agent",
+        });
+        expect(created.created,
+            "Desktop creation transaction commits the fake-HOME project");
+        if (!created.created) {
+            std::cerr << "creation failed: " << created.detail << '\n';
+            return 1;
+        }
         const auto main_agent = project / ".lingtai/Main";
-        write_init(main_agent, runtime_python, default_path, alternate_path,
-            alternate_path);
+        expect(fs::is_regular_file(main_agent / "init.json")
+                && fs::is_regular_file(main_agent / ".agent.json")
+                && fs::is_directory(project / ".lingtai/human/mailbox/inbox")
+                && fs::is_directory(project / ".lingtai/.library_shared")
+                && !fs::exists(project / ".lingtai/.tui-asset"),
+            "created project has the exact Desktop/kernel shape and no TUI state");
 
         const auto attached = lingtai::desktop::attach_project(project);
         if (!attached) {
@@ -307,6 +347,27 @@ int main(int argc, char **argv) {
         auto first = lingtai::desktop::observe_exact_agent_processes(main_agent);
         expect(first.available && first.pids.size() == 1,
             "the launched process has the exact production argv");
+        for (const auto pid : first.pids) {
+            std::cout << "EXACT_LAUNCHED_PID: " << pid << '\n';
+        }
+        const auto launched_identity = QJsonDocument::fromJson(
+            QByteArray::fromStdString(read_file(main_agent / ".agent.json")))
+            .object();
+        expect(!launched_identity.value("agent_id").toString().isEmpty()
+                && fs::is_regular_file(
+                    main_agent / "system/manifest.resolved.json"),
+            "the real kernel publishes durable identity and resolved system state");
+        const lingtai::desktop::AgentSetupStore setup_store(attachment);
+        const auto loaded_setup = setup_store.load("Main");
+        expect(static_cast<bool>(loaded_setup),
+            "the real kernel identity and Desktop-created init load as setup state");
+        if (loaded_setup) {
+            const auto unchanged = setup_store.save(
+                *loaded_setup.state, loaded_setup.state->draft);
+            expect(unchanged.status
+                    == lingtai::desktop::AgentSetupSaveStatus::no_change,
+                "unchanged setup is byte-preserving after real launch");
+        }
 
         result = run_command(attachment, runtime_python,
             snapshot({agent_row("Main", AgentRole::main,
@@ -335,6 +396,9 @@ int main(int argc, char **argv) {
         expect(revived.available && revived.pids.size() == 1
                 && revived.pids != first.pids,
             "CPR produces a fresh exact process");
+        for (const auto pid : revived.pids) {
+            std::cout << "EXACT_REVIVED_PID: " << pid << '\n';
+        }
 
         result = run_command(attachment, runtime_python,
             snapshot({agent_row("Main", AgentRole::main,
@@ -369,6 +433,7 @@ int main(int argc, char **argv) {
         const auto broken_venv = project / "broken-runtime";
         write_file(broken_venv / "bin/python", "not executable\n");
         const auto broken_agent = project / ".lingtai/broken";
+        fs::create_directories(broken_agent / "logs");
         write_init(broken_agent, runtime_python, default_path, alternate_path,
             default_path, broken_venv);
         result = run_command(attachment, runtime_python,
@@ -396,6 +461,7 @@ int main(int argc, char **argv) {
         stop_agent(attachment, "broken");
         const auto remaining =
             lingtai::desktop::observe_exact_agent_processes(main_agent);
+        std::cout << "EXACT_REMAINING_PIDS: " << remaining.pids.size() << '\n';
         expect(remaining.available && remaining.pids.empty(),
             "smoke cleanup leaves no real Agent process behind");
     } catch (const std::exception &error) {

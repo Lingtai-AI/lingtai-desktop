@@ -53,7 +53,6 @@ private:
 
     RuntimeOptions runtime_options_;
     std::filesystem::path agent_start_fallback_python_;
-    std::filesystem::path tui_executable_;
     std::vector<std::unique_ptr<NativeShell>> shells_;
     bool shutting_down_ = false;
 };

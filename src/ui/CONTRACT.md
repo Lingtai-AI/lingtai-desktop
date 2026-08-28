@@ -41,8 +41,8 @@ below is grounded in the widget source.
 - **No business eligibility.** A row click forwards the directory key
   (`agent_roster.cpp:371-375`); whether that key may select a project or start
   an Agent is `NativeShell`'s decision, never this folder's.
-- **No subprocesses.** No `QProcess`, no `lingtai` invocation, no launch. (The
-  shell's `start_agent`/`ProjectBootstrapRunner` live in parent `src/`.)
+- **No subprocesses.** No `QProcess`, no `lingtai` invocation, no launch. The
+  launch and creation owners live in parent `src/`.
 - **No duplicate domain model.** The roster stores only the snapshot it was
   given for change detection (`visible_snapshot_`, `agent_roster.h:59`);
   `AgentRowButton` is presentation-only. The conversation surface reuses the

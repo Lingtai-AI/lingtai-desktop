@@ -13,10 +13,9 @@ restate per-owner behavior; owner-level detail lives in `src/`, `src/ui/`, and
   behavior, and never imports Telegram account, protocol, chat, message,
   media, contact, cache, or high-level UI code, and never links or depends on
   the Telegram product.
-- **TUI** (`lingtai-tui`) is a *functional reference*, not a lifecycle runtime
-  dependency: envelope/mailbox and first-project preset/spawn behavior are
-  compared against it, while Desktop directly implements kernel marker,
-  lease, process, heartbeat, clear, preset, and launch contracts.
+- **TUI** (`lingtai-tui`) is a *functional reference*, not a runtime
+  dependency: compatible on-disk behavior may be compared against it, while
+  Desktop owns project creation, setup, lifecycle, and launch directly.
 - **Desktop** is the *Qt adaptation*: it adapts Qt 6.11.1 + the pinned
   `desktop-app::lib_ui` to LingTai's on-disk project model, owning none of
   Telegram's or the kernel's protocol/business logic.
@@ -41,15 +40,13 @@ restate per-owner behavior; owner-level detail lives in `src/`, `src/ui/`, and
 - **Repro-4 — Kernel boundary is filesystem + exact runtime process only.** The
   repository never links the `lingtai` Python package; kernel contact is
   exclusively on-disk `.lingtai` artifacts, advisory lock/process observation,
-  and exact-argv `python -m lingtai run`. TUI is used only for New Project.
+  and exact-argv `python -m lingtai run`. No production path executes a TUI.
   Enforced by link graph
   (`CMakeLists.txt:169-308`) and review.
-- **Repro-4a — Finder launch resolves the installed TUI without a shell.**
-  Normal `ShellHost` composition checks injected inherited PATH order, a valid
-  managed receipt candidate, home-local bin, then the two canonical macOS bin
-  directories. Candidates must resolve to executable regular files; no PATH
-  mutation, login shell, or subprocess participates in discovery. Proven by
-  `tui_executable_resolver`.
+- **Repro-4a — New Project does not require TUI availability.** Desktop reads
+  the injected global preset catalog, commits the project transaction, attaches
+  it, and launches through its lifecycle owner while `PATH` contains no TUI.
+  Proven by `project_creation`, `native_shell_bootstrap`, and the real smoke.
 - **Repro-5 — Read seams write nothing.** Every read projection
   (`project_agents`, `read_direct_conversation`,
   `read_agent_preset_summary`,

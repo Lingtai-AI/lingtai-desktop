@@ -125,9 +125,9 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
 - `tests/preset_catalog_test.cpp` — `preset_catalog`; injected global-root
   saved/template discovery, validation/skips, canonical ordering, exact facts,
   missing-directory behavior, typed scan failure, normalization, and no-write.
-- `tests/tui_executable_resolver_test.cpp` — `tui_executable_resolver`; all
-  PATH/home/system inputs and candidate files live below one injected fixture,
-  with no process environment mutation or host installation dependency.
+- `tests/project_creation_test.cpp` — `project_creation`; project inputs,
+  destination contents, unsafe links, injected failures, and expected output
+  all live below one injected fixture root.
 - `tests/agent_sleep_test.cpp` — `agent_sleep`.
 - `tests/agent_lifecycle_test.cpp` — `agent_lifecycle`; the complete
   Desktop-owned lifecycle component contract with injected process, launcher,
@@ -137,10 +137,9 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   generation-race/capture-incapability liveness seams.
 - `tests/native_shell_test.cpp` — split `native_shell_<journey>` tests (links the shell +
   `lib_ui` + `crl_integration.cpp`; the real-Qt layer), including the focused
-  synthetic existing-Agent setup rerun, `native_shell_paste`, and
-  `native_shell_lifecycle` journeys. Lifecycle UI coverage includes
-  nonblocking delivery, stale-generation suppression, and a configured
-  executable sentinel that must remain uninvoked. The
+  synthetic existing-Agent setup rerun, no-TUI New Project,
+  `native_shell_paste`, and `native_shell_lifecycle` journeys. Lifecycle UI
+  coverage includes nonblocking delivery and stale-generation suppression. The
   paste journey delivers logical text through a real MIME-carrying Qt event,
   then proves exact Unicode editor state, emoji input-method formatting,
   ordinary Send, and two-shell runtime sharing without accessing `QClipboard`.

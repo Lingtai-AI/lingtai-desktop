@@ -50,7 +50,7 @@ prefix (`CMakeLists.txt:67-70`), and declares the owned libraries:
   `lingtai_desktop_conversation`, `lingtai_desktop_mail_publisher`,
   `lingtai_desktop_agent_preset_summary`, `lingtai_desktop_agent_setup_store`,
   `lingtai_desktop_preset_catalog`,
-  `lingtai_desktop_tui_executable`,
+  `lingtai_desktop_project_creation`,
   `lingtai_desktop_agent_sleep`,
   `lingtai_desktop_agent_launch` — one library per read/write seam
   (`CMakeLists.txt:211-308`).
@@ -61,8 +61,8 @@ prefix (`CMakeLists.txt:67-70`), and declares the owned libraries:
 
 Qt/lib_ui is the only external linked GUI SDK/build dependency. It is
 resolved from `QT_ROOT` or the documented `$HOME/Qt/6.11.1/macos` default
-(`CMakeLists.txt:13-16`); the app also invokes TUI and Python subprocess
-surfaces at runtime, which are not linked dependencies.
+(`CMakeLists.txt:13-16`); the app launches only the configured Python kernel
+runtime, which is not a linked dependency.
 
 ## Owned source owners (`src/`)
 
@@ -72,9 +72,7 @@ before exiting (`src/main.cpp:55-83`). `src/crl_integration.cpp` supplies the
 bounded no-emission parent `crl` update producer the smoke needs.
 
 `src/shell_host.cpp` owns normal window composition, including the fallback
-interpreter and the configured TUI executable. `src/tui_executable_resolver.*`
-owns the injected PATH → managed receipt → home-local → two system-directory
-resolution order and preserves an accepted symlink path.
+kernel interpreter.
 
 - `src/native_shell.{h,cpp}` — `NativeShell` (`src/native_shell.h:64`), the
   one C5-owned composition: `WorkspaceSelectionState` C1 truth, the 260px
@@ -138,9 +136,10 @@ resolution order and preserves an accepted symlink path.
   timer-driven `/sleep`, `/suspend`, `/cpr`, `/clear`, `/refresh` state machine,
   including lease waits, preset updates, clear completion, hard-refresh
   escalation, aggregate results, and generation binding.
-- `src/project_bootstrap.{h,cpp}` — `ProjectBootstrapRunner`
-  (`src/project_bootstrap.h:54`): async exact-argv `presets`/`spawn` headless
-  TUI calls + JSON parse.
+- `src/project_creation.{h,cpp}` — `create_project` plus
+  `ProjectCreationRunner`: validated descriptor-relative staging, shared setup
+  policy shaping, exclusive atomic `.lingtai` publication, and asynchronous
+  preset/creation delivery for the New Project wizard.
 
 ## Owned UI owners (`src/ui/`)
 

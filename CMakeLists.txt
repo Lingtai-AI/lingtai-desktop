@@ -225,7 +225,6 @@ add_library(lingtai_desktop_native_shell STATIC
     src/project_setup_wizard.cpp
     src/kanban_page.cpp
     src/native_window_background.mm
-    src/project_bootstrap.cpp
     src/ui/agent_roster.cpp
     src/ui/conversation_surface.cpp
     src/ui/slash_command_card.cpp)
@@ -259,20 +258,8 @@ target_link_libraries(lingtai_desktop_native_shell
         lingtai_desktop_agent_preset_summary
         lingtai_desktop_agent_setup_store
         lingtai_desktop_preset_catalog
-        lingtai_desktop_tui_executable
+        lingtai_desktop_project_creation
         lingtai_desktop_kanban)
-
-# Small host-executable resolver. All environment and fallback roots are
-# injected; it reads only the bounded managed-install receipt and candidate
-# metadata and never launches a process or mutates PATH.
-add_library(lingtai_desktop_tui_executable STATIC
-    src/tui_executable_resolver.cpp)
-init_target(lingtai_desktop_tui_executable)
-target_include_directories(lingtai_desktop_tui_executable PUBLIC
-    "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_compile_options(lingtai_desktop_tui_executable PRIVATE
-    -Wall -Wextra -Werror -pedantic)
-target_link_libraries(lingtai_desktop_tui_executable PRIVATE Qt6::Core)
 
 # Internal POSIX descriptor/no-follow primitives. No Qt, no project model, and
 # deliberately no link edge of its own: it is the shared safety mechanism every
@@ -384,6 +371,18 @@ target_compile_options(lingtai_desktop_agent_setup_store PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_desktop_agent_setup_store
     PUBLIC lingtai_desktop_core Qt6::Core
+    PRIVATE lingtai_desktop_posix_primitives)
+
+add_library(lingtai_desktop_project_creation STATIC
+    src/project_creation.cpp)
+init_target(lingtai_desktop_project_creation)
+target_include_directories(lingtai_desktop_project_creation PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(lingtai_desktop_project_creation PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_desktop_project_creation
+    PUBLIC lingtai_desktop_agent_setup_store lingtai_desktop_preset_catalog
+        Qt6::Core
     PRIVATE lingtai_desktop_posix_primitives)
 
 add_library(lingtai_desktop_kanban STATIC
@@ -567,13 +566,14 @@ target_compile_options(lingtai_preset_catalog_test PRIVATE
 target_link_libraries(lingtai_preset_catalog_test PRIVATE
     lingtai_desktop_preset_catalog Qt6::Core)
 
-add_executable(lingtai_tui_executable_resolver_test
-    tests/tui_executable_resolver_test.cpp)
-init_target(lingtai_tui_executable_resolver_test)
-target_compile_options(lingtai_tui_executable_resolver_test PRIVATE
+add_executable(lingtai_project_creation_test
+    tests/project_creation_test.cpp)
+init_target(lingtai_project_creation_test)
+target_compile_options(lingtai_project_creation_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
-target_link_libraries(lingtai_tui_executable_resolver_test PRIVATE
-    lingtai_desktop_tui_executable)
+target_link_libraries(lingtai_project_creation_test PRIVATE
+    lingtai_desktop_project_creation lingtai_desktop_agent_projection)
+
 
 add_executable(lingtai_agent_detail_view_test
     tests/agent_detail_view_test.cpp
@@ -758,7 +758,8 @@ init_target(lingtai_agent_lifecycle_real_smoke)
 target_compile_options(lingtai_agent_lifecycle_real_smoke PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_agent_lifecycle_real_smoke PRIVATE
-    lingtai_desktop_agent_lifecycle Qt6::Core)
+    lingtai_desktop_agent_lifecycle
+    lingtai_desktop_project_creation)
 add_executable(lingtai_agent_prompt_actions_test
     tests/agent_prompt_actions_test.cpp)
 init_target(lingtai_agent_prompt_actions_test)
@@ -834,9 +835,9 @@ add_test(NAME agent_setup_store
 add_test(NAME preset_catalog
     COMMAND lingtai_preset_catalog_test
         "${CMAKE_CURRENT_BINARY_DIR}/preset-catalog-fixture")
-add_test(NAME tui_executable_resolver
-    COMMAND lingtai_tui_executable_resolver_test
-        "${CMAKE_CURRENT_BINARY_DIR}/tui-executable-resolver-fixture")
+add_test(NAME project_creation
+    COMMAND lingtai_project_creation_test
+        "${CMAKE_CURRENT_BINARY_DIR}/project-creation-fixture")
 add_test(NAME kanban_model
     COMMAND lingtai_kanban_model_test
         "${CMAKE_CURRENT_BINARY_DIR}/kanban-model-fixture")

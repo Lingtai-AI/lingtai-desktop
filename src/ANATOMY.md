@@ -3,7 +3,7 @@
 `src/` is the Desktop's owned C++ surface, deliberately flat and deliberately
 small: most source pairs are their own single-owner library target, with three
 exceptions — `main.cpp` and `crl_integration.cpp` live only in the smoke
-executable, and `native_shell.cpp`, `project_bootstrap.cpp`, and the two
+executable, and `native_shell.cpp` and the two
 `ui/` widgets compile only into the shell library. The folder splits
 into two kinds of code — **entry/composition/presentation** (the persistent
 shell, its dialog, its widgets) and **domain readers/adapters** (pure models
@@ -20,11 +20,7 @@ Entry point and composition root:
 - `main.cpp` — `main()`: constructs `ShellHost` and runs the `--smoke` /
   `--offscreen` paths.
 - `shell_host.{h,cpp}` — owns all native windows, directory-picker routing,
-  the fallback interpreter, and normal TUI executable injection.
-- `tui_executable_resolver.{h,cpp}` — small discovery owner with injected
-  inherited PATH, home, and system fallback directories. It parses only the
-  bounded canonical managed-install receipt, validates executable regular
-  candidates (including benign symlink targets), and launches nothing.
+  and the fallback kernel interpreter.
 - `native_shell.{h,cpp}` — the C5 composition owner: owns one `Ui::RpWindow`,
   the roster column, the content pane, native dialog orchestration, the
   composer's local slash-command/publisher dispatch, the one-second refresh
@@ -42,7 +38,7 @@ Entry point and composition root:
   `Ui::PlainShadow` `lingtai_roster_separator` that follows it) whose drags
   re-derive a runtime-only 22%-30% roster width ratio over the absolute
   260px / 380px two-surface minima. Its composition seams are
-  `set_tui_executable`, `set_agent_start_fallback_python`, and the narrow
+  `set_agent_start_fallback_python` and the narrow
   `set_attachment_picker` injection used by shell tests (when unset, the
   product path opens the native dialog), plus `open_project` and the read-only
   `window()` / `selection_state()` accessors;
@@ -54,8 +50,9 @@ Entry point and composition root:
   pages, fixes the selected Agent name/directory, and saves through
   `AgentSetupStore`; its narrow save-result injection exists only for
   deterministic shell tests.
-  The existing New Project mode still owns the independent TUI
-  `presets`/`spawn` sequence, and every entry resets the other mode.
+  New Project reuses that catalog/wizard policy, runs the Desktop creation
+  transaction asynchronously, attaches normally, and hands first launch to
+  `AgentLifecycleController`; every entry resets the other setup mode.
   The content pane composes one coherent workspace: the no-project welcome
   branding and its rhythm spacing live in the empty route only (a selected
   project's route starts at the content origin), and the selected-Agent page
@@ -114,6 +111,10 @@ Domain models (pure, Qt-light state/derivation owners):
   descriptor/directory-stream ownership, shared read flags, `safe_leaf`, and
   one-leaf-at-a-time no-follow `openat`-based opens. Internal; links nothing;
   no domain policy.
+- `project_creation.{h,cpp}` — `create_project` and `ProjectCreationRunner`:
+  validated no-follow inputs, one owned sibling stage, shared preset-policy
+  reconciliation, exclusive atomic `.lingtai` publication, and queued
+  exactly-once delivery to the UI thread.
 
 Domain readers/projections (stateless, read-only, one source each):
 
@@ -168,9 +169,8 @@ Direct-operation/side-effect owners (the only writers/launchers):
   shell-free `<python> -m lingtai run <dir>` launch with PID/log outcome.
 - `agent_lifecycle.{h,cpp}` — target and argument policy plus the timer-driven
   sleep/suspend/CPR/clear/hard-refresh state machine.
-- `project_bootstrap.{h,cpp}` — `ProjectBootstrapRunner`: async, shell-free
-  owner of the two headless TUI calls `<exe> presets` and
-  `<exe> spawn <dir> --preset <name>` with exact separate argv.
+- `project_creation.{h,cpp}` — the initial-project writer described above;
+  post-publication launch stays with `AgentLifecycleController`.
 - `agent_setup_store.{h,cpp}` — the only existing-Agent configuration writer:
   descriptor-bounded load, setup-owned leaf patches, same-directory stage +
   atomic rename, and bounded rollback. It never scaffolds an Agent or writes
@@ -200,7 +200,7 @@ keeps the parent summary):
   `parse_slash_command`, the shared mailbox fingerprint/snapshot projection,
   `send_direct_mail`,
   `read_agent_preset_summary`, `AgentLifecycleController`, and the
-  `ProjectBootstrapRunner` calls, and `AgentSetupStore` for the selected-Agent
+  `ProjectCreationRunner`, and `AgentSetupStore` for the selected-Agent
   `/setup` route. The click handlers rerun `project_agents`
   once at the click boundary and update the sole `agents_` snapshot.
 - `NativeShell` → `WorkspaceSelectionState`: the shell proposes typed
@@ -238,7 +238,7 @@ Owned library targets (`CMakeLists.txt`) and their source membership:
 - `lingtai_desktop_agent_preset_summary` — `agent_preset_summary.cpp`.
 - `lingtai_desktop_agent_setup_store` — `agent_setup_store.cpp`.
 - `lingtai_desktop_preset_catalog` — `preset_catalog.cpp`.
-- `lingtai_desktop_tui_executable` — `tui_executable_resolver.cpp`.
+- `lingtai_desktop_project_creation` — `project_creation.cpp`.
 - `lingtai_desktop_agent_sleep` — `agent_sleep.cpp`.
 - `lingtai_desktop_agent_launch` — `agent_launch.cpp`.
 - `lingtai_desktop_agent_signal` — `agent_signal.cpp`.
@@ -247,7 +247,7 @@ Owned library targets (`CMakeLists.txt`) and their source membership:
 - `lingtai_desktop_kanban` — `kanban_model.cpp`.
 - `lingtai_desktop_native_shell` — `native_shell.cpp`,
   `agent_detail_view.cpp`, `attachment_thumbnail.cpp`,
-  `project_bootstrap.cpp`, `ui/agent_roster.cpp`,
+  `ui/agent_roster.cpp`,
   `ui/conversation_surface.cpp`.
 - `lingtai_desktop_smoke` (executable) — `main.cpp`, `crl_integration.cpp`.
 
@@ -275,17 +275,16 @@ they are the shell's presentation layer and own no domain reads or writes.
   Owned boundaries: the direct local leaf
   writers (`send_direct_mail`, `request_agent_sleep`) write only their own
   leaf; `start_agent` owns the Agent's log plus the detached launch; and
-  `ProjectBootstrapRunner` delegates the entire first-project scaffold/config boundary to
-  the TUI headless surface. `AgentSetupStore` alone may transactionally patch
+  `create_project` exclusively publishes the initial `.lingtai` tree from its
+  bounded stage. `AgentSetupStore` alone may transactionally patch
   its declared setup fields in existing Agent configuration, the exact env leaf
   authorized by selected `init.json`, and bounded peer preset/orchestrator
   fields; it never creates an Agent.
 
 ## Notes
 
-- `main.cpp` deliberately performs no `.lingtai` or Agent writes: its only
-  concrete choices are the fallback interpreter, the configured TUI
-  executable, and the open-project directory picker.
+- `main.cpp` deliberately performs no `.lingtai` or Agent writes: its concrete
+  choices are the fallback interpreter and open-project directory picker.
 - The `posix_internal` seam is intentionally not a filesystem framework: it
   owns mechanics only (ownership, flags, one-leaf validation), and every
   bound, parser, candidate choice, and error mapping stays in the owning

@@ -315,24 +315,6 @@ void write_fixture_python(
     require(!error, "fixture python must be made executable");
 }
 
-// Writes an executable sentinel whose only behavior is recording invocation.
-// Lifecycle tests configure it as the shell's bootstrap-only TUI executable;
-// the record's continued absence proves lifecycle dispatch never reaches it.
-void write_forbidden_executable(
-        const fs::path &executable_path,
-        const fs::path &invocation_record_path) {
-    auto script = std::string("#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"")
-        + invocation_record_path.string() + "\"\n"
-        + "exit 0\n";
-    write_file(executable_path, script);
-    std::error_code error;
-    fs::permissions(executable_path,
-        fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec
-            | fs::perms::others_read | fs::perms::others_exec,
-        fs::perm_options::replace, error);
-    require(!error, "forbidden executable sentinel must be made executable");
-}
-
 std::map<std::string, std::string> tree_snapshot(const fs::path &root) {
     auto result = std::map<std::string, std::string>();
     if (!fs::exists(root)) {
@@ -2977,10 +2959,8 @@ void verify_request_sleep_action(
     auto *status = required_child<QLabel>(
         window, "lingtai_selected_agent_sleep_status");
 
-    // Desktop-owned controller regression: lifecycle remains fully local even
-    // when a configured executable would make any accidental TUI launch
-    // observable. The injected process seam is deterministic and does not
-    // inspect or signal host processes.
+    // Desktop-owned controller regression. The injected process seam is
+    // deterministic and does not inspect or signal host processes.
     {
         const auto project = sandbox / "owned-project";
         const auto agent_a = project / ".lingtai/agent-a";
@@ -2995,11 +2975,6 @@ void verify_request_sleep_action(
         write_file(agent_b / ".agent.heartbeat", std::to_string(
             std::chrono::duration<double>(
                 std::chrono::system_clock::now().time_since_epoch()).count()));
-
-        const auto tui = sandbox / "must-not-run-tui";
-        const auto tui_record = sandbox / "tui-invoked";
-        write_forbidden_executable(tui, tui_record);
-        shell.set_tui_executable(tui);
 
         auto dependencies =
             lingtai::desktop::production_agent_lifecycle_dependencies();
@@ -3068,9 +3043,6 @@ void verify_request_sleep_action(
         QCoreApplication::processEvents();
         require(status->text() != QStringLiteral("Sleep request applied."),
             "a late lifecycle completion must be suppressed after selection changes");
-        require(!fs::exists(tui_record),
-            "Desktop lifecycle must never invoke the configured TUI executable");
-
         shell.set_agent_lifecycle_dependencies(
             lingtai::desktop::production_agent_lifecycle_dependencies());
         std::error_code cleanup_error;
@@ -3351,57 +3323,99 @@ void verify_agent_preset_summary_panel(
     require(!cleanup_error, "Presets fixtures must be removed");
 }
 
-// Writes one executable POSIX fixture executable used only by the Commit-22
-// New Project journey. It records its exact separate argv, then dispatches
-// on `$1` (`presets` or `spawn <dir> --preset <name>`) to the two caller-
-// provided shell fragments. It never runs a real TUI and never touches a
-// real project/Agent/config/credential.
-void write_fixture_tui(
-        const fs::path &tui_path,
-        const fs::path &argv_record,
-        std::string_view presets_fragment,
-        std::string_view spawn_fragment) {
-    auto script = std::string("#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"")
-        + argv_record.string() + "\"\n"
-        + "if [ \"$1\" = \"presets\" ]; then\n"
-        + std::string(presets_fragment) + "\nfi\n"
-        + "if [ \"$1\" = \"spawn\" ]; then\n"
-        + std::string(spawn_fragment) + "\nfi\n"
-        + "exit 2\n";
-    write_file(tui_path, script);
-    write_file(argv_record, std::string{});
-    std::error_code error;
-    fs::permissions(tui_path,
-        fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec
-            | fs::perms::others_read | fs::perms::others_exec,
-        fs::perm_options::replace, error);
-    require(!error, "fixture TUI must be made executable");
-}
 
-std::string fixture_tui_argv(const std::vector<std::string> &args) {
-    auto text = std::string();
-    for (const auto &arg : args) {
-        text += arg + "\n";
-    }
-    return text;
-}
-
-// The Commit-22 journey: a user starting with no project can explicitly
-// create a new project and its first Agent through the canonical TUI
-// headless `presets`/`spawn` surface. The smallest native assertion first:
-// the no-project window must expose a visible `New Project` action beside
-// `Open Project`.
+// Desktop owns preset discovery, creation, attachment, and the handoff to its
+// existing lifecycle controller. This real shell journey runs with a PATH
+// containing no TUI executable and with every global/project path under the
+// injected fixture root.
 void verify_first_project_bootstrap(
         lingtai::desktop::NativeShell &shell,
         const fs::path &sandbox) {
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "bootstrap fixture must start clean");
+    fs::create_directories(sandbox);
     auto &window = shell.window();
-    auto *open_button = required_child<QPushButton>(
-        window, "lingtai_open_project_button");
+    const auto global = sandbox / "global";
+    const auto destination = fs::canonical(sandbox) / "created-project";
+    const auto launch_failure_destination =
+        fs::canonical(sandbox) / "created-not-started";
+    const auto runtime_python = sandbox / "runtime/venv/bin/python";
+    const auto empty_path = sandbox / "empty-path";
+    fs::create_directories(destination);
+    fs::create_directories(launch_failure_destination);
+    fs::create_directories(empty_path);
+    write_file(global / ".env", "TEST_API_KEY=fake\n");
+    write_file(global / "covenant/en/covenant.md", "# Covenant\n");
+    write_file(global / "soul/en/soul-flow.md", "# Soul\n");
+    write_file(global / "presets/saved/alpha.json", R"JSON({
+      "name": "alpha",
+      "description": {"summary": "Alpha preset", "tier": "1"},
+      "manifest": {
+        "llm": {"provider": "openrouter", "model": "openai/gpt-test", "api_key_env": "TEST_API_KEY"},
+        "capabilities": {"system": {}, "email": {}}
+      }
+    })JSON");
+    write_file(global / "presets/saved/beta.json", R"JSON({
+      "name": "beta",
+      "description": {"summary": "Beta preset", "tier": "1"},
+      "manifest": {
+        "llm": {"provider": "openrouter", "model": "openai/gpt-test-2", "api_key_env": "TEST_API_KEY"},
+        "capabilities": {"system": {}, "email": {}}
+      }
+    })JSON");
+    write_file(runtime_python, "#!/bin/sh\nexit 1\n");
+    fs::permissions(runtime_python,
+        fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec
+            | fs::perms::others_read | fs::perms::others_exec,
+        fs::perm_options::replace);
+    const auto previous_global = qgetenv("LINGTAI_TUI_DIR");
+    const auto previous_path = qgetenv("PATH");
+    qputenv("LINGTAI_TUI_DIR", QByteArray::fromStdString(global.string()));
+    qputenv("PATH", QByteArray::fromStdString(empty_path.string()));
+    shell.set_agent_start_fallback_python(runtime_python);
+
+    auto dependencies =
+        lingtai::desktop::production_agent_lifecycle_dependencies();
+    dependencies.poll_interval = std::chrono::milliseconds(10);
+    dependencies.processes.observe = [](const fs::path &agent_dir) {
+        return lingtai::desktop::AgentProcessObservation{
+            .available = true,
+            .pids = fs::exists(agent_dir / ".agent.heartbeat")
+                ? std::vector<lingtai::desktop::AgentProcessId>{4242}
+                : std::vector<lingtai::desktop::AgentProcessId>{},
+        };
+    };
+    dependencies.processes.signal = [](const fs::path &,
+            lingtai::desktop::AgentProcessId,
+            lingtai::desktop::AgentTerminationSignal) { return false; };
+    dependencies.launcher.launch = [](const auto &attachment,
+            const fs::path &key, const fs::path &) {
+        const auto now = std::chrono::duration<double>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        write_file(attachment.root() / ".lingtai" / key / ".agent.heartbeat",
+            std::to_string(now));
+        auto identity_path = attachment.root() / ".lingtai" / key
+            / ".agent.json";
+        auto identity = QJsonDocument::fromJson(
+            QByteArray::fromStdString(read_file(identity_path))).object();
+        identity["agent_id"] = "shell-fixture-id";
+        write_file(identity_path,
+            QJsonDocument(identity).toJson(QJsonDocument::Indented)
+                .toStdString());
+        return lingtai::desktop::AgentLaunchOutcome{
+            .result = lingtai::desktop::AgentLaunchResult::started,
+            .pid = 4242,
+            .log_path = attachment.root() / ".lingtai" / key
+                / "logs/agent.log",
+        };
+    };
+    shell.set_agent_lifecycle_dependencies(std::move(dependencies));
+
     auto *choose_project = required_child<QPushButton>(
         window, "lingtai_startup_choose_project");
-    require(window.findChild<QPushButton *>("lingtai_new_project_button")
-            == nullptr,
-        "no-project state must not expose a separate New Project control");
+    auto *open_button = required_child<QPushButton>(
+        window, "lingtai_open_project_button");
     auto *status = required_ui_child<Ui::FlatLabel>(
         window, "lingtai_bootstrap_status");
     auto *wizard = required_child<lingtai::desktop::ProjectSetupWizard>(
@@ -3410,272 +3424,140 @@ void verify_first_project_bootstrap(
         window, "lingtai_bootstrap_destination_input");
     auto *preset_chooser = required_child<QComboBox>(
         window, "lingtai_bootstrap_preset_chooser");
-    auto *create_start = required_child<QPushButton>(
-        window, "lingtai_bootstrap_create_start");
     auto *preset_continue = required_child<QPushButton>(
         window, "lingtai_setup_preset_continue");
     auto *save_preset = required_child<QPushButton>(
         window, "lingtai_setup_edit_preset_save");
+    auto *pages = required_child<QStackedWidget>(
+        window, "lingtai_setup_pages");
+    auto *agents_page = required_child<QWidget>(
+        window, "lingtai_setup_agents_page");
+    auto *preset_error = required_child<QLabel>(
+        window, "lingtai_setup_edit_preset_error");
     auto *agents_continue = required_child<QPushButton>(
         window, "lingtai_setup_agents_continue");
+    auto *create_start = required_child<QPushButton>(
+        window, "lingtai_bootstrap_create_start");
     auto *dialog_status = required_ui_child<Ui::FlatLabel>(
         window, "lingtai_bootstrap_dialog_status");
-    required_child<QPushButton>(window, "lingtai_bootstrap_cancel");
-    required_child<QPushButton>(window, "lingtai_bootstrap_destination_browse");
-    require(create_start->accessibleName().isEmpty()
-            || create_start->text() == QStringLiteral("Create orchestrator"),
-        "the committing wizard action must remain Create orchestrator");
 
-    const auto argv_record = sandbox / "tui-argv.txt";
-    fs::create_directories(sandbox);
-    const auto destination = fs::canonical(sandbox) / "created-project";
-    const auto success_tui = sandbox / "tui-success";
-    // A real fixture process: records its exact argv; `presets` prints the
-    // current two-entry JSON contract and `spawn <dir> --preset <name>`
-    // creates a minimal valid returned project and emits valid launch JSON.
-    write_fixture_tui(success_tui, argv_record,
-        R"(printf '%s' '{"presets":[{"name":"alpha","description":"Alpha preset","tier":"t1","source":"template","path":"/tmp/a.json"},{"name":"beta","description":"Beta preset","tier":"t2","source":"saved","path":"/tmp/b.json"}]}'
-exit 0)",
-        R"(mkdir -p "$2/.lingtai/agent"
-printf '%s' '{"admin":{}}' > "$2/.lingtai/agent/.agent.json"
-printf '%s' "{\"status\":\"ready\",\"project_dir\":\"$2\",\"agent_name\":\"agent\",\"agent_dir\":\"$2/.lingtai/agent\",\"preset\":\"$4\",\"recipe\":\"plain\",\"pid\":0}"
-exit 0)");
-    shell.set_tui_executable(fs::absolute(success_tui));
-
-    // Evidence 1: choosing an empty folder through the Open Project path runs
-    // the exact separate argv `presets` and keeps the UI responsive/pending.
     auto open_requests = std::size_t{0};
-    const auto start_bootstrap_at = [&](const fs::path &folder) {
-        shell.set_open_project_request_handler([&] {
-            ++open_requests;
-            shell.request_new_project_at(folder);
-        });
-        choose_project->click();
-    };
-    start_bootstrap_at(destination);
-    require(status->accessibilityName() == QStringLiteral("Discovering presets…"),
-        "a pending discovery must show one truthful phase status");
-    require(!open_button->isEnabled(),
-        "Open Project must be disabled while bootstrap is pending");
-    auto *open_new_window = required_child<QPushButton>(
-        window, "lingtai_open_project_new_window_button");
-    require(!open_new_window->isEnabled(),
-        "Open Project in Another Window must be disabled while bootstrap "
-        "is pending");
-    QCoreApplication::processEvents();
-    const auto presets_deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (read_file(argv_record) != fixture_tui_argv({"presets"})
-            && std::chrono::steady_clock::now() < presets_deadline) {
-        QThread::msleep(20);
-        QCoreApplication::processEvents();
-    }
-    require(read_file(argv_record) == fixture_tui_argv({"presets"}),
-        "choosing an empty folder must run the exact separate argv `presets`");
+    shell.set_open_project_request_handler([&] {
+        ++open_requests;
+        shell.request_new_project_at(destination);
+    });
+    choose_project->click();
+    require(status->accessibilityName() == QStringLiteral("Discovering presets…")
+            && !open_button->isEnabled(),
+        "Desktop catalog discovery must be nonblocking and single-pending");
     choose_project->click();
     require(open_requests == 1,
-        "Choose project must not fire again while bootstrap is pending");
-
-    // Evidence 2: valid preset JSON populates the in-window setup route;
-    // dismissing it via reject() (Escape / Cancel) must be the same no-spawn
-    // cancellation and must re-enable actions.
-    const auto dialog_deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (!wizard->isVisible()
-            && std::chrono::steady_clock::now() < dialog_deadline) {
-        QThread::msleep(20);
-        QCoreApplication::processEvents();
-    }
-    require(wizard->isVisible(),
-        "valid preset discovery must show the New Project wizard");
+        "a pending Desktop catalog scan must suppress duplicate activation");
+    require(wait_for_event_loop([&] { return wizard->isVisible(); }, 3000),
+        "Desktop catalog discovery did not open the wizard");
     require(preset_chooser->count() == 2
-            && preset_chooser->itemText(0) == "beta"
-            && preset_chooser->itemText(1) == "alpha",
-        "the preset chooser must list saved presets before templates");
-    wizard->reject();
-    QCoreApplication::processEvents();
-    require(!wizard->isVisible() && open_button->isEnabled(),
-        "dismissing the wizard via reject() must close it and re-enable Open "
-        "Project");
-    require(read_file(argv_record) == fixture_tui_argv({"presets"}),
-        "dismissing the dialog must perform no spawn at all");
+            && preset_chooser->itemText(0) == "alpha"
+            && preset_chooser->itemText(1) == "beta",
+        "New Project must use the Desktop-owned saved preset catalog");
 
-    // Evidence 3: a destination plus the selected non-first preset and
-    // Create & Start produces the exact separate spawn argv, with Open Project
-    // staying disabled while pending.
-    start_bootstrap_at(destination);
-    QCoreApplication::processEvents();
-    while (!wizard->isVisible()
-            && std::chrono::steady_clock::now() < dialog_deadline) {
-        QThread::msleep(20);
-        QCoreApplication::processEvents();
-    }
-    require(wizard->isVisible(), "the second discovery must reopen the wizard");
-    preset_chooser->setCurrentIndex(1);
-    preset_continue->click();
-    QCoreApplication::processEvents();
-    save_preset->click();
-    QCoreApplication::processEvents();
-    destination_input->setText(QString());
-    create_start->click();
-    QCoreApplication::processEvents();
-    require(dialog_status->accessibilityName()
-                .contains(QStringLiteral("nonempty")),
-        "Create project with no destination must refuse with a concise "
-        "dialog status");
-    destination_input->setText(path_text(destination));
-    agents_continue->click();
-    QCoreApplication::processEvents();
-    create_start->click();
-    require(status->accessibilityName() == QStringLiteral(
-                "Creating project and starting Agent…"),
-        "a pending spawn must show one truthful phase status");
-    require(!open_button->isEnabled(),
-        "Open Project must stay disabled while spawn is pending");
-    QCoreApplication::processEvents();
-    const auto spawn_argv = std::vector<std::string>{
-        "spawn", path_text(destination).toStdString(),
-        "--preset", "alpha"};
-    const auto spawn_deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (read_file(argv_record)
-                != fixture_tui_argv({"presets", "presets"})
-                    + fixture_tui_argv(spawn_argv)
-            && std::chrono::steady_clock::now() < spawn_deadline) {
-        QThread::msleep(20);
-        QCoreApplication::processEvents();
-    }
-    require(read_file(argv_record)
-            == fixture_tui_argv({"presets", "presets"})
-                + fixture_tui_argv(spawn_argv),
-        "Create & Start must run the exact separate argv `spawn <destination> "
-        "--preset beta` with no shell joining");
-
-    // Evidence 4: fixture success creates a minimal valid returned project,
-    // emits valid launch JSON, and Desktop attaches that exact returned
-    // project and reports created+started.
-    const auto attached_deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (status->accessibilityName()
-                != QStringLiteral("Project created and Agent started.")
-            && std::chrono::steady_clock::now() < attached_deadline) {
-        QThread::msleep(20);
-        QCoreApplication::processEvents();
-    }
-    require(status->accessibilityName() == QStringLiteral(
-                "Project created and Agent started."),
-        "spawn success must report the concise created-and-started status");
-    require(shell.selection_state().active_project()
-            && shell.selection_state().active_project()->root()
-                == fs::canonical(destination),
-        "Desktop must attach the exact returned project directory");
-    require(!wizard->isVisible(),
-        "a successful spawn must close the New Project wizard");
-
-    // Evidence 5: a nonzero structured spawn failure must leave the currently
-    // attached project unchanged, re-enable actions, and show the structured
-    // error plus a generic partial-state warning.
-    const auto fail_argv_record = sandbox / "tui-fail-argv.txt";
-    const auto fail_tui = sandbox / "tui-fail";
-    write_fixture_tui(fail_tui, fail_argv_record,
-        R"(printf '%s' '{"presets":[{"name":"alpha","description":"Alpha preset","tier":"t1","source":"template","path":"/tmp/a.json"},{"name":"beta","description":"Beta preset","tier":"t2","source":"saved","path":"/tmp/b.json"}]}'
-exit 0)",
-        R"(printf '%s\n' 'warning: recipe copy: fixture recipe copy failed' >&2
-printf '%s\n' '{' >&2
-printf '%s\n' '  "error": "fixture spawn refused",' >&2
-printf '%s\n' '  "code": "launch_failed"' >&2
-printf '%s\n' '}' >&2
-exit 7)");
-    shell.set_tui_executable(fs::absolute(fail_tui));
-    const auto attached_root = fs::canonical(destination);
-    start_bootstrap_at(sandbox / "partial-destination");
-    QCoreApplication::processEvents();
-    const auto fail_dialog_deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (!wizard->isVisible()
-            && std::chrono::steady_clock::now() < fail_dialog_deadline) {
-        QThread::msleep(20);
-        QCoreApplication::processEvents();
-    }
-    require(wizard->isVisible(),
-        "the failing fixture's discovery must still show the wizard");
     preset_chooser->setCurrentIndex(0);
     preset_continue->click();
     QCoreApplication::processEvents();
     save_preset->click();
     QCoreApplication::processEvents();
-    destination_input->setText(path_text(sandbox / "partial-destination"));
+    require(pages->currentWidget() == agents_page,
+        "saved preset must enter Agent policy: "
+            + preset_error->text().toStdString());
+    destination_input->setText(QString());
+    create_start->click();
+    require(dialog_status->accessibilityName().contains("nonempty"),
+        "empty destination must fail before creation");
+    destination_input->setText(path_text(destination));
+    agents_continue->click();
+    QCoreApplication::processEvents();
+    const auto creation_started = std::chrono::steady_clock::now();
+    create_start->click();
+    require(std::chrono::steady_clock::now() - creation_started
+            < std::chrono::seconds(1),
+        "creation dispatch must return without blocking the UI thread");
+    const auto creation_finished = wait_for_event_loop([&] {
+        auto *current = static_cast<Ui::FlatLabel *>(window.findChild<QObject *>(
+            "lingtai_bootstrap_status"));
+        return current && current->accessibilityName()
+            == QStringLiteral("Project created and Agent started.");
+    }, 5000);
+    auto *finished_status = static_cast<Ui::FlatLabel *>(
+        window.findChild<QObject *>("lingtai_bootstrap_status"));
+    require(creation_finished,
+        "Desktop-owned creation/lifecycle handoff did not finish: "
+            + (finished_status
+                ? finished_status->accessibilityName().toStdString()
+                : std::string("status control missing"))
+            + " dialog: " + dialog_status->accessibilityName().toStdString());
+    require(shell.selection_state().active_project()
+            && shell.selection_state().active_project()->root()
+                == fs::canonical(destination)
+            && shell.selection_state().selected_agent_directory_key()
+                == fs::path("alpha"),
+        "created project must open through the normal attachment/selection path");
+    require(fs::is_regular_file(destination / ".lingtai/alpha/init.json")
+            && fs::is_regular_file(destination / ".lingtai/alpha/.agent.json")
+            && fs::is_directory(destination / ".lingtai/.library_shared")
+            && !fs::exists(destination / ".lingtai/.tui-asset"),
+        "Desktop-owned first-project shape is incomplete or contains TUI state");
+    const lingtai::desktop::AgentSetupStore store(
+        *shell.selection_state().active_project());
+    const auto loaded = store.load("alpha");
+    require(static_cast<bool>(loaded),
+        "kernel-shaped first Agent must be accepted by AgentSetupStore");
+    const auto unchanged = store.save(*loaded.state, loaded.state->draft);
+    require(unchanged.status
+            == lingtai::desktop::AgentSetupSaveStatus::no_change,
+        "unchanged setup after first launch must preserve policy bytes");
+
+    // A post-commit launch refusal is an honest created-but-not-started
+    // outcome and must never delete the recoverable project.
+    auto failed_dependencies =
+        lingtai::desktop::production_agent_lifecycle_dependencies();
+    failed_dependencies.poll_interval = std::chrono::milliseconds(10);
+    failed_dependencies.processes.observe = [](const fs::path &) {
+        return lingtai::desktop::AgentProcessObservation{.available = true};
+    };
+    failed_dependencies.processes.signal = [](const fs::path &,
+            lingtai::desktop::AgentProcessId,
+            lingtai::desktop::AgentTerminationSignal) { return false; };
+    failed_dependencies.launcher.launch = [](const auto &, const auto &,
+            const auto &) { return lingtai::desktop::AgentLaunchOutcome{}; };
+    shell.set_agent_lifecycle_dependencies(std::move(failed_dependencies));
+    shell.request_new_project_at(launch_failure_destination);
+    require(wait_for_event_loop([&] { return wizard->isVisible(); }, 3000),
+        "second Desktop catalog scan did not reopen the wizard");
+    preset_chooser->setCurrentIndex(0);
+    preset_continue->click();
+    QCoreApplication::processEvents();
+    save_preset->click();
+    QCoreApplication::processEvents();
+    destination_input->setText(path_text(launch_failure_destination));
     agents_continue->click();
     QCoreApplication::processEvents();
     create_start->click();
-    QCoreApplication::processEvents();
-    const auto failure_deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (!status->accessibilityName().contains(QStringLiteral("launch_failed"))
-            && std::chrono::steady_clock::now() < failure_deadline) {
-        QThread::msleep(20);
-        QCoreApplication::processEvents();
-    }
-    require(status->accessibilityName().contains(QStringLiteral("launch_failed"))
-            && status->accessibilityName().contains(
-                QStringLiteral("fixture spawn refused"))
-            && status->accessibilityName().contains(QStringLiteral(
-                "partially initialized LingTai project")),
-        "a structured spawn failure must surface the code and error plus the "
-        "generic partial-state warning");
-    require(shell.selection_state().active_project()
-            && shell.selection_state().active_project()->root() == attached_root,
-        "a spawn failure must leave the currently attached project unchanged");
-    require(open_button->isEnabled(),
-        "a spawn failure must re-enable Open Project");
-    require(!wizard->isVisible(),
-        "a failed spawn must close the New Project wizard");
-    require(fs::exists(fail_argv_record)
-            && read_file(fail_argv_record)
-                == fixture_tui_argv({"presets"})
-                    + fixture_tui_argv({"spawn",
-                        path_text(sandbox / "partial-destination").toStdString(),
-                        "--preset", "beta"}),
-        "the failing spawn must still run the exact separate spawn argv");
+    require(wait_for_event_loop([&] {
+        auto *current = static_cast<Ui::FlatLabel *>(window.findChild<QObject *>(
+            "lingtai_bootstrap_status"));
+        return current && current->accessibilityName().contains(
+            QStringLiteral("Project created, but Agent did not start"));
+    }, 5000), "post-commit launch refusal was not reported honestly");
+    auto *failed_status = static_cast<Ui::FlatLabel *>(
+        window.findChild<QObject *>("lingtai_bootstrap_status"));
+    require(fs::is_regular_file(
+                launch_failure_destination / ".lingtai/alpha/init.json")
+            && failed_status
+            && failed_status->accessibilityName().contains(
+                path_text(launch_failure_destination)),
+        "launch failure must preserve and identify the recoverable project");
 
-    // Evidence 6: one malformed preset-list case fails closed before any
-    // dialog or spawn.
-    const auto malformed_argv_record = sandbox / "tui-malformed-argv.txt";
-    const auto malformed_tui = sandbox / "tui-malformed";
-    write_fixture_tui(malformed_tui, malformed_argv_record,
-        R"(printf '%s' '{this is not json'
-exit 0)",
-        R"(exit 9)");
-    shell.set_tui_executable(fs::absolute(malformed_tui));
-    start_bootstrap_at(sandbox / "malformed-destination");
-    QCoreApplication::processEvents();
-    const auto malformed_deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (read_file(malformed_argv_record) != fixture_tui_argv({"presets"})
-            && std::chrono::steady_clock::now() < malformed_deadline) {
-        QThread::msleep(20);
-        QCoreApplication::processEvents();
-    }
-    require(read_file(malformed_argv_record) == fixture_tui_argv({"presets"}),
-        "the malformed-presets fixture must be invoked with the exact argv");
-    const auto fail_closed_deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (!status->accessibilityName().contains(
-                QStringLiteral("could not be used"))
-            && std::chrono::steady_clock::now() < fail_closed_deadline) {
-        QThread::msleep(20);
-        QCoreApplication::processEvents();
-    }
-    require(status->accessibilityName().contains(
-                QStringLiteral("could not be used")),
-        "malformed preset output must fail closed with one concise failure");
-    require(!wizard->isVisible() && open_button->isEnabled(),
-        "a malformed preset list must never show the wizard and must "
-        "re-enable Open Project");
-    require(read_file(malformed_argv_record) == fixture_tui_argv({"presets"}),
-        "a malformed preset list must never reach spawn");
-
-    std::error_code cleanup_error;
+    qputenv("LINGTAI_TUI_DIR", previous_global);
+    qputenv("PATH", previous_path);
     fs::remove_all(sandbox, cleanup_error);
     require(!cleanup_error, "bootstrap fixtures must be removed");
 }
@@ -3751,13 +3633,6 @@ void verify_existing_agent_setup(
 })").arg(path_text(env)).toStdString();
     write_file(agent / "init.json", init);
 
-    const auto tui = sandbox / "fixture-tui";
-    const auto tui_argv = sandbox / "tui-argv.txt";
-    write_fixture_tui(tui, tui_argv,
-        R"(printf '%s' '{"presets":[{"name":"creation","source":"saved","path":"/fixture/creation.json"}]}'
-exit 0)",
-        R"(exit 9)");
-    shell.set_tui_executable(fs::absolute(tui));
     const auto opened = shell.open_project(project, fs::path(".lingtai/alpha"));
     require(opened.disposition == ProjectOpenDisposition::opened,
         "setup rerun fixture project must open with alpha selected");
@@ -3856,8 +3731,6 @@ exit 0)",
     const auto before = tree_snapshot(project);
     const auto env_before = read_file(env);
     submit_setup();
-    require(read_file(tui_argv).empty(),
-        "/setup must not invoke TUI preset discovery or spawn");
     require(pages->currentWidget() == preset_page
             && step_index->text() == QStringLiteral("1 of 3")
             && preset_chooser->count() == 4
@@ -3968,9 +3841,8 @@ exit 0)",
     commit->click();
     QCoreApplication::processEvents();
     require(!wizard->isVisible()
-            && outer_status->accessibilityName() == QStringLiteral("Setup saved.")
-            && read_file(tui_argv).empty(),
-        "changed setup must save through Desktop and close without TUI spawn");
+            && outer_status->accessibilityName() == QStringLiteral("Setup saved."),
+        "changed setup must save through Desktop and close");
     const auto saved_init = QJsonDocument::fromJson(
         QByteArray::fromStdString(read_file(agent / "init.json"))).object();
     const auto saved_manifest = saved_init.value("manifest").toObject();
@@ -4258,8 +4130,7 @@ exit 0)",
     shell.request_new_project_at(sandbox / "creation-destination");
     require(wait_for_event_loop([&] { return wizard->isVisible(); }, 3000),
         "New Project must still discover presets and open creation mode");
-    require(read_file(tui_argv) == fixture_tui_argv({"presets"})
-            && commit->text() == QStringLiteral("Create orchestrator")
+    require(commit->text() == QStringLiteral("Create orchestrator")
             && !name->isReadOnly() && !folder->isReadOnly(),
         "rerun-to-creation mode reset must restore presets and editable identity");
     wizard->reject();
@@ -4272,8 +4143,7 @@ exit 0)",
     agents_continue->click();
     QCoreApplication::processEvents();
     require(commit->text() == QStringLiteral("Save setup")
-            && name->isReadOnly() && folder->isReadOnly()
-            && read_file(tui_argv) == fixture_tui_argv({"presets"}),
+            && name->isReadOnly() && folder->isReadOnly(),
         "creation-to-rerun reset must restore fixed identity without discovery");
     wizard->reject();
     QCoreApplication::processEvents();

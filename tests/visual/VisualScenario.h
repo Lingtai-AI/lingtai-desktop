@@ -27,12 +27,12 @@ private:
 struct SetupSandbox {
     std::filesystem::path root;
     std::filesystem::path destination;
-    std::filesystem::path tui_executable;
+    std::filesystem::path global_dir;
 };
 
 [[nodiscard]] SetupSandbox makeSetupSandbox();
 
-void installMockSetupTui(NativeShell &shell, const SetupSandbox &sandbox);
+void installMockSetupCatalog(const SetupSandbox &sandbox);
 
 void startSetupWizard(NativeShell &shell, const SetupSandbox &sandbox);
 

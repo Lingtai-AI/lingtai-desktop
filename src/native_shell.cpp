@@ -2054,10 +2054,10 @@ NativeShell::NativeShell(RuntimeOptions runtime_options)
         activity_timer_->start();
     }
 
-    bootstrap_runner_ = std::make_unique<ProjectBootstrapRunner>();
+    creation_runner_ = std::make_unique<ProjectCreationRunner>();
 
     // New-folder setup is one workspace-sized route inside the main content
-    // pane. It reuses the canonical headless preset discovery and spawn owner
+    // pane. It reuses Desktop preset discovery and the creation transaction
     // below; the pages own only the human decisions reviewed before spawn.
     apply_project_setup_palette(setup_route_);
     {
@@ -2730,10 +2730,6 @@ void NativeShell::set_agent_lifecycle_dependencies(
         std::move(dependencies));
 }
 
-void NativeShell::set_tui_executable(fs::path executable) {
-    tui_executable_ = std::move(executable);
-}
-
 void NativeShell::set_bootstrap_actions_enabled(bool enabled) {
     if (auto *open_button = window_->findChild<QPushButton *>(
             "lingtai_open_project_button")) {
@@ -2761,46 +2757,31 @@ void NativeShell::request_new_project() {
     existing_setup_selected_manifest_ = {};
     setup_mode_ = SetupMode::create_project;
     hide_setup_wizard();
-    if (tui_executable_.empty()) {
-        setup_mode_ = SetupMode::none;
-        set_bootstrap_status(QStringLiteral(
-            "New Project is unavailable: no TUI executable is configured."));
-        refresh_route();
-        recompute_layout(window_->body()->width());
-        return;
-    }
     bootstrap_pending_ = true;
     set_bootstrap_actions_enabled(false);
     set_bootstrap_status(QStringLiteral("Discovering presets…"));
     refresh_route();
     recompute_layout(window_->body()->width());
-    bootstrap_runner_->run_presets(tui_executable_, [this](
-            PresetDiscoveryResult result) {
+    creation_runner_->run_catalog(lingtai_global_dir(), [this](
+            PresetCatalogLoadResult result) {
         handle_presets_finished(std::move(result));
     });
 }
 
-void NativeShell::handle_presets_finished(PresetDiscoveryResult result) {
-    if (result.kind != PresetDiscoveryKind::succeeded
-        || result.presets.empty()) {
+void NativeShell::handle_presets_finished(PresetCatalogLoadResult result) {
+    if (!result || result.presets.empty()) {
         bootstrap_pending_ = false;
         setup_mode_ = SetupMode::none;
         set_bootstrap_actions_enabled(true);
         QString failure;
-        if (result.kind == PresetDiscoveryKind::process_failed) {
-            if (!result.error.empty()) {
-                failure = QStringLiteral("Preset discovery failed: %1")
-                    .arg(QString::fromStdString(result.error));
-            } else {
-                failure = QStringLiteral("Preset discovery failed.");
-            }
-        } else if (result.kind == PresetDiscoveryKind::empty) {
-            failure = QStringLiteral(
-                "No usable presets were found. Preset discovery returned an "
-                "empty list.");
+        if (!result) {
+            failure = result.detail.empty()
+                ? QStringLiteral("Preset discovery failed.")
+                : QStringLiteral("Preset discovery failed: %1")
+                    .arg(QString::fromStdString(result.detail));
         } else {
             failure = QStringLiteral(
-                "Preset discovery returned output that could not be used.");
+                "No usable saved or template presets were found.");
         }
         set_bootstrap_status(failure);
         refresh_route();
@@ -3148,7 +3129,7 @@ void NativeShell::handle_create_and_start() {
         return;
     }
     if (!setup_route_ || !setup_route_visible_
-        || bootstrap_runner_->is_pending()) {
+        || creation_runner_->is_pending()) {
         return;
     }
     auto *input = find_ui_child<Ui::InputField>(
@@ -3165,9 +3146,37 @@ void NativeShell::handle_create_and_start() {
             "Choose a nonempty destination folder and a preset."));
         return;
     }
-    if (tui_executable_.empty()) {
+    auto *agents_page = window_->findChild<AgentPresetsPage *>(
+        "lingtai_setup_agents_page");
+    auto *config = window_->findChild<AgentConfigPage *>(
+        "lingtai_setup_review_page");
+    if (!agents_page || !config) return;
+    const auto preset_path_for = [chooser](const QString &name) {
+        const auto index = chooser->findText(name);
+        return index < 0 ? QString()
+            : chooser->itemData(index, Qt::UserRole + 7).toString();
+    };
+    const auto default_path = preset_path_for(agents_page->default_name());
+    if (default_path.isEmpty()) {
         dialog_status->setText(QStringLiteral(
-            "No TUI executable is configured."));
+            "The selected default preset no longer has a readable catalog path."));
+        return;
+    }
+    auto allowed_paths = std::vector<fs::path>();
+    for (const auto &name : agents_page->allowed_names()) {
+        const auto path = preset_path_for(name);
+        if (path.isEmpty()) {
+            dialog_status->setText(QStringLiteral(
+                "An allowed preset no longer has a readable catalog path."));
+            return;
+        }
+        allowed_paths.emplace_back(path.toStdU16String());
+    }
+    auto setup = config->apply_to_draft({});
+    setup.agent_name = config->agent_name().toStdString();
+    if (setup.agent_name.empty() || config->folder_name().isEmpty()) {
+        dialog_status->setText(QStringLiteral(
+            "Choose a nonempty Agent name and folder."));
         return;
     }
     dialog_status->setText(QString());
@@ -3175,30 +3184,30 @@ void NativeShell::handle_create_and_start() {
     refresh_route();
     recompute_layout(window_->body()->width());
     set_bootstrap_status(QStringLiteral(
-        "Creating project and starting Agent…"));
-    auto agent_name = std::string();
-    auto language = std::string();
-    if (auto *config = window_->findChild<AgentConfigPage *>(
-            "lingtai_setup_review_page")) {
-        agent_name = config->agent_name().toStdString();
-        language = config->language().toStdString();
-    }
-    bootstrap_runner_->run_spawn(tui_executable_,
-        fs::path(destination.toStdU16String()),
-        preset.toStdString(),
-        [this](SpawnOutcome outcome) {
-            handle_spawn_finished(std::move(outcome));
-        },
-        agent_name,
-        language);
+        "Creating project…"));
+    const auto global = fs::path(lingtai_global_dir().toStdU16String());
+    creation_runner_->run_create(ProjectCreationRequest{
+        .destination = fs::path(destination.toStdU16String()),
+        .preset_path = fs::path(default_path.toStdU16String()),
+        .allowed_preset_paths = std::move(allowed_paths),
+        .runtime_python = agent_start_fallback_python_,
+        .env_file = global / ".env",
+        .covenant_file = fs::path(setup.covenant_file),
+        .agent_name = setup.agent_name,
+        .agent_directory = config->folder_name().toStdString(),
+        .setup = setup,
+        .comment = setup.comment_file,
+    }, [this](ProjectCreationResult result) {
+        handle_creation_finished(std::move(result));
+    });
 }
 
 void NativeShell::handle_cancel_bootstrap() {
     if (!setup_route_) return;
     // A user dismissal of the New Project flow -- Cancel, Escape, or
-    // reject() -- is always a no-spawn cancellation. It must not run while a
-    // discovery/spawn subprocess is pending.
-    if (bootstrap_runner_ && bootstrap_runner_->is_pending()) return;
+    // reject() -- is always a no-create cancellation. It must not run while
+    // discovery or creation is pending.
+    if (creation_runner_ && creation_runner_->is_pending()) return;
     bootstrap_pending_ = false;
     setup_mode_ = SetupMode::none;
     existing_setup_state_.reset();
@@ -3212,7 +3221,61 @@ void NativeShell::handle_cancel_bootstrap() {
     set_bootstrap_actions_enabled(true);
 }
 
-void NativeShell::handle_spawn_finished(SpawnOutcome outcome) {
+void NativeShell::handle_creation_finished(ProjectCreationResult outcome) {
+    if (!outcome.created || outcome.project_dir.empty()) {
+        bootstrap_pending_ = false;
+        setup_mode_ = SetupMode::none;
+        created_project_root_.reset();
+        hide_setup_wizard();
+        set_bootstrap_actions_enabled(true);
+        set_bootstrap_status(outcome.detail.empty()
+            ? QStringLiteral("Project was not created.")
+            : QStringLiteral("Project was not created: %1")
+                .arg(QString::fromStdString(outcome.detail)));
+        refresh_route();
+        recompute_layout(window_->body()->width());
+        return;
+    }
+    created_project_root_ = outcome.project_dir;
+    const auto opened = open_project(outcome.project_dir,
+        fs::path(".lingtai") / outcome.agent_key);
+    if (opened.disposition != ProjectOpenDisposition::opened
+            || !selection_state_.active_project()) {
+        bootstrap_pending_ = false;
+        setup_mode_ = SetupMode::none;
+        hide_setup_wizard();
+        set_bootstrap_actions_enabled(true);
+        set_bootstrap_status(QStringLiteral(
+            "Project was created but could not be opened here. It is preserved at %1.")
+            .arg(path_text(outcome.project_dir)));
+        return;
+    }
+    agents_ = project_agents(*selection_state_.active_project());
+    const auto started = lifecycle_controller_->run(AgentLifecycleRequest{
+        .attachment = *selection_state_.active_project(),
+        .snapshot = agents_,
+        .selected_agent_key = outcome.agent_key,
+        .command = AgentLifecycleCommand::cpr,
+        .fallback_python = agent_start_fallback_python_,
+        .generation = lifecycle_generation(),
+    }, [this](AgentLifecycleResult result) {
+        handle_first_agent_launch_finished(std::move(result));
+    });
+    if (started != AgentLifecycleStartResult::started) {
+        bootstrap_pending_ = false;
+        setup_mode_ = SetupMode::none;
+        hide_setup_wizard();
+        set_bootstrap_actions_enabled(true);
+        set_bootstrap_status(QStringLiteral(
+            "Project created, but Agent start was refused. The project is preserved at %1.")
+            .arg(path_text(outcome.project_dir)));
+        return;
+    }
+    set_bootstrap_status(QStringLiteral("Project created; starting Agent…"));
+}
+
+void NativeShell::handle_first_agent_launch_finished(
+        AgentLifecycleResult result) {
     bootstrap_pending_ = false;
     setup_mode_ = SetupMode::none;
     existing_setup_state_.reset();
@@ -3223,34 +3286,33 @@ void NativeShell::handle_spawn_finished(SpawnOutcome outcome) {
     refresh_route();
     recompute_layout(window_->body()->width());
     set_bootstrap_actions_enabled(true);
-    if (outcome.kind != SpawnOutcomeKind::launched
-        || outcome.project_dir.empty()) {
-        QString failure;
-        if (outcome.kind == SpawnOutcomeKind::process_failed) {
-            if (!outcome.error.empty()) {
-                failure = outcome.code.empty()
-                    ? QStringLiteral("Project creation failed: %1").arg(
-                        QString::fromStdString(outcome.error))
-                    : QStringLiteral("Project creation failed (%1): %2").arg(
-                        QString::fromStdString(outcome.code),
-                        QString::fromStdString(outcome.error));
-            } else {
-                failure = QStringLiteral("Project creation failed.");
-            }
-        } else {
-            failure = QStringLiteral(
-                "Project creation returned output that could not be used.");
-        }
-        set_bootstrap_status(failure + QStringLiteral(
-            " The destination may contain a partially initialized LingTai "
-            "project."));
+    const auto current = selection_state_.active_project()
+        && selection_state_.active_project()->root()
+            == result.bound_project_root
+        && lifecycle_generation() == result.bound_generation;
+    if (!current) {
+        created_project_root_.reset();
         return;
     }
-    const auto opened = open_project(outcome.project_dir, std::nullopt);
-    set_bootstrap_status(opened.disposition == ProjectOpenDisposition::opened
-        ? QStringLiteral("Project created and Agent started.")
-        : QStringLiteral(
-            "Project was created but could not be opened here."));
+    agents_ = selection_state_.active_project()
+        ? project_agents(*selection_state_.active_project()) : AgentSnapshot{};
+    render_roster();
+    const auto launched = result.targets.size() == 1U
+        && (result.targets.front().outcome == AgentLifecycleOutcomeKind::applied
+            || result.targets.front().outcome
+                == AgentLifecycleOutcomeKind::already_online);
+    if (launched) {
+        set_bootstrap_status(QStringLiteral(
+            "Project created and Agent started."));
+    } else {
+        const auto detail = QString::fromStdString(
+            agent_lifecycle_result_text(result));
+        set_bootstrap_status(QStringLiteral(
+            "Project created, but Agent did not start: %1 The project is preserved at %2.")
+            .arg(detail, created_project_root_
+                ? path_text(*created_project_root_) : QStringLiteral("the destination")));
+    }
+    created_project_root_.reset();
 }
 
 ProjectOpenOutcome NativeShell::open_project(
@@ -4753,7 +4815,7 @@ bool NativeShell::handle_prompt_command(
 // One Desktop-owned lifecycle dispatcher. The controller validates the exact
 // command matrix (including Main fallback and supported `all` forms) before
 // any destructive work, then advances waits on its own timer without blocking
-// the UI thread. `tui_executable_` is deliberately absent from this path.
+// the UI thread.
 void NativeShell::handle_lifecycle_command(
         const std::string &name, const std::string &args) {
     auto *status = window_->findChild<QLabel *>("lingtai_composer_status");

@@ -40,26 +40,6 @@ void writeFile(const std::filesystem::path &path, std::string_view bytes) {
     }
 }
 
-void writeExecutableScript(
-        const std::filesystem::path &path,
-        std::string_view body) {
-    writeFile(path, body);
-    std::error_code error;
-    std::filesystem::permissions(
-        path,
-        std::filesystem::perms::owner_all
-            | std::filesystem::perms::group_read
-            | std::filesystem::perms::group_exec
-            | std::filesystem::perms::others_read
-            | std::filesystem::perms::others_exec,
-        std::filesystem::perm_options::replace,
-        error);
-    if (error) {
-        throw std::runtime_error(
-            "visual scenario: chmod failed: " + path.string());
-    }
-}
-
 void clickButton(QWidget &window, const char *object_name) {
     auto *button = requireChild<QPushButton>(window, object_name);
     button->click();
@@ -143,31 +123,27 @@ SetupSandbox makeSetupSandbox() {
             / ("lingtai-visual-setup-" + std::to_string(
                 static_cast<unsigned long long>(QCoreApplication::applicationPid()))),
         .destination = {},
-        .tui_executable = {},
+        .global_dir = {},
     };
     sandbox.destination = sandbox.root / "new-project";
-    sandbox.tui_executable = sandbox.root / "mock-tui";
+    sandbox.global_dir = sandbox.root / "global";
     std::filesystem::create_directories(sandbox.root);
     return sandbox;
 }
 
-void installMockSetupTui(NativeShell &shell, const SetupSandbox &sandbox) {
-    const auto argv_record = sandbox.root / "tui-argv.txt";
-    writeFile(argv_record, std::string_view{});
-    writeExecutableScript(
-        sandbox.tui_executable,
-        "#!/bin/sh\n"
-        "printf '%s\\n' \"$@\" >> \"" + argv_record.string() + "\"\n"
-        "if [ \"$1\" = \"presets\" ]; then\n"
-        "  printf '%s' "
-        "'{\"presets\":[{\"name\":\"beta\",\"description\":\"Beta preset\","
-        "\"tier\":\"t2\",\"source\":\"saved\",\"path\":\"/tmp/b.json\"},"
-        "{\"name\":\"alpha\",\"description\":\"Alpha preset\",\"tier\":\"t1\","
-        "\"source\":\"template\",\"path\":\"/tmp/a.json\"}]}'\n"
-        "  exit 0\n"
-        "fi\n"
-        "exit 2\n");
-    shell.set_tui_executable(std::filesystem::absolute(sandbox.tui_executable));
+void installMockSetupCatalog(const SetupSandbox &sandbox) {
+    writeFile(sandbox.global_dir / "presets/saved/beta.json", R"JSON({
+      "name":"beta",
+      "description":{"summary":"Beta preset","tier":"2"},
+      "manifest":{"llm":{"provider":"openrouter","model":"beta"},"capabilities":{}}
+    })JSON");
+    writeFile(sandbox.global_dir / "presets/templates/alpha.json", R"JSON({
+      "name":"alpha",
+      "description":{"summary":"Alpha preset","tier":"1"},
+      "manifest":{"llm":{"provider":"openrouter","model":"alpha"},"capabilities":{}}
+    })JSON");
+    qputenv("LINGTAI_TUI_DIR",
+        QByteArray::fromStdString(sandbox.global_dir.string()));
 }
 
 void waitForVisible(QWidget &widget, int timeout_ms) {
@@ -183,7 +159,7 @@ void waitForVisible(QWidget &widget, int timeout_ms) {
 }
 
 void startSetupWizard(NativeShell &shell, const SetupSandbox &sandbox) {
-    installMockSetupTui(shell, sandbox);
+    installMockSetupCatalog(sandbox);
     auto &window = shell.window();
     auto *wizard = requireChild<QWidget>(window, "lingtai_project_setup_wizard");
     shell.set_open_project_request_handler([&] {
