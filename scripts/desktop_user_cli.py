@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import ctypes
 import dataclasses
 import hashlib
+import http.client
 import json
 import os
 import plistlib
@@ -16,6 +18,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 import uuid
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
@@ -35,6 +38,22 @@ MANIFEST_SCHEMA = 1
 EXECUTABLE_RELATIVE = "Contents/MacOS/LingTai"
 # 512 MiB leaves more than 20x headroom over the current roughly 23 MiB archive.
 MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
+MAX_MANIFEST_BYTES = 16 * 1024
+MAX_RELEASE_METADATA_BYTES = 64 * 1024
+OFFICIAL_REPOSITORY = "Lingtai-AI/lingtai-desktop"
+OFFICIAL_LATEST_RELEASE_URL = (
+    "https://api.github.com/repos/Lingtai-AI/lingtai-desktop/releases/latest"
+)
+OFFICIAL_RELEASE_TAG_URL = (
+    "https://api.github.com/repos/Lingtai-AI/lingtai-desktop/releases/tags/v{}"
+)
+OFFICIAL_HTTPS_HOSTS = frozenset({
+    "api.github.com", "github.com", "release-assets.githubusercontent.com",
+})
+RELEASE_USER_AGENT = "lingtai-desktop/official-release-downloader"
+RELEASE_ACCEPT = "application/vnd.github+json"
+EXPLICIT_RELEASE_TIMEOUT = 15.0
+MAX_REDIRECTS = 5
 MANIFEST_KEYS = {
     "architectures", "archive_file_name", "archive_sha256",
     "archive_size_bytes", "artifact_kind", "bundle_executable",
@@ -71,6 +90,20 @@ class Manifest:
     packaging_git_tree: str
     packaging_git_dirty: bool
     manifest_sha256: str
+
+
+@dataclasses.dataclass(frozen=True)
+class ReleaseAsset:
+    name: str
+    url: str
+    size_bytes: int
+
+
+@dataclasses.dataclass(frozen=True)
+class OfficialRelease:
+    version: str
+    archive: ReleaseAsset
+    manifest: ReleaseAsset
 
 
 @dataclasses.dataclass(frozen=True)
@@ -169,6 +202,242 @@ class Platform:
 
     def exec_app(self, executable: Path, arguments: list[str]) -> None:
         os.execv(executable, [os.fspath(executable), *arguments])
+
+
+class _HTTPSResponse:
+    def __init__(self, response: http.client.HTTPResponse,
+                 connection: http.client.HTTPSConnection) -> None:
+        self.status = response.status
+        self.headers = response.headers
+        self._response = response
+        self._connection = connection
+
+    def read(self, size: int = -1) -> bytes:
+        return self._response.read(size)
+
+    def close(self) -> None:
+        try:
+            self._response.close()
+        finally:
+            self._connection.close()
+
+
+class ReleaseTransport:
+    """Injectable one-request HTTPS boundary; redirect policy stays above it."""
+
+    def open(self, url: str, headers: dict[str, str], timeout: float) -> _HTTPSResponse:
+        parts = urllib.parse.urlsplit(url)
+        connection = http.client.HTTPSConnection(parts.hostname, timeout=timeout)
+        target = urllib.parse.urlunsplit(("", "", parts.path or "/", parts.query, ""))
+        try:
+            connection.request("GET", target, headers=headers)
+            return _HTTPSResponse(connection.getresponse(), connection)
+        except (OSError, TimeoutError, http.client.HTTPException) as error:
+            connection.close()
+            raise DesktopCLIError("official release request failed") from error
+
+
+def _validate_official_url(url: str, label: str) -> urllib.parse.SplitResult:
+    try:
+        parts = urllib.parse.urlsplit(url)
+        port = parts.port
+    except (TypeError, ValueError) as error:
+        raise DesktopCLIError(f"{label} URL is malformed") from error
+    if (parts.scheme != "https" or not parts.hostname
+            or parts.username is not None or parts.password is not None
+            or port is not None or parts.fragment
+            or parts.hostname.lower() not in OFFICIAL_HTTPS_HOSTS):
+        raise DesktopCLIError(f"{label} URL is not an allowed official HTTPS destination")
+    return parts
+
+
+def _response_header(response: object, name: str) -> str | None:
+    headers = getattr(response, "headers", None)
+    value = headers.get(name) if headers is not None else None
+    return value if isinstance(value, str) else None
+
+
+def _content_length(response: object, maximum_bytes: int,
+                    expected_bytes: int | None = None) -> int | None:
+    raw = _response_header(response, "Content-Length")
+    if raw is None:
+        return None
+    if not raw.isascii() or not raw.isdecimal():
+        raise DesktopCLIError("official release response Content-Length is invalid")
+    length = int(raw)
+    if length > maximum_bytes:
+        raise DesktopCLIError("official release response is too large")
+    if expected_bytes is not None and length != expected_bytes:
+        raise DesktopCLIError("official release response length does not match asset metadata")
+    return length
+
+
+def _open_official_response(url: str, transport: ReleaseTransport,
+                            timeout: float) -> object:
+    current = url
+    headers = {"User-Agent": RELEASE_USER_AGENT, "Accept": RELEASE_ACCEPT}
+    for redirect_count in range(MAX_REDIRECTS + 1):
+        _validate_official_url(current, "official release")
+        try:
+            response = transport.open(current, headers, timeout)
+        except DesktopCLIError:
+            raise
+        except (OSError, TimeoutError, http.client.HTTPException) as error:
+            raise DesktopCLIError("official release request failed") from error
+        status = getattr(response, "status", None)
+        if status in {301, 302, 303, 307, 308}:
+            location = _response_header(response, "Location")
+            response.close()
+            if location is None or not location:
+                raise DesktopCLIError("official release redirect is malformed")
+            if redirect_count == MAX_REDIRECTS:
+                raise DesktopCLIError("official release redirected too many times")
+            current = urllib.parse.urljoin(current, location)
+            _validate_official_url(current, "official release redirect")
+            continue
+        if type(status) is not int or status < 200 or status >= 300:
+            response.close()
+            raise DesktopCLIError("official release request returned a non-success status")
+        return response
+    raise DesktopCLIError("official release redirected too many times")
+
+
+def _read_official_bytes(url: str, transport: ReleaseTransport,
+                         maximum_bytes: int, timeout: float) -> bytes:
+    response = _open_official_response(url, transport, timeout)
+    try:
+        advertised = _content_length(response, maximum_bytes)
+        result = bytearray()
+        while True:
+            block = response.read(min(64 * 1024, maximum_bytes + 1 - len(result)))
+            if not block:
+                break
+            result.extend(block)
+            if len(result) > maximum_bytes:
+                raise DesktopCLIError("official release response is too large")
+        if advertised is not None and len(result) != advertised:
+            raise DesktopCLIError("official release response was truncated")
+        return bytes(result)
+    except DesktopCLIError:
+        raise
+    except (OSError, TimeoutError, http.client.HTTPException) as error:
+        raise DesktopCLIError("official release response failed while streaming") from error
+    finally:
+        response.close()
+
+
+def _asset_from_metadata(value: object, expected_name: str,
+                         version: str, maximum_bytes: int) -> ReleaseAsset | None:
+    if not isinstance(value, dict):
+        raise DesktopCLIError("official release asset metadata is invalid")
+    name, url, size_bytes = value.get("name"), value.get("browser_download_url"), value.get("size")
+    if name != expected_name:
+        return None
+    if (not isinstance(url, str) or type(size_bytes) is not int
+            or size_bytes <= 0 or size_bytes > maximum_bytes):
+        raise DesktopCLIError("official release asset metadata is invalid")
+    parts = _validate_official_url(url, "official release asset")
+    expected_path = f"/{OFFICIAL_REPOSITORY}/releases/download/v{version}/{expected_name}"
+    if (parts.hostname.lower() != "github.com" or parts.path != expected_path
+            or parts.query):
+        raise DesktopCLIError("official release asset URL does not match its tag and name")
+    return ReleaseAsset(expected_name, url, size_bytes)
+
+
+def discover_official_release(version: str | None = None, *,
+                              transport: ReleaseTransport | None = None,
+                              timeout: float = EXPLICIT_RELEASE_TIMEOUT) -> OfficialRelease:
+    if version is not None and VERSION_PATTERN.fullmatch(version) is None:
+        raise DesktopCLIError("release version must be a safe x.y.z value")
+    transport = transport or ReleaseTransport()
+    url = OFFICIAL_LATEST_RELEASE_URL if version is None else OFFICIAL_RELEASE_TAG_URL.format(version)
+    raw = _read_official_bytes(url, transport, MAX_RELEASE_METADATA_BYTES, timeout)
+    try:
+        metadata = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise DesktopCLIError("official release metadata is not bounded valid JSON") from error
+    if not isinstance(metadata, dict):
+        raise DesktopCLIError("official release metadata must be an object")
+    tag = metadata.get("tag_name")
+    draft, prerelease, assets = metadata.get("draft"), metadata.get("prerelease"), metadata.get("assets")
+    if (not isinstance(tag, str) or not tag.startswith("v")
+            or VERSION_PATTERN.fullmatch(tag[1:]) is None
+            or type(draft) is not bool or type(prerelease) is not bool
+            or draft or prerelease or not isinstance(assets, list)):
+        raise DesktopCLIError("official release metadata is not a stable release")
+    discovered_version = tag[1:]
+    if version is not None and discovered_version != version:
+        raise DesktopCLIError("official release tag does not match the requested version")
+    archive_name = f"LingTai-{discovered_version}-macOS-universal.app.tar.gz"
+    manifest_name = f"LingTai-{discovered_version}-macOS-universal.app.manifest.json"
+    archives = [asset for value in assets
+                if (asset := _asset_from_metadata(value, archive_name, discovered_version,
+                                                  MAX_ARCHIVE_BYTES)) is not None]
+    manifests = [asset for value in assets
+                 if (asset := _asset_from_metadata(value, manifest_name, discovered_version,
+                                                   MAX_MANIFEST_BYTES)) is not None]
+    if len(archives) != 1 or len(manifests) != 1:
+        raise DesktopCLIError("official release must contain one exact archive and manifest asset")
+    return OfficialRelease(discovered_version, archives[0], manifests[0])
+
+
+def _download_official_asset(asset: ReleaseAsset, destination: Path,
+                             transport: ReleaseTransport, maximum_bytes: int,
+                             timeout: float) -> None:
+    response = _open_official_response(asset.url, transport, timeout)
+    descriptor: int | None = None
+    try:
+        advertised = _content_length(response, maximum_bytes, asset.size_bytes)
+        flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                 | getattr(os, "O_NOFOLLOW", 0))
+        descriptor = os.open(destination, flags, 0o600)
+        written = 0
+        with os.fdopen(descriptor, "wb") as stream:
+            descriptor = None
+            while True:
+                block = response.read(min(1024 * 1024, maximum_bytes + 1 - written))
+                if not block:
+                    break
+                written += len(block)
+                if written > maximum_bytes or written > asset.size_bytes:
+                    raise DesktopCLIError("official release asset exceeded its declared size")
+                stream.write(block)
+        if written != asset.size_bytes or (advertised is not None and written != advertised):
+            raise DesktopCLIError("official release asset was truncated")
+        facts = _regular_nofollow(destination, f"downloaded {asset.name}")
+        if facts.st_size != asset.size_bytes or stat.S_IMODE(facts.st_mode) != 0o600:
+            raise DesktopCLIError("downloaded official release asset facts are invalid")
+    except DesktopCLIError:
+        raise
+    except (OSError, TimeoutError, http.client.HTTPException) as error:
+        raise DesktopCLIError("official release asset failed while streaming") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        response.close()
+
+
+@contextlib.contextmanager
+def downloaded_official_release(version: str | None = None, *,
+                                transport: ReleaseTransport | None = None,
+                                timeout: float = EXPLICIT_RELEASE_TIMEOUT):
+    transport = transport or ReleaseTransport()
+    release = discover_official_release(version, transport=transport, timeout=timeout)
+    scratch = Path(tempfile.mkdtemp(prefix="lingtai-desktop-download-"))
+    os.chmod(scratch, 0o700, follow_symlinks=False)
+    scratch_identity = _identity(scratch)
+    archive = scratch / release.archive.name
+    manifest = scratch / release.manifest.name
+    try:
+        _download_official_asset(release.manifest, manifest, transport,
+                                 MAX_MANIFEST_BYTES, timeout)
+        _download_official_asset(release.archive, archive, transport,
+                                 MAX_ARCHIVE_BYTES, timeout)
+        yield release, archive, manifest
+    finally:
+        if (_matches_identity(scratch, scratch_identity) and not scratch.is_symlink()
+                and scratch.is_dir()):
+            shutil.rmtree(scratch)
 
 
 def _regular_nofollow(path: Path, label: str) -> os.stat_result:
@@ -848,6 +1117,23 @@ def install(archive: Path, manifest_path: Path, *, home: Path | None = None,
     return manifest.version
 
 
+def install_official(version: str | None = None, *, home: Path | None = None,
+                     platform: Platform | None = None,
+                     transport: ReleaseTransport | None = None,
+                     effective_uid: int | None = None, update: bool = False,
+                     repository_root: Path | None = None) -> str:
+    with downloaded_official_release(version, transport=transport) as release_pair:
+        release, archive, manifest = release_pair
+        installed = install(
+            archive, manifest, home=home, platform=platform,
+            effective_uid=effective_uid, update=update,
+            repository_root=repository_root,
+        )
+        if installed != release.version:
+            raise DesktopCLIError("installed version does not match official release metadata")
+        return installed
+
+
 def doctor(*, home: Path | None = None) -> tuple[str, dict[str, object]]:
     paths = _paths(home)
     for path in (paths.local, paths.bin, paths.root, paths.cli, paths.versions, paths.receipts):
@@ -989,21 +1275,41 @@ def installed_main(argv: Sequence[str] | None = None) -> int:
 
 def bootstrap_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Install LingTai Desktop into the current user's managed layout.")
-    parser.add_argument("--archive", required=True, type=Path)
-    parser.add_argument("--manifest", required=True, type=Path)
+    parser.add_argument("--version")
+    parser.add_argument("--archive", type=Path)
+    parser.add_argument("--manifest", type=Path)
     return parser
 
 
-def bootstrap_main(argv: Sequence[str] | None = None) -> int:
+def bootstrap_main(argv: Sequence[str] | None = None, *, home: Path | None = None,
+                   platform: Platform | None = None,
+                   transport: ReleaseTransport | None = None,
+                   effective_uid: int | None = None,
+                   output: Callable[[str], None] | None = None) -> int:
     values = bootstrap_parser().parse_args(argv)
+    output = output or print
     try:
-        version = install(values.archive, values.manifest)
-        doctor()
+        local_pair = values.archive is not None or values.manifest is not None
+        if (values.archive is None) != (values.manifest is None):
+            raise DesktopCLIError("--archive and --manifest must be supplied together")
+        if local_pair and values.version is not None:
+            raise DesktopCLIError("--version is mutually exclusive with --archive/--manifest")
+        if local_pair:
+            version = install(
+                values.archive, values.manifest, home=home, platform=platform,
+                effective_uid=effective_uid,
+            )
+        else:
+            version = install_official(
+                values.version, home=home, platform=platform,
+                transport=transport, effective_uid=effective_uid,
+            )
+        doctor(home=home)
     except DesktopCLIError as error:
         print(f"install-macos-app: {error}", file=sys.stderr)
         return 1
-    print(f"installed LingTai Desktop {version}")
-    print("launcher: $HOME/.local/bin/lingtai-desktop (PATH was not modified)")
+    output(f"installed LingTai Desktop {version}")
+    output("launcher: $HOME/.local/bin/lingtai-desktop (PATH was not modified)")
     return 0
 
 

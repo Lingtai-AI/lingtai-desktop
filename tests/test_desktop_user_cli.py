@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import plistlib
@@ -114,7 +115,107 @@ class FakePlatform(cli.Platform):
         self.exec_calls.append([str(executable), *arguments])
 
 
+class FakeHTTPResponse:
+    def __init__(self, status: int, headers: dict[str, str], body: bytes) -> None:
+        self.status = status
+        self.headers = headers
+        self._stream = io.BytesIO(body)
+
+    def read(self, size: int = -1) -> bytes:
+        return self._stream.read(size)
+
+    def close(self) -> None:
+        self._stream.close()
+
+
+class FakeReleaseTransport:
+    def __init__(self, routes: dict[str, tuple[int, dict[str, str], bytes]]) -> None:
+        self.routes = routes
+        self.calls: list[tuple[str, dict[str, str], float]] = []
+
+    def open(self, url: str, headers: dict[str, str], timeout: float) -> FakeHTTPResponse:
+        self.calls.append((url, dict(headers), timeout))
+        try:
+            status, response_headers, body = self.routes[url]
+        except KeyError as error:
+            raise AssertionError(f"unexpected offline transport URL: {url}") from error
+        return FakeHTTPResponse(status, dict(response_headers), body)
+
+
+def official_release_transport(archive: Path, manifest: Path, version: str) -> FakeReleaseTransport:
+    archive_name = archive.name
+    manifest_name = manifest.name
+    archive_url = f"https://github.com/Lingtai-AI/lingtai-desktop/releases/download/v{version}/{archive_name}"
+    manifest_url = f"https://github.com/Lingtai-AI/lingtai-desktop/releases/download/v{version}/{manifest_name}"
+    archive_final = f"https://release-assets.githubusercontent.com/github-production-release-asset/archive?token=private-archive"
+    manifest_final = f"https://release-assets.githubusercontent.com/github-production-release-asset/manifest?token=private-manifest"
+    metadata = json.dumps({
+        "tag_name": f"v{version}",
+        "draft": False,
+        "prerelease": False,
+        "assets": [
+            {"name": archive_name, "browser_download_url": archive_url, "size": archive.stat().st_size},
+            {"name": manifest_name, "browser_download_url": manifest_url, "size": manifest.stat().st_size},
+        ],
+    }).encode()
+    return FakeReleaseTransport({
+        "https://api.github.com/repos/Lingtai-AI/lingtai-desktop/releases/latest":
+            (200, {"Content-Length": str(len(metadata))}, metadata),
+        f"https://api.github.com/repos/Lingtai-AI/lingtai-desktop/releases/tags/v{version}":
+            (200, {"Content-Length": str(len(metadata))}, metadata),
+        archive_url: (302, {"Location": archive_final}, b""),
+        manifest_url: (302, {"Location": manifest_final}, b""),
+        archive_final: (200, {"Content-Length": str(archive.stat().st_size)}, archive.read_bytes()),
+        manifest_final: (200, {"Content-Length": str(manifest.stat().st_size)}, manifest.read_bytes()),
+    })
+
+
 class DesktopUserCLIContractTest(unittest.TestCase):
+    def test_official_latest_and_exact_bootstrap_download_verified_release(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            artifacts = root / "release"
+            artifacts.mkdir()
+            archive, manifest = write_artifacts(artifacts, "0.1.6")
+
+            latest_home = root / "latest-home"
+            latest_home.mkdir()
+            latest_platform = FakePlatform()
+            latest_transport = official_release_transport(archive, manifest, "0.1.6")
+            latest_output: list[str] = []
+            self.assertEqual(cli.bootstrap_main(
+                [], home=latest_home, platform=latest_platform,
+                transport=latest_transport, effective_uid=501,
+                output=latest_output.append,
+            ), 0)
+            self.assertEqual(
+                os.readlink(latest_home / ".local/share/lingtai-desktop/current"),
+                "versions/0.1.6",
+            )
+            self.assertEqual(latest_transport.calls[0][0], cli.OFFICIAL_LATEST_RELEASE_URL)
+
+            exact_home = root / "exact-home"
+            exact_home.mkdir()
+            exact_platform = FakePlatform()
+            exact_transport = official_release_transport(archive, manifest, "0.1.6")
+            self.assertEqual(cli.bootstrap_main(
+                ["--version", "0.1.6"], home=exact_home, platform=exact_platform,
+                transport=exact_transport, effective_uid=501,
+                output=lambda _: None,
+            ), 0)
+            self.assertEqual(
+                exact_transport.calls[0][0],
+                "https://api.github.com/repos/Lingtai-AI/lingtai-desktop/releases/tags/v0.1.6",
+            )
+            self.assertTrue(all(call[1]["User-Agent"].startswith("lingtai-desktop/")
+                                and call[1]["Accept"] for call in latest_transport.calls))
+            verify_calls = [call for call in latest_platform.calls + exact_platform.calls
+                            if call[0] == "verify"]
+            self.assertEqual(len(verify_calls), 2)
+            self.assertTrue(all(Path(call[1]).name == archive.name
+                                and Path(call[2]).name == manifest.name for call in verify_calls))
+            self.assertTrue(all(not Path(call[1]).parent.exists() for call in verify_calls))
+
     def test_existing_shared_parent_modes_and_contents_are_preserved(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
