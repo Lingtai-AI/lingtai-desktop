@@ -507,6 +507,259 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                         self.assertEqual(tree_snapshot(home), before)
                         self.assertEqual(list(downloads.iterdir()), [])
 
+    def test_recursive_json_is_bounded_for_automatic_and_explicit_discovery(self) -> None:
+        nested = b"[" * 60_000
+        for mode in ("explicit", "automatic"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                transport = FakeReleaseTransport({
+                    cli.OFFICIAL_LATEST_RELEASE_URL: (
+                        200, {"Content-Length": str(len(nested))}, nested,
+                    ),
+                })
+                if mode == "explicit":
+                    with self.assertRaisesRegex(
+                            cli.DesktopCLIError,
+                            "official release metadata is not bounded valid JSON",
+                    ):
+                        cli.discover_official_release(transport=transport)
+                    continue
+
+                home = root / "home"
+                home.mkdir()
+                archive, manifest = write_artifacts(root, "0.1.5")
+                platform = FakePlatform()
+                cli.install(archive, manifest, home=home,
+                            platform=platform, effective_uid=501)
+                managed = home / ".local/share/lingtai-desktop"
+                before = tree_snapshot(managed)
+                output: list[str] = []
+
+                self.assertEqual(cli.run_installed(
+                    ["open"], home=home, platform=platform, transport=transport,
+                    clock=lambda: 1_000.0, tty=lambda: False,
+                    output=output.append, effective_uid=501,
+                ), 0)
+                old_app = managed / "versions/0.1.5/LingTai.app"
+                self.assertEqual(platform.calls[-1], ["/usr/bin/open", str(old_app)])
+                self.assertEqual(tree_snapshot(managed), before)
+                self.assertFalse((managed / "update-check.json").exists())
+
+    def test_recursive_json_is_bounded_for_manifest_receipt_and_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, manifest = write_artifacts(root, "0.1.5")
+            with self.subTest(boundary="manifest"), mock.patch.object(
+                    cli.json, "loads", side_effect=RecursionError("injected nested manifest"),
+            ):
+                with self.assertRaisesRegex(
+                        cli.DesktopCLIError, "manifest must be bounded valid JSON",
+                ):
+                    cli.load_manifest(archive, manifest)
+
+            home = root / "home"
+            home.mkdir()
+            cli.install(archive, manifest, home=home,
+                        platform=FakePlatform(), effective_uid=501)
+            paths = cli._paths(home)
+            with self.subTest(boundary="receipt"), mock.patch.object(
+                    cli.json, "loads", side_effect=RecursionError("injected nested receipt"),
+            ):
+                with self.assertRaisesRegex(cli.DesktopCLIError, "receipt is invalid"):
+                    cli._read_receipt(paths, "0.1.5")
+
+            paths.update_cache.write_text(json.dumps({
+                "checked_at": 1_000,
+                "latest_version": "0.1.6",
+                "schema_version": cli.UPDATE_CACHE_SCHEMA,
+            }))
+            paths.update_cache.chmod(0o600)
+            with self.subTest(boundary="cache"), mock.patch.object(
+                    cli.json, "loads", side_effect=RecursionError("injected nested cache"),
+            ):
+                with self.assertRaisesRegex(
+                        cli.DesktopCLIError, "managed update-check cache is invalid",
+                ):
+                    cli._read_update_cache(paths)
+
+    def test_official_asset_owner_casing_is_tolerant_but_route_tail_is_exact(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, manifest = write_artifacts(root, "0.1.6")
+            exact_url = cli.OFFICIAL_RELEASE_TAG_URL.format("0.1.6")
+            lower_owner = official_release_transport(archive, manifest, "0.1.6")
+            metadata = json.loads(lower_owner.routes[exact_url][2])
+            for asset in metadata["assets"]:
+                asset["browser_download_url"] = asset["browser_download_url"].replace(
+                    "/Lingtai-AI/lingtai-desktop/", "/lingtai-AI/lingtai-desktop/",
+                )
+            body = json.dumps(metadata).encode()
+            lower_owner.routes[exact_url] = (
+                200, {"Content-Length": str(len(body))}, body,
+            )
+            release = cli.discover_official_release("0.1.6", transport=lower_owner)
+            self.assertIn("/lingtai-AI/lingtai-desktop/", release.archive.url)
+            self.assertIn("/lingtai-AI/lingtai-desktop/", release.manifest.url)
+
+            archive_url = metadata["assets"][0]["browser_download_url"]
+            for label, bad_url in (
+                ("tail", archive_url.replace("/releases/download/", "/release/download/")),
+                ("tag", archive_url.replace("/v0.1.6/", "/V0.1.6/")),
+                ("name", archive_url.replace(archive.name, f"wrong-{archive.name}")),
+            ):
+                with self.subTest(case=label):
+                    candidate = official_release_transport(archive, manifest, "0.1.6")
+                    changed = json.loads(candidate.routes[exact_url][2])
+                    changed["assets"][0]["browser_download_url"] = bad_url
+                    changed_body = json.dumps(changed).encode()
+                    candidate.routes[exact_url] = (
+                        200, {"Content-Length": str(len(changed_body))}, changed_body,
+                    )
+                    with self.assertRaisesRegex(
+                            cli.DesktopCLIError,
+                            "official release asset URL does not match its tag and name",
+                    ):
+                        cli.discover_official_release("0.1.6", transport=candidate)
+
+    def test_automatic_metadata_redirects_and_reads_share_one_total_deadline(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, manifest = write_artifacts(root, "0.1.5")
+            home = root / "home"
+            home.mkdir()
+            platform = FakePlatform()
+            cli.install(archive, manifest, home=home,
+                        platform=platform, effective_uid=501)
+            managed = home / ".local/share/lingtai-desktop"
+            before = tree_snapshot(managed)
+
+            release_archive, release_manifest = write_artifacts(root, "0.1.6")
+            complete = official_release_transport(release_archive, release_manifest, "0.1.6")
+            metadata = complete.routes[cli.OFFICIAL_LATEST_RELEASE_URL][2]
+            redirected_url = "https://api.github.com/slow-official-release"
+            transport = FakeReleaseTransport({
+                cli.OFFICIAL_LATEST_RELEASE_URL: (
+                    302, {"Location": redirected_url}, b"",
+                ),
+                redirected_url: (200, {"Content-Length": str(len(metadata))}, metadata),
+            })
+            monotonic_values = iter((100.0, 100.25, 100.5, 100.75, 101.0, 101.25, 102.1))
+            with mock.patch.object(cli.time, "monotonic", side_effect=monotonic_values):
+                self.assertEqual(cli.run_installed(
+                    ["open"], home=home, platform=platform, transport=transport,
+                    clock=lambda: 1_000.0, tty=lambda: False,
+                    output=lambda _: None, effective_uid=501,
+                ), 0)
+
+            old_app = managed / "versions/0.1.5/LingTai.app"
+            self.assertEqual(platform.calls[-1], ["/usr/bin/open", str(old_app)])
+            self.assertEqual(tree_snapshot(managed), before)
+            self.assertFalse((managed / "update-check.json").exists())
+            self.assertEqual([call[0] for call in transport.calls], [
+                cli.OFFICIAL_LATEST_RELEASE_URL, redirected_url,
+            ])
+            self.assertGreater(transport.calls[0][2], transport.calls[1][2])
+            self.assertLessEqual(transport.calls[0][2], cli.AUTOMATIC_RELEASE_TIMEOUT)
+
+            explicit = FakeReleaseTransport({
+                cli.OFFICIAL_LATEST_RELEASE_URL: (
+                    302, {"Location": redirected_url}, b"",
+                ),
+                redirected_url: (200, {"Content-Length": str(len(metadata))}, metadata),
+            })
+            with mock.patch.object(
+                    cli.time, "monotonic",
+                    side_effect=AssertionError("explicit discovery used automatic deadline"),
+            ):
+                cli.discover_official_release(transport=explicit)
+            self.assertTrue(all(
+                call[2] == cli.EXPLICIT_RELEASE_TIMEOUT for call in explicit.calls
+            ))
+
+    def test_confirmed_update_temp_directory_failure_continues_old_command(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            old_archive, old_manifest = write_artifacts(root, "0.1.5")
+            release_root = root / "release"
+            release_root.mkdir()
+            new_archive, new_manifest = write_artifacts(release_root, "0.1.6")
+            home = root / "home"
+            home.mkdir()
+            platform = FakePlatform()
+            cli.install(old_archive, old_manifest, home=home,
+                        platform=platform, effective_uid=501)
+            managed = home / ".local/share/lingtai-desktop"
+            before = tree_snapshot(managed)
+            output: list[str] = []
+
+            with mock.patch.object(
+                    cli.tempfile, "mkdtemp", side_effect=OSError("injected no tmp"),
+            ):
+                self.assertEqual(cli.run_installed(
+                    ["open"], home=home, platform=platform,
+                    transport=official_release_transport(
+                        new_archive, new_manifest, "0.1.6",
+                    ),
+                    clock=lambda: 1_000.0, tty=lambda: True, prompt=lambda _: "yes",
+                    output=output.append, effective_uid=501,
+                ), 0)
+
+            old_app = managed / "versions/0.1.5/LingTai.app"
+            self.assertEqual(platform.calls[-1], ["/usr/bin/open", str(old_app)])
+            self.assertEqual(tree_snapshot(managed), before)
+            self.assertTrue(any(
+                "Update failed" in line and "continuing" in line for line in output
+            ))
+
+    def test_explicit_update_cache_record_failure_warns_after_successful_install(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            old_archive, old_manifest = write_artifacts(root, "0.1.5")
+            release_root = root / "release"
+            release_root.mkdir()
+            new_archive, new_manifest = write_artifacts(release_root, "0.1.6")
+            home = root / "home"
+            home.mkdir()
+            platform = FakePlatform()
+            cli.install(old_archive, old_manifest, home=home,
+                        platform=platform, effective_uid=501)
+            managed = home / ".local/share/lingtai-desktop"
+            output: list[str] = []
+
+            with mock.patch.object(
+                    cli, "_write_update_cache",
+                    side_effect=cli.DesktopCLIError("injected cache record failure"),
+            ):
+                self.assertEqual(cli.run_installed(
+                    ["update"], home=home, platform=platform,
+                    transport=official_release_transport(
+                        new_archive, new_manifest, "0.1.6",
+                    ),
+                    clock=lambda: 1_000.0, output=output.append,
+                    effective_uid=501,
+                ), 0)
+
+            self.assertEqual(os.readlink(managed / "current"), "versions/0.1.6")
+            self.assertTrue(any(
+                "updated LingTai Desktop to 0.1.6" in line
+                and "cache was not recorded" in line
+                and "injected cache record failure" in line
+                for line in output
+            ))
+
+            cache = managed / "update-check.json"
+            cache.write_text("{invalid")
+            cache.chmod(0o600)
+            before = tree_snapshot(managed)
+            unused_transport = official_release_transport(new_archive, new_manifest, "0.1.6")
+            with self.assertRaisesRegex(cli.DesktopCLIError, "cache is invalid"):
+                cli.run_installed(
+                    ["update"], home=home, platform=platform,
+                    transport=unused_transport, effective_uid=501,
+                )
+            self.assertEqual(unused_transport.calls, [])
+            self.assertEqual(tree_snapshot(managed), before)
+
     def test_normal_commands_use_cached_offer_and_only_confirmed_tty_updates(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

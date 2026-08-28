@@ -43,8 +43,9 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
   the owned bounded, single-link `update-check.json`: noninteractive calls notice
   only, while interactive calls
   require an explicit default-No `y`/`yes` before the same verified transaction.
-  Explicit `update` forces fresh discovery and never prompts. The command never
-  mutates PATH/profiles and never weakens quarantine or Gatekeeper.
+  Explicit `update` forces fresh discovery and never prompts, but malformed or
+  substituted owned cache state remains a fail-closed integrity precondition. The
+  command never mutates PATH/profiles and never weakens quarantine or Gatekeeper.
   Existing shared `.local` parent modes are outside its ownership. Managed
   publication becomes visible only after mode preparation, rollback removes
   only invocation-created inode identities, and uninstall rejects the entire

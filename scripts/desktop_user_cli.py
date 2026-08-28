@@ -299,18 +299,34 @@ def _content_length(response: object, maximum_bytes: int,
     return length
 
 
+def _remaining_official_timeout(timeout: float, deadline: float | None) -> float:
+    if deadline is None:
+        return timeout
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise DesktopCLIError("official release metadata check timed out")
+    return min(timeout, remaining)
+
+
 def _open_official_response(url: str, transport: ReleaseTransport,
-                            timeout: float) -> object:
+                            timeout: float, deadline: float | None = None) -> object:
     current = url
     headers = {"User-Agent": RELEASE_USER_AGENT, "Accept": RELEASE_ACCEPT}
     for redirect_count in range(MAX_REDIRECTS + 1):
         _validate_official_url(current, "official release")
         try:
-            response = transport.open(current, headers, timeout)
+            response = transport.open(
+                current, headers, _remaining_official_timeout(timeout, deadline),
+            )
         except DesktopCLIError:
             raise
         except (OSError, TimeoutError, http.client.HTTPException) as error:
             raise DesktopCLIError("official release request failed") from error
+        try:
+            _remaining_official_timeout(timeout, deadline)
+        except DesktopCLIError:
+            response.close()
+            raise
         status = getattr(response, "status", None)
         if status in {301, 302, 303, 307, 308}:
             location = _response_header(response, "Location")
@@ -333,13 +349,16 @@ def _open_official_response(url: str, transport: ReleaseTransport,
 
 
 def _read_official_bytes(url: str, transport: ReleaseTransport,
-                         maximum_bytes: int, timeout: float) -> bytes:
-    response = _open_official_response(url, transport, timeout)
+                         maximum_bytes: int, timeout: float,
+                         deadline: float | None = None) -> bytes:
+    response = _open_official_response(url, transport, timeout, deadline)
     try:
         advertised = _content_length(response, maximum_bytes)
         result = bytearray()
         while True:
+            _remaining_official_timeout(timeout, deadline)
             block = response.read(min(64 * 1024, maximum_bytes + 1 - len(result)))
+            _remaining_official_timeout(timeout, deadline)
             if not block:
                 break
             result.extend(block)
@@ -367,9 +386,14 @@ def _asset_from_metadata(value: object, expected_name: str,
             or size_bytes <= 0 or size_bytes > maximum_bytes):
         raise DesktopCLIError("official release asset metadata is invalid")
     parts = _validate_official_url(url, "official release asset")
-    expected_path = f"/{OFFICIAL_REPOSITORY}/releases/download/v{version}/{expected_name}"
-    if (parts.hostname.lower() != "github.com" or parts.path != expected_path
-            or parts.query):
+    owner, repository = OFFICIAL_REPOSITORY.split("/", 1)
+    path_segments = parts.path.split("/")
+    exact_tail = ["releases", "download", f"v{version}", expected_name]
+    if (parts.hostname.lower() != "github.com" or parts.query
+            or len(path_segments) != 7 or path_segments[0]
+            or path_segments[1].lower() != owner.lower()
+            or path_segments[2].lower() != repository.lower()
+            or path_segments[3:] != exact_tail):
         raise DesktopCLIError("official release asset URL does not match its tag and name")
     return ReleaseAsset(expected_name, url, size_bytes)
 
@@ -385,15 +409,18 @@ def _exact_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
 
 def discover_official_release(version: str | None = None, *,
                               transport: ReleaseTransport | None = None,
-                              timeout: float = EXPLICIT_RELEASE_TIMEOUT) -> OfficialRelease:
+                              timeout: float = EXPLICIT_RELEASE_TIMEOUT,
+                              deadline: float | None = None) -> OfficialRelease:
     if version is not None and not _is_safe_version(version):
         raise DesktopCLIError("release version must be a safe x.y.z value")
     transport = transport or ReleaseTransport()
     url = OFFICIAL_LATEST_RELEASE_URL if version is None else OFFICIAL_RELEASE_TAG_URL.format(version)
-    raw = _read_official_bytes(url, transport, MAX_RELEASE_METADATA_BYTES, timeout)
+    raw = _read_official_bytes(
+        url, transport, MAX_RELEASE_METADATA_BYTES, timeout, deadline,
+    )
     try:
         metadata = json.loads(raw, object_pairs_hook=_exact_json_object)
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError) as error:
         raise DesktopCLIError("official release metadata is not bounded valid JSON") from error
     if not isinstance(metadata, dict):
         raise DesktopCLIError("official release metadata must be an object")
@@ -462,7 +489,12 @@ def downloaded_official_release(version: str | None = None, *,
                                 timeout: float = EXPLICIT_RELEASE_TIMEOUT):
     transport = transport or ReleaseTransport()
     release = discover_official_release(version, transport=transport, timeout=timeout)
-    scratch = Path(tempfile.mkdtemp(prefix="lingtai-desktop-download-"))
+    try:
+        scratch = Path(tempfile.mkdtemp(prefix="lingtai-desktop-download-"))
+    except OSError as error:
+        raise DesktopCLIError(
+            "official release temporary directory could not be created"
+        ) from error
     os.chmod(scratch, 0o700, follow_symlinks=False)
     scratch_identity = _identity(scratch)
     archive = scratch / release.archive.name
@@ -557,7 +589,7 @@ def load_manifest(archive: Path, manifest: Path) -> Manifest:
     raw = _read_bytes_nofollow(manifest, "manifest", 16 * 1024)
     try:
         data = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as error:
         raise DesktopCLIError("manifest must be bounded valid JSON") from error
     if not isinstance(data, dict) or set(data) != MANIFEST_KEYS:
         raise DesktopCLIError("manifest does not match the bounded exact schema")
@@ -859,7 +891,7 @@ def _read_receipt(paths: ManagedPaths, version: str) -> dict[str, object]:
     raw = _read_bytes_nofollow(receipt_path, "receipt", 8192)
     try:
         receipt = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as error:
         raise DesktopCLIError("receipt is invalid") from error
     if not isinstance(receipt, dict) or set(receipt) != RECEIPT_KEYS or receipt.get("schema_version") != RECEIPT_SCHEMA:
         raise DesktopCLIError("receipt does not match the bounded exact schema")
@@ -1042,7 +1074,7 @@ def _read_update_cache(paths: ManagedPaths) -> UpdateCheck | None:
     raw = _read_bytes_nofollow(path, "managed update-check cache", MAX_UPDATE_CACHE_BYTES)
     try:
         value = json.loads(raw, object_pairs_hook=_exact_json_object)
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError) as error:
         raise DesktopCLIError("managed update-check cache is invalid") from error
     if (not isinstance(value, dict) or set(value) != UPDATE_CACHE_KEYS
             or type(value.get("schema_version")) is not int
@@ -1295,8 +1327,10 @@ def _automatic_update_offer(*, paths: ManagedPaths, installed_version: str,
         latest_version = cached.latest_version
     else:
         try:
+            deadline = time.monotonic() + AUTOMATIC_RELEASE_TIMEOUT
             release = discover_official_release(
                 transport=transport, timeout=AUTOMATIC_RELEASE_TIMEOUT,
+                deadline=deadline,
             )
         except DesktopCLIError:
             return False
@@ -1443,7 +1477,14 @@ def run_installed(arguments: Sequence[str], *, home: Path | None = None,
                 values.version, home=home, platform=platform,
                 transport=transport, effective_uid=effective_uid, update=True,
             )
-            _write_update_cache(paths, version, max(0, int(clock())))
+            try:
+                _write_update_cache(paths, version, max(0, int(clock())))
+            except DesktopCLIError as error:
+                output(
+                    f"updated LingTai Desktop to {version}, but update-check "
+                    f"cache was not recorded: {error}"
+                )
+                return 0
         output(f"updated LingTai Desktop to {version}")
         return 0
     if command == "uninstall":

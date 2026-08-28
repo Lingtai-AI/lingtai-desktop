@@ -100,8 +100,9 @@ fixed-schema 24-hour cache. When a newer
 stable version is known, noninteractive calls print a notice only; an interactive
 terminal offers a default-No prompt and only `y`/`yes` downloads, verifies, and
 atomically installs before continuing the requested command. Explicit `update`
-always performs a fresh official check and never prompts. The bootstrap does not
-use sudo, change PATH or shell profiles, clear quarantine, bypass Gatekeeper, or
+always performs a fresh official check and never prompts, but first requires any
+existing owned update-check cache to pass its integrity checks. The bootstrap does
+not use sudo, change PATH or shell profiles, clear quarantine, bypass Gatekeeper, or
 claim a public release. If `$HOME/.local/bin` is not already on PATH, invoke the launcher by
 its full path. Existing shared `.local`, `.local/bin`, and `.local/share`
 directory modes and unrelated contents are preserved; only newly created
