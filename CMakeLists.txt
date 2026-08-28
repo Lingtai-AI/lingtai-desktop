@@ -928,6 +928,20 @@ foreach(journey IN LISTS NATIVE_SHELL_JOURNEYS)
     endif()
 endforeach()
 
+file(MAKE_DIRECTORY
+    "${CMAKE_CURRENT_BINARY_DIR}/native-shell-new-window-bootstrap-fixture")
+add_test(NAME native_shell_new_window_bootstrap
+    COMMAND lingtai_native_shell_test
+        "${CMAKE_CURRENT_BINARY_DIR}/native-shell-new-window-bootstrap-fixture"
+        --new-window-bootstrap-only)
+if(APPLE)
+    set_tests_properties(native_shell_new_window_bootstrap PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
+else()
+    set_tests_properties(native_shell_new_window_bootstrap PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
 add_executable(lingtai_native_shell_destinations_test
     tests/native_shell_destinations_test.cpp
     src/crl_integration.cpp)

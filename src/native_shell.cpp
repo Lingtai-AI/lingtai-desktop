@@ -4919,10 +4919,12 @@ void NativeShell::bump_lifecycle_generation() noexcept {
 void NativeShell::recompute_layout(int body_width) {
     const auto project_active = selection_state_.active_project().has_value();
     const auto setup_active = in_project_setup();
+    const auto bootstrap_status_active =
+        !bootstrap_status_surface_->isHidden();
     if (startup_route_) {
         const auto open_error_visible = open_error_active(*window_);
         startup_route_->setVisible(!project_active && !setup_active
-            && !open_error_visible);
+            && !open_error_visible && !bootstrap_status_active);
     }
     if (auto *brand = window_->findChild<QLabel *>("lingtai_titlebar_brand")) {
         auto *titlebar = brand->parentWidget();
@@ -4948,7 +4950,7 @@ void NativeShell::recompute_layout(int body_width) {
         roster_resize_handle_->setVisible(false);
         separator_->setVisible(false);
         const auto open_error_visible = open_error_active(*window_);
-        content_->setVisible(open_error_visible);
+        content_->setVisible(open_error_visible || bootstrap_status_active);
         return;
     }
     const auto available = body_width - kRosterResizeHandleWidth

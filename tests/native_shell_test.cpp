@@ -1116,6 +1116,337 @@ void verify_open_project_in_another_window(const fs::path &sandbox) {
     require(!cleanup_error, "multi-window fixtures must be removed");
 }
 
+// Regression for the missing composition: a ShellHost-created
+// secondary window must bootstrap an existing non-LingTai repository through
+// the full wizard, attach the created project there, and finish first launch.
+// The final fixture remains below the build tree for failure inspection.
+void verify_new_window_project_bootstrap(const fs::path &sandbox) {
+    using lingtai::desktop::RuntimeOptions;
+    using lingtai::desktop::ShellHost;
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "new-window bootstrap fixture must start clean");
+    fs::create_directories(sandbox);
+
+    const auto global = sandbox / "fake-home/.lingtai-tui";
+    const auto empty_path = sandbox / "empty-path";
+    const auto runtime_python = global / "runtime/venv/bin/python";
+    const auto primary_project = sandbox / "primary-project";
+    const auto destination = sandbox / "existing-repository";
+    fs::create_directories(empty_path);
+    fs::create_directories(destination / ".git");
+    write_file(primary_project / ".lingtai/primary/.agent.json",
+        R"({"admin":{}})");
+    write_file(destination / ".git/HEAD", "ref: refs/heads/main\n");
+    write_file(destination / "README.md", "existing repository sentinel\n");
+    write_file(global / ".env", "TEST_API_KEY=fake\n");
+    write_file(global / "covenant/en/covenant.md", "# Covenant\n");
+    write_file(global / "soul/en/soul-flow.md", "# Soul\n");
+    write_file(global / "presets/saved/alpha.json", R"JSON({
+      "name": "alpha",
+      "description": {"summary": "Alpha preset", "tier": "1"},
+      "manifest": {
+        "llm": {"provider": "openrouter", "model": "openai/gpt-test", "api_key_env": "TEST_API_KEY"},
+        "capabilities": {"system": {}, "email": {}}
+      }
+    })JSON");
+    write_file(runtime_python, "#!/bin/sh\nexit 1\n");
+    fs::permissions(runtime_python,
+        fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec
+            | fs::perms::others_read | fs::perms::others_exec,
+        fs::perm_options::replace);
+
+    const auto previous_home = qgetenv("HOME");
+    const auto previous_global = qgetenv("LINGTAI_TUI_DIR");
+    const auto previous_path = qgetenv("PATH");
+    qputenv("HOME", QByteArray::fromStdString((sandbox / "fake-home").string()));
+    qputenv("LINGTAI_TUI_DIR", QByteArray::fromStdString(global.string()));
+    qputenv("PATH", QByteArray::fromStdString(empty_path.string()));
+
+    RuntimeOptions options;
+    options.offscreen_mode = true;
+    options.ui_test_mode = true;
+    ShellHost host(options);
+    auto &primary = host.primary();
+    primary.show_offscreen();
+    auto &primary_window = primary.window();
+    auto *clean_startup = required_child<QWidget>(
+        primary_window, "lingtai_startup_route");
+    auto *clean_content = required_child<Ui::RpWidget>(
+        primary_window, "lingtai_desktop_content");
+    auto *clean_status_surface = required_child<Ui::RpWidget>(
+        primary_window, "lingtai_bootstrap_status_surface");
+    require(clean_startup->isVisible()
+            && !clean_content->isVisible()
+            && clean_status_surface->isHidden(),
+        "ordinary status-free startup must retain its branded route");
+    const auto primary_opened = primary.open_project(primary_project);
+    require(primary_opened.disposition == ProjectOpenDisposition::opened,
+        "diagnostic primary project must open");
+    const auto primary_root = fs::canonical(primary_project);
+    const auto destination_root = fs::canonical(destination);
+
+    host.open_path_in_new_window(primary, destination);
+    require(host.shell_count() == 2,
+        "non-LingTai destination must still create and retain a second shell");
+    auto &secondary = host.shell_at(1);
+    secondary.set_agent_start_fallback_python(runtime_python);
+
+    auto launch_count = std::size_t{0};
+    auto launched_root = fs::path();
+    auto launched_key = fs::path();
+    auto dependencies =
+        lingtai::desktop::production_agent_lifecycle_dependencies();
+    dependencies.poll_interval = std::chrono::milliseconds(10);
+    dependencies.processes.observe = [](const fs::path &agent_dir) {
+        return lingtai::desktop::AgentProcessObservation{
+            .available = true,
+            .pids = fs::exists(agent_dir / ".agent.heartbeat")
+                ? std::vector<lingtai::desktop::AgentProcessId>{4242}
+                : std::vector<lingtai::desktop::AgentProcessId>{},
+        };
+    };
+    dependencies.processes.signal = [](const fs::path &,
+            lingtai::desktop::AgentProcessId,
+            lingtai::desktop::AgentTerminationSignal) { return false; };
+    dependencies.launcher.launch = [&](const auto &attachment,
+            const fs::path &key, const fs::path &) {
+        ++launch_count;
+        launched_root = attachment.root();
+        launched_key = key;
+        const auto now = std::chrono::duration<double>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        write_file(attachment.root() / ".lingtai" / key / ".agent.heartbeat",
+            std::to_string(now));
+        auto identity_path = attachment.root() / ".lingtai" / key
+            / ".agent.json";
+        auto identity = QJsonDocument::fromJson(
+            QByteArray::fromStdString(read_file(identity_path))).object();
+        identity["agent_id"] = "new-window-diagnostic-id";
+        write_file(identity_path,
+            QJsonDocument(identity).toJson(QJsonDocument::Indented)
+                .toStdString());
+        return lingtai::desktop::AgentLaunchOutcome{
+            .result = lingtai::desktop::AgentLaunchResult::started,
+            .pid = 4242,
+            .log_path = attachment.root() / ".lingtai" / key
+                / "logs/agent.log",
+        };
+    };
+    secondary.set_agent_lifecycle_dependencies(std::move(dependencies));
+
+    auto &window = secondary.window();
+    auto *wizard = required_child<lingtai::desktop::ProjectSetupWizard>(
+        window, "lingtai_project_setup_wizard");
+    require(wait_for_event_loop([&] { return wizard->isVisible(); }, 3000),
+        "ShellHost secondary did not enter the New Project wizard");
+    auto *destination_input = required_ui_child<Ui::InputField>(
+        window, "lingtai_bootstrap_destination_input");
+    auto *preset_chooser = required_child<QComboBox>(
+        window, "lingtai_bootstrap_preset_chooser");
+    auto *preset_continue = required_child<QPushButton>(
+        window, "lingtai_setup_preset_continue");
+    auto *save_preset = required_child<QPushButton>(
+        window, "lingtai_setup_edit_preset_save");
+    auto *agents_continue = required_child<QPushButton>(
+        window, "lingtai_setup_agents_continue");
+    auto *create_start = required_child<QPushButton>(
+        window, "lingtai_bootstrap_create_start");
+    auto *status = required_ui_child<Ui::FlatLabel>(
+        window, "lingtai_bootstrap_status");
+
+    require(destination_input->getLastText().trimmed()
+            == path_text(destination_root),
+        "ShellHost must transport the selected destination into the secondary wizard");
+    require(preset_chooser->count() == 1
+            && preset_chooser->itemText(0) == QStringLiteral("alpha"),
+        "secondary wizard must receive the Desktop preset catalog");
+    preset_chooser->setCurrentIndex(0);
+    preset_continue->click();
+    QCoreApplication::processEvents();
+    save_preset->click();
+    QCoreApplication::processEvents();
+    agents_continue->click();
+    QCoreApplication::processEvents();
+    create_start->click();
+
+    require(wait_for_event_loop([&] {
+        return status->accessibilityName()
+            == QStringLiteral("Project created and Agent started.");
+    }, 5000), "secondary creation/open/lifecycle delivery did not finish: "
+        + status->accessibilityName().toStdString());
+    require(host.shell_count() == 2,
+        "secondary must remain owned after bootstrap completion");
+    require(primary.selection_state().active_project()
+            && primary.selection_state().active_project()->root()
+                == primary_root,
+        "secondary bootstrap must not rebind the primary shell");
+    require(secondary.selection_state().active_project()
+            && secondary.selection_state().active_project()->root()
+                == destination_root
+            && secondary.selection_state().selected_agent_directory_key()
+                == fs::path("alpha"),
+        "created project and first Agent must be selected in the secondary shell");
+    require(label_text(window, "lingtai_project_root").toStdString()
+                == destination_root.string()
+            && is_agent_selected(secondary, "alpha")
+            && label_text(window, "lingtai_selected_agent_presentation_name")
+                == QStringLiteral("alpha"),
+        "secondary project route and roster must refresh from attached state");
+    require(launch_count == 1 && launched_root == destination_root
+            && launched_key == fs::path("alpha"),
+        "secondary lifecycle must launch exactly the created first Agent");
+    require(fs::is_directory(destination / ".lingtai")
+            && fs::is_regular_file(destination / ".lingtai/alpha/init.json")
+            && fs::is_regular_file(destination / ".lingtai/alpha/.agent.json")
+            && fs::is_directory(destination / ".lingtai/.library_shared")
+            && fs::is_regular_file(destination / "README.md")
+            && read_file(destination / "README.md")
+                == "existing repository sentinel\n"
+            && fs::is_regular_file(destination / ".git/HEAD"),
+        "creation must publish the canonical shape without harming repository files");
+    const lingtai::desktop::AgentSetupStore store(
+        *secondary.selection_state().active_project());
+    require(static_cast<bool>(store.load("alpha")),
+        "secondary-created Agent must be setup-compatible");
+
+    // Controlled pre-publication failure through another real host-owned
+    // secondary shell. The catalog and review pages accept their inputs while
+    // the fixture env exists; removing it immediately before Create makes
+    // ProjectCreation return its exact runtime preflight detail.
+    const auto success_shell_count = host.shell_count();
+    const auto failure_destination = sandbox / "existing-repository-failure";
+    fs::create_directories(failure_destination / ".git");
+    write_file(failure_destination / ".git/HEAD", "ref: refs/heads/main\n");
+    write_file(failure_destination / "README.md", "failure sentinel\n");
+    const auto failure_root = fs::canonical(failure_destination);
+    host.open_path_in_new_window(primary, failure_destination);
+    require(host.shell_count() == 3,
+        "controlled failure must create and retain another secondary shell");
+    auto &failure_shell = host.shell_at(2);
+    failure_shell.set_agent_start_fallback_python(runtime_python);
+    auto &failure_window = failure_shell.window();
+    auto *failure_wizard = required_child<
+        lingtai::desktop::ProjectSetupWizard>(
+            failure_window, "lingtai_project_setup_wizard");
+    require(wait_for_event_loop(
+            [&] { return failure_wizard->isVisible(); }, 3000),
+        "controlled-failure secondary did not enter the wizard");
+    auto *failure_destination_input = required_ui_child<Ui::InputField>(
+        failure_window, "lingtai_bootstrap_destination_input");
+    auto *failure_chooser = required_child<QComboBox>(
+        failure_window, "lingtai_bootstrap_preset_chooser");
+    auto *failure_preset_continue = required_child<QPushButton>(
+        failure_window, "lingtai_setup_preset_continue");
+    auto *failure_save_preset = required_child<QPushButton>(
+        failure_window, "lingtai_setup_edit_preset_save");
+    auto *failure_agents_continue = required_child<QPushButton>(
+        failure_window, "lingtai_setup_agents_continue");
+    auto *failure_create_start = required_child<QPushButton>(
+        failure_window, "lingtai_bootstrap_create_start");
+    auto *failure_status = required_ui_child<Ui::FlatLabel>(
+        failure_window, "lingtai_bootstrap_status");
+    auto *failure_status_surface = required_child<Ui::RpWidget>(
+        failure_window, "lingtai_bootstrap_status_surface");
+    auto *failure_content = required_child<Ui::RpWidget>(
+        failure_window, "lingtai_desktop_content");
+    auto *failure_startup = required_child<QWidget>(
+        failure_window, "lingtai_startup_route");
+    require(failure_destination_input->getLastText().trimmed()
+            == path_text(failure_root),
+        "controlled failure destination was not transported");
+    require(failure_chooser->count() == 1,
+        "controlled failure catalog was not delivered");
+    failure_chooser->setCurrentIndex(0);
+    failure_preset_continue->click();
+    QCoreApplication::processEvents();
+    failure_save_preset->click();
+    QCoreApplication::processEvents();
+    failure_agents_continue->click();
+    QCoreApplication::processEvents();
+
+    std::error_code env_remove_error;
+    require(fs::remove(global / ".env", env_remove_error)
+            && !env_remove_error,
+        "controlled failure could not remove its fake env");
+    failure_create_start->click();
+    const auto expected_failure = QStringLiteral(
+        "Project was not created: the configured runtime environment file is unavailable");
+    require(wait_for_event_loop([&] {
+        return failure_status->accessibilityName() == expected_failure;
+    }, 5000), "controlled ProjectCreation detail was not delivered: "
+        + failure_status->accessibilityName().toStdString());
+    require(!failure_wizard->isVisible() && !failure_startup->isVisible(),
+        "controlled failure must leave setup and hide branded startup");
+    require(failure_content->isVisible()
+            && failure_status_surface->isVisible()
+            && failure_status->isVisible()
+            && failure_status->accessibilityName() == expected_failure,
+        "controlled failure must visibly retain its exact rejection status");
+    require(!failure_shell.selection_state().active_project()
+            && !failure_shell.selection_state()
+                .selected_agent_directory_key(),
+        "controlled failure must not fake attachment state");
+    require(!fs::exists(failure_destination / ".lingtai")
+            && read_file(failure_destination / "README.md")
+                == "failure sentinel\n"
+            && fs::is_regular_file(failure_destination / ".git/HEAD"),
+        "controlled failure published state or harmed repository files");
+    for (const auto &entry : fs::directory_iterator(failure_destination)) {
+        require(!entry.path().filename().string().starts_with(
+                    ".lingtai.create-"),
+            "controlled failure left a staging directory");
+    }
+    require(launch_count == 1,
+        "pre-publication failure must not invoke Agent lifecycle");
+    require(primary.selection_state().active_project()
+            && primary.selection_state().active_project()->root()
+                == primary_root
+            && secondary.selection_state().active_project()
+            && secondary.selection_state().active_project()->root()
+                == destination_root,
+        "controlled failure must not disturb existing shell roots");
+    write_file(global / ".env", "TEST_API_KEY=fake\n");
+
+    std::cout
+        << "DIAG new_window_bootstrap=GREEN\n"
+        << "DIAG success_shell_count=" << success_shell_count << '\n'
+        << "DIAG shell_count_after_controlled_failure="
+        << host.shell_count() << '\n'
+        << "DIAG destination_transported=yes\n"
+        << "DIAG wizard_entered=yes\n"
+        << "DIAG creation_published=yes\n"
+        << "DIAG route_roster_refreshed=yes\n"
+        << "DIAG primary_root=" << primary_root << '\n'
+        << "DIAG secondary_root=" << destination_root << '\n'
+        << "DIAG selected_agent="
+        << secondary.selection_state().selected_agent_directory_key()->string()
+        << '\n'
+        << "DIAG lifecycle_launch_count=" << launch_count << '\n'
+        << "DIAG lifecycle_status=" << status->accessibilityName().toStdString()
+        << '\n'
+        << "DIAG lingtai_shape=alpha/init.json,alpha/.agent.json,.library_shared\n"
+        << "DIAG preserved=.git/HEAD,README.md\n"
+        << "DIAG controlled_failure_delivery=GREEN\n"
+        << "DIAG controlled_failure_visibility=GREEN\n"
+        << "DIAG controlled_failure_root=" << failure_root << '\n'
+        << "DIAG controlled_failure_published=no\n"
+        << "DIAG controlled_failure_lifecycle_started=no\n"
+        << "DIAG controlled_failure_startup_visible=no\n"
+        << "DIAG controlled_failure_status_stored=yes\n"
+        << "DIAG controlled_failure_status_surface_explicitly_hidden=no\n"
+        << "DIAG controlled_failure_content_visible=yes\n"
+        << "DIAG controlled_failure_status_visible=yes\n"
+        << "DIAG controlled_failure_status="
+        << failure_status->accessibilityName().toStdString() << '\n'
+        << "DIAG evidence_root=" << destination_root << '\n';
+
+    qputenv("HOME", previous_home);
+    qputenv("LINGTAI_TUI_DIR", previous_global);
+    qputenv("PATH", previous_path);
+}
+
 void verify_semantics_and_request(
         lingtai::desktop::NativeShell &shell,
         const std::filesystem::path &project_root) {
@@ -7643,6 +7974,8 @@ int main(int argc, char **argv) {
         && std::string_view(argv[2]) == "--setup-rerun-only";
     const auto kanban_only = argc == 3
         && std::string_view(argv[2]) == "--kanban-only";
+    const auto new_window_bootstrap_only = argc == 3
+        && std::string_view(argv[2]) == "--new-window-bootstrap-only";
     const auto journey_flag = argc == 3
         ? parse_journey_flag(argv[2]) : std::nullopt;
     const auto has_legacy_flag = responsive_sidebar_only
@@ -7650,7 +7983,7 @@ int main(int argc, char **argv) {
         || slash_interception_only || compact_header_only
         || two_surface_only || plain_underline_only
         || floating_composer_only || project_setup_only || setup_rerun_only
-        || kanban_only;
+        || kanban_only || new_window_bootstrap_only;
     if (argc != 2 && !has_legacy_flag && !journey_flag) {
         std::cerr << "usage: native_shell_test PROJECT_ROOT "
                      "[--journey=NAME|--journey=all|"
@@ -7658,7 +7991,8 @@ int main(int argc, char **argv) {
                      "--modern-composer-only|--slash-interception-only|"
                      "--compact-header-only|--two-surface-only|"
                      "--plain-underline-only|--floating-composer-only|"
-                     "--project-setup-only|--setup-rerun-only|--kanban-only]\n"
+                     "--project-setup-only|--setup-rerun-only|--kanban-only|"
+                     "--new-window-bootstrap-only]\n"
                      "  journeys: semantics bootstrap roster conversation "
                      "setup lifecycle layout theme composer paste outgoing kanban all\n";
         return 2;
@@ -7766,6 +8100,12 @@ int main(int argc, char **argv) {
             QCoreApplication::processEvents();
             verify_kanban_page(
                 shell, project_root / "kanban-page-fixture");
+            std::cout << "native shell behavior: OK\n";
+            return 0;
+        }
+        if (new_window_bootstrap_only) {
+            verify_new_window_project_bootstrap(
+                project_root / "new-window-bootstrap-diagnostic-fixture");
             std::cout << "native shell behavior: OK\n";
             return 0;
         }
