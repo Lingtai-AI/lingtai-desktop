@@ -17,9 +17,12 @@ scripts/bootstrap-deps.sh              verified local source/resource bootstrap
 scripts/configure.sh                   Qt-aware CMake configure wrapper
 scripts/build.sh                       target build wrapper
 scripts/smoke.py                       bounded offscreen native-shell smoke runner
+scripts/app_archive.py                 primary portable-App archive producer
+scripts/package-app-archive.py         portable-App packaging CLI
+scripts/verify-app-archive.py          independent safe archive verifier/extractor
 scripts/macos_packaging.py             testable fail-closed macOS package owner
-scripts/package-macos.py               diagnostic/release package CLI
-scripts/verify-macos-package.py        independent mounted-DMG/linkage/smoke verifier
+scripts/package-macos.py               optional diagnostic/release DMG CLI
+scripts/verify-macos-package.py        optional independent DMG verifier
 scripts/desktop_user_cli.py            user install/update/launch lifecycle policy
 scripts/install-macos-app.py           thin Python 3 initial-bootstrap CLI
 cmake/macos/Info.plist.in              bundle metadata including the macOS floor
@@ -165,8 +168,10 @@ Each C++ contract executable maps to one ctest name (declared in
 `workspace_selection`, `native_shell_behavior`, plus the Python gates
 `native_shell` (process persistence + smoke-order, `tests/test_native_shell.py`),
 `test_repository_contract.py` (pinned toolkit provenance + tracked-artifact
-guard), and `test_macos_packaging.py` (offline package-mode, naming, path, and
-manifest contract). Route
+guard), `test_app_archive.py` (portable archive production, independent safe
+extraction, exact manifest/App binding, and publication races), and
+`test_macos_packaging.py` (optional DMG mode, naming, path, and manifest
+contract). Route
 into `tests/ANATOMY.md` for the per-test contract mapping.
 
 ## Kernel artifacts Desktop reads
@@ -193,15 +198,16 @@ subprocess surfaces. Producer-side contracts live in the kernel repo
 
 The root composes `src/` (owned Qt adaptation), `tests/` (owned contracts),
 `scripts/` + `cmake/` (build governance), and external `.deps/`/Qt inputs.
-The package boundary always stages a copy: diagnostic mode embeds Qt and
-ad-hoc signs only, while release mode fails closed unless Developer ID signing,
-hardened runtime, timestamping, notarization, stapling, and strict independent
-verification all succeed. DMG and manifest are completed in same-filesystem
-scratch and exclusively hard-linked into place as a rollback-safe pair. The
-independent verifier checks linkage per exact arm64 and x86_64 slice. Manifest
-Git facts identify only the packaging checkout. The canonical bundle/compiled
-minimum is macOS 13.0.
-The user-level lifecycle consumes one already-built local pair. It installs
+The primary package boundary turns one already verified self-contained
+universal App into a portable tar.gz and exact manifest. Both are completed in
+same-filesystem scratch, independently verified, and exclusively hard-linked
+into place as a rollback-safe pair. The verifier preflights every untrusted tar
+member before private extraction and binds archive bytes, App/executable facts,
+universal architectures, and the recursive tree digest. Manifest Git facts
+identify only the packaging checkout. The older DMG boundary is an optional
+diagnostic/release experiment. The canonical bundle/compiled minimum is macOS
+13.0.
+The user-level lifecycle consumes one already-built local archive pair. It installs
 under `$HOME/.local`, carries the independent verifier with the managed CLI,
 binds each version to a bounded receipt and deterministic bundle-tree digest,
 and switches the relative `current` symlink only after exclusive publication.

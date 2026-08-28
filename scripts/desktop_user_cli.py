@@ -17,9 +17,8 @@ import subprocess
 import sys
 import tempfile
 import uuid
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, Iterator, Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 
 APP_NAME = "LingTai.app"
@@ -29,22 +28,25 @@ ARCHITECTURES = ("arm64", "x86_64")
 VERSION_PATTERN = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 SHA_PATTERN = re.compile(r"[0-9a-f]{64}")
 GIT_SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
-RECEIPT_SCHEMA = 1
+RECEIPT_SCHEMA = 2
 LAUNCHER_MARKER = "# lingtai-desktop-owned-v1"
-DIAGNOSTIC_SIGNING = "ad-hoc App; unsigned DMG (diagnostic only)"
-DIAGNOSTIC_NOTARIZATION = "not performed (diagnostic mode)"
-RELEASE_SIGNING = "Developer ID Application; hardened runtime; timestamped"
-RELEASE_NOTARIZATION = "Apple accepted; ticket stapled and validated"
+ARTIFACT_KIND = "lingtai-portable-app-archive"
+MANIFEST_SCHEMA = 1
+EXECUTABLE_RELATIVE = "Contents/MacOS/LingTai"
 MANIFEST_KEYS = {
-    "architectures", "file_name", "minimum_macos", "notarization",
-    "packaging_git_dirty", "packaging_git_sha", "packaging_git_tree",
-    "sha256", "signing", "size_bytes", "version",
+    "architectures", "archive_file_name", "archive_sha256",
+    "archive_size_bytes", "artifact_kind", "bundle_executable",
+    "bundle_identifier", "bundle_name", "bundle_tree_sha256",
+    "bundle_version", "executable_sha256", "executable_size_bytes",
+    "minimum_macos", "packaging_git_dirty", "packaging_git_head",
+    "packaging_git_tree", "schema_version", "version",
 }
 RECEIPT_KEYS = {
-    "schema_version", "version", "bundle_id", "minimum_macos",
-    "architectures", "source_dmg", "manifest_sha256", "signing",
-    "notarization", "packaging_git_sha", "packaging_git_tree",
-    "packaging_git_dirty", "bundle_tree_sha256", "classification",
+    "schema_version", "artifact_kind", "version", "bundle_id",
+    "bundle_version", "bundle_executable", "minimum_macos",
+    "architectures", "source_archive", "manifest_sha256",
+    "packaging_git_head", "packaging_git_tree", "packaging_git_dirty",
+    "executable_size_bytes", "executable_sha256", "bundle_tree_sha256",
     "managed_app_path",
 }
 _FAILPOINT: str | None = None  # Tests inject failures without production flags.
@@ -60,13 +62,13 @@ class Manifest:
     file_name: str
     size_bytes: int
     sha256: str
-    signing: str
-    notarization: str
-    packaging_git_sha: str
+    executable_size_bytes: int
+    executable_sha256: str
+    bundle_tree_sha256: str
+    packaging_git_head: str
     packaging_git_tree: str
     packaging_git_dirty: bool
     manifest_sha256: str
-    diagnostic: bool
 
 
 @dataclasses.dataclass(frozen=True)
@@ -125,56 +127,27 @@ def _run(arguments: Sequence[os.PathLike[str] | str], *, label: str,
 class Platform:
     """Injectable macOS process boundary; policy never uses a shell string."""
 
-    def verify_package(self, repository_root: Path, dmg: Path, version: str, release_ready: bool) -> None:
-        verifier = repository_root / "scripts/verify-macos-package.py"
+    def _archive_verifier(self, repository_root: Path) -> Path:
+        verifier = repository_root / "scripts/verify-app-archive.py"
         if not verifier.is_file():
-            verifier = repository_root / "verify-macos-package.py"
+            verifier = repository_root / "verify-app-archive.py"
         _regular_nofollow(verifier, "independent package verifier")
-        command: list[os.PathLike[str] | str] = [
-            sys.executable, verifier,
-            "--dmg", dmg, "--expected-version", version,
-        ]
-        if release_ready:
-            command.append("--require-release-ready")
-        _run(command, label="independent package verification")
+        return verifier
 
-    @contextmanager
-    def mounted_app(self, dmg: Path, scratch: Path) -> Iterator[Path]:
-        mountpoint = scratch / "mounted"
-        mountpoint.mkdir(mode=0o700)
-        attached = False
-        primary: BaseException | None = None
-        try:
-            _run([
-                "/usr/bin/hdiutil", "attach", "-readonly", "-nobrowse", "-noautoopen",
-                "-mountpoint", mountpoint, "-plist", dmg,
-            ], label="read-only DMG mount")
-            attached = True
-            mounted = _run(["/sbin/mount"], label="mounted-volume inspection")
-            lines = [line for line in mounted.splitlines() if os.fspath(mountpoint) in line]
-            if not lines or not any("read-only" in line for line in lines):
-                raise DesktopCLIError("DMG mount is not read-only")
-            apps = list(mountpoint.glob("*.app"))
-            app = mountpoint / APP_NAME
-            if apps != [app] or app.is_symlink() or not app.is_dir():
-                raise DesktopCLIError("DMG must contain one exact LingTai.app")
-            yield app
-        except BaseException as error:
-            primary = error
-            raise
-        finally:
-            if attached:
-                try:
-                    _run(["/usr/bin/hdiutil", "detach", mountpoint], label="DMG detach")
-                except DesktopCLIError as detach_error:
-                    if primary is None:
-                        raise
-                    if hasattr(primary, "add_note"):
-                        primary.add_note(str(detach_error))
+    def verify_archive(self, repository_root: Path, archive: Path, manifest: Path) -> None:
+        _run([
+            sys.executable, self._archive_verifier(repository_root),
+            "--archive", archive, "--manifest", manifest,
+        ], label="independent App-archive verification")
 
-    def copy_app(self, source: Path, destination: Path) -> None:
-        _run(["/usr/bin/ditto", "--rsrc", "--extattr", "--acl", source, destination],
-             label="staged App copy")
+    def verify_and_extract_archive(self, repository_root: Path, archive: Path,
+                                   manifest: Path, destination: Path) -> Path:
+        _run([
+            sys.executable, self._archive_verifier(repository_root),
+            "--archive", archive, "--manifest", manifest,
+            "--extract-to", destination,
+        ], label="independent App-archive extraction")
+        return destination / APP_NAME
 
     def smoke(self, executable: Path, fake_home: Path, fake_tmp: Path) -> None:
         environment = {
@@ -238,51 +211,63 @@ def _sha256_file(path: Path, label: str) -> str:
     return digest.hexdigest()
 
 
-def load_manifest(dmg: Path, manifest: Path, *, allow_diagnostic: bool) -> Manifest:
-    dmg = Path(dmg)
+def load_manifest(archive: Path, manifest: Path) -> Manifest:
+    archive = Path(archive)
     manifest = Path(manifest)
-    dmg_stat = _regular_nofollow(dmg, "DMG")
-    raw = _read_bytes_nofollow(manifest, "manifest", 4096)
+    archive_stat = _regular_nofollow(archive, "App archive")
+    raw = _read_bytes_nofollow(manifest, "manifest", 16 * 1024)
     try:
         data = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise DesktopCLIError("manifest must be bounded valid JSON") from error
     if not isinstance(data, dict) or set(data) != MANIFEST_KEYS:
         raise DesktopCLIError("manifest does not match the bounded exact schema")
+    if type(data["schema_version"]) is not int or data["schema_version"] != MANIFEST_SCHEMA:
+        raise DesktopCLIError("manifest schema version is invalid")
     version = data["version"]
     if not isinstance(version, str) or VERSION_PATTERN.fullmatch(version) is None:
         raise DesktopCLIError("manifest version is not a safe x.y.z value")
-    expected_name = f"LingTai-{version}-macOS-universal.dmg"
-    if data["file_name"] != expected_name or dmg.name != expected_name:
-        raise DesktopCLIError("DMG does not have the exact deterministic file name")
+    expected_name = f"LingTai-{version}-macOS-universal.app.tar.gz"
+    if data["archive_file_name"] != expected_name or archive.name != expected_name:
+        raise DesktopCLIError("App archive does not have the exact deterministic file name")
+    exact = {
+        "artifact_kind": ARTIFACT_KIND,
+        "schema_version": MANIFEST_SCHEMA,
+        "bundle_name": APP_NAME,
+        "bundle_identifier": BUNDLE_ID,
+        "bundle_version": version,
+        "bundle_executable": EXECUTABLE_RELATIVE,
+        "minimum_macos": MINIMUM_MACOS,
+    }
+    if any(data[key] != value for key, value in exact.items()):
+        raise DesktopCLIError("manifest artifact or App identity facts are invalid")
     if data["architectures"] != list(ARCHITECTURES):
         raise DesktopCLIError("manifest architectures must be arm64+x86_64")
-    if data["minimum_macos"] != MINIMUM_MACOS:
-        raise DesktopCLIError("manifest minimum macOS must be 13.0")
-    if type(data["size_bytes"]) is not int or data["size_bytes"] <= 0 or data["size_bytes"] != dmg_stat.st_size:
-        raise DesktopCLIError("DMG size does not match manifest")
-    sha = data["sha256"]
-    if not isinstance(sha, str) or SHA_PATTERN.fullmatch(sha) is None or _sha256_file(dmg, "DMG") != sha:
-        raise DesktopCLIError("DMG SHA-256 does not match manifest")
-    git_sha, git_tree, dirty = data["packaging_git_sha"], data["packaging_git_tree"], data["packaging_git_dirty"]
-    if not isinstance(git_sha, str) or GIT_SHA_PATTERN.fullmatch(git_sha) is None:
-        raise DesktopCLIError("manifest packaging Git SHA is invalid")
+    size_bytes = data["archive_size_bytes"]
+    if type(size_bytes) is not int or size_bytes <= 0 or size_bytes != archive_stat.st_size:
+        raise DesktopCLIError("App archive size does not match manifest")
+    sha = data["archive_sha256"]
+    if not isinstance(sha, str) or SHA_PATTERN.fullmatch(sha) is None or _sha256_file(archive, "App archive") != sha:
+        raise DesktopCLIError("App archive SHA-256 does not match manifest")
+    executable_size = data["executable_size_bytes"]
+    executable_sha = data["executable_sha256"]
+    bundle_digest = data["bundle_tree_sha256"]
+    if type(executable_size) is not int or executable_size <= 0:
+        raise DesktopCLIError("manifest executable size is invalid")
+    if not isinstance(executable_sha, str) or SHA_PATTERN.fullmatch(executable_sha) is None:
+        raise DesktopCLIError("manifest executable SHA-256 is invalid")
+    if not isinstance(bundle_digest, str) or SHA_PATTERN.fullmatch(bundle_digest) is None:
+        raise DesktopCLIError("manifest recursive bundle digest is invalid")
+    git_head, git_tree, dirty = data["packaging_git_head"], data["packaging_git_tree"], data["packaging_git_dirty"]
+    if not isinstance(git_head, str) or GIT_SHA_PATTERN.fullmatch(git_head) is None:
+        raise DesktopCLIError("manifest packaging Git HEAD is invalid")
     if not isinstance(git_tree, str) or GIT_SHA_PATTERN.fullmatch(git_tree) is None or type(dirty) is not bool:
         raise DesktopCLIError("manifest packaging Git facts are invalid")
-    state = (data["signing"], data["notarization"])
-    if state == (DIAGNOSTIC_SIGNING, DIAGNOSTIC_NOTARIZATION):
-        diagnostic = True
-        if not allow_diagnostic:
-            raise DesktopCLIError("diagnostic artifact requires explicit --allow-diagnostic")
-    elif state == (RELEASE_SIGNING, RELEASE_NOTARIZATION):
-        diagnostic = False
-        if dirty:
-            raise DesktopCLIError("release-ready manifest requires clean packaging Git facts")
-    else:
-        raise DesktopCLIError("manifest has unknown or ambiguous signing/notarization state")
-    return Manifest(version, expected_name, dmg_stat.st_size, sha, data["signing"],
-                    data["notarization"], git_sha, git_tree, dirty,
-                    _sha256_bytes(raw), diagnostic)
+    return Manifest(
+        version, expected_name, archive_stat.st_size, sha,
+        executable_size, executable_sha, bundle_digest,
+        git_head, git_tree, dirty, _sha256_bytes(raw),
+    )
 
 
 def _paths(home: Path | None) -> ManagedPaths:
@@ -405,16 +390,20 @@ def bundle_tree_digest(app: Path) -> str:
 
 def _receipt(manifest: Manifest, bundle_digest: str) -> dict[str, object]:
     return {
-        "schema_version": RECEIPT_SCHEMA, "version": manifest.version,
-        "bundle_id": BUNDLE_ID, "minimum_macos": MINIMUM_MACOS,
+        "schema_version": RECEIPT_SCHEMA, "artifact_kind": ARTIFACT_KIND,
+        "version": manifest.version, "bundle_id": BUNDLE_ID,
+        "bundle_version": manifest.version,
+        "bundle_executable": EXECUTABLE_RELATIVE,
+        "minimum_macos": MINIMUM_MACOS,
         "architectures": list(ARCHITECTURES),
-        "source_dmg": {"file_name": manifest.file_name, "size_bytes": manifest.size_bytes, "sha256": manifest.sha256},
-        "manifest_sha256": manifest.manifest_sha256, "signing": manifest.signing,
-        "notarization": manifest.notarization, "packaging_git_sha": manifest.packaging_git_sha,
+        "source_archive": {"file_name": manifest.file_name, "size_bytes": manifest.size_bytes, "sha256": manifest.sha256},
+        "manifest_sha256": manifest.manifest_sha256,
+        "packaging_git_head": manifest.packaging_git_head,
         "packaging_git_tree": manifest.packaging_git_tree,
         "packaging_git_dirty": manifest.packaging_git_dirty,
+        "executable_size_bytes": manifest.executable_size_bytes,
+        "executable_sha256": manifest.executable_sha256,
         "bundle_tree_sha256": bundle_digest,
-        "classification": "diagnostic" if manifest.diagnostic else "release-ready",
         "managed_app_path": f"versions/{manifest.version}/{APP_NAME}",
     }
 
@@ -422,8 +411,8 @@ def _receipt(manifest: Manifest, bundle_digest: str) -> dict[str, object]:
 def _launcher_bytes(module_bytes: bytes | None = None, verifier_bytes: bytes | None = None) -> bytes:
     module_bytes = Path(__file__).read_bytes() if module_bytes is None else module_bytes
     if verifier_bytes is None:
-        sibling = Path(__file__).parent / "verify-macos-package.py"
-        source = sibling if sibling.is_file() else Path(__file__).parent / "scripts/verify-macos-package.py"
+        sibling = Path(__file__).parent / "verify-app-archive.py"
+        source = sibling if sibling.is_file() else Path(__file__).parent / "scripts/verify-app-archive.py"
         verifier_bytes = _read_bytes_nofollow(source, "independent package verifier", 1024 * 1024)
     module_sha = _sha256_bytes(module_bytes)
     verifier_sha = _sha256_bytes(verifier_bytes)
@@ -431,7 +420,7 @@ def _launcher_bytes(module_bytes: bytes | None = None, verifier_bytes: bytes | N
             "import hashlib, os, stat, sys\n"
             "sys.dont_write_bytecode=True\n"
             "root=os.path.join(os.environ.get('HOME',''),'.local','share','lingtai-desktop','cli')\n"
-            f"expected={{'desktop_user_cli.py':'{module_sha}','verify-macos-package.py':'{verifier_sha}'}}\n"
+            f"expected={{'desktop_user_cli.py':'{module_sha}','verify-app-archive.py':'{verifier_sha}'}}\n"
             "for name,digest in expected.items():\n"
             " path=os.path.join(root,name); facts=os.lstat(path)\n"
             " if not stat.S_ISREG(facts.st_mode): raise SystemExit('lingtai-desktop: managed CLI integrity failure')\n"
@@ -514,7 +503,7 @@ def _owned_file_state(path: Path, expected: bytes, mode: int, label: str) -> boo
 
 def _validate_owned_cli(paths: ManagedPaths) -> None:
     module = paths.cli / "desktop_user_cli.py"
-    verifier = paths.cli / "verify-macos-package.py"
+    verifier = paths.cli / "verify-app-archive.py"
     module_bytes = _read_bytes_nofollow(module, "managed CLI", 1024 * 1024)
     verifier_bytes = _read_bytes_nofollow(verifier, "managed verifier", 1024 * 1024)
     _owned_file_state(module, module_bytes, 0o600, "managed CLI")
@@ -536,14 +525,17 @@ def _read_receipt(paths: ManagedPaths, version: str) -> dict[str, object]:
     expected_path = f"versions/{version}/{APP_NAME}"
     if receipt.get("version") != version or receipt.get("managed_app_path") != expected_path:
         raise DesktopCLIError("receipt version/path relation is invalid")
-    if receipt.get("bundle_id") != BUNDLE_ID or receipt.get("minimum_macos") != MINIMUM_MACOS or receipt.get("architectures") != list(ARCHITECTURES):
+    if (receipt.get("artifact_kind") != ARTIFACT_KIND
+            or receipt.get("bundle_id") != BUNDLE_ID
+            or receipt.get("bundle_version") != version
+            or receipt.get("bundle_executable") != EXECUTABLE_RELATIVE
+            or receipt.get("minimum_macos") != MINIMUM_MACOS
+            or receipt.get("architectures") != list(ARCHITECTURES)):
         raise DesktopCLIError("receipt App facts are invalid")
-    if receipt.get("classification") not in {"diagnostic", "release-ready"}:
-        raise DesktopCLIError("receipt classification is invalid")
-    source = receipt.get("source_dmg")
+    source = receipt.get("source_archive")
     if not isinstance(source, dict) or set(source) != {"file_name", "size_bytes", "sha256"}:
         raise DesktopCLIError("receipt source artifact facts are invalid")
-    if source.get("file_name") != f"LingTai-{version}-macOS-universal.dmg":
+    if source.get("file_name") != f"LingTai-{version}-macOS-universal.app.tar.gz":
         raise DesktopCLIError("receipt source artifact name is invalid")
     if type(source.get("size_bytes")) is not int or source["size_bytes"] <= 0:
         raise DesktopCLIError("receipt source artifact size is invalid")
@@ -551,18 +543,16 @@ def _read_receipt(paths: ManagedPaths, version: str) -> dict[str, object]:
         raise DesktopCLIError("receipt source artifact SHA-256 is invalid")
     if not isinstance(receipt.get("manifest_sha256"), str) or SHA_PATTERN.fullmatch(receipt["manifest_sha256"]) is None:
         raise DesktopCLIError("receipt manifest SHA-256 is invalid")
-    for field in ("packaging_git_sha", "packaging_git_tree"):
+    for field in ("packaging_git_head", "packaging_git_tree"):
         if not isinstance(receipt.get(field), str) or GIT_SHA_PATTERN.fullmatch(receipt[field]) is None:
             raise DesktopCLIError("receipt packaging-only Git facts are invalid")
     if type(receipt.get("packaging_git_dirty")) is not bool:
         raise DesktopCLIError("receipt packaging-only dirty fact is invalid")
-    expected_state = (
-        (DIAGNOSTIC_SIGNING, DIAGNOSTIC_NOTARIZATION)
-        if receipt["classification"] == "diagnostic"
-        else (RELEASE_SIGNING, RELEASE_NOTARIZATION)
-    )
-    if (receipt.get("signing"), receipt.get("notarization")) != expected_state:
-        raise DesktopCLIError("receipt signing/notarization state is inconsistent")
+    if type(receipt.get("executable_size_bytes")) is not int or receipt["executable_size_bytes"] <= 0:
+        raise DesktopCLIError("receipt executable size is invalid")
+    executable_sha = receipt.get("executable_sha256")
+    if not isinstance(executable_sha, str) or SHA_PATTERN.fullmatch(executable_sha) is None:
+        raise DesktopCLIError("receipt executable SHA-256 is invalid")
     digest = receipt.get("bundle_tree_sha256")
     if not isinstance(digest, str) or SHA_PATTERN.fullmatch(digest) is None:
         raise DesktopCLIError("receipt bundle digest is invalid")
@@ -587,7 +577,11 @@ def _active(paths: ManagedPaths) -> tuple[str, Path, dict[str, object]]:
     _require_real_directory(version_directory, "managed version")
     app = version_directory / APP_NAME
     receipt = _read_receipt(paths, version)
-    _inspect_app(app, version)
+    executable = _inspect_app(app, version)
+    executable_facts = _regular_nofollow(executable, "App executable")
+    if (executable_facts.st_size != receipt["executable_size_bytes"]
+            or _sha256_file(executable, "App executable") != receipt["executable_sha256"]):
+        raise DesktopCLIError("installed executable facts do not match receipt")
     if bundle_tree_digest(app) != receipt["bundle_tree_sha256"]:
         raise DesktopCLIError("installed bundle digest does not match receipt")
     return version, app, receipt
@@ -620,7 +614,7 @@ def _preflight_uninstall(paths: ManagedPaths) -> UninstallPlan:
         raise DesktopCLIError("managed root contains unknown or missing files")
 
     module = paths.cli / "desktop_user_cli.py"
-    verifier = paths.cli / "verify-macos-package.py"
+    verifier = paths.cli / "verify-app-archive.py"
     if {path.name for path in paths.cli.iterdir()} != {module.name, verifier.name}:
         raise DesktopCLIError("managed CLI directory contains unknown files")
     _validate_owned_cli(paths)
@@ -653,7 +647,11 @@ def _preflight_uninstall(paths: ManagedPaths) -> UninstallPlan:
         if {path.name for path in version_path.iterdir()} != {APP_NAME}:
             raise DesktopCLIError("managed version contains unknown files")
         app = version_path / APP_NAME
-        _inspect_app(app, version)
+        executable = _inspect_app(app, version)
+        executable_facts = _regular_nofollow(executable, "App executable")
+        if (executable_facts.st_size != receipt["executable_size_bytes"]
+                or _sha256_file(executable, "App executable") != receipt["executable_sha256"]):
+            raise DesktopCLIError("installed executable facts do not match receipt")
         if bundle_tree_digest(app) != receipt["bundle_tree_sha256"]:
             raise DesktopCLIError("installed bundle digest does not match receipt")
         entries.append(UninstallEntry(
@@ -684,13 +682,13 @@ def _version_tuple(version: str) -> tuple[int, int, int]:
     return tuple(int(value) for value in version.split("."))  # type: ignore[return-value]
 
 
-def install(dmg: Path, manifest_path: Path, *, home: Path | None = None,
-            allow_diagnostic: bool = False, platform: Platform | None = None,
+def install(archive: Path, manifest_path: Path, *, home: Path | None = None,
+            platform: Platform | None = None,
             effective_uid: int | None = None, update: bool = False,
             repository_root: Path | None = None) -> str:
     _require_nonroot(effective_uid)
     paths = _paths(home)
-    manifest = load_manifest(Path(dmg), Path(manifest_path), allow_diagnostic=allow_diagnostic)
+    manifest = load_manifest(Path(archive), Path(manifest_path))
     platform = platform or Platform()
     module_path = Path(__file__).resolve()
     repository_root = repository_root or (
@@ -710,25 +708,13 @@ def install(dmg: Path, manifest_path: Path, *, home: Path | None = None,
             raise DesktopCLIError("update refuses lower versions")
         if manifest.version == current_version:
             assert current_receipt is not None
-            source = current_receipt.get("source_dmg")
-            identical = (
-                isinstance(source, dict)
-                and source == {"file_name": manifest.file_name, "size_bytes": manifest.size_bytes, "sha256": manifest.sha256}
-                and current_receipt.get("manifest_sha256") == manifest.manifest_sha256
-                and current_receipt.get("signing") == manifest.signing
-                and current_receipt.get("notarization") == manifest.notarization
-                and current_receipt.get("packaging_git_sha") == manifest.packaging_git_sha
-                and current_receipt.get("packaging_git_tree") == manifest.packaging_git_tree
-                and current_receipt.get("packaging_git_dirty") == manifest.packaging_git_dirty
-                and current_receipt.get("classification") == ("diagnostic" if manifest.diagnostic else "release-ready")
-            )
-            if not identical:
+            if current_receipt != _receipt(manifest, manifest.bundle_tree_sha256):
                 raise DesktopCLIError("same-version update requires an identical artifact and receipt")
-            platform.verify_package(repository_root, Path(dmg), manifest.version, not manifest.diagnostic)
+            platform.verify_archive(repository_root, Path(archive), Path(manifest_path))
             return manifest.version
     elif current_version is not None:
         raise DesktopCLIError("an installation already exists; use update")
-    platform.verify_package(repository_root, Path(dmg), manifest.version, not manifest.diagnostic)
+    platform.verify_archive(repository_root, Path(archive), Path(manifest_path))
     _prepare_layout(paths)
     final_version = paths.versions / manifest.version
     final_receipt = paths.receipts / f"{manifest.version}.json"
@@ -745,16 +731,21 @@ def install(dmg: Path, manifest_path: Path, *, home: Path | None = None,
     digest = ""
     try:
         staged_version = scratch / "version"
-        staged_version.mkdir(mode=0o700)
-        staged_app = staged_version / APP_NAME
-        with platform.mounted_app(Path(dmg), scratch) as source_app:
-            platform.copy_app(source_app, staged_app)
+        staged_app = platform.verify_and_extract_archive(
+            repository_root, Path(archive), Path(manifest_path), staged_version
+        )
         executable = _inspect_app(staged_app, manifest.version)
+        executable_facts = _regular_nofollow(executable, "App executable")
+        if (executable_facts.st_size != manifest.executable_size_bytes
+                or _sha256_file(executable, "App executable") != manifest.executable_sha256):
+            raise DesktopCLIError("extracted executable facts do not match manifest")
         fake_home, fake_tmp = scratch / "smoke-home", scratch / "smoke-tmp"
         fake_home.mkdir(mode=0o700)
         fake_tmp.mkdir(mode=0o700)
         platform.smoke(executable, fake_home, fake_tmp)
         digest = bundle_tree_digest(staged_app)
+        if digest != manifest.bundle_tree_sha256:
+            raise DesktopCLIError("extracted recursive bundle digest does not match manifest")
         receipt_bytes = (json.dumps(_receipt(manifest, digest), indent=2, sort_keys=True) + "\n").encode()
         staged_receipt = scratch / "receipt.json"
         staged_receipt.write_bytes(receipt_bytes)
@@ -767,14 +758,14 @@ def install(dmg: Path, manifest_path: Path, *, home: Path | None = None,
         version_identity = staged_version_identity
         module_bytes = Path(__file__).read_bytes()
         verifier_source = (
-            repository_root / "scripts/verify-macos-package.py"
-            if (repository_root / "scripts/verify-macos-package.py").is_file()
-            else repository_root / "verify-macos-package.py"
+            repository_root / "scripts/verify-app-archive.py"
+            if (repository_root / "scripts/verify-app-archive.py").is_file()
+            else repository_root / "verify-app-archive.py"
         )
         verifier_bytes = _read_bytes_nofollow(verifier_source, "independent package verifier", 1024 * 1024)
         launcher_bytes = _launcher_bytes(module_bytes, verifier_bytes)
         cli_path = paths.cli / "desktop_user_cli.py"
-        verifier_path = paths.cli / "verify-macos-package.py"
+        verifier_path = paths.cli / "verify-app-archive.py"
         cli_exists = _owned_file_state(cli_path, module_bytes, 0o600, "managed CLI")
         verifier_exists = _owned_file_state(verifier_path, verifier_bytes, 0o600, "managed verifier")
         launcher_exists = _owned_file_state(paths.launcher, launcher_bytes, 0o755, "launcher")
@@ -785,7 +776,7 @@ def install(dmg: Path, manifest_path: Path, *, home: Path | None = None,
             staged_cli.write_bytes(module_bytes)
             cli_identity = _publish_file_exclusive(staged_cli, cli_path, 0o600)
         if not verifier_exists:
-            staged_verifier = scratch / "verify-macos-package.py"
+            staged_verifier = scratch / "verify-app-archive.py"
             staged_verifier.write_bytes(verifier_bytes)
             verifier_identity = _publish_file_exclusive(staged_verifier, verifier_path, 0o600)
         if not launcher_exists:
@@ -832,11 +823,7 @@ def doctor(*, home: Path | None = None) -> tuple[str, dict[str, object]]:
             raise DesktopCLIError("managed layout contains a missing/non-directory/symlink root")
     _validate_owned_cli(paths)
     version, _, receipt = _active(paths)
-    expected_states = ((DIAGNOSTIC_SIGNING, DIAGNOSTIC_NOTARIZATION, "diagnostic"),
-                       (RELEASE_SIGNING, RELEASE_NOTARIZATION, "release-ready"))
-    if (receipt["signing"], receipt["notarization"], receipt["classification"]) not in expected_states:
-        raise DesktopCLIError("receipt artifact facts are inconsistent")
-    source = receipt.get("source_dmg")
+    source = receipt.get("source_archive")
     if not isinstance(source, dict) or set(source) != {"file_name", "size_bytes", "sha256"}:
         raise DesktopCLIError("receipt source artifact facts are invalid")
     return version, receipt
@@ -864,25 +851,22 @@ def run_installed(arguments: Sequence[str], *, home: Path | None = None,
             if rest:
                 raise DesktopCLIError("version takes no arguments")
             output(f"version: {version}")
-            output(f"artifact sha256: {receipt['source_dmg']['sha256']}")  # type: ignore[index]
-            output(f"signing: {receipt['signing']}")
-            output(f"notarization: {receipt['notarization']}")
-            output("DIAGNOSTIC / NOT RELEASE READY" if receipt["classification"] == "diagnostic" else "RELEASE READY")
+            output(f"archive sha256: {receipt['source_archive']['sha256']}")  # type: ignore[index]
+            output(f"bundle sha256: {receipt['bundle_tree_sha256']}")
         else:
             if rest:
                 raise DesktopCLIError("doctor takes no arguments")
             version, receipt = doctor(home=home)
             output(f"INTEGRITY PASS: managed LingTai Desktop {version}")
-            output("NOT RELEASE READY: diagnostic developer preview" if receipt["classification"] == "diagnostic" else "RELEASE READY")
+            output(f"archive binding: {receipt['source_archive']['sha256']}")  # type: ignore[index]
         return 0
     if command == "update":
         parser = argparse.ArgumentParser(prog="lingtai-desktop update")
-        parser.add_argument("--dmg", required=True, type=Path)
+        parser.add_argument("--archive", required=True, type=Path)
         parser.add_argument("--manifest", required=True, type=Path)
-        parser.add_argument("--allow-diagnostic", action="store_true")
         values = parser.parse_args(rest)
-        version = install(values.dmg, values.manifest, home=home,
-                          allow_diagnostic=values.allow_diagnostic, platform=platform, update=True)
+        version = install(values.archive, values.manifest, home=home,
+                          platform=platform, update=True)
         output(f"updated LingTai Desktop to {version}")
         return 0
     if command == "uninstall":
@@ -924,7 +908,7 @@ def uninstall_all(*, home: Path | None = None, effective_uid: int | None = None)
     paths = _paths(home)
     plan = _preflight_uninstall(paths)
     module = paths.cli / "desktop_user_cli.py"
-    verifier = paths.cli / "verify-macos-package.py"
+    verifier = paths.cli / "verify-app-archive.py"
     for entry in plan.entries:
         _revalidate_uninstall_ancestors(paths, plan)
         _remove_owned_version(
@@ -973,23 +957,20 @@ def installed_main(argv: Sequence[str] | None = None) -> int:
 
 def bootstrap_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Install LingTai Desktop into the current user's managed layout.")
-    parser.add_argument("--dmg", required=True, type=Path)
+    parser.add_argument("--archive", required=True, type=Path)
     parser.add_argument("--manifest", required=True, type=Path)
-    parser.add_argument("--allow-diagnostic", action="store_true")
     return parser
 
 
 def bootstrap_main(argv: Sequence[str] | None = None) -> int:
     values = bootstrap_parser().parse_args(argv)
     try:
-        version = install(values.dmg, values.manifest, allow_diagnostic=values.allow_diagnostic)
-        _, receipt = doctor()
+        version = install(values.archive, values.manifest)
+        doctor()
     except DesktopCLIError as error:
         print(f"install-macos-app: {error}", file=sys.stderr)
         return 1
     print(f"installed LingTai Desktop {version}")
-    if receipt["classification"] == "diagnostic":
-        print("WARNING: diagnostic developer preview; NOT RELEASE READY")
     print("launcher: $HOME/.local/bin/lingtai-desktop (PATH was not modified)")
     return 0
 

@@ -30,7 +30,12 @@ test proves. This file descends into `tests/` itself.
   `python3 -m unittest tests.test_repository_contract`, deliberately not as
   a ctest: it is a repository contract, not a product behavior, and it is
   deliberately not a repository-shape or CMake-source assertion suite.
-- `tests/test_macos_packaging.py` — the offline owner of the package boundary's
+- `tests/test_app_archive.py` — the offline owner of the primary portable-App
+  archive boundary: exact manifest/App-tree binding, safe private extraction,
+  executable modes, internal symlink/hardlink preservation, hostile member
+  rejection, malformed/truncated input cleanup, and inode-bound pair
+  publication races. It invokes no network, Apple service, App, or DMG tool.
+- `tests/test_macos_packaging.py` — the offline owner of the optional DMG boundary's
   fail-closed diagnostic/release mode choice, credential-name presence rules,
   deterministic versioned names, unsafe destination/overwrite refusal, tool
   absence, exact-MACOS parser helpers, per-slice otool linkage calls,
@@ -38,8 +43,8 @@ test proves. This file descends into `tests/` itself.
   and bounded secret-free manifest shape. It invokes no Apple, GitHub, signing,
   mount, or packaging service.
 - `tests/test_desktop_user_cli.py` — the fake-HOME user-install lifecycle
-  contract. Its injected platform boundary proves exact verifier mode,
-  mount/copy/smoke failures, exact open/foreground argv, managed modes/layout,
+  contract. Its injected platform boundary proves exact independent archive
+  verification/extraction and smoke failures, exact open/foreground argv, managed modes/layout,
   receipt/digest tamper rejection, atomic current preservation, collisions,
   symlink/traversal refusal, root refusal, and owned-only uninstall without
   invoking Finder, an App, Apple services, or the network.
@@ -239,6 +244,7 @@ no fixture); the test itself creates and removes its sandbox within that root
 | Test file | Target / executable | ctest name | Fixture (build dir) |
 | --- | --- | --- | --- |
 | `test_repository_contract.py` | Python `unittest` (no target) | manual: `python3 -m unittest tests.test_repository_contract` | — |
+| `test_app_archive.py` | Python `unittest` (no target) | manual: `python3 -m unittest tests.test_app_archive` | temporary injected directories only |
 | `test_macos_packaging.py` | Python `unittest` (no target) | manual: `python3 -m unittest tests.test_macos_packaging` | temporary injected directories only |
 | `test_desktop_user_cli.py` | Python `unittest` (no target) | manual: `python3 -m unittest tests.test_desktop_user_cli` | fake HOME + injected platform boundary |
 | `posix_descriptor_primitives_test.cpp` | `lingtai_posix_descriptor_primitives_test` | `posix_descriptor_primitives` | `posix-descriptor-primitives-fixture` |

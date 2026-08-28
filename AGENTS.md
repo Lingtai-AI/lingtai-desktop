@@ -26,8 +26,9 @@ From the repository root:
 ```bash
 python3 -m unittest tests.test_repository_contract
 python3 -m unittest tests.test_macos_packaging
+python3 -m unittest tests.test_app_archive
 python3 -m unittest tests.test_desktop_user_cli
-python3 -m py_compile scripts/macos_packaging.py scripts/package-macos.py scripts/verify-macos-package.py scripts/desktop_user_cli.py scripts/install-macos-app.py
+python3 -m py_compile scripts/macos_packaging.py scripts/package-macos.py scripts/verify-macos-package.py scripts/app_archive.py scripts/package-app-archive.py scripts/verify-app-archive.py scripts/desktop_user_cli.py scripts/install-macos-app.py
 python3 -m json.tool cmake/desktop-app-toolkit-lock.json >/dev/null
 for script in scripts/*.sh; do bash -n "$script"; done
 export QT_ROOT="$HOME/Qt/6.11.1/macos"
@@ -52,30 +53,28 @@ ctest --test-dir build --output-on-failure -R '^native_shell(_behavior)?$'
 ./scripts/smoke.py
 ```
 
-For macOS packaging, build only from an isolated checkout. Diagnostic output is
-explicitly ad-hoc and is never release-ready:
+The primary terminal-install artifact is a portable App archive. Package only
+an already verified self-contained universal App, from an isolated checkout:
 
 ```bash
-python3 scripts/package-macos.py --mode diagnostic \
+python3 scripts/package-app-archive.py \
   --app build/LingTai.app --output-dir /private/tmp/lingtai-desktop-package
-python3 scripts/verify-macos-package.py \
-  --dmg /private/tmp/lingtai-desktop-package/LingTai-0.1.5-macOS-universal.dmg \
-  --expected-version 0.1.5
+python3 scripts/verify-app-archive.py \
+  --archive /private/tmp/lingtai-desktop-package/LingTai-0.1.5-macOS-universal.app.tar.gz \
+  --manifest /private/tmp/lingtai-desktop-package/LingTai-0.1.5-macOS-universal.app.manifest.json
 ```
 
-Public `--mode release` additionally requires a locally available Developer ID
-Application identity and a named `notarytool` keychain profile, then must pass
-the verifier with `--require-release-ready`. Never use diagnostic output as a
-release artifact. Package publication is an exclusive DMG/manifest pair; never
-replace its hard-link no-clobber publication with a final rename. The manifest's
-`packaging_git_*` fields describe the scripts' tracked checkout, not the App's
-build provenance.
+Archive/manifest publication is exclusive and rollback is inode-bound; never
+replace its hard-link no-clobber publication with a final rename. Manifest
+`packaging_git_*` fields describe only the tracked packaging checkout, not the
+App build. The older DMG producer/verifier remains an optional release
+experiment; it is not an input to `lingtai-desktop` install or update.
 
 The developer-preview installer is always exercised with an injected fake
 HOME. Never run it against a developer's real HOME during validation.
 `scripts/desktop_user_cli.py` owns install/update/launch/doctor/uninstall policy;
 `scripts/install-macos-app.py` is only a bootstrap wrapper. Updates consume only
-explicit local DMG/manifest paths. Do not add PATH/profile mutation, sudo,
+explicit local App-archive/manifest paths. Do not add PATH/profile mutation, sudo,
 quarantine/Gatekeeper bypass, remote discovery, or a release claim.
 Preserve existing modes and unrelated contents in the shared `.local`,
 `.local/bin`, and `.local/share` parents. File publication must be fully

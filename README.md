@@ -41,55 +41,47 @@ For a CI-parity check before pushing:
 ./scripts/ci/preflight.sh
 ```
 
-## macOS packages
+## Portable App archive and terminal install
 
-The repository now has a local foundation for a self-contained, universal,
-versioned DMG. No public downloadable binary is published yet.
+The Puffo-inspired product boundary is a thin terminal command plus a portable,
+self-contained universal `LingTai.app`. The primary local artifact is a
+versioned `.tar.gz` containing exactly one top-level `LingTai.app/`, paired with
+an exact JSON manifest. No public downloadable binary is published yet.
 
-`scripts/package-macos.py` has two deliberately separate modes. `diagnostic`
-embeds the pinned Qt frameworks/plugins into a staged copy and ad-hoc signs it
-for local relocation checks; its manifest marks it as diagnostic only.
-`release` refuses to run without a local Developer ID Application identity and
-a named `notarytool` keychain profile, then requires hardened-runtime signing,
-timestamping, Apple notarization, and stapling. It does not upload to GitHub.
-The completed DMG and manifest are published as one no-clobber pair; a file
-that appears during packaging is preserved and causes the command to fail.
+Package an already verified App, then run the independent verifier:
 
-Manifest fields `packaging_git_sha`, `packaging_git_tree`, and
-`packaging_git_dirty` describe the checkout that ran the packaging scripts.
-They are not the input App's build provenance. Embedding and verifying App
-build provenance is a separate deferred release gate.
+```bash
+python3 scripts/package-app-archive.py \
+  --app build/LingTai.app \
+  --output-dir /private/tmp/lingtai-desktop-package
+python3 scripts/verify-app-archive.py \
+  --archive /private/tmp/lingtai-desktop-package/LingTai-0.1.5-macOS-universal.app.tar.gz \
+  --manifest /private/tmp/lingtai-desktop-package/LingTai-0.1.5-macOS-universal.app.manifest.json
+```
 
-After packaging, `scripts/verify-macos-package.py` mounts the DMG read-only,
-checks the drag-to-Applications layout, bundle identity/version/macOS 13.0
-floor, universal Mach-O slices, self-contained linkage, and signing mode, then
-copies the App to a disposable location and runs `--smoke` with no developer Qt
-environment. Linkage, install IDs, and run paths are checked independently for
-the exact arm64 and x86_64 slices. Pass `--require-release-ready` for strict Developer ID,
-Gatekeeper, and stapled-ticket checks.
+The manifest binds the archive bytes, exact bundle identity/version/executable,
+main executable bytes and universal architectures, recursive App-tree digest,
+and packaging-checkout HEAD/tree/dirty facts. Packaging provenance is not
+claimed as App-build provenance. The producer independently verifies the pair
+before exclusively publishing it, and preserves any racer-created destination.
 
-### Developer-preview user install
-
-Python 3 can bootstrap a previously verified local DMG/manifest pair into the
-current user's managed layout (it does not download an artifact):
+Install a local pair without a DMG, mount, download, or privileged operation:
 
 ```bash
 python3 scripts/install-macos-app.py \
-  --dmg /path/to/LingTai-0.1.5-macOS-universal.dmg \
-  --manifest /path/to/LingTai-0.1.5-macOS-universal.manifest.json \
-  --allow-diagnostic
+  --archive /path/to/LingTai-0.1.5-macOS-universal.app.tar.gz \
+  --manifest /path/to/LingTai-0.1.5-macOS-universal.app.manifest.json
 ```
 
-The explicit diagnostic flag accepts the manifest's developer-preview state;
-it does not bypass hashes, the independent package verifier, code-signature
-checks, bundle validation, or the installed-tree digest, and it never relabels
-the result release-ready. A public release still requires Developer ID signing,
-Apple notarization/stapling, and a release-ready manifest.
+The archive is treated as untrusted: extraction rejects absolute/traversing or
+invalid names, escaping links, special devices/FIFOs/sockets, duplicates, and
+extra top-level content. Verification and smoke run in private disposable
+directories before version publication.
 
 The managed files are `$HOME/.local/bin/lingtai-desktop` and
 `$HOME/.local/share/lingtai-desktop/{cli,versions,receipts,current}`. The command
 supports `open` (also the no-argument default), `foreground [-- APP_ARGS...]`,
-`version`, `doctor`, local-artifact-only `update --dmg ... --manifest ...`, and
+`version`, `doctor`, local-artifact-only `update --archive ... --manifest ...`, and
 explicit `uninstall --version X.Y.Z` / `uninstall --all`. A byte-identical
 same-version update is reverified and is an idempotent no-op; lower versions are
 refused. The bootstrap does not use sudo, change PATH or shell profiles, clear
@@ -101,6 +93,13 @@ shared parents and the exclusively managed root use restrictive defaults.
 Uninstall preflights the complete managed tree—including every installed
 version—before deleting anything and refuses unknown, tampered, or substituted
 paths without a partial cleanup.
+
+### Optional DMG experiment
+
+`scripts/package-macos.py` and `scripts/verify-macos-package.py` remain available
+for explicit diagnostic/release DMG experiments, including signing and
+notarization gates. A DMG is not required or accepted by the managed
+`lingtai-desktop` install/update path.
 
 ## First project
 

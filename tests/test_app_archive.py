@@ -1,0 +1,282 @@
+#!/usr/bin/env python3
+"""Hermetic contracts for portable LingTai.app archive production/verification."""
+
+from __future__ import annotations
+
+import importlib.util
+import hashlib
+import json
+import os
+import plistlib
+import tarfile
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from scripts import app_archive
+
+
+_VERIFIER_SPEC = importlib.util.spec_from_file_location(
+    "verify_app_archive",
+    Path(__file__).parents[1] / "scripts" / "verify-app-archive.py",
+)
+assert _VERIFIER_SPEC is not None and _VERIFIER_SPEC.loader is not None
+verify_app_archive = importlib.util.module_from_spec(_VERIFIER_SPEC)
+_VERIFIER_SPEC.loader.exec_module(verify_app_archive)
+
+
+def make_app(path: Path, version: str = "0.1.5") -> None:
+    executable = path / "Contents/MacOS/LingTai"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"#!/bin/sh\nexit 0\n")
+    executable.chmod(0o755)
+    framework = path / "Contents/Frameworks/Example.framework/Versions/A"
+    framework.mkdir(parents=True)
+    os.symlink("A", framework.parent / "Current")
+    os.symlink("Versions/Current", framework.parent.parent / "Example")
+    resource = path / "Contents/Resources/payload.bin"
+    resource.parent.mkdir(parents=True)
+    resource.write_bytes(b"hard-linked payload")
+    os.link(resource, resource.with_name("payload-copy.bin"))
+    with (path / "Contents/Info.plist").open("wb") as stream:
+        plistlib.dump({
+            "CFBundleIdentifier": "ai.lingtai.desktop",
+            "CFBundleShortVersionString": version,
+            "CFBundleVersion": version,
+            "CFBundleExecutable": "LingTai",
+            "LSMinimumSystemVersion": "13.0",
+        }, stream)
+
+
+class AppArchiveContractTest(unittest.TestCase):
+    @staticmethod
+    def _architectures(_: Path) -> tuple[str, ...]:
+        return "arm64", "x86_64"
+
+    def _package(self, root: Path, version: str = "0.1.5") -> tuple[Path, Path, Path]:
+        app = root / "input/LingTai.app"
+        make_app(app, version)
+        output = root / "output"
+        output.mkdir()
+        with mock.patch.object(
+            app_archive,
+            "packaging_git_facts",
+            return_value=app_archive.PackagingGitFacts("a" * 40, "b" * 40, False),
+        ):
+            archive, manifest = app_archive.package_app_archive(
+                app,
+                output,
+                repository_root=Path(__file__).parents[1],
+                architecture_reader=self._architectures,
+                verifier_runner=lambda archive_path, manifest_path: verify_app_archive.verify_pair(
+                    archive_path,
+                    manifest_path,
+                    architecture_reader=self._architectures,
+                ),
+            )
+        return archive, manifest, app
+
+    @staticmethod
+    def _rewrite_archive_binding(archive: Path, manifest: Path) -> None:
+        data = json.loads(manifest.read_text())
+        data["archive_size_bytes"] = archive.stat().st_size
+        data["archive_sha256"] = hashlib.sha256(archive.read_bytes()).hexdigest()
+        manifest.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+
+    @staticmethod
+    def _write_members(archive: Path, members: list[tarfile.TarInfo]) -> None:
+        with tarfile.open(archive, "w:gz", format=tarfile.PAX_FORMAT) as output:
+            for member in members:
+                if member.isfile():
+                    import io
+                    output.addfile(member, io.BytesIO(b"x" * member.size))
+                else:
+                    output.addfile(member)
+
+    def test_packaged_pair_is_independently_verified_and_preserves_modes_and_links(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, manifest, _ = self._package(root)
+
+            extracted = root / "verified"
+            verify_app_archive.verify_pair(
+                archive,
+                manifest,
+                extract_to=extracted,
+                architecture_reader=self._architectures,
+            )
+            verified_app = extracted / "LingTai.app"
+            self.assertEqual(
+                (verified_app / "Contents/MacOS/LingTai").stat().st_mode & 0o777,
+                0o755,
+            )
+            self.assertEqual(
+                os.readlink(verified_app / "Contents/Frameworks/Example.framework/Versions/Current"),
+                "A",
+            )
+            first = verified_app / "Contents/Resources/payload.bin"
+            second = verified_app / "Contents/Resources/payload-copy.bin"
+            self.assertEqual((first.stat().st_dev, first.stat().st_ino),
+                             (second.stat().st_dev, second.stat().st_ino))
+
+    def test_manifest_and_exact_app_fact_mismatches_are_rejected(self) -> None:
+        mutations = {
+            "archive hash": lambda data: data.__setitem__("archive_sha256", "0" * 64),
+            "archive size": lambda data: data.__setitem__("archive_size_bytes", data["archive_size_bytes"] + 1),
+            "bundle": lambda data: data.__setitem__("bundle_identifier", "invalid.bundle"),
+            "executable hash": lambda data: data.__setitem__("executable_sha256", "0" * 64),
+            "executable size": lambda data: data.__setitem__("executable_size_bytes", data["executable_size_bytes"] + 1),
+            "architectures": lambda data: data.__setitem__("architectures", ["arm64"]),
+            "recursive digest": lambda data: data.__setitem__("bundle_tree_sha256", "0" * 64),
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                archive, manifest, _ = self._package(Path(temporary))
+                data = json.loads(manifest.read_text())
+                mutate(data)
+                manifest.write_text(json.dumps(data))
+                with self.assertRaises(verify_app_archive.VerificationError):
+                    verify_app_archive.verify_pair(
+                        archive, manifest, architecture_reader=self._architectures
+                    )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            archive, manifest, _ = self._package(Path(temporary))
+            with self.assertRaisesRegex(verify_app_archive.VerificationError, "architectures"):
+                verify_app_archive.verify_pair(
+                    archive,
+                    manifest,
+                    architecture_reader=lambda _: ("arm64",),
+                )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, manifest, _ = self._package(root)
+            renamed = archive.with_name("LingTai-0.1.6-macOS-universal.app.tar.gz")
+            archive.rename(renamed)
+            data = json.loads(manifest.read_text())
+            data["version"] = "0.1.6"
+            data["bundle_version"] = "0.1.6"
+            data["archive_file_name"] = renamed.name
+            manifest.write_text(json.dumps(data))
+            with self.assertRaisesRegex(verify_app_archive.VerificationError, "bundle identity"):
+                verify_app_archive.verify_pair(
+                    renamed, manifest, architecture_reader=self._architectures
+                )
+
+    def test_untrusted_archive_structure_is_rejected_before_extraction(self) -> None:
+        root_directory = tarfile.TarInfo("LingTai.app")
+        root_directory.type = tarfile.DIRTYPE
+        root_directory.mode = 0o755
+
+        cases: dict[str, list[tarfile.TarInfo]] = {}
+        absolute = tarfile.TarInfo("/LingTai.app/escape")
+        absolute.size = 1
+        cases["absolute"] = [root_directory, absolute]
+        traversal = tarfile.TarInfo("LingTai.app/../escape")
+        traversal.size = 1
+        cases["traversal"] = [root_directory, traversal]
+        invalid = tarfile.TarInfo("LingTai.app/bad\\name")
+        invalid.size = 1
+        cases["invalid"] = [root_directory, invalid]
+        escaping_symlink = tarfile.TarInfo("LingTai.app/bad-link")
+        escaping_symlink.type = tarfile.SYMTYPE
+        escaping_symlink.linkname = "../../escape"
+        cases["escaping symlink"] = [root_directory, escaping_symlink]
+        escaping_hardlink = tarfile.TarInfo("LingTai.app/bad-hardlink")
+        escaping_hardlink.type = tarfile.LNKTYPE
+        escaping_hardlink.linkname = "../escape"
+        cases["escaping hardlink"] = [root_directory, escaping_hardlink]
+        fifo = tarfile.TarInfo("LingTai.app/fifo")
+        fifo.type = tarfile.FIFOTYPE
+        cases["FIFO"] = [root_directory, fifo]
+        device = tarfile.TarInfo("LingTai.app/device")
+        device.type = tarfile.CHRTYPE
+        cases["device"] = [root_directory, device]
+        socket = tarfile.TarInfo("LingTai.app/socket")
+        socket.type = b"s"
+        cases["socket"] = [root_directory, socket]
+        extra = tarfile.TarInfo("README")
+        extra.size = 1
+        cases["extra top-level"] = [root_directory, extra]
+        duplicate = tarfile.TarInfo("LingTai.app")
+        duplicate.type = tarfile.DIRTYPE
+        cases["duplicate"] = [root_directory, duplicate]
+        conflicting = tarfile.TarInfo("LingTai.app")
+        conflicting.size = 1
+        cases["conflicting"] = [root_directory, conflicting]
+
+        for label, members in cases.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                archive, manifest, _ = self._package(root)
+                self._write_members(archive, members)
+                self._rewrite_archive_binding(archive, manifest)
+                destination = root / "must-not-survive"
+                with self.assertRaises(verify_app_archive.VerificationError):
+                    verify_app_archive.verify_pair(
+                        archive,
+                        manifest,
+                        extract_to=destination,
+                        architecture_reader=self._architectures,
+                    )
+                self.assertFalse(destination.exists())
+
+    def test_malformed_and_truncated_archives_are_rejected_and_cleaned(self) -> None:
+        for form in ("malformed", "truncated"):
+            with self.subTest(form=form), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                archive, manifest, _ = self._package(root)
+                if form == "malformed":
+                    archive.write_bytes(b"not a gzip or tar")
+                else:
+                    content = archive.read_bytes()
+                    archive.write_bytes(content[: len(content) // 2])
+                self._rewrite_archive_binding(archive, manifest)
+                destination = root / "extracted"
+                with self.assertRaisesRegex(verify_app_archive.VerificationError, "malformed|truncated"):
+                    verify_app_archive.verify_pair(
+                        archive,
+                        manifest,
+                        extract_to=destination,
+                        architecture_reader=self._architectures,
+                    )
+                self.assertFalse(destination.exists())
+
+    def test_pair_publication_is_exclusive_and_rollback_is_inode_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            staged_archive = root / "staged.tar.gz"
+            staged_manifest = root / "staged.json"
+            final_archive = root / "final.tar.gz"
+            final_manifest = root / "final.json"
+            staged_archive.write_bytes(b"archive")
+            staged_manifest.write_bytes(b"manifest")
+            final_manifest.write_bytes(b"racer")
+            with self.assertRaisesRegex(app_archive.ArchivePackagingError, "manifest appeared"):
+                app_archive.publish_pair(
+                    staged_archive, staged_manifest, final_archive, final_manifest
+                )
+            self.assertFalse(final_archive.exists())
+            self.assertEqual(final_manifest.read_bytes(), b"racer")
+
+            real_link = os.link
+
+            def replace_before_second(source: Path, destination: Path, **kwargs: object) -> None:
+                if Path(destination) == final_manifest:
+                    final_archive.unlink()
+                    final_archive.write_bytes(b"foreign replacement")
+                real_link(source, destination, **kwargs)
+
+            with mock.patch.object(app_archive.os, "link", side_effect=replace_before_second), \
+                 self.assertRaisesRegex(app_archive.ArchivePackagingError, "manifest appeared"):
+                app_archive.publish_pair(
+                    staged_archive, staged_manifest, final_archive, final_manifest
+                )
+            self.assertEqual(final_archive.read_bytes(), b"foreign replacement")
+            self.assertEqual(final_manifest.read_bytes(), b"racer")
+
+
+if __name__ == "__main__":
+    unittest.main()

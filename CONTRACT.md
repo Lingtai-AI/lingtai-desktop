@@ -21,15 +21,17 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
 - `scripts/` owns the bootstrap/configure/build/smoke and macOS package/verify
   entry points;
   `scripts/bootstrap-deps.sh` is the only sanctioned way to populate `.deps/`.
-- `scripts/macos_packaging.py` is the sole package-production owner. It never
-  mutates the input App and exclusively publishes a complete DMG/manifest pair
-  without replacing a concurrent target. `scripts/verify-macos-package.py`
-  independently owns mounted-DMG layout, per-architecture bundle/linkage/signing
-  checks, and relocated smoke.
+- `scripts/app_archive.py` owns the primary portable-App archive production
+  boundary. It never mutates the input App and exclusively publishes a complete
+  archive/manifest pair without replacing a concurrent target.
+  `scripts/verify-app-archive.py` independently owns untrusted-member preflight,
+  private extraction, exact archive/App-tree binding, and universal executable
+  verification. The older DMG producer/verifier remains an optional release
+  experiment and is not an installer input.
 - `scripts/desktop_user_cli.py` solely owns the unprivileged, HOME-derived
   install/update/current/receipt/doctor/launch/uninstall transaction.
   `scripts/install-macos-app.py` is a thin bootstrap and duplicates no policy.
-  The managed command accepts only explicit local update artifacts, never
+  The managed command accepts only explicit local App-archive/manifest pairs, never
   mutates PATH/profiles, and never weakens quarantine or Gatekeeper.
   Existing shared `.local` parent modes are outside its ownership. Managed
   publication becomes visible only after mode preparation, rollback removes
@@ -119,6 +121,10 @@ its folder.
   verification; any absent prerequisite or unsuccessful check is fatal.
   `packaging_git_*` manifest facts identify only the clean tracked packaging
   checkout and must never be represented as input-App build provenance.
+- **No DMG-bound managed lifecycle**: the primary terminal install/update path
+  consumes a portable App archive and never mounts or detaches a disk image.
+  Archive packaging Git facts describe the packaging checkout only; they never
+  claim to identify the App build.
 - **No privileged or remote install path**: the managed lifecycle refuses
   effective uid 0, owns only `$HOME/.local/bin/lingtai-desktop` and
   `$HOME/.local/share/lingtai-desktop`, and has no sudo, system prefix,

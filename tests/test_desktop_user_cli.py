@@ -10,31 +10,44 @@ import plistlib
 import stat
 import tempfile
 import unittest
-from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
 from scripts import desktop_user_cli as cli
 
 
-def write_artifacts(root: Path, version: str = "0.1.5", *, release: bool = False) -> tuple[Path, Path]:
-    dmg = root / f"LingTai-{version}-macOS-universal.dmg"
-    dmg.write_bytes(b"fixed test dmg")
-    manifest = root / f"LingTai-{version}-macOS-universal.manifest.json"
+def write_artifacts(root: Path, version: str = "0.1.5") -> tuple[Path, Path]:
+    archive = root / f"LingTai-{version}-macOS-universal.app.tar.gz"
+    archive.write_bytes(b"fixed test App archive")
+    with tempfile.TemporaryDirectory(dir=root) as temporary:
+        app = Path(temporary) / "LingTai.app"
+        make_app(app, version)
+        executable = app / "Contents/MacOS/LingTai"
+        executable_size = executable.stat().st_size
+        executable_sha = hashlib.sha256(executable.read_bytes()).hexdigest()
+        bundle_digest = cli.bundle_tree_digest(app)
+    manifest = root / f"LingTai-{version}-macOS-universal.app.manifest.json"
     manifest.write_text(json.dumps({
         "architectures": ["arm64", "x86_64"],
-        "file_name": dmg.name,
+        "archive_file_name": archive.name,
+        "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+        "archive_size_bytes": archive.stat().st_size,
+        "artifact_kind": "lingtai-portable-app-archive",
+        "bundle_executable": "Contents/MacOS/LingTai",
+        "bundle_identifier": "ai.lingtai.desktop",
+        "bundle_name": "LingTai.app",
+        "bundle_tree_sha256": bundle_digest,
+        "bundle_version": version,
+        "executable_sha256": executable_sha,
+        "executable_size_bytes": executable_size,
         "minimum_macos": "13.0",
-        "notarization": ("Apple accepted; ticket stapled and validated" if release else "not performed (diagnostic mode)"),
         "packaging_git_dirty": False,
-        "packaging_git_sha": "a" * 40,
+        "packaging_git_head": "a" * 40,
         "packaging_git_tree": "b" * 40,
-        "sha256": hashlib.sha256(dmg.read_bytes()).hexdigest(),
-        "signing": ("Developer ID Application; hardened runtime; timestamped" if release else "ad-hoc App; unsigned DMG (diagnostic only)"),
-        "size_bytes": dmg.stat().st_size,
+        "schema_version": 1,
         "version": version,
     }, sort_keys=True), encoding="utf-8")
-    return dmg, manifest
+    return archive, manifest
 
 
 def make_app(path: Path, version: str) -> None:
@@ -77,26 +90,19 @@ class FakePlatform(cli.Platform):
         self.calls: list[list[str]] = []
         self.exec_calls: list[list[str]] = []
         self.fail: str | None = None
-        self.current_during_copy: str | None = None
 
-    def verify_package(self, repository_root: Path, dmg: Path, version: str, release_ready: bool) -> None:
-        self.calls.append(["verify", str(dmg), version, str(release_ready)])
+    def verify_archive(self, repository_root: Path, archive: Path, manifest: Path) -> None:
+        self.calls.append(["verify", str(archive), str(manifest)])
         if self.fail == "verifier":
             raise cli.DesktopCLIError("injected verifier failure")
 
-    @contextmanager
-    def mounted_app(self, dmg: Path, scratch: Path):
-        if self.fail == "mount":
-            raise cli.DesktopCLIError("injected mount failure")
-        source = scratch / "mounted" / "LingTai.app"
-        make_app(source, cli.VERSION_PATTERN.search(dmg.name).group(0))
-        yield source
-
-    def copy_app(self, source: Path, destination: Path) -> None:
-        if self.fail == "copy":
-            raise cli.DesktopCLIError("injected copy failure")
-        import shutil
-        shutil.copytree(source, destination, symlinks=True)
+    def verify_and_extract_archive(self, repository_root: Path, archive: Path,
+                                   manifest: Path, destination: Path) -> Path:
+        if self.fail == "extract":
+            raise cli.DesktopCLIError("injected archive extraction failure")
+        source = destination / "LingTai.app"
+        make_app(source, cli.VERSION_PATTERN.search(archive.name).group(0))
+        return source
 
     def smoke(self, executable: Path, fake_home: Path, fake_tmp: Path) -> None:
         self.calls.append([str(executable), "--smoke", str(fake_home), str(fake_tmp)])
@@ -120,8 +126,8 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             unrelated = home / ".local/share/unrelated.txt"
             unrelated.write_text("keep me")
             before = tuple(stat.S_IMODE(path.stat().st_mode) for path in shared), unrelated.read_bytes()
-            dmg, manifest = write_artifacts(root)
-            cli.install(dmg, manifest, home=home, allow_diagnostic=True,
+            archive, manifest = write_artifacts(root)
+            cli.install(archive, manifest, home=home,
                         platform=FakePlatform(), effective_uid=501)
             self.assertEqual(
                 (tuple(stat.S_IMODE(path.stat().st_mode) for path in shared), unrelated.read_bytes()),
@@ -148,8 +154,8 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             root = Path(temporary)
             home = root / "home"
             home.mkdir()
-            dmg, manifest = write_artifacts(root)
-            verifier = home / ".local/share/lingtai-desktop/cli/verify-macos-package.py"
+            archive, manifest = write_artifacts(root)
+            verifier = home / ".local/share/lingtai-desktop/cli/verify-app-archive.py"
             real_link = os.link
             racer_bytes: bytes | None = None
 
@@ -163,7 +169,7 @@ class DesktopUserCLIContractTest(unittest.TestCase):
 
             with mock.patch.object(cli.os, "link", side_effect=race_verifier):
                 with self.assertRaisesRegex(cli.DesktopCLIError, "refusing to overwrite"):
-                    cli.install(dmg, manifest, home=home, allow_diagnostic=True,
+                    cli.install(archive, manifest, home=home,
                                 platform=FakePlatform(), effective_uid=501)
             self.assertIsNotNone(racer_bytes)
             self.assertEqual(verifier.read_bytes(), racer_bytes)
@@ -174,8 +180,8 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                 root = Path(temporary)
                 home = root / "home"
                 home.mkdir()
-                dmg, manifest = write_artifacts(root)
-                cli.install(dmg, manifest, home=home, allow_diagnostic=True,
+                archive, manifest = write_artifacts(root)
+                cli.install(archive, manifest, home=home,
                             platform=FakePlatform(), effective_uid=501)
                 managed = home / ".local/share/lingtai-desktop"
                 outside = root / "outside-managed"
@@ -198,16 +204,16 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                 home = root / "home"
                 home.mkdir()
                 platform = FakePlatform()
-                dmg1, manifest1 = write_artifacts(root, "0.1.5")
-                cli.install(dmg1, manifest1, home=home, allow_diagnostic=True,
+                archive1, manifest1 = write_artifacts(root, "0.1.5")
+                cli.install(archive1, manifest1, home=home,
                             platform=platform, effective_uid=501)
                 if corruption == "unknown-root":
                     (home / ".local/share/lingtai-desktop/KEEP").write_text("unknown")
                 else:
                     newer = root / "newer"
                     newer.mkdir()
-                    dmg2, manifest2 = write_artifacts(newer, "0.1.6")
-                    cli.install(dmg2, manifest2, home=home, allow_diagnostic=True,
+                    archive2, manifest2 = write_artifacts(newer, "0.1.6")
+                    cli.install(archive2, manifest2, home=home,
                                 platform=platform, effective_uid=501, update=True)
                     executable = home / ".local/share/lingtai-desktop/versions/0.1.6/LingTai.app/Contents/MacOS/LingTai"
                     executable.chmod(0o700)
@@ -219,50 +225,45 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                 self.assertEqual(tree_snapshot(managed), before)
                 self.assertEqual(launcher.read_bytes(), launcher_before)
 
-    def test_bootstrap_warning_uses_validated_classification_not_opt_in_flag(self) -> None:
-        release_receipt = {"classification": "release-ready"}
+    def test_bootstrap_parser_uses_the_portable_archive_contract(self) -> None:
         with mock.patch.object(cli, "install", return_value="0.1.5"), \
-             mock.patch.object(cli, "doctor", return_value=("0.1.5", release_receipt)), \
+             mock.patch.object(cli, "doctor", return_value=("0.1.5", {})), \
              mock.patch("builtins.print") as output:
             self.assertEqual(cli.bootstrap_main([
-                "--dmg", "/tmp/release.dmg", "--manifest", "/tmp/release.json",
-                "--allow-diagnostic",
+                "--archive", "/tmp/LingTai.app.tar.gz", "--manifest", "/tmp/LingTai.app.json",
             ]), 0)
         self.assertFalse(any("WARNING" in str(call) for call in output.call_args_list))
 
     def test_manifest_exact_schema_hash_size_state_and_symlink_refusal(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            dmg, manifest = write_artifacts(root)
-            parsed = cli.load_manifest(dmg, manifest, allow_diagnostic=True)
+            archive, manifest = write_artifacts(root)
+            parsed = cli.load_manifest(archive, manifest)
             self.assertEqual(parsed.version, "0.1.5")
-            self.assertTrue(parsed.diagnostic)
-            with self.assertRaisesRegex(cli.DesktopCLIError, "explicit --allow-diagnostic"):
-                cli.load_manifest(dmg, manifest, allow_diagnostic=False)
 
             data = json.loads(manifest.read_text())
             data["unknown"] = True
             manifest.write_text(json.dumps(data))
             with self.assertRaisesRegex(cli.DesktopCLIError, "exact schema"):
-                cli.load_manifest(dmg, manifest, allow_diagnostic=True)
+                cli.load_manifest(archive, manifest)
             data.pop("unknown")
-            data["sha256"] = "0" * 64
+            data["archive_sha256"] = "0" * 64
             manifest.write_text(json.dumps(data))
             with self.assertRaisesRegex(cli.DesktopCLIError, "SHA-256"):
-                cli.load_manifest(dmg, manifest, allow_diagnostic=True)
+                cli.load_manifest(archive, manifest)
             manifest.unlink()
             manifest.symlink_to(root / "elsewhere")
             with self.assertRaisesRegex(cli.DesktopCLIError, "regular file, not a symlink"):
-                cli.load_manifest(dmg, manifest, allow_diagnostic=True)
+                cli.load_manifest(archive, manifest)
 
-    def test_release_uses_strict_verifier_and_install_layout_is_private(self) -> None:
+    def test_archive_uses_independent_verifier_and_install_layout_is_private(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             home = root / "home"
             home.mkdir()
-            dmg, manifest = write_artifacts(root, release=True)
+            archive, manifest = write_artifacts(root)
             platform = FakePlatform()
-            cli.install(dmg, manifest, home=home, allow_diagnostic=False, platform=platform, effective_uid=501)
+            cli.install(archive, manifest, home=home, platform=platform, effective_uid=501)
             managed = home / ".local/share/lingtai-desktop"
             self.assertEqual(os.readlink(managed / "current"), "versions/0.1.5")
             self.assertTrue((managed / "versions/0.1.5/LingTai.app").is_dir())
@@ -270,19 +271,19 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             self.assertTrue((managed / "cli/desktop_user_cli.py").is_file())
             launcher = home / ".local/bin/lingtai-desktop"
             self.assertEqual(stat.S_IMODE(launcher.stat().st_mode), 0o755)
-            self.assertEqual(platform.calls[0][-1], "True")
+            self.assertEqual(platform.calls[0][0], "verify")
 
     def test_same_version_update_is_verified_byte_identical_idempotence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             home = root / "home"
             home.mkdir()
-            dmg, manifest = write_artifacts(root)
+            archive, manifest = write_artifacts(root)
             platform = FakePlatform()
-            cli.install(dmg, manifest, home=home, allow_diagnostic=True, platform=platform, effective_uid=501)
+            cli.install(archive, manifest, home=home, platform=platform, effective_uid=501)
             managed = home / ".local/share/lingtai-desktop"
             before = (os.readlink(managed / "current"), (managed / "receipts/0.1.5.json").read_bytes())
-            cli.install(dmg, manifest, home=home, allow_diagnostic=True, platform=platform, effective_uid=501, update=True)
+            cli.install(archive, manifest, home=home, platform=platform, effective_uid=501, update=True)
             self.assertEqual((os.readlink(managed / "current"), (managed / "receipts/0.1.5.json").read_bytes()), before)
             self.assertEqual([call[0] for call in platform.calls].count("verify"), 2)
 
@@ -291,9 +292,9 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             root = Path(temporary)
             home = root / "home"
             home.mkdir()
-            dmg, manifest = write_artifacts(root)
+            archive, manifest = write_artifacts(root)
             platform = FakePlatform()
-            cli.install(dmg, manifest, home=home, allow_diagnostic=True, platform=platform, effective_uid=501)
+            cli.install(archive, manifest, home=home, platform=platform, effective_uid=501)
             out: list[str] = []
             cli.run_installed([], home=home, platform=platform, output=out.append)
             app = home / ".local/share/lingtai-desktop/versions/0.1.5/LingTai.app"
@@ -303,35 +304,35 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             cli.run_installed(["version"], home=home, platform=platform, output=out.append)
             cli.run_installed(["doctor"], home=home, platform=platform, output=out.append)
             self.assertIn("INTEGRITY PASS", "\n".join(out))
-            self.assertIn("NOT RELEASE READY", "\n".join(out))
+            self.assertIn("archive binding", "\n".join(out))
             (app / "Contents/MacOS/LingTai").write_bytes(b"tampered")
-            with self.assertRaisesRegex(cli.DesktopCLIError, "bundle digest"):
+            with self.assertRaisesRegex(cli.DesktopCLIError, "executable facts|bundle digest"):
                 cli.run_installed(["open"], home=home, platform=platform, output=out.append)
 
             make_app(app, "0.1.5")
-            verifier = home / ".local/share/lingtai-desktop/cli/verify-macos-package.py"
+            verifier = home / ".local/share/lingtai-desktop/cli/verify-app-archive.py"
             verifier.write_text("tampered verifier")
             with self.assertRaisesRegex(cli.DesktopCLIError, "unrelated launcher"):
                 cli.run_installed(["doctor"], home=home, platform=platform, output=out.append)
 
     def test_update_failure_matrix_preserves_old_current_and_owned_bytes(self) -> None:
-        for failure in ("verifier", "mount", "copy", "receipt", "launcher", "current"):
+        for failure in ("verifier", "extract", "receipt", "launcher", "current"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 home = root / "home"
                 home.mkdir()
                 platform = FakePlatform()
-                dmg1, manifest1 = write_artifacts(root, "0.1.5")
-                cli.install(dmg1, manifest1, home=home, allow_diagnostic=True, platform=platform, effective_uid=501)
+                archive1, manifest1 = write_artifacts(root, "0.1.5")
+                cli.install(archive1, manifest1, home=home, platform=platform, effective_uid=501)
                 managed = home / ".local/share/lingtai-desktop"
                 launcher = home / ".local/bin/lingtai-desktop"
                 old = (os.readlink(managed / "current"), launcher.read_bytes(), (managed / "receipts/0.1.5.json").read_bytes())
                 newer = root / "new"
                 newer.mkdir()
-                dmg2, manifest2 = write_artifacts(newer, "0.1.6")
-                platform.fail = failure if failure in {"verifier", "mount", "copy"} else None
+                archive2, manifest2 = write_artifacts(newer, "0.1.6")
+                platform.fail = failure if failure in {"verifier", "extract"} else None
                 with mock.patch.object(cli, "_FAILPOINT", failure), self.assertRaises(cli.DesktopCLIError):
-                    cli.install(dmg2, manifest2, home=home, allow_diagnostic=True, platform=platform, effective_uid=501, update=True)
+                    cli.install(archive2, manifest2, home=home, platform=platform, effective_uid=501, update=True)
                 self.assertEqual((os.readlink(managed / "current"), launcher.read_bytes(), (managed / "receipts/0.1.5.json").read_bytes()), old)
                 self.assertFalse((managed / "versions/0.1.6").exists())
                 self.assertFalse((managed / "receipts/0.1.6.json").exists())
@@ -341,35 +342,35 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             root = Path(temporary)
             home = root / "home"
             home.mkdir()
-            dmg, manifest = write_artifacts(root)
+            archive, manifest = write_artifacts(root)
             launcher = home / ".local/bin/lingtai-desktop"
             launcher.parent.mkdir(parents=True)
             launcher.write_text("unrelated")
             with self.assertRaisesRegex(cli.DesktopCLIError, "unrelated launcher"):
-                cli.install(dmg, manifest, home=home, allow_diagnostic=True, platform=FakePlatform(), effective_uid=501)
+                cli.install(archive, manifest, home=home, platform=FakePlatform(), effective_uid=501)
             launcher.unlink()
             with self.assertRaisesRegex(cli.DesktopCLIError, "effective uid 0"):
-                cli.install(dmg, manifest, home=home, allow_diagnostic=True, platform=FakePlatform(), effective_uid=0)
+                cli.install(archive, manifest, home=home, platform=FakePlatform(), effective_uid=0)
             managed = home / ".local/share/lingtai-desktop"
             import shutil
             shutil.rmtree(managed)
             managed.symlink_to(root / "outside")
             with self.assertRaisesRegex(cli.DesktopCLIError, "symlink"):
-                cli.install(dmg, manifest, home=home, allow_diagnostic=True, platform=FakePlatform(), effective_uid=501)
+                cli.install(archive, manifest, home=home, platform=FakePlatform(), effective_uid=501)
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             home = root / "home"
             home.mkdir()
-            dmg, manifest = write_artifacts(root)
+            archive, manifest = write_artifacts(root)
             platform = FakePlatform()
-            cli.install(dmg, manifest, home=home, allow_diagnostic=True, platform=platform, effective_uid=501)
+            cli.install(archive, manifest, home=home, platform=platform, effective_uid=501)
             with self.assertRaisesRegex(cli.DesktopCLIError, "safe x.y.z"):
                 cli.uninstall_version("../../outside", home=home, effective_uid=501)
             cli.uninstall_version("0.1.5", home=home, effective_uid=501)
             self.assertFalse((home / ".local/share/lingtai-desktop/versions/0.1.5").exists())
-            dmg, manifest = write_artifacts(root, "0.1.6")
-            cli.install(dmg, manifest, home=home, allow_diagnostic=True, platform=platform, effective_uid=501)
+            archive, manifest = write_artifacts(root, "0.1.6")
+            cli.install(archive, manifest, home=home, platform=platform, effective_uid=501)
             cli.uninstall_all(home=home, effective_uid=501)
             self.assertFalse(home.joinpath(".local/bin/lingtai-desktop").exists())
             self.assertFalse(home.joinpath(".local/share/lingtai-desktop").exists())
@@ -389,9 +390,9 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             with self.assertRaisesRegex(cli.DesktopCLIError, "unknown command"):
                 cli.run_installed(["surprise"], home=home, platform=FakePlatform())
 
-            dmg, manifest = write_artifacts(root)
+            archive, manifest = write_artifacts(root)
             platform = FakePlatform()
-            cli.install(dmg, manifest, home=home, allow_diagnostic=True, platform=platform, effective_uid=501)
+            cli.install(archive, manifest, home=home, platform=platform, effective_uid=501)
             managed = home / ".local/share/lingtai-desktop"
             unknown = managed / "receipts/README"
             unknown.write_text("not owned")
@@ -404,11 +405,11 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             root = Path(temporary)
             home = root / "home"
             home.mkdir()
-            dmg, manifest = write_artifacts(root)
+            archive, manifest = write_artifacts(root)
             collision = home / ".local/share/lingtai-desktop/versions/0.1.5"
             collision.mkdir(parents=True)
             with self.assertRaisesRegex(cli.DesktopCLIError, "version collision"):
-                cli.install(dmg, manifest, home=home, allow_diagnostic=True,
+                cli.install(archive, manifest, home=home,
                             platform=FakePlatform(), effective_uid=501)
 
 
