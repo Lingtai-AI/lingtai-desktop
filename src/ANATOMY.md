@@ -111,10 +111,14 @@ Domain models (pure, Qt-light state/derivation owners):
   descriptor/directory-stream ownership, shared read flags, `safe_leaf`, and
   one-leaf-at-a-time no-follow `openat`-based opens. Internal; links nothing;
   no domain policy.
-- `project_creation.{h,cpp}` — `create_project` and `ProjectCreationRunner`:
+- `project_creation.{h,cpp}` plus
+  `project_creation_resources.{h,cpp}` — `create_project`, compiled
+  Desktop-owned `en`/`zh`/`wen` first-boot content, and
+  `ProjectCreationRunner`:
   selected-preset/draft no-follow prevalidation, one owned sibling stage,
-  in-stage allowed-preset reconciliation, bounded shape and exactly-one-
-  orchestrator validation, typed stage/detail, fd-anchored recursive rollback
+  in-stage allowed-preset reconciliation, localized resolved `.prompt`,
+  adaptive-or-byte-exact `comment.md`, bounded exact shape/content and
+  exactly-one-orchestrator validation, typed stage/detail, fd-anchored rollback
   before or after ownership-marker removal, exclusive atomic `.lingtai`
   publication, and joinable queued exactly-once delivery to the UI thread with
   destruction-time suppression. It does not gate publication on runtime

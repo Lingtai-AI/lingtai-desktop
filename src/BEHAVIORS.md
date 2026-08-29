@@ -206,7 +206,13 @@ its code.
   selected preset before building one marker-owned sibling stage. It writes the
   canonical minimum human, first Agent, mailbox, and shared-library tree,
   validates allowed presets and reconciles selected/default/allowed policy
-  inside staging, then validates the bounded tree and exactly one orchestrator.
+  inside staging, then writes a Desktop-owned localized `.prompt` and always
+  writes Agent-local `comment.md`. Empty create-new Comment text selects the
+  localized adaptive playbook; nonempty text is transported and written
+  byte-for-byte. The final `manifest.comment_file` always names that published
+  Agent-local file. Validation requires exact Agent children, bounded regular
+  content, resolved generated placeholders, matching content/references, and
+  exactly one orchestrator.
   It syncs every directory before removing the marker and exclusively renames
   to `.lingtai`. Conflicts and pre-commit failures preserve existing state and
   remove only the exact open stage through descriptor-relative recursion;
@@ -223,6 +229,12 @@ its code.
   executable is discovered or invoked.
   Anchor: `create_project` (`project_creation.cpp`) and shell handoff
   (`native_shell.cpp`).
+- The kernel-consumed per-Agent `.prompt`/`comment.md` effects are shared
+  on-disk behavior and therefore Desktop-owned here. `.tui-asset`, project
+  `.recipe`, recipe snapshots/reconciliation, TUI config/Register/global
+  utilities, preset credential persistence, and the TUI phantom-process
+  recheck are intentionally nonapplicable; creation neither emits nor calls
+  them.
 
 ## Existing Agent setup rerun
 

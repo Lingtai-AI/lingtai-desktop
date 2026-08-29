@@ -74,7 +74,10 @@ Qt plugin path set and an 8 s watchdog.
 ### Pure/domain unit tests
 
 - `project_creation` proves the exact human/Agent/shared-library shape,
-  selected-preset default/allowed parity, reviewed setup fields, publication
+  selected-preset default/allowed parity, reviewed setup fields, localized
+  `en`/`zh`/`wen` `.prompt` and empty-comment adaptive playbooks, complete
+  generated-placeholder substitution, byte-exact nonempty comment content,
+  the final `manifest.comment_file`, publication
   with missing runtime/env/covenant inputs, staged validation, typed
   stage/detail survival through `ProjectCreationRunner`, normal attachment/
   setup compatibility, byte-preserving no-change save, preservation of
@@ -83,7 +86,11 @@ Qt plugin path set and an 8 s watchdog.
   joined runner destruction with no late callback, and destination/preset
   symlink rejection. `test_project_creation_source_contract` separately proves
   production rollback contains no path-recursive `remove_all` call and no TUI
-  or runtime-readiness adapter.
+  or runtime-readiness adapter, and pins the Desktop-owned compiled content
+  source into the creation target. `native_shell_new_window_bootstrap` also
+  proves the create-new Comment widget starts empty, preserves leading/trailing
+  whitespace through asynchronous creation, and keeps the accepted typed
+  failure status visible.
 
 - `posix_descriptor_primitives` proves the descriptor seam: exactly-once
   ownership with a real recycled-descriptor double-close probe

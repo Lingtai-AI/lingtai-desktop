@@ -136,10 +136,13 @@ kernel interpreter.
   timer-driven `/sleep`, `/suspend`, `/cpr`, `/clear`, `/refresh` state machine,
   including lease waits, preset updates, clear completion, hard-refresh
   escalation, aggregate results, and generation binding.
-- `src/project_creation.{h,cpp}` — `create_project` plus
+- `src/project_creation.{h,cpp}` and
+  `src/project_creation_resources.{h,cpp}` — `create_project` plus compiled
+  Desktop-owned `en`/`zh`/`wen` first-boot content and
   `ProjectCreationRunner`: typed draft/staging/generation/validation/publication
   results, selected-preset prevalidation, descriptor-relative staging,
-  in-stage allowed-policy shaping and exactly-one-orchestrator validation,
+  in-stage allowed-policy shaping, localized `.prompt`/adaptive `comment.md`,
+  exact content/shape and exactly-one-orchestrator validation,
   descriptor-relative rollback before/after marker removal, exclusive atomic
   `.lingtai` publication, and joinable asynchronous delivery. Runtime readiness
   remains a post-commit lifecycle concern.

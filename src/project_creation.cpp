@@ -1,12 +1,14 @@
 #include "project_creation.h"
 
 #include "posix_descriptor_primitives.h"
+#include "project_creation_resources.h"
 
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QJsonParseError>
 #include <QtCore/QMetaObject>
+#include <QtCore/QDateTime>
 
 #include <algorithm>
 #include <atomic>
@@ -136,6 +138,47 @@ bool blank(std::string_view value) {
     return std::ranges::all_of(value, [](unsigned char ch) {
         return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
     });
+}
+
+bool unresolved_placeholder(std::string_view value) {
+    return value.find("{{") != std::string_view::npos
+        || value.find("}}") != std::string_view::npos;
+}
+
+void replace_all(std::string &value, std::string_view token,
+        std::string_view replacement) {
+    auto offset = std::size_t{0};
+    while ((offset = value.find(token, offset)) != std::string::npos) {
+        value.replace(offset, token.size(), replacement);
+        offset += replacement.size();
+    }
+}
+
+std::optional<std::string> render_greeting(
+        const ProjectCreationResources &resources,
+        const ProjectCreationRequest &request) {
+    auto result = std::string(resources.greeting_template);
+    const auto timestamp = QDateTime::currentDateTimeUtc()
+        .toString(Qt::ISODateWithMs).toStdString();
+    const auto soul_delay = request.setup.soul_delay
+        ? QString::number(*request.setup.soul_delay, 'g', 15).toStdString()
+        : std::string("kernel-default");
+    for (const auto &[token, replacement] : {
+            std::pair<std::string_view, std::string_view>{
+                "{{time}}", timestamp},
+            {"{{location}}", "unknown"},
+            {"{{language}}", resources.language},
+            {"{{soul_delay}}", soul_delay},
+            {"{{agent_address}}", request.agent_directory},
+            {"{{human_address}}", "human"},
+        }) {
+        replace_all(result, token, replacement);
+    }
+    if (result.size() > kMaximumJsonBytes || blank(result)
+            || unresolved_placeholder(result)) {
+        return std::nullopt;
+    }
+    return result;
 }
 
 bool valid_agent_leaf(std::string_view name) {
@@ -299,7 +342,11 @@ bool json_array_matches(
 bool validate_staged_project(
         int staging,
         const ProjectCreationRequest &request,
-        const AgentSetupPresetPolicy &policy) {
+        const AgentSetupPresetPolicy &policy,
+        std::string_view expected_language,
+        std::string_view expected_greeting,
+        std::string_view expected_comment,
+        bool default_comment) {
     const auto children = directory_children(staging);
     auto expected = std::vector<std::string>{
         std::string(kStagingMarker), ".library_shared", "human",
@@ -318,6 +365,14 @@ bool validate_staged_project(
             || !has_mailbox_shape(agent.get())) {
         return false;
     }
+    auto expected_agent_children = std::vector<std::string>{
+        ".agent.json", ".prompt", "comment.md", "init.json", "mailbox",
+    };
+    const auto agent_children = directory_children(agent.get());
+    std::ranges::sort(expected_agent_children);
+    if (!agent_children || *agent_children != expected_agent_children) {
+        return false;
+    }
 
     const auto human_bytes = read_regular_component(
         human.get(), ".agent.json", kMaximumJsonBytes);
@@ -325,7 +380,17 @@ bool validate_staged_project(
         agent.get(), ".agent.json", kMaximumJsonBytes);
     const auto init_bytes = read_regular_component(
         agent.get(), "init.json", kMaximumJsonBytes);
-    if (!human_bytes || !agent_bytes || !init_bytes) return false;
+    const auto greeting = read_regular_component(
+        agent.get(), ".prompt", kMaximumJsonBytes);
+    const auto comment = read_regular_component(
+        agent.get(), "comment.md", kMaximumJsonBytes);
+    if (!human_bytes || !agent_bytes || !init_bytes || !greeting || !comment
+            || *greeting != expected_greeting || *comment != expected_comment
+            || blank(*greeting) || blank(*comment)
+            || unresolved_placeholder(*greeting)
+            || (default_comment && unresolved_placeholder(*comment))) {
+        return false;
+    }
     const auto human_identity = parse_object(*human_bytes);
     const auto agent_identity = parse_object(*agent_bytes);
     const auto init = parse_object(*init_bytes);
@@ -348,6 +413,8 @@ bool validate_staged_project(
             || !manifest.value("capabilities").isObject()
             || manifest.value("agent_name").toString().toStdString()
                 != request.agent_name
+            || manifest.value("language").toString().toStdString()
+                != expected_language
             || !preset_value.isObject()) {
         return false;
     }
@@ -373,16 +440,11 @@ bool validate_staged_project(
                 != request.covenant_file.string()) {
         return false;
     }
-    if (!request.comment.empty()) {
-        const auto expected_comment = request.destination / ".lingtai"
-            / request.agent_directory / "comment.md";
-        const auto comment = read_regular_component(
-            agent.get(), "comment.md", kMaximumJsonBytes);
-        if (!comment || *comment != request.comment
-                || init->value("comment_file").toString().toStdString()
-                    != expected_comment.string()) {
-            return false;
-        }
+    const auto final_comment = request.destination / ".lingtai"
+        / request.agent_directory / "comment.md";
+    if (init->value("comment_file").toString().toStdString()
+            != final_comment.string()) {
+        return false;
     }
     return true;
 }
@@ -553,6 +615,8 @@ ProjectCreationResult create_project(
                 ProjectCreationStage::draft_validation,
                 "selected preset is unreadable, unsafe, oversized, or malformed");
         }
+        const auto &localized = project_creation_resources(
+            request.setup.language);
 
         const auto stage_leaf = stage_name();
         if (!make_directory(destination.get(), stage_leaf, 0700)) {
@@ -652,9 +716,28 @@ ProjectCreationResult create_project(
                 "selected preset could not form a valid setup policy");
         }
 
+        const auto greeting = render_greeting(localized, request);
+        if (!greeting) {
+            return staged_failure(ProjectCreationFailure::staging_failed,
+                ProjectCreationStage::staged_generation,
+                "could not render the localized first-boot greeting safely");
+        }
+        const auto comment = request.comment.empty()
+            ? std::string(localized.adaptive_playbook)
+            : request.comment;
+        if (comment.size() > kMaximumJsonBytes || blank(comment)
+                || (request.comment.empty()
+                    && unresolved_placeholder(comment))) {
+            return staged_failure(ProjectCreationFailure::staging_failed,
+                ProjectCreationStage::staged_generation,
+                "localized or reviewed Agent comment content is not meaningful and bounded");
+        }
+
         auto manifest = selected_preset->value("manifest").toObject();
         manifest["agent_name"] = QString::fromStdString(request.agent_name);
-        manifest["language"] = QString::fromStdString(request.setup.language);
+        manifest["language"] = QString::fromUtf8(
+            localized.language.data(),
+            static_cast<qsizetype>(localized.language.size()));
         manifest["context_limit"] = request.setup.context_limit;
         manifest["max_turns"] = 500;
         manifest["max_rpm"] = request.setup.max_rpm;
@@ -686,11 +769,9 @@ ProjectCreationResult create_project(
             init["covenant_file"] = QString::fromStdString(
                 request.covenant_file.string());
         }
-        if (!request.comment.empty()) {
-            const auto final_comment = request.destination / ".lingtai"
-                / request.agent_directory / "comment.md";
-            init["comment_file"] = QString::fromStdString(final_comment.string());
-        }
+        const auto final_comment = request.destination / ".lingtai"
+            / request.agent_directory / "comment.md";
+        init["comment_file"] = QString::fromStdString(final_comment.string());
         const QJsonObject agent_identity{
             {"agent_name", QString::fromStdString(request.agent_name)},
             {"address", QString::fromStdString(request.agent_directory)},
@@ -703,9 +784,8 @@ ProjectCreationResult create_project(
         if (!write_new_file(agent.get(), "init.json", json_bytes(init))
                 || !write_new_file(agent.get(), ".agent.json",
                     json_bytes(agent_identity))
-                || (!request.comment.empty()
-                    && !write_new_file(agent.get(), "comment.md",
-                        request.comment))) {
+                || !write_new_file(agent.get(), ".prompt", *greeting)
+                || !write_new_file(agent.get(), "comment.md", comment)) {
             return staged_failure(ProjectCreationFailure::staging_failed,
                 ProjectCreationStage::staged_generation,
                 "could not write the staged Agent configuration");
@@ -716,7 +796,9 @@ ProjectCreationResult create_project(
                 ProjectCreationStage::staged_generation,
                 "injected failure after staged generation");
         }
-        if (!validate_staged_project(staging.get(), request, policy)) {
+        if (!validate_staged_project(staging.get(), request, policy,
+                localized.language, *greeting, comment,
+                request.comment.empty())) {
             return staged_failure(ProjectCreationFailure::staging_failed,
                 ProjectCreationStage::staged_validation,
                 "staged project failed bounded shape, preset, or exactly-one-orchestrator validation");

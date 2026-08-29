@@ -1247,6 +1247,8 @@ void verify_new_window_project_bootstrap(const fs::path &sandbox) {
         window, "lingtai_setup_agents_continue");
     auto *create_start = required_child<QPushButton>(
         window, "lingtai_bootstrap_create_start");
+    auto *comment = required_child<QPlainTextEdit>(
+        window, "lingtai_setup_review_comment");
     auto *status = required_ui_child<Ui::FlatLabel>(
         window, "lingtai_bootstrap_status");
 
@@ -1263,6 +1265,11 @@ void verify_new_window_project_bootstrap(const fs::path &sandbox) {
     QCoreApplication::processEvents();
     agents_continue->click();
     QCoreApplication::processEvents();
+    const auto exact_comment = QStringLiteral(
+        "  Keep these leading spaces.\nPreserve this trailing blank line.  \n\n");
+    require(comment->toPlainText().isEmpty(),
+        "create-new Comment must begin empty");
+    comment->setPlainText(exact_comment);
     create_start->click();
 
     require(wait_for_event_loop([&] {
@@ -1294,12 +1301,21 @@ void verify_new_window_project_bootstrap(const fs::path &sandbox) {
     require(fs::is_directory(destination / ".lingtai")
             && fs::is_regular_file(destination / ".lingtai/alpha/init.json")
             && fs::is_regular_file(destination / ".lingtai/alpha/.agent.json")
+            && fs::is_regular_file(destination / ".lingtai/alpha/.prompt")
+            && fs::is_regular_file(destination / ".lingtai/alpha/comment.md")
             && fs::is_directory(destination / ".lingtai/.library_shared")
             && fs::is_regular_file(destination / "README.md")
             && read_file(destination / "README.md")
                 == "existing repository sentinel\n"
             && fs::is_regular_file(destination / ".git/HEAD"),
         "creation must publish the canonical shape without harming repository files");
+    const auto created_init = QJsonDocument::fromJson(QByteArray::fromStdString(
+        read_file(destination / ".lingtai/alpha/init.json"))).object();
+    require(read_file(destination / ".lingtai/alpha/comment.md")
+                == exact_comment.toStdString()
+            && created_init.value("comment_file").toString().toStdString()
+                == (destination_root / ".lingtai/alpha/comment.md").string(),
+        "create-new Comment bytes or final manifest reference changed");
     const lingtai::desktop::AgentSetupStore store(
         *secondary.selection_state().active_project());
     require(static_cast<bool>(store.load("alpha")),

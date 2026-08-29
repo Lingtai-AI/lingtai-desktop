@@ -565,11 +565,14 @@ AgentSetupDraft AgentConfigPage::apply_to_draft(AgentSetupDraft draft) const {
     draft.nirvana = nirvana_->isChecked();
     draft.soul_flow_enabled = soul_flow_->isChecked();
     draft.covenant_file = covenant_->text().trimmed().toStdString();
-    draft.comment_file = comment_->toPlainText().trimmed().toStdString();
+    const auto comment = comment_->toPlainText();
+    draft.comment_file = (existing_mode_ ? comment.trimmed() : comment)
+        .toStdString();
     return draft;
 }
 
 void AgentConfigPage::set_existing_mode(bool existing) {
+    existing_mode_ = existing;
     if (!existing) {
         while (language_->count() > 3) language_->removeItem(3);
     }

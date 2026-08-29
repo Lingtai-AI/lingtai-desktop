@@ -105,8 +105,10 @@ its folder.
   the started Agent's `logs/` directory.
 - New Project and existing-Agent `/setup` both discover presets through
   Desktop's bounded `load_preset_catalog`. `create_project` owns the initial
-  fail-closed filesystem transaction and reports its stable typed stage plus
-  safe detail. Runtime readiness is not a publication precondition:
+  fail-closed filesystem transaction, including the localized kernel-consumed
+  first-boot `.prompt` and either byte-exact reviewed Comment text or the
+  localized adaptive `comment.md` playbook. It reports its stable typed stage
+  plus safe detail. Runtime readiness is not a publication precondition:
   `AgentLifecycleController` owns the post-commit first launch plus all later
   `/sleep`, `/suspend`, `/cpr`, `/clear`, and `/refresh` kernel
   filesystem/process contracts. No production path executes or discovers a
@@ -149,7 +151,10 @@ its folder.
   no-argument uninstall.
 - **One bounded first-project owner**: `AgentSetupStore` updates only
   setup-owned fields of existing Agents; `create_project` alone may publish the
-  minimum initial tree and creates no global registry or TUI recipe state.
+  minimum initial tree. Its per-Agent `.prompt` and `comment.md` are
+  kernel-consumed project behavior, not TUI recipe state. It creates no global
+  registry, `.tui-asset`, project `.recipe`, credential draft, or TUI recipe
+  reconciliation/snapshot state.
 
 ## Cross-doc graph
 

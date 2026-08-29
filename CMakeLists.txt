@@ -373,8 +373,11 @@ target_link_libraries(lingtai_desktop_agent_setup_store
     PUBLIC lingtai_desktop_core Qt6::Core
     PRIVATE lingtai_desktop_posix_primitives)
 
+# The localized first-boot greeting/playbook is compiled into this Desktop
+# owner; creation has no runtime content lookup or external product dependency.
 add_library(lingtai_desktop_project_creation STATIC
-    src/project_creation.cpp)
+    src/project_creation.cpp
+    src/project_creation_resources.cpp)
 init_target(lingtai_desktop_project_creation)
 target_include_directories(lingtai_desktop_project_creation PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src")

@@ -108,7 +108,11 @@ bounded side-effect scope):
 - `create_project(request)` / `ProjectCreationRunner::run_create`
   (`project_creation.h`) — validates the draft and selected preset needed to
   begin, builds one owned sibling staging tree, applies allowed-preset policy
-  and validates the bounded result there, rolls it back only through held
+  and the compiled localized first-boot `.prompt` plus `comment.md` there, and
+  validates the exact bounded result. An empty create-new Comment selects the
+  localized adaptive playbook; nonempty create-new text is preserved byte for
+  byte. `manifest.comment_file` always names the final published Agent-local
+  `comment.md`. Creation rolls back only through held
   descriptors, and exclusively publishes `.lingtai`. Every result carries a
   `ProjectCreationStage` and safe detail; the runner preserves those facts
   across queued delivery and joins its worker before destruction. Runtime,
@@ -223,7 +227,11 @@ coalescing, and stale-while-revalidate presentation.
    is used where a full path is needed (e.g. `start_agent`).
 8. **No unowned scaffold/config/registry writes.** `create_project` is the sole
    initial scaffold owner and may publish only its validated minimum `.lingtai`
-   transaction; it creates no global registry or TUI recipe metadata.
+   transaction. The Agent-local `.prompt` and `comment.md` are kernel-consumed
+   first-boot behavior. TUI-only `.tui-asset`, project `.recipe`, recipe
+   snapshots/reconciliation, global registry/config utilities, credential
+   persistence, and phantom-process prechecks remain outside Desktop creation
+   ownership.
    `AgentSetupStore` is the sole existing-Agent configuration owner: it preserves
    the full documents and patches only the fields declared by
    `AgentSetupDraft`, the one soul-flow key in the exact configured env leaf,

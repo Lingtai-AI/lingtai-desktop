@@ -15,6 +15,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
 
 namespace fs = std::filesystem;
@@ -54,6 +55,11 @@ bool has_stage(const fs::path &destination) {
         }
     }
     return false;
+}
+
+bool has_unresolved_placeholder(std::string_view bytes) {
+    return bytes.find("{{") != std::string_view::npos
+        || bytes.find("}}") != std::string_view::npos;
 }
 
 lingtai::desktop::ProjectCreationRequest request_for(
@@ -130,6 +136,13 @@ void assert_creation_shape(const fs::path &destination,
     require(read_file(agent / "comment.md")
             == "Keep the project scientifically honest.\n",
         "reviewed comment bytes changed");
+    const auto greeting = read_file(agent / ".prompt");
+    require(greeting.find("欢迎人类") != std::string::npos
+            && greeting.find("main") != std::string::npos
+            && greeting.find("human") != std::string::npos
+            && greeting.find("unknown") != std::string::npos
+            && !has_unresolved_placeholder(greeting),
+        "custom-comment creation lost its localized resolved greeting");
 
     const auto identity = read_object(agent / ".agent.json");
     require(identity.value("agent_name").toString() == "orchestrator"
@@ -187,6 +200,60 @@ int main(int argc, char **argv) {
             "pre-existing destination contents changed");
         require(!has_stage(destination), "successful creation left staging residue");
         assert_creation_shape(destination, global, runtime);
+
+        struct LocalizedCase {
+            const char *language;
+            const char *greeting_marker;
+            const char *playbook_marker;
+        };
+        for (const auto &localized : {
+                LocalizedCase{
+                    "en", "Welcome the human",
+                    "# Adaptive Collaboration Playbook"},
+                LocalizedCase{
+                    "zh", "欢迎人类", "# 自适应协作指南"},
+                LocalizedCase{
+                    "wen", "迎人", "# 随宜协作要略"},
+            }) {
+            const auto localized_destination = root
+                / (std::string("localized-") + localized.language);
+            fs::create_directories(localized_destination);
+            request = request_for(localized_destination, global, runtime);
+            request.setup.language = localized.language;
+            request.comment.clear();
+            const auto localized_result =
+                lingtai::desktop::create_project(request);
+            require(static_cast<bool>(localized_result),
+                std::string("localized empty-comment creation failed for ")
+                    + localized.language + ": " + localized_result.detail);
+
+            const auto agent = localized_destination / ".lingtai/main";
+            const auto greeting = read_file(agent / ".prompt");
+            const auto playbook = read_file(agent / "comment.md");
+            const auto init = read_object(agent / "init.json");
+            require(greeting.find(localized.greeting_marker)
+                        != std::string::npos
+                    && greeting.find("main") != std::string::npos
+                    && greeting.find("human") != std::string::npos
+                    && greeting.find("unknown") != std::string::npos
+                    && greeting.find(localized.language) != std::string::npos
+                    && greeting.size() > 200U
+                    && !has_unresolved_placeholder(greeting),
+                std::string("localized greeting was incomplete for ")
+                    + localized.language);
+            require(playbook.find(localized.playbook_marker)
+                        != std::string::npos
+                    && playbook.size() > 200U
+                    && !has_unresolved_placeholder(playbook),
+                std::string("localized adaptive playbook was incomplete for ")
+                    + localized.language);
+            require(init.value("manifest").toObject().value("language")
+                        .toString().toStdString() == localized.language
+                    && init.value("comment_file").toString().toStdString()
+                        == (agent / "comment.md").string(),
+                std::string("localized final comment reference was wrong for ")
+                    + localized.language);
+        }
 
         // Publication is independent of runtime readiness. The configured
         // paths remain useful launch inputs, but a missing interpreter, env,

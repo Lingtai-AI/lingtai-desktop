@@ -65,6 +65,7 @@ private:
     bool folder_dirty_ = false;
     bool covenant_dirty_ = false;
     bool soul_path_dirty_ = false;
+    bool existing_mode_ = false;
 };
 
 } // namespace lingtai::desktop

@@ -116,14 +116,17 @@ touches a real Agent or project, and none depends on a network or provider.
   saved/template library facts, skip rules, canonical order, missing-directory
   success, typed directory-read failure, ref normalization, and no-write.
 - `tests/project_creation_test.cpp` — `project_creation` ctest. Exact project
-  shape/setup policy, runtime-independent publication, staged validation,
+  shape/setup policy, `en`/`zh`/`wen` localized greeting/playbook selection,
+  generated-placeholder elimination, byte-exact reviewed comment plus final
+  manifest reference, runtime-independent publication, staged validation,
   typed asynchronous stage/detail delivery, exclusive publication, descriptor
   rollback across generation/marker-removal/publish refusal, join-on-
   destruction callback suppression, conflicting state preservation, and
   no-follow path rejection under one injected root.
 - `tests/test_project_creation_source_contract.py` — manual Python unittest
   proving production rollback has descriptor primitives and no path-recursive
-  `remove_all` call, TUI adapter, or creation-time runtime-readiness gate.
+  `remove_all` call, TUI adapter, or creation-time runtime-readiness gate, and
+  that the compiled Desktop-owned content unit is part of the creation target.
 - `tests/agent_sleep_test.cpp` — `agent_sleep` ctest. Exact-target `.sleep`
   marker write plus the baseline/observe pair.
 - `tests/agent_lifecycle_test.cpp` — `agent_lifecycle` ctest. Deterministic
