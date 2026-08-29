@@ -202,6 +202,13 @@ its code.
 - The existing setup wizard owns destination, saved/template selection,
   editor, allowed/default policy, reviewed language/configuration, and explicit
   Create/Cancel. Any dismissal remains a no-create cancellation.
+- Immediately before dispatch, the shell maps only exact `~` and `~/...`
+  destination text through a nonempty traversal-free absolute `HOME`. It does
+  no shell, environment-variable, user-home, or glob expansion and leaves
+  absolute input unchanged. Missing/invalid `HOME` and shorthand traversal
+  remain in the wizard as visible draft-validation errors without starting the
+  transaction. `~user` and every other relative path remain literal and are
+  rejected by the unchanged strict creation owner.
 - `Create` validates the destination/draft/reference shape and reviewed
   selected preset before building one marker-owned sibling stage. It writes the
   canonical minimum human, first Agent, mailbox, and shared-library tree,
@@ -225,9 +232,11 @@ its code.
 - After publication, the shell attaches only through `open_project` and starts
   the first Agent through `AgentLifecycleController`. Launch failure reports a
   recoverable created-but-not-started project; it never rolls back committed
-  user-visible state. Creation failures retain their stable typed stage and
-  safe detail through asynchronous UI delivery and diagnostic logging. No TUI
-  executable is discovered or invoked.
+  user-visible state. Pre-publication creation failures return to the same
+  Review page with destination, preset, and configuration draft preserved;
+  their stable typed stage and safe detail are visible there and retained
+  through asynchronous UI delivery and diagnostic logging. No TUI executable
+  is discovered or invoked.
   Anchor: `create_project` (`project_creation.cpp`) and shell handoff
   (`native_shell.cpp`).
 - The kernel-consumed per-Agent `.prompt`/`comment.md` effects are shared

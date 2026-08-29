@@ -51,8 +51,12 @@ Entry point and composition root:
   `AgentSetupStore`; its narrow save-result injection exists only for
   deterministic shell tests.
   New Project reuses that catalog/wizard policy, runs the Desktop creation
-  transaction asynchronously, attaches normally, and hands first launch to
-  `AgentLifecycleController`; every entry resets the other setup mode.
+  transaction asynchronously, and at this UI boundary alone maps exact `~` /
+  `~/...` through a valid absolute `HOME` without evaluating other user input.
+  A transaction rejection restores the same populated Review page and its
+  visible typed error for correction/retry; publication attaches normally and
+  hands first launch to `AgentLifecycleController`. Every entry resets the
+  other setup mode.
   The content pane composes one coherent workspace: the no-project welcome
   branding and its rhythm spacing live in the empty route only (a selected
   project's route starts at the content origin), and the selected-Agent page

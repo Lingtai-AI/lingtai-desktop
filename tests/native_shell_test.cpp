@@ -1129,12 +1129,15 @@ void verify_new_window_project_bootstrap(const fs::path &sandbox) {
     require(!cleanup_error, "new-window bootstrap fixture must start clean");
     fs::create_directories(sandbox);
 
-    const auto global = sandbox / "fake-home/.lingtai-tui";
+    const auto fake_home = sandbox / "fake-home";
+    const auto home_documents = fake_home / "Documents";
+    const auto global = fake_home / ".lingtai-tui";
     const auto empty_path = sandbox / "empty-path";
     const auto runtime_python = global / "runtime/venv/bin/python";
     const auto primary_project = sandbox / "primary-project";
     const auto destination = sandbox / "existing-repository";
     fs::create_directories(empty_path);
+    fs::create_directories(home_documents);
     fs::create_directories(destination / ".git");
     write_file(primary_project / ".lingtai/primary/.agent.json",
         R"({"admin":{}})");
@@ -1154,7 +1157,7 @@ void verify_new_window_project_bootstrap(const fs::path &sandbox) {
     const auto previous_home = qgetenv("HOME");
     const auto previous_global = qgetenv("LINGTAI_TUI_DIR");
     const auto previous_path = qgetenv("PATH");
-    qputenv("HOME", QByteArray::fromStdString((sandbox / "fake-home").string()));
+    qputenv("HOME", QByteArray::fromStdString(fake_home.string()));
     qputenv("LINGTAI_TUI_DIR", QByteArray::fromStdString(global.string()));
     qputenv("PATH", QByteArray::fromStdString(empty_path.string()));
 
@@ -1190,45 +1193,49 @@ void verify_new_window_project_bootstrap(const fs::path &sandbox) {
     auto launch_count = std::size_t{0};
     auto launched_root = fs::path();
     auto launched_key = fs::path();
-    auto dependencies =
-        lingtai::desktop::production_agent_lifecycle_dependencies();
-    dependencies.poll_interval = std::chrono::milliseconds(10);
-    dependencies.processes.observe = [](const fs::path &agent_dir) {
-        return lingtai::desktop::AgentProcessObservation{
-            .available = true,
-            .pids = fs::exists(agent_dir / ".agent.heartbeat")
-                ? std::vector<lingtai::desktop::AgentProcessId>{4242}
-                : std::vector<lingtai::desktop::AgentProcessId>{},
+    const auto make_lifecycle_dependencies = [&] {
+        auto dependencies =
+            lingtai::desktop::production_agent_lifecycle_dependencies();
+        dependencies.poll_interval = std::chrono::milliseconds(10);
+        dependencies.processes.observe = [](const fs::path &agent_dir) {
+            return lingtai::desktop::AgentProcessObservation{
+                .available = true,
+                .pids = fs::exists(agent_dir / ".agent.heartbeat")
+                    ? std::vector<lingtai::desktop::AgentProcessId>{4242}
+                    : std::vector<lingtai::desktop::AgentProcessId>{},
+            };
         };
-    };
-    dependencies.processes.signal = [](const fs::path &,
-            lingtai::desktop::AgentProcessId,
-            lingtai::desktop::AgentTerminationSignal) { return false; };
-    dependencies.launcher.launch = [&](const auto &attachment,
-            const fs::path &key, const fs::path &) {
-        ++launch_count;
-        launched_root = attachment.root();
-        launched_key = key;
-        const auto now = std::chrono::duration<double>(
-            std::chrono::system_clock::now().time_since_epoch()).count();
-        write_file(attachment.root() / ".lingtai" / key / ".agent.heartbeat",
-            std::to_string(now));
-        auto identity_path = attachment.root() / ".lingtai" / key
-            / ".agent.json";
-        auto identity = QJsonDocument::fromJson(
-            QByteArray::fromStdString(read_file(identity_path))).object();
-        identity["agent_id"] = "new-window-diagnostic-id";
-        write_file(identity_path,
-            QJsonDocument(identity).toJson(QJsonDocument::Indented)
-                .toStdString());
-        return lingtai::desktop::AgentLaunchOutcome{
-            .result = lingtai::desktop::AgentLaunchResult::started,
-            .pid = 4242,
-            .log_path = attachment.root() / ".lingtai" / key
-                / "logs/agent.log",
+        dependencies.processes.signal = [](const fs::path &,
+                lingtai::desktop::AgentProcessId,
+                lingtai::desktop::AgentTerminationSignal) { return false; };
+        dependencies.launcher.launch = [&](const auto &attachment,
+                const fs::path &key, const fs::path &) {
+            ++launch_count;
+            launched_root = attachment.root();
+            launched_key = key;
+            const auto now = std::chrono::duration<double>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+            write_file(
+                attachment.root() / ".lingtai" / key / ".agent.heartbeat",
+                std::to_string(now));
+            auto identity_path = attachment.root() / ".lingtai" / key
+                / ".agent.json";
+            auto identity = QJsonDocument::fromJson(
+                QByteArray::fromStdString(read_file(identity_path))).object();
+            identity["agent_id"] = "new-window-diagnostic-id";
+            write_file(identity_path,
+                QJsonDocument(identity).toJson(QJsonDocument::Indented)
+                    .toStdString());
+            return lingtai::desktop::AgentLaunchOutcome{
+                .result = lingtai::desktop::AgentLaunchResult::started,
+                .pid = 4242,
+                .log_path = attachment.root() / ".lingtai" / key
+                    / "logs/agent.log",
+            };
         };
+        return dependencies;
     };
-    secondary.set_agent_lifecycle_dependencies(std::move(dependencies));
+    secondary.set_agent_lifecycle_dependencies(make_lifecycle_dependencies());
 
     auto &window = secondary.window();
     auto *wizard = required_child<lingtai::desktop::ProjectSetupWizard>(
@@ -1336,6 +1343,8 @@ void verify_new_window_project_bootstrap(const fs::path &sandbox) {
         "controlled failure must create and retain another secondary shell");
     auto &failure_shell = host.shell_at(2);
     failure_shell.set_agent_start_fallback_python(runtime_python);
+    failure_shell.set_agent_lifecycle_dependencies(
+        make_lifecycle_dependencies());
     auto &failure_window = failure_shell.window();
     auto *failure_wizard = required_child<
         lingtai::desktop::ProjectSetupWizard>(
@@ -1355,6 +1364,10 @@ void verify_new_window_project_bootstrap(const fs::path &sandbox) {
         failure_window, "lingtai_setup_agents_continue");
     auto *failure_create_start = required_child<QPushButton>(
         failure_window, "lingtai_bootstrap_create_start");
+    auto *failure_dialog_status = required_ui_child<Ui::FlatLabel>(
+        failure_window, "lingtai_bootstrap_dialog_status");
+    auto *failure_comment = required_child<QPlainTextEdit>(
+        failure_window, "lingtai_setup_review_comment");
     auto *failure_status = required_ui_child<Ui::FlatLabel>(
         failure_window, "lingtai_bootstrap_status");
     auto *failure_status_surface = required_child<Ui::RpWidget>(
@@ -1376,23 +1389,90 @@ void verify_new_window_project_bootstrap(const fs::path &sandbox) {
     failure_agents_continue->click();
     QCoreApplication::processEvents();
 
+    const auto preserved_failure_comment = QStringLiteral(
+        "Keep this draft through validation failure.\n");
+    failure_comment->setPlainText(preserved_failure_comment);
+    const auto expect_recoverable_rejection = [&](const QString &raw,
+            const QString &expected, bool local = false) {
+        failure_dialog_status->setText(QString());
+        failure_destination_input->setText(raw);
+        failure_create_start->click();
+        if (local) {
+            require(failure_wizard->isVisible()
+                    && failure_status_surface->isHidden()
+                    && failure_dialog_status->accessibilityName() == expected,
+                "local destination rejection started project creation");
+        }
+        require(wait_for_event_loop([&] {
+            return failure_wizard->isVisible()
+                && failure_dialog_status->accessibilityName() == expected;
+        }, 5000), "destination rejection was not visible in the wizard: "
+            + raw.toStdString() + ": "
+            + failure_dialog_status->accessibilityName().toStdString());
+        require(failure_dialog_status->width() > 0
+                && failure_dialog_status->height() > 0
+                && failure_destination_input->getLastText().trimmed() == raw
+                && failure_comment->toPlainText() == preserved_failure_comment
+                && failure_chooser->currentText() == QStringLiteral("alpha"),
+            "destination rejection lacked usable geometry or lost the draft");
+        require(!fs::exists(failure_destination / ".lingtai")
+                && !fs::exists(fake_home / ".lingtai")
+                && !fs::exists(home_documents / ".lingtai"),
+            "rejected destination input published project state");
+    };
+    const auto strict_destination_failure = QStringLiteral(
+        "Project was not created (draft_validation): destination must be an existing absolute directory without traversal");
+    expect_recoverable_rejection(
+        QStringLiteral("~otheruser"), strict_destination_failure);
+    expect_recoverable_rejection(
+        QStringLiteral("relative-project"), strict_destination_failure);
+    expect_recoverable_rejection(
+        QStringLiteral("$HOME/Documents"), strict_destination_failure);
+    expect_recoverable_rejection(
+        QStringLiteral("~/Doc*"), QStringLiteral(
+            "Project was not created (draft_validation): destination is unavailable or contains a symlink"));
+    expect_recoverable_rejection(
+        QStringLiteral("~/Documents/../escape"), QStringLiteral(
+            "Project was not created (draft_validation): home-relative destination must not contain traversal"),
+        true);
+
+    qunsetenv("HOME");
+    const auto invalid_home_failure = QStringLiteral(
+        "Project was not created (draft_validation): HOME must be a nonempty absolute path without traversal before ~ can be used");
+    expect_recoverable_rejection(
+        QStringLiteral("~"), invalid_home_failure, true);
+    qputenv("HOME", QByteArray("relative-home"));
+    expect_recoverable_rejection(
+        QStringLiteral("~"), invalid_home_failure, true);
+    qputenv("HOME", QByteArray::fromStdString(fake_home.string()));
+
     const auto preset_target = global / "preset-target.json";
     fs::rename(global / "presets/saved/alpha.json", preset_target);
     fs::create_symlink(preset_target, global / "presets/saved/alpha.json");
+    failure_destination_input->setText(QStringLiteral("~"));
+    failure_dialog_status->setText(QString());
     failure_create_start->click();
     const auto expected_failure = QStringLiteral(
         "Project was not created (draft_validation): selected preset is unreadable, unsafe, oversized, or malformed");
     require(wait_for_event_loop([&] {
-        return failure_status->accessibilityName() == expected_failure;
+        return failure_wizard->isVisible()
+            && failure_dialog_status->accessibilityName() == expected_failure;
     }, 5000), "controlled ProjectCreation detail was not delivered: "
-        + failure_status->accessibilityName().toStdString());
-    require(!failure_wizard->isVisible() && !failure_startup->isVisible(),
-        "controlled failure must leave setup and hide branded startup");
+        + failure_dialog_status->accessibilityName().toStdString());
+    require(failure_wizard->isVisible() && !failure_startup->isVisible(),
+        "controlled failure must return to setup and hide branded startup");
     require(failure_content->isVisible()
-            && failure_status_surface->isVisible()
-            && failure_status->isVisible()
-            && failure_status->accessibilityName() == expected_failure,
-        "controlled failure must visibly retain its exact rejection status");
+            && failure_status_surface->isHidden()
+            && failure_dialog_status->isVisible()
+            && failure_dialog_status->width() > 0
+            && failure_dialog_status->height() > 0
+            && failure_dialog_status->accessibilityName() == expected_failure,
+        "controlled failure must visibly retain its exact rejection status in the wizard");
+    require(failure_destination_input->getLastText().trimmed()
+                == QStringLiteral("~")
+            && failure_comment->toPlainText() == preserved_failure_comment
+            && failure_chooser->currentText() == QStringLiteral("alpha"),
+        "controlled creation failure did not preserve the retry draft");
     require(!failure_shell.selection_state().active_project()
             && !failure_shell.selection_state()
                 .selected_agent_directory_key(),
@@ -1418,6 +1498,62 @@ void verify_new_window_project_bootstrap(const fs::path &sandbox) {
         "controlled failure must not disturb existing shell roots");
     fs::remove(global / "presets/saved/alpha.json");
     fs::rename(preset_target, global / "presets/saved/alpha.json");
+
+    // Retry the preserved literal '~' draft. Reaching the exact fake HOME
+    // proves normalization happened before the strict creation transaction.
+    failure_create_start->click();
+    require(wait_for_event_loop([&] {
+        return failure_status->accessibilityName()
+            == QStringLiteral("Project created and Agent started.");
+    }, 5000), "literal ~ retry did not complete creation and launch");
+    const auto fake_home_root = fs::canonical(fake_home);
+    require(failure_shell.selection_state().active_project()
+            && failure_shell.selection_state().active_project()->root()
+                == fake_home_root
+            && read_file(fake_home / ".lingtai/alpha/comment.md")
+                == preserved_failure_comment.toStdString()
+            && launch_count == 2,
+        "literal ~ did not resolve to HOME with its preserved draft");
+
+    // The same real shell starts another full wizard flow from the attached
+    // project. A literal ~/Documents must target the fake HOME child while
+    // the already-proven absolute destination remains untouched.
+    failure_shell.request_new_project_at(fs::path("~/Documents"));
+    require(wait_for_event_loop(
+            [&] { return failure_wizard->isVisible(); }, 3000),
+        "~/Documents retry wizard did not open");
+    require(failure_destination_input->getLastText().trimmed()
+            == QStringLiteral("~/Documents"),
+        "literal ~/Documents draft was rewritten before submission");
+    failure_chooser->setCurrentIndex(0);
+    failure_preset_continue->click();
+    QCoreApplication::processEvents();
+    failure_save_preset->click();
+    QCoreApplication::processEvents();
+    failure_agents_continue->click();
+    QCoreApplication::processEvents();
+    const auto documents_comment = QStringLiteral(
+        "Home Documents shorthand stays literal in the editable draft.\n");
+    failure_comment->setPlainText(documents_comment);
+    failure_create_start->click();
+    require(wait_for_event_loop([&] {
+        return failure_status->accessibilityName()
+            == QStringLiteral("Project created and Agent started.");
+    }, 5000), "literal ~/Documents creation did not complete");
+    const auto home_documents_root = fs::canonical(home_documents);
+    require(failure_shell.selection_state().active_project()
+            && failure_shell.selection_state().active_project()->root()
+                == home_documents_root
+            && read_file(home_documents / ".lingtai/alpha/comment.md")
+                == documents_comment.toStdString()
+            && launch_count == 3,
+        "literal ~/Documents did not resolve to the exact HOME/Documents root");
+    require(read_file(destination / "README.md")
+                == "existing repository sentinel\n"
+            && read_file(failure_destination / "README.md")
+                == "failure sentinel\n"
+            && !fs::exists(failure_destination / ".lingtai"),
+        "home shorthand flows changed an unrelated absolute destination");
 
     std::cout
         << "DIAG new_window_bootstrap=GREEN\n"
@@ -1445,11 +1581,13 @@ void verify_new_window_project_bootstrap(const fs::path &sandbox) {
         << "DIAG controlled_failure_lifecycle_started=no\n"
         << "DIAG controlled_failure_startup_visible=no\n"
         << "DIAG controlled_failure_status_stored=yes\n"
-        << "DIAG controlled_failure_status_surface_explicitly_hidden=no\n"
+        << "DIAG controlled_failure_status_surface_explicitly_hidden=yes\n"
         << "DIAG controlled_failure_content_visible=yes\n"
-        << "DIAG controlled_failure_status_visible=yes\n"
+        << "DIAG controlled_failure_status_visible_in_wizard=yes\n"
         << "DIAG controlled_failure_status="
-        << failure_status->accessibilityName().toStdString() << '\n'
+        << expected_failure.toStdString() << '\n'
+        << "DIAG literal_home_root=" << fake_home_root << '\n'
+        << "DIAG literal_home_documents_root=" << home_documents_root << '\n'
         << "DIAG evidence_root=" << destination_root << '\n';
 
     qputenv("HOME", previous_home);

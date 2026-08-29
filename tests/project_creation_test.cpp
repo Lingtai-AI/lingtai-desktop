@@ -302,6 +302,36 @@ int main(int argc, char **argv) {
             "valid project draft must publish without a runnable kernel: "
                 + created_without_runtime.detail);
 
+        // Home shorthand belongs only to the NativeShell boundary. Direct
+        // transaction calls retain the existing strict absolute-path shape.
+        for (const auto &strict_destination : {
+                fs::path("~"), fs::path("~/Documents"),
+                fs::path("relative-project")}) {
+            request = request_for(strict_destination, global, runtime);
+            const auto strict_rejection =
+                lingtai::desktop::create_project(request);
+            require(!strict_rejection
+                    && strict_rejection.failure
+                        == lingtai::desktop::ProjectCreationFailure::invalid_destination
+                    && strict_rejection.stage
+                        == lingtai::desktop::ProjectCreationStage::draft_validation,
+                "ProjectCreation accepted a UI-only or relative destination: "
+                    + strict_destination.string());
+        }
+        const auto traversal_target = root / "traversal-target";
+        fs::create_directories(traversal_target);
+        request = request_for(
+            root / "traversal-parent/../traversal-target", global, runtime);
+        const auto traversal_rejection =
+            lingtai::desktop::create_project(request);
+        require(!traversal_rejection
+                && traversal_rejection.failure
+                    == lingtai::desktop::ProjectCreationFailure::invalid_destination
+                && traversal_rejection.stage
+                    == lingtai::desktop::ProjectCreationStage::draft_validation
+                && !fs::exists(traversal_target / ".lingtai"),
+            "ProjectCreation weakened absolute traversal rejection");
+
         const auto invalid_orchestrator = root / "invalid-orchestrator";
         fs::create_directories(invalid_orchestrator);
         request = request_for(invalid_orchestrator, global, runtime);

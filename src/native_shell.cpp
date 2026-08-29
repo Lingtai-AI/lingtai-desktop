@@ -167,6 +167,64 @@ QString setup_failure_text(const QString &phase, AgentSetupFailure failure,
 
 namespace fs = std::filesystem;
 
+struct ProjectDestinationNormalization {
+    fs::path destination;
+    QString failure_detail;
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return failure_detail.isEmpty();
+    }
+};
+
+bool plain_absolute_destination(const fs::path &path) {
+    if (!path.is_absolute() || path.has_root_name()
+            || !path.has_root_directory()) {
+        return false;
+    }
+    return std::ranges::none_of(path.relative_path(), [](const auto &part) {
+        return part.empty() || part == "." || part == "..";
+    });
+}
+
+ProjectDestinationNormalization normalize_project_destination(
+        const QString &input) {
+    if (input != QLatin1String("~")
+            && !input.startsWith(QLatin1String("~/"))) {
+        return { fs::path(input.toStdU16String()), {} };
+    }
+
+    const auto home_bytes = qgetenv("HOME");
+    const auto home_text = QString::fromUtf8(home_bytes);
+    const auto home = fs::path(home_text.toStdU16String());
+    if (home_bytes.isEmpty() || home_text.toUtf8() != home_bytes
+            || !plain_absolute_destination(home)) {
+        return { {}, QStringLiteral(
+            "HOME must be a nonempty absolute path without traversal before ~ can be used") };
+    }
+    if (input == QLatin1String("~")) {
+        return { home, {} };
+    }
+
+    const auto suffix = fs::path(input.mid(2).toStdU16String());
+    if (suffix.empty()) {
+        return { home, {} };
+    }
+    if (suffix.is_absolute() || suffix.has_root_name()
+            || suffix.has_root_directory()
+            || std::ranges::any_of(suffix, [](const auto &part) {
+                return part.empty() || part == "." || part == "..";
+            })) {
+        return { {}, QStringLiteral(
+            "home-relative destination must not contain traversal") };
+    }
+    const auto destination = home / suffix;
+    if (!plain_absolute_destination(destination)) {
+        return { {}, QStringLiteral(
+            "home-relative destination must not contain traversal") };
+    }
+    return { destination, {} };
+}
+
 QLabel *make_label(
         QWidget *parent,
         const QString &text,
@@ -3147,6 +3205,16 @@ void NativeShell::handle_create_and_start() {
             "Choose a nonempty destination folder and a preset."));
         return;
     }
+    const auto normalized_destination = normalize_project_destination(
+        destination);
+    if (!normalized_destination) {
+        dialog_status->setText(QStringLiteral(
+            "Project was not created (%1): %2")
+                .arg(QString::fromLatin1(project_creation_stage_name(
+                    ProjectCreationStage::draft_validation)),
+                    normalized_destination.failure_detail));
+        return;
+    }
     auto *agents_page = window_->findChild<AgentPresetsPage *>(
         "lingtai_setup_agents_page");
     auto *config = window_->findChild<AgentConfigPage *>(
@@ -3188,7 +3256,7 @@ void NativeShell::handle_create_and_start() {
         "Creating project…"));
     const auto global = fs::path(lingtai_global_dir().toStdU16String());
     creation_runner_->run_create(ProjectCreationRequest{
-        .destination = fs::path(destination.toStdU16String()),
+        .destination = normalized_destination.destination,
         .preset_path = fs::path(default_path.toStdU16String()),
         .allowed_preset_paths = std::move(allowed_paths),
         .runtime_python = agent_start_fallback_python_,
@@ -3224,11 +3292,13 @@ void NativeShell::handle_cancel_bootstrap() {
 
 void NativeShell::handle_creation_finished(ProjectCreationResult outcome) {
     if (!outcome.created || outcome.project_dir.empty()) {
-        bootstrap_pending_ = false;
-        setup_mode_ = SetupMode::none;
+        // The draft remains owned by the still-live wizard widgets. Return
+        // there instead of resetting the setup mode or exposing the empty
+        // content shell, so the user can correct the destination and retry.
+        bootstrap_pending_ = true;
+        setup_mode_ = SetupMode::create_project;
         created_project_root_.reset();
-        hide_setup_wizard();
-        set_bootstrap_actions_enabled(true);
+        set_bootstrap_actions_enabled(false);
         const auto stage = QString::fromLatin1(
             project_creation_stage_name(outcome.stage));
         const auto detail = outcome.detail.empty()
@@ -3236,10 +3306,19 @@ void NativeShell::handle_creation_finished(ProjectCreationResult outcome) {
             : QString::fromStdString(outcome.detail);
         qWarning().noquote()
             << "LingTai project creation failed at" << stage << ":" << detail;
-        set_bootstrap_status(QStringLiteral(
-            "Project was not created (%1): %2").arg(stage, detail));
+        const auto failure_text = QStringLiteral(
+            "Project was not created (%1): %2").arg(stage, detail);
+        set_bootstrap_status(QString());
+        if (auto *dialog_status = find_ui_child<Ui::FlatLabel>(
+                *window_, "lingtai_bootstrap_dialog_status")) {
+            dialog_status->setText(failure_text);
+        }
+        setup_route_visible_ = true;
+        setup_route_->show();
+        setup_route_->setFocus();
         refresh_route();
         recompute_layout(window_->body()->width());
+        recompute_setup_layout(setup_route_);
         return;
     }
     created_project_root_ = outcome.project_dir;

@@ -166,6 +166,12 @@ touches a real Agent or project, and none depends on a network or provider.
   the exact intended in-fixture mutations on the synthetic
   `commit-N-...-fixture` trees the test itself creates. The working
   directory is an injected path, not an OS or process sandbox.
+- Its focused `native_shell_new_window_bootstrap` path uses a fake `HOME` and
+  real wizard widgets to prove exact `~` / `~/Documents` normalization,
+  unchanged absolute destinations, literal rejection of `~user`, relatives,
+  environment syntax and globs, missing/invalid HOME and traversal failure,
+  visible draft-preserving pre-publication recovery/retry, no rejected-input
+  publication, and unchanged attach/launch handoff after success.
 - Its focused `native_shell_kanban` journey holds and fails the real worker
   seam to prove warm updating, stale retention, Reload coalescing, and
   old-project generation rejection.
