@@ -129,9 +129,11 @@ existing-Agent store, Desktop's full saved/template catalog reader, and the
 shared in-window setup wizard/editor. It retains the loaded state until Save
 or cancellation and refreshes the selected project only after `saved` or
 `no_change`. New Project uses the same catalog and preset-policy rules, then
-normalizes only exact `~` / `~/...` destination shorthand from a syntactically
-valid absolute `HOME` at the shell boundary. Every other destination reaches
-the unchanged strict transaction contract without normalizer rewriting. A
+strips only terminal `/` separators from non-root destination text, then
+normalizes exact `~` / `~/...` shorthand from a syntactically valid absolute
+`HOME` at the shell boundary. All-separator root text is preserved; every
+other byte reaches the unchanged strict transaction contract without
+normalizer rewriting. A
 pre-publication failure returns to the same Review page with its draft and
 typed stage/detail visible for correction and retry; success still opens
 through normal attachment and launches through the lifecycle controller.

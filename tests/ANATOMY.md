@@ -166,12 +166,16 @@ touches a real Agent or project, and none depends on a network or provider.
   the exact intended in-fixture mutations on the synthetic
   `commit-N-...-fixture` trees the test itself creates. The working
   directory is an injected path, not an OS or process sandbox.
-- Its focused `native_shell_new_window_bootstrap` path uses a fake `HOME` and
-  real wizard widgets to prove exact `~` / `~/Documents` normalization,
-  unchanged absolute destinations, literal rejection of `~user`, relatives,
-  environment syntax and globs, missing/invalid HOME and traversal failure,
-  visible draft-preserving pre-publication recovery/retry, no rejected-input
-  publication, and unchanged attach/launch handoff after success.
+- Its focused `native_shell_new_window_bootstrap` path commits literal `~`,
+  `~/Documents`, `~/Documents/`, `~/Documents///`, and an absolute destination
+  ending in `/` through real `Ui::InputField` editors, then activates the real
+  Review Create buttons to prove exact fake-HOME/root normalization, terminal-
+  separator acceptance, unchanged non-separator bytes, rejection of traversal,
+  dot, missing-leaf, and symlink paths, visible draft-preserving
+  pre-publication recovery/retry, no rejected-input publication, and unchanged
+  attach/launch handoff after success. These input-method events do not
+  automate a native `QFileDialog`, literal system Command-V, or submission in
+  the packaged physical App; those remain acceptance gates.
 - Its focused `native_shell_kanban` journey holds and fails the real worker
   seam to prove warm updating, stale retention, Reload coalescing, and
   old-project generation rejection.

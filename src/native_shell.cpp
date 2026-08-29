@@ -188,9 +188,19 @@ bool plain_absolute_destination(const fs::path &path) {
 
 ProjectDestinationNormalization normalize_project_destination(
         const QString &input) {
-    if (input != QLatin1String("~")
-            && !input.startsWith(QLatin1String("~/"))) {
-        return { fs::path(input.toStdU16String()), {} };
+    auto normalized = input;
+    auto terminal = normalized.size();
+    while (terminal > 0
+            && normalized.at(terminal - 1) == QLatin1Char('/')) {
+        --terminal;
+    }
+    if (terminal > 0 && terminal != normalized.size()) {
+        normalized.truncate(terminal);
+    }
+
+    if (normalized != QLatin1String("~")
+            && !normalized.startsWith(QLatin1String("~/"))) {
+        return { fs::path(normalized.toStdU16String()), {} };
     }
 
     const auto home_bytes = qgetenv("HOME");
@@ -201,11 +211,11 @@ ProjectDestinationNormalization normalize_project_destination(
         return { {}, QStringLiteral(
             "HOME must be a nonempty absolute path without traversal before ~ can be used") };
     }
-    if (input == QLatin1String("~")) {
+    if (normalized == QLatin1String("~")) {
         return { home, {} };
     }
 
-    const auto suffix = fs::path(input.mid(2).toStdU16String());
+    const auto suffix = fs::path(normalized.mid(2).toStdU16String());
     if (suffix.empty()) {
         return { home, {} };
     }

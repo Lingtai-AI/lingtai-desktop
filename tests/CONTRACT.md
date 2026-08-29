@@ -141,8 +141,11 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   generation-race/capture-incapability liveness seams.
 - `tests/native_shell_test.cpp` — split `native_shell_<journey>` tests (links the shell +
   `lib_ui` + `crl_integration.cpp`; the real-Qt layer), including the focused
-  synthetic existing-Agent setup rerun, no-TUI New Project, exact fake-HOME
-  shorthand normalization, visible draft-preserving creation rejection/retry,
+  synthetic existing-Agent setup rerun, no-TUI New Project, literal bare/home-
+  child and terminal-separator destinations committed through real destination
+  editors and Review Create buttons, exact fake-HOME normalization, visible
+  draft-preserving creation rejection/retry (without claiming native picker,
+  literal system Command-V, or packaged-App submission),
   `native_shell_paste`, and `native_shell_lifecycle` journeys. Lifecycle UI
   coverage includes nonblocking delivery and stale-generation suppression. The
   paste journey delivers logical text through a real MIME-carrying Qt event,

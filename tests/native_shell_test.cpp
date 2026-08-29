@@ -1131,6 +1131,10 @@ void verify_new_window_project_bootstrap(const fs::path &sandbox) {
 
     const auto fake_home = sandbox / "fake-home";
     const auto home_documents = fake_home / "Documents";
+    const auto trailing_home = sandbox / "trailing-home";
+    const auto trailing_home_documents = trailing_home / "Documents";
+    const auto repeated_home = sandbox / "repeated-home";
+    const auto repeated_home_documents = repeated_home / "Documents";
     const auto global = fake_home / ".lingtai-tui";
     const auto empty_path = sandbox / "empty-path";
     const auto runtime_python = global / "runtime/venv/bin/python";
@@ -1138,6 +1142,8 @@ void verify_new_window_project_bootstrap(const fs::path &sandbox) {
     const auto destination = sandbox / "existing-repository";
     fs::create_directories(empty_path);
     fs::create_directories(home_documents);
+    fs::create_directories(trailing_home_documents);
+    fs::create_directories(repeated_home_documents);
     fs::create_directories(destination / ".git");
     write_file(primary_project / ".lingtai/primary/.agent.json",
         R"({"admin":{}})");
@@ -1259,9 +1265,26 @@ void verify_new_window_project_bootstrap(const fs::path &sandbox) {
     auto *status = required_ui_child<Ui::FlatLabel>(
         window, "lingtai_bootstrap_status");
 
+    const auto commit_destination = [](Ui::InputField *input,
+            const QString &text) {
+        input->setFocus();
+        input->selectAll();
+        auto event = QInputMethodEvent(QString(), {});
+        event.setCommitString(text);
+        QApplication::sendEvent(input->rawTextEdit(), &event);
+        QCoreApplication::processEvents();
+        return input->getLastText().toUtf8();
+    };
+
     require(destination_input->getLastText().trimmed()
             == path_text(destination_root),
         "ShellHost must transport the selected destination into the secondary wizard");
+    const auto absolute_with_separator = path_text(destination_root)
+        + QLatin1Char('/');
+    const auto absolute_raw_bytes = commit_destination(
+        destination_input, absolute_with_separator);
+    require(absolute_raw_bytes == absolute_with_separator.toUtf8(),
+        "the real destination editor did not retain the absolute trailing separator");
     require(preset_chooser->count() == 1
             && preset_chooser->itemText(0) == QStringLiteral("alpha"),
         "secondary wizard must receive the Desktop preset catalog");
@@ -1277,6 +1300,8 @@ void verify_new_window_project_bootstrap(const fs::path &sandbox) {
     require(comment->toPlainText().isEmpty(),
         "create-new Comment must begin empty");
     comment->setPlainText(exact_comment);
+    require(destination_input->getLastText().toUtf8() == absolute_raw_bytes,
+        "wizard navigation rewrote the absolute destination draft");
     create_start->click();
 
     require(wait_for_event_loop([&] {
@@ -1392,10 +1417,17 @@ void verify_new_window_project_bootstrap(const fs::path &sandbox) {
     const auto preserved_failure_comment = QStringLiteral(
         "Keep this draft through validation failure.\n");
     failure_comment->setPlainText(preserved_failure_comment);
+    const auto outside_destination = sandbox / "outside-destination";
+    const auto symlink_destination = sandbox / "symlink-destination";
+    fs::create_directories(outside_destination);
+    fs::create_directory_symlink(outside_destination, symlink_destination);
     const auto expect_recoverable_rejection = [&](const QString &raw,
             const QString &expected, bool local = false) {
         failure_dialog_status->setText(QString());
-        failure_destination_input->setText(raw);
+        const auto raw_bytes = commit_destination(
+            failure_destination_input, raw);
+        require(raw_bytes == raw.toUtf8(),
+            "the real destination editor changed rejected input bytes");
         failure_create_start->click();
         if (local) {
             require(failure_wizard->isVisible()
@@ -1411,13 +1443,17 @@ void verify_new_window_project_bootstrap(const fs::path &sandbox) {
             + failure_dialog_status->accessibilityName().toStdString());
         require(failure_dialog_status->width() > 0
                 && failure_dialog_status->height() > 0
-                && failure_destination_input->getLastText().trimmed() == raw
+                && failure_destination_input->getLastText().toUtf8()
+                    == raw_bytes
                 && failure_comment->toPlainText() == preserved_failure_comment
                 && failure_chooser->currentText() == QStringLiteral("alpha"),
             "destination rejection lacked usable geometry or lost the draft");
         require(!fs::exists(failure_destination / ".lingtai")
                 && !fs::exists(fake_home / ".lingtai")
-                && !fs::exists(home_documents / ".lingtai"),
+                && !fs::exists(home_documents / ".lingtai")
+                && !fs::exists(trailing_home / ".lingtai")
+                && !fs::exists(repeated_home / ".lingtai")
+                && !fs::exists(outside_destination / ".lingtai"),
             "rejected destination input published project state");
     };
     const auto strict_destination_failure = QStringLiteral(
@@ -1432,9 +1468,23 @@ void verify_new_window_project_bootstrap(const fs::path &sandbox) {
         QStringLiteral("~/Doc*"), QStringLiteral(
             "Project was not created (draft_validation): destination is unavailable or contains a symlink"));
     expect_recoverable_rejection(
-        QStringLiteral("~/Documents/../escape"), QStringLiteral(
+        QStringLiteral("~/Documents/../escape/"), QStringLiteral(
             "Project was not created (draft_validation): home-relative destination must not contain traversal"),
         true);
+    expect_recoverable_rejection(
+        path_text(failure_root) + QStringLiteral("/../escape/"),
+        strict_destination_failure);
+    expect_recoverable_rejection(
+        path_text(failure_root) + QStringLiteral("/./"),
+        strict_destination_failure);
+    const auto unsafe_destination_failure = QStringLiteral(
+        "Project was not created (draft_validation): destination is unavailable or contains a symlink");
+    expect_recoverable_rejection(
+        path_text(failure_root) + QStringLiteral("//missing/"),
+        unsafe_destination_failure);
+    expect_recoverable_rejection(
+        path_text(symlink_destination) + QLatin1Char('/'),
+        unsafe_destination_failure);
 
     qunsetenv("HOME");
     const auto invalid_home_failure = QStringLiteral(
@@ -1449,7 +1499,10 @@ void verify_new_window_project_bootstrap(const fs::path &sandbox) {
     const auto preset_target = global / "preset-target.json";
     fs::rename(global / "presets/saved/alpha.json", preset_target);
     fs::create_symlink(preset_target, global / "presets/saved/alpha.json");
-    failure_destination_input->setText(QStringLiteral("~"));
+    const auto submitted_raw_bytes = commit_destination(
+        failure_destination_input, QStringLiteral("~/Documents"));
+    require(submitted_raw_bytes == QByteArray("~/Documents", 11),
+        "the real destination editor did not retain exact ~/Documents bytes");
     failure_dialog_status->setText(QString());
     failure_create_start->click();
     const auto expected_failure = QStringLiteral(
@@ -1468,8 +1521,8 @@ void verify_new_window_project_bootstrap(const fs::path &sandbox) {
             && failure_dialog_status->height() > 0
             && failure_dialog_status->accessibilityName() == expected_failure,
         "controlled failure must visibly retain its exact rejection status in the wizard");
-    require(failure_destination_input->getLastText().trimmed()
-                == QStringLiteral("~")
+    require(failure_destination_input->getLastText().toUtf8()
+                == submitted_raw_bytes
             && failure_comment->toPlainText() == preserved_failure_comment
             && failure_chooser->currentText() == QStringLiteral("alpha"),
         "controlled creation failure did not preserve the retry draft");
@@ -1499,55 +1552,93 @@ void verify_new_window_project_bootstrap(const fs::path &sandbox) {
     fs::remove(global / "presets/saved/alpha.json");
     fs::rename(preset_target, global / "presets/saved/alpha.json");
 
-    // Retry the preserved literal '~' draft. Reaching the exact fake HOME
-    // proves normalization happened before the strict creation transaction.
+    // Retry the literal editor-produced draft. Reaching exact fake
+    // HOME/Documents proves the normalized request crossed the strict async
+    // creation boundary while the editable raw bytes remained unchanged.
     failure_create_start->click();
     require(wait_for_event_loop([&] {
         return failure_status->accessibilityName()
             == QStringLiteral("Project created and Agent started.");
-    }, 5000), "literal ~ retry did not complete creation and launch");
-    const auto fake_home_root = fs::canonical(fake_home);
-    require(failure_shell.selection_state().active_project()
-            && failure_shell.selection_state().active_project()->root()
-                == fake_home_root
-            && read_file(fake_home / ".lingtai/alpha/comment.md")
-                == preserved_failure_comment.toStdString()
-            && launch_count == 2,
-        "literal ~ did not resolve to HOME with its preserved draft");
-
-    // The same real shell starts another full wizard flow from the attached
-    // project. A literal ~/Documents must target the fake HOME child while
-    // the already-proven absolute destination remains untouched.
-    failure_shell.request_new_project_at(fs::path("~/Documents"));
-    require(wait_for_event_loop(
-            [&] { return failure_wizard->isVisible(); }, 3000),
-        "~/Documents retry wizard did not open");
-    require(failure_destination_input->getLastText().trimmed()
-            == QStringLiteral("~/Documents"),
-        "literal ~/Documents draft was rewritten before submission");
-    failure_chooser->setCurrentIndex(0);
-    failure_preset_continue->click();
-    QCoreApplication::processEvents();
-    failure_save_preset->click();
-    QCoreApplication::processEvents();
-    failure_agents_continue->click();
-    QCoreApplication::processEvents();
-    const auto documents_comment = QStringLiteral(
-        "Home Documents shorthand stays literal in the editable draft.\n");
-    failure_comment->setPlainText(documents_comment);
-    failure_create_start->click();
-    require(wait_for_event_loop([&] {
-        return failure_status->accessibilityName()
-            == QStringLiteral("Project created and Agent started.");
-    }, 5000), "literal ~/Documents creation did not complete");
+    }, 5000), "editor-produced ~/Documents retry did not complete creation and launch");
     const auto home_documents_root = fs::canonical(home_documents);
     require(failure_shell.selection_state().active_project()
             && failure_shell.selection_state().active_project()->root()
                 == home_documents_root
             && read_file(home_documents / ".lingtai/alpha/comment.md")
-                == documents_comment.toStdString()
-            && launch_count == 3,
-        "literal ~/Documents did not resolve to the exact HOME/Documents root");
+                == preserved_failure_comment.toStdString()
+            && launch_count == 2,
+        "editor-produced ~/Documents did not resolve to HOME/Documents with its preserved draft");
+
+    // Reuse the attached shell, but seed each wizard with an unrelated
+    // absolute directory before replacing it through the authoritative editor.
+    // This removes the old helper-seeded shorthand acceptance while retaining
+    // the distinct bare-home branch and adding terminal-separator coverage.
+    const auto create_from_editor = [&](const fs::path &seed,
+            const fs::path &home, const QString &raw,
+            const QString &comment_text, const fs::path &expected,
+            std::size_t expected_launch_count) {
+        fs::create_directories(seed);
+        qputenv("HOME", QByteArray::fromStdString(home.string()));
+        failure_shell.request_new_project_at(seed);
+        require(wait_for_event_loop(
+                [&] { return failure_wizard->isVisible(); }, 3000),
+            "editor destination wizard did not open");
+        require(failure_destination_input->getLastText().trimmed()
+                == path_text(fs::canonical(seed)),
+            "unrelated absolute seed was not transported before editor input");
+        require(failure_chooser->count() == 1,
+            "editor destination wizard lost its preset catalog");
+        failure_chooser->setCurrentIndex(0);
+        failure_preset_continue->click();
+        QCoreApplication::processEvents();
+        failure_save_preset->click();
+        QCoreApplication::processEvents();
+        failure_agents_continue->click();
+        QCoreApplication::processEvents();
+        failure_comment->setPlainText(comment_text);
+        const auto raw_bytes = commit_destination(
+            failure_destination_input, raw);
+        require(raw_bytes == raw.toUtf8(),
+            "the real destination editor changed accepted input bytes");
+        failure_create_start->click();
+        const auto expected_root = fs::canonical(expected);
+        require(wait_for_event_loop([&] {
+            return failure_status->accessibilityName()
+                    == QStringLiteral("Project created and Agent started.")
+                && launch_count == expected_launch_count
+                && failure_shell.selection_state().active_project()
+                && failure_shell.selection_state().active_project()->root()
+                    == expected_root;
+        }, 5000), "editor-produced destination did not complete creation and launch");
+        require(read_file(expected / ".lingtai/alpha/comment.md")
+                    == comment_text.toStdString()
+                && !fs::exists(seed / ".lingtai"),
+            "editor-produced destination changed bytes or published at its helper seed");
+        return raw_bytes;
+    };
+
+    const auto trailing_raw_bytes = create_from_editor(
+        sandbox / "trailing-separator-seed",
+        trailing_home,
+        QStringLiteral("~/Documents/"),
+        QStringLiteral("One terminal separator is accepted.\n"),
+        trailing_home_documents,
+        3);
+    const auto repeated_raw_bytes = create_from_editor(
+        sandbox / "repeated-separator-seed",
+        repeated_home,
+        QStringLiteral("~/Documents///"),
+        QStringLiteral("Repeated terminal separators are deterministic.\n"),
+        repeated_home_documents,
+        4);
+    const auto bare_home_raw_bytes = create_from_editor(
+        sandbox / "bare-home-seed",
+        fake_home,
+        QStringLiteral("~"),
+        QStringLiteral("Bare home-root shorthand stays covered.\n"),
+        fake_home,
+        5);
+    const auto fake_home_root = fs::canonical(fake_home);
     require(read_file(destination / "README.md")
                 == "existing repository sentinel\n"
             && read_file(failure_destination / "README.md")
@@ -1586,8 +1677,22 @@ void verify_new_window_project_bootstrap(const fs::path &sandbox) {
         << "DIAG controlled_failure_status_visible_in_wizard=yes\n"
         << "DIAG controlled_failure_status="
         << expected_failure.toStdString() << '\n'
+        << "DIAG absolute_trailing_raw_hex="
+        << absolute_raw_bytes.toHex().toStdString() << '\n'
+        << "DIAG submitted_raw_hex="
+        << submitted_raw_bytes.toHex().toStdString() << '\n'
+        << "DIAG trailing_raw_hex="
+        << trailing_raw_bytes.toHex().toStdString() << '\n'
+        << "DIAG repeated_raw_hex="
+        << repeated_raw_bytes.toHex().toStdString() << '\n'
+        << "DIAG bare_home_raw_hex="
+        << bare_home_raw_bytes.toHex().toStdString() << '\n'
         << "DIAG literal_home_root=" << fake_home_root << '\n'
         << "DIAG literal_home_documents_root=" << home_documents_root << '\n'
+        << "DIAG trailing_home_documents_root="
+        << fs::canonical(trailing_home_documents) << '\n'
+        << "DIAG repeated_home_documents_root="
+        << fs::canonical(repeated_home_documents) << '\n'
         << "DIAG evidence_root=" << destination_root << '\n';
 
     qputenv("HOME", previous_home);

@@ -202,13 +202,14 @@ its code.
 - The existing setup wizard owns destination, saved/template selection,
   editor, allowed/default policy, reviewed language/configuration, and explicit
   Create/Cancel. Any dismissal remains a no-create cancellation.
-- Immediately before dispatch, the shell maps only exact `~` and `~/...`
-  destination text through a nonempty traversal-free absolute `HOME`. It does
-  no shell, environment-variable, user-home, or glob expansion and leaves
-  absolute input unchanged. Missing/invalid `HOME` and shorthand traversal
-  remain in the wizard as visible draft-validation errors without starting the
-  transaction. `~user` and every other relative path remain literal and are
-  rejected by the unchanged strict creation owner.
+- Immediately before dispatch, the shell removes only terminal `/` separators
+  from a non-root destination, then maps exact `~` and `~/...` text through a
+  nonempty traversal-free absolute `HOME`. It preserves all-separator root text
+  and every other byte; it does no shell, environment-variable, user-home, glob,
+  dot, or traversal normalization. Missing/invalid `HOME` and shorthand
+  traversal remain in the wizard as visible draft-validation errors without
+  starting the transaction. `~user` and every other relative path remain
+  literal and are rejected by the unchanged strict creation owner.
 - `Create` validates the destination/draft/reference shape and reviewed
   selected preset before building one marker-owned sibling stage. It writes the
   canonical minimum human, first Agent, mailbox, and shared-library tree,
