@@ -105,10 +105,12 @@ its folder.
   the started Agent's `logs/` directory.
 - New Project and existing-Agent `/setup` both discover presets through
   Desktop's bounded `load_preset_catalog`. `create_project` owns the initial
-  fail-closed filesystem transaction, and `AgentLifecycleController` owns the
-  first launch plus all later `/sleep`, `/suspend`, `/cpr`, `/clear`, and
-  `/refresh` kernel filesystem/process contracts. No production path executes
-  or discovers a TUI binary.
+  fail-closed filesystem transaction and reports its stable typed stage plus
+  safe detail. Runtime readiness is not a publication precondition:
+  `AgentLifecycleController` owns the post-commit first launch plus all later
+  `/sleep`, `/suspend`, `/cpr`, `/clear`, and `/refresh` kernel
+  filesystem/process contracts. No production path executes or discovers a
+  TUI binary.
 
 ## Forbidden dependencies
 

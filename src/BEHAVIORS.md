@@ -202,20 +202,25 @@ its code.
 - The existing setup wizard owns destination, saved/template selection,
   editor, allowed/default policy, reviewed language/configuration, and explicit
   Create/Cancel. Any dismissal remains a no-create cancellation.
-- `Create` validates every external path and prerequisite before building one
-  marker-owned sibling stage. It writes the canonical minimum human, first
-  Agent, mailbox, and shared-library tree, reconciles selected/default/allowed
-  references through the same setup policy, syncs every directory before
-  removing the marker, and exclusively renames it to `.lingtai`. Conflicts and
-  pre-commit failures preserve existing state and remove only the exact open
-  stage through descriptor-relative recursion; symlinked inputs fail closed.
+- `Create` validates the destination/draft/reference shape and reviewed
+  selected preset before building one marker-owned sibling stage. It writes the
+  canonical minimum human, first Agent, mailbox, and shared-library tree,
+  validates allowed presets and reconciles selected/default/allowed policy
+  inside staging, then validates the bounded tree and exactly one orchestrator.
+  It syncs every directory before removing the marker and exclusively renames
+  to `.lingtai`. Conflicts and pre-commit failures preserve existing state and
+  remove only the exact open stage through descriptor-relative recursion;
+  symlinked inputs fail closed. Runtime Python, `.env`, and covenant existence
+  are launch concerns, not pre-stage publication gates.
 - New Project disables Soul flow and cadence with `/setup` guidance because
   creation does not mutate shared runtime Soul-flow state. Existing-Agent
   `/setup` keeps the enabled toggle and its existing save semantics.
 - After publication, the shell attaches only through `open_project` and starts
   the first Agent through `AgentLifecycleController`. Launch failure reports a
   recoverable created-but-not-started project; it never rolls back committed
-  user-visible state. No TUI executable is discovered or invoked.
+  user-visible state. Creation failures retain their stable typed stage and
+  safe detail through asynchronous UI delivery and diagnostic logging. No TUI
+  executable is discovered or invoked.
   Anchor: `create_project` (`project_creation.cpp`) and shell handoff
   (`native_shell.cpp`).
 

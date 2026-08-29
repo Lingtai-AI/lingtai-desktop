@@ -49,6 +49,7 @@
 #include "ui/widgets/shadow.h"
 
 #include <QtCore/QCoreApplication>
+#include <QtCore/QDebug>
 #include <QtCore/QDir>
 #include <QtCore/QLineF>
 #include <QtCore/QPoint>
@@ -3228,10 +3229,15 @@ void NativeShell::handle_creation_finished(ProjectCreationResult outcome) {
         created_project_root_.reset();
         hide_setup_wizard();
         set_bootstrap_actions_enabled(true);
-        set_bootstrap_status(outcome.detail.empty()
-            ? QStringLiteral("Project was not created.")
-            : QStringLiteral("Project was not created: %1")
-                .arg(QString::fromStdString(outcome.detail)));
+        const auto stage = QString::fromLatin1(
+            project_creation_stage_name(outcome.stage));
+        const auto detail = outcome.detail.empty()
+            ? QStringLiteral("no safe failure detail was provided")
+            : QString::fromStdString(outcome.detail);
+        qWarning().noquote()
+            << "LingTai project creation failed at" << stage << ":" << detail;
+        set_bootstrap_status(QStringLiteral(
+            "Project was not created (%1): %2").arg(stage, detail));
         refresh_route();
         recompute_layout(window_->body()->width());
         return;
@@ -3248,6 +3254,10 @@ void NativeShell::handle_creation_finished(ProjectCreationResult outcome) {
         set_bootstrap_status(QStringLiteral(
             "Project was created but could not be opened here. It is preserved at %1.")
             .arg(path_text(outcome.project_dir)));
+        qWarning().noquote()
+            << "LingTai project creation post_commit_attach failed;"
+            << "the published project was preserved at"
+            << path_text(outcome.project_dir);
         return;
     }
     agents_ = project_agents(*selection_state_.active_project());
@@ -3269,6 +3279,10 @@ void NativeShell::handle_creation_finished(ProjectCreationResult outcome) {
         set_bootstrap_status(QStringLiteral(
             "Project created, but Agent start was refused. The project is preserved at %1.")
             .arg(path_text(outcome.project_dir)));
+        qWarning().noquote()
+            << "LingTai project creation post_commit_start was refused;"
+            << "the published project was preserved at"
+            << path_text(outcome.project_dir);
         return;
     }
     set_bootstrap_status(QStringLiteral("Project created; starting Agent…"));
@@ -3307,6 +3321,8 @@ void NativeShell::handle_first_agent_launch_finished(
     } else {
         const auto detail = QString::fromStdString(
             agent_lifecycle_result_text(result));
+        qWarning().noquote()
+            << "LingTai project creation post_commit_start failed:" << detail;
         set_bootstrap_status(QStringLiteral(
             "Project created, but Agent did not start: %1 The project is preserved at %2.")
             .arg(detail, created_project_root_

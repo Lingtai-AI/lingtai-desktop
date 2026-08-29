@@ -106,10 +106,13 @@ bounded side-effect scope):
   launch/fresh-heartbeat proof, dead-Agent clear, and atomic refresh preset
   updates. Results are phase-specific and generation-bound.
 - `create_project(request)` / `ProjectCreationRunner::run_create`
-  (`project_creation.h`) — validates all external inputs, builds one owned
-  sibling staging tree, rolls it back only through held descriptors, and
-  exclusively publishes `.lingtai`; the runner keeps filesystem work off the
-  UI thread and joins its worker before destruction.
+  (`project_creation.h`) — validates the draft and selected preset needed to
+  begin, builds one owned sibling staging tree, applies allowed-preset policy
+  and validates the bounded result there, rolls it back only through held
+  descriptors, and exclusively publishes `.lingtai`. Every result carries a
+  `ProjectCreationStage` and safe detail; the runner preserves those facts
+  across queued delivery and joins its worker before destruction. Runtime,
+  environment, and covenant existence are not publication preconditions.
 - `AgentSetupStore::load` / `save` (`agent_setup_store.h`) — one bounded
   existing-Agent setup snapshot/draft and one staged transaction over the
   selected `init.json`, `.agent.json`, exact configured env leaf, peer
@@ -166,8 +169,10 @@ coalescing, and stale-while-revalidate presentation.
   palette/styles, and one `QApplication`-owned emoji runtime shared by every
   shell; composer widgets consume those prerequisites but do not own them.
 - New Project has no subprocess adapter. `load_preset_catalog` reads the
-  Desktop global root and `create_project` publishes the canonical minimum
-  project before the existing lifecycle adapter launches the kernel.
+  Desktop global root and `create_project` publishes the canonical validated
+  minimum project before the existing lifecycle adapter checks/launches the
+  kernel. Missing launch prerequisites therefore produce a preserved,
+  created-but-not-started project instead of a pre-stage refusal.
 
 ## Contract rules
 

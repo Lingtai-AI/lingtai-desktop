@@ -74,13 +74,16 @@ Qt plugin path set and an 8 s watchdog.
 ### Pure/domain unit tests
 
 - `project_creation` proves the exact human/Agent/shared-library shape,
-  selected-preset default/allowed parity, reviewed setup fields, normal
-  attachment/setup compatibility, byte-preserving no-change save, preservation
-  of pre-existing destination contents, conflicting `.lingtai` refusal,
-  injected rollback before and after marker removal, publish-refusal cleanup,
+  selected-preset default/allowed parity, reviewed setup fields, publication
+  with missing runtime/env/covenant inputs, staged validation, typed
+  stage/detail survival through `ProjectCreationRunner`, normal attachment/
+  setup compatibility, byte-preserving no-change save, preservation of
+  pre-existing destination contents, conflicting `.lingtai` refusal, injected
+  rollback after staging/generation/marker removal, publish-refusal cleanup,
   joined runner destruction with no late callback, and destination/preset
   symlink rejection. `test_project_creation_source_contract` separately proves
-  production rollback contains no path-recursive `remove_all` call.
+  production rollback contains no path-recursive `remove_all` call and no TUI
+  or runtime-readiness adapter.
 
 - `posix_descriptor_primitives` proves the descriptor seam: exactly-once
   ownership with a real recycled-descriptor double-close probe
@@ -251,9 +254,11 @@ Qt plugin path set and an 8 s watchdog.
   source-change/rollback evidence, and both mode resets.
 - `verify_first_project_bootstrap` uses a fake Desktop global catalog and a
   PATH with no TUI executable. It proves asynchronous single-pending discovery
-  and creation, normal attach/selection, setup-compatible output, successful
-  first launch, and the recoverable created-but-not-started result after an
-  injected launch refusal.
+  and creation with no runtime executable, normal attach/selection, setup-
+  compatible output, successful injected first launch, and the recoverable
+  created-but-not-started result after an injected launch refusal. The host-
+  owned secondary-window journey additionally proves a typed draft-stage
+  no-follow preset detail remains visibly rendered after queued delivery.
 - `visual_composer_attachments_light` and `_dark` capture the selected-Agent
   detail with one file card and one decoded image thumbnail at the normal
   macOS viewport. Missing baselines preserve the actual PNG as an inspection

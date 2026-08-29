@@ -17,6 +17,16 @@ class ProjectCreationSourceContractTest(unittest.TestCase):
         for primitive in ("::openat", "::fstatat", "AT_SYMLINK_NOFOLLOW", "::unlinkat"):
             self.assertIn(primitive, implementation)
 
+    def test_creation_has_no_tui_or_runtime_readiness_adapter(self) -> None:
+        implementation = SOURCE.read_text()
+        for forbidden in (
+            "lingtai-tui",
+            "project_create.go",
+            "QProcess",
+            "runtime_python_available",
+        ):
+            self.assertNotIn(forbidden, implementation)
+
 
 if __name__ == "__main__":
     unittest.main()

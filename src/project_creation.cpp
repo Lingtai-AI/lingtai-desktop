@@ -37,10 +37,13 @@ constexpr std::string_view kStagingPrefix = ".lingtai.create-";
 constexpr std::string_view kStagingMarker = ".desktop-create-owner";
 
 ProjectCreationResult failure(
-        ProjectCreationFailure kind, std::string detail) {
+        ProjectCreationFailure kind,
+        ProjectCreationStage stage,
+        std::string detail) {
     return {
         .created = false,
         .failure = kind,
+        .stage = stage,
         .detail = std::move(detail),
     };
 }
@@ -125,12 +128,14 @@ std::optional<std::string> read_regular_component(
     return bytes;
 }
 
-bool runtime_python_available(const fs::path &path) {
-    if (!path.is_absolute()) return false;
-    std::error_code error;
-    const auto resolved = fs::canonical(path, error);
-    if (error || !fs::is_regular_file(resolved, error) || error) return false;
-    return ::access(resolved.c_str(), X_OK) == 0;
+bool optional_absolute_reference(const fs::path &path) {
+    return path.empty() || plain_absolute_path(path);
+}
+
+bool blank(std::string_view value) {
+    return std::ranges::all_of(value, [](unsigned char ch) {
+        return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n';
+    });
 }
 
 bool valid_agent_leaf(std::string_view name) {
@@ -166,6 +171,16 @@ std::optional<QJsonObject> load_preset(const fs::path &path) {
         return std::nullopt;
     }
     return root;
+}
+
+std::optional<QJsonObject> parse_object(std::string_view bytes) {
+    QJsonParseError error;
+    const auto document = QJsonDocument::fromJson(
+        QByteArray(bytes.data(), static_cast<qsizetype>(bytes.size())), &error);
+    if (error.error != QJsonParseError::NoError || !document.isObject()) {
+        return std::nullopt;
+    }
+    return document.object();
 }
 
 bool write_all(int fd, std::string_view bytes) {
@@ -226,6 +241,150 @@ bool make_mailbox(int owner) {
         && make_directory(mailbox.get(), "sent", 0755)
         && make_directory(mailbox.get(), "archive", 0755)
         && ::fsync(mailbox.get()) == 0;
+}
+
+std::optional<std::vector<std::string>> directory_children(int directory) {
+    const auto scan_fd = ::openat(directory, ".",
+        posix::read_flags() | O_DIRECTORY);
+    if (scan_fd < 0) return std::nullopt;
+    posix::DirectoryStream entries(::fdopendir(scan_fd));
+    if (!entries.get()) {
+        ::close(scan_fd);
+        return std::nullopt;
+    }
+    auto result = std::vector<std::string>();
+    errno = 0;
+    while (const auto *entry = ::readdir(entries.get())) {
+        const auto leaf = std::string(entry->d_name);
+        if (leaf == "." || leaf == "..") continue;
+        if (!posix::safe_leaf(fs::path(leaf))) return std::nullopt;
+        result.push_back(leaf);
+    }
+    if (errno != 0) return std::nullopt;
+    std::ranges::sort(result);
+    return result;
+}
+
+bool has_mailbox_shape(int owner) {
+    const auto mailbox = posix::open_directory_component(owner, "mailbox");
+    if (mailbox.get() < 0) return false;
+    for (const auto *leaf : {"archive", "inbox", "sent"}) {
+        if (posix::open_directory_component(mailbox.get(), leaf).get() < 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool has_truthy_admin(const QJsonObject &identity) {
+    const auto admin = identity.value("admin");
+    if (!admin.isObject()) return false;
+    return std::ranges::any_of(admin.toObject(), [](const QJsonValue &value) {
+        return value.isBool() && value.toBool();
+    });
+}
+
+bool json_array_matches(
+        const QJsonArray &array, const std::vector<std::string> &expected) {
+    if (array.size() != static_cast<qsizetype>(expected.size())) return false;
+    for (auto index = std::size_t{0}; index != expected.size(); ++index) {
+        if (array.at(static_cast<qsizetype>(index)).toString().toStdString()
+                != expected[index]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool validate_staged_project(
+        int staging,
+        const ProjectCreationRequest &request,
+        const AgentSetupPresetPolicy &policy) {
+    const auto children = directory_children(staging);
+    auto expected = std::vector<std::string>{
+        std::string(kStagingMarker), ".library_shared", "human",
+        request.agent_directory,
+    };
+    std::ranges::sort(expected);
+    if (!children || *children != expected) return false;
+
+    const auto human = posix::open_directory_component(staging, "human");
+    const auto shared = posix::open_directory_component(
+        staging, ".library_shared");
+    const auto agent = posix::open_directory_component(
+        staging, fs::path(request.agent_directory));
+    if (human.get() < 0 || shared.get() < 0 || agent.get() < 0
+            || !has_mailbox_shape(human.get())
+            || !has_mailbox_shape(agent.get())) {
+        return false;
+    }
+
+    const auto human_bytes = read_regular_component(
+        human.get(), ".agent.json", kMaximumJsonBytes);
+    const auto agent_bytes = read_regular_component(
+        agent.get(), ".agent.json", kMaximumJsonBytes);
+    const auto init_bytes = read_regular_component(
+        agent.get(), "init.json", kMaximumJsonBytes);
+    if (!human_bytes || !agent_bytes || !init_bytes) return false;
+    const auto human_identity = parse_object(*human_bytes);
+    const auto agent_identity = parse_object(*agent_bytes);
+    const auto init = parse_object(*init_bytes);
+    if (!human_identity || !agent_identity || !init
+            || !human_identity->value("admin").isNull()
+            || has_truthy_admin(*human_identity)
+            || !has_truthy_admin(*agent_identity)
+            || agent_identity->value("agent_name").toString().toStdString()
+                != request.agent_name
+            || agent_identity->value("address").toString().toStdString()
+                != request.agent_directory) {
+        return false;
+    }
+
+    const auto manifest_value = init->value("manifest");
+    if (!manifest_value.isObject()) return false;
+    const auto manifest = manifest_value.toObject();
+    const auto preset_value = manifest.value("preset");
+    if (!manifest.value("llm").isObject()
+            || !manifest.value("capabilities").isObject()
+            || manifest.value("agent_name").toString().toStdString()
+                != request.agent_name
+            || !preset_value.isObject()) {
+        return false;
+    }
+    const auto preset = preset_value.toObject();
+    if (preset.value("active").toString().toStdString() != policy.active
+            || preset.value("default").toString().toStdString()
+                != policy.default_ref
+            || !json_array_matches(
+                preset.value("allowed").toArray(), policy.allowed)) {
+        return false;
+    }
+
+    const auto expected_venv =
+        request.runtime_python.parent_path().parent_path().string();
+    if (init->value("env_file").toString().toStdString()
+                != request.env_file.string()
+            || init->value("venv_path").toString().toStdString()
+                != expected_venv) {
+        return false;
+    }
+    if (!request.covenant_file.empty()
+            && init->value("covenant_file").toString().toStdString()
+                != request.covenant_file.string()) {
+        return false;
+    }
+    if (!request.comment.empty()) {
+        const auto expected_comment = request.destination / ".lingtai"
+            / request.agent_directory / "comment.md";
+        const auto comment = read_regular_component(
+            agent.get(), "comment.md", kMaximumJsonBytes);
+        if (!comment || *comment != request.comment
+                || init->value("comment_file").toString().toStdString()
+                    != expected_comment.string()) {
+            return false;
+        }
+    }
+    return true;
 }
 
 std::atomic_uint64_t next_stage{0};
@@ -330,111 +489,114 @@ bool publish_no_replace(int parent, const std::string &from,
 
 } // namespace
 
+const char *project_creation_stage_name(ProjectCreationStage stage) noexcept {
+    switch (stage) {
+    case ProjectCreationStage::none: return "none";
+    case ProjectCreationStage::draft_validation: return "draft_validation";
+    case ProjectCreationStage::staging: return "staging";
+    case ProjectCreationStage::staged_generation: return "staged_generation";
+    case ProjectCreationStage::staged_validation: return "staged_validation";
+    case ProjectCreationStage::publication: return "publication";
+    case ProjectCreationStage::complete: return "complete";
+    }
+    return "unknown";
+}
+
 ProjectCreationResult create_project(
         const ProjectCreationRequest &request) noexcept {
     try {
         if (!plain_absolute_path(request.destination)) {
             return failure(ProjectCreationFailure::invalid_destination,
+                ProjectCreationStage::draft_validation,
                 "destination must be an existing absolute directory without traversal");
         }
         auto destination = open_absolute_directory(request.destination);
         if (destination.get() < 0) {
             return failure(ProjectCreationFailure::unsafe_path,
+                ProjectCreationStage::draft_validation,
                 "destination is unavailable or contains a symlink");
         }
         if (!valid_agent_leaf(request.agent_directory)
-                || request.agent_name.empty()) {
+                || request.agent_name.empty() || blank(request.agent_name)
+                || request.agent_name.size() > 255U) {
             return failure(ProjectCreationFailure::invalid_agent_name,
+                ProjectCreationStage::draft_validation,
                 "Agent name and folder must be nonempty contained names");
+        }
+        if (!optional_absolute_reference(request.runtime_python)
+                || !optional_absolute_reference(request.env_file)
+                || !optional_absolute_reference(request.covenant_file)
+                || request.comment.size() > kMaximumJsonBytes) {
+            return failure(ProjectCreationFailure::runtime_unavailable,
+                ProjectCreationStage::draft_validation,
+                "runtime, environment, covenant, and comment references must have bounded absolute-path shape");
         }
         struct stat existing {};
         if (::fstatat(destination.get(), ".lingtai", &existing,
                 AT_SYMLINK_NOFOLLOW) == 0) {
             return failure(ProjectCreationFailure::existing_project,
+                ProjectCreationStage::staging,
                 ".lingtai already exists; existing project state was preserved");
         }
         if (errno != ENOENT) {
             return failure(ProjectCreationFailure::unsafe_path,
+                ProjectCreationStage::staging,
                 "the destination .lingtai leaf could not be inspected safely");
         }
 
+        // Only the reviewed selected preset is needed to begin. Keep its
+        // parsed shape in memory across the transaction; allowed dependency
+        // reads and policy normalization belong to staged generation below.
         const auto selected_preset = load_preset(request.preset_path);
         if (!selected_preset) {
             return failure(ProjectCreationFailure::invalid_preset,
+                ProjectCreationStage::draft_validation,
                 "selected preset is unreadable, unsafe, oversized, or malformed");
         }
-        auto requested_allowed = std::vector<std::string>();
-        for (const auto &path : request.allowed_preset_paths) {
-            if (!load_preset(path)) {
-                return failure(ProjectCreationFailure::invalid_preset,
-                    "an allowed preset is unreadable, unsafe, oversized, or malformed");
-            }
-            const auto text = path.string();
-            if (std::ranges::find(requested_allowed, text)
-                    == requested_allowed.end()) {
-                requested_allowed.push_back(text);
-            }
-        }
-        AgentSetupPresetSelection selection{
-            .choice = AgentSetupPresetChoice::select_preset,
-            .reference = request.preset_path.string(),
-            .manifest = selected_preset->value("manifest").toObject(),
-        };
-        const auto policy = reconcile_agent_setup_presets(
-            {}, selection, requested_allowed);
-        if (policy.active.empty() || policy.default_ref.empty()
-                || policy.allowed.empty()) {
-            return failure(ProjectCreationFailure::invalid_preset,
-                "selected preset could not form a valid setup policy");
-        }
 
-        if (!runtime_python_available(request.runtime_python)) {
-            return failure(ProjectCreationFailure::runtime_unavailable,
-                "the configured kernel runtime Python is unavailable");
-        }
-        if (!read_absolute_regular(request.env_file, kMaximumJsonBytes)) {
-            return failure(ProjectCreationFailure::runtime_unavailable,
-                "the configured runtime environment file is unavailable");
-        }
-        if (!request.covenant_file.empty()
-                && !read_absolute_regular(
-                    request.covenant_file, kMaximumJsonBytes)) {
-            return failure(ProjectCreationFailure::runtime_unavailable,
-                "the reviewed covenant file is unavailable");
-        }
-
-        const auto stage = stage_name();
-        if (!make_directory(destination.get(), stage, 0700)) {
+        const auto stage_leaf = stage_name();
+        if (!make_directory(destination.get(), stage_leaf, 0700)) {
             return failure(ProjectCreationFailure::staging_failed,
+                ProjectCreationStage::staging,
                 "could not create the owned project staging directory");
         }
-        auto staging = posix::open_directory_component(destination.get(), stage);
+        auto staging = posix::open_directory_component(
+            destination.get(), stage_leaf);
         if (staging.get() < 0) {
             return failure(ProjectCreationFailure::staging_failed,
-                "could not open the owned project staging directory");
+                ProjectCreationStage::staging,
+                "could not open the owned project staging directory; it was preserved because its identity could not be verified");
         }
         struct stat staging_identity {};
         if (::fstat(staging.get(), &staging_identity) != 0
                 || !S_ISDIR(staging_identity.st_mode)) {
             return failure(ProjectCreationFailure::staging_failed,
-                "could not identify the owned project staging directory");
+                ProjectCreationStage::staging,
+                "could not identify the owned project staging directory; it was preserved because its identity could not be verified");
         }
         auto marker_present = false;
         const auto cleanup = [&] {
-            static_cast<void>(remove_owned_stage(destination.get(), staging.get(),
-                stage, staging_identity.st_dev, staging_identity.st_ino,
-                marker_present));
+            return remove_owned_stage(destination.get(), staging.get(),
+                stage_leaf, staging_identity.st_dev, staging_identity.st_ino,
+                marker_present);
+        };
+        const auto staged_failure = [&](ProjectCreationFailure kind,
+                ProjectCreationStage stage, std::string detail) {
+            if (!cleanup()) {
+                detail += "; rollback could not safely remove the owned staging directory";
+            }
+            return failure(kind, stage, std::move(detail));
         };
         if (!write_new_file(staging.get(), kStagingMarker,
-                stage + "\n", 0600)) {
-            cleanup();
-            return failure(ProjectCreationFailure::staging_failed,
+                stage_leaf + "\n", 0600)) {
+            return staged_failure(ProjectCreationFailure::staging_failed,
+                ProjectCreationStage::staging,
                 "could not mark the owned project staging directory");
         }
         marker_present = true;
         if (request.failure_point == ProjectCreationFailurePoint::after_staging) {
-            cleanup();
-            return failure(ProjectCreationFailure::staging_failed,
+            return staged_failure(ProjectCreationFailure::staging_failed,
+                ProjectCreationStage::staging,
                 "injected failure after staging");
         }
 
@@ -444,8 +606,8 @@ ProjectCreationResult create_project(
             staging.get(), fs::path(request.agent_directory));
         if (human.get() < 0 || shared.get() < 0 || agent.get() < 0
                 || !make_mailbox(human.get()) || !make_mailbox(agent.get())) {
-            cleanup();
-            return failure(ProjectCreationFailure::staging_failed,
+            return staged_failure(ProjectCreationFailure::staging_failed,
+                ProjectCreationStage::staged_generation,
                 "could not build the staged project directories");
         }
         const QJsonObject human_identity{
@@ -458,9 +620,36 @@ ProjectCreationResult create_project(
                 || human_mailbox.get() < 0
                 || !write_new_file(human_mailbox.get(), "contacts.json", "[]")
                 || ::fsync(human_mailbox.get()) != 0) {
-            cleanup();
-            return failure(ProjectCreationFailure::staging_failed,
+            return staged_failure(ProjectCreationFailure::staging_failed,
+                ProjectCreationStage::staged_generation,
                 "could not build the staged human mailbox");
+        }
+
+        auto requested_allowed = std::vector<std::string>();
+        for (const auto &path : request.allowed_preset_paths) {
+            if (!load_preset(path)) {
+                return staged_failure(ProjectCreationFailure::invalid_preset,
+                    ProjectCreationStage::staged_generation,
+                    "an allowed preset is unreadable, unsafe, oversized, or malformed");
+            }
+            const auto text = path.string();
+            if (std::ranges::find(requested_allowed, text)
+                    == requested_allowed.end()) {
+                requested_allowed.push_back(text);
+            }
+        }
+        const AgentSetupPresetSelection selection{
+            .choice = AgentSetupPresetChoice::select_preset,
+            .reference = request.preset_path.string(),
+            .manifest = selected_preset->value("manifest").toObject(),
+        };
+        const auto policy = reconcile_agent_setup_presets(
+            {}, selection, requested_allowed);
+        if (policy.active.empty() || policy.default_ref.empty()
+                || policy.allowed.empty()) {
+            return staged_failure(ProjectCreationFailure::invalid_preset,
+                ProjectCreationStage::staged_generation,
+                "selected preset could not form a valid setup policy");
         }
 
         auto manifest = selected_preset->value("manifest").toObject();
@@ -517,40 +706,51 @@ ProjectCreationResult create_project(
                 || (!request.comment.empty()
                     && !write_new_file(agent.get(), "comment.md",
                         request.comment))) {
-            cleanup();
-            return failure(ProjectCreationFailure::staging_failed,
+            return staged_failure(ProjectCreationFailure::staging_failed,
+                ProjectCreationStage::staged_generation,
                 "could not write the staged Agent configuration");
+        }
+        if (request.failure_point
+                == ProjectCreationFailurePoint::after_generation) {
+            return staged_failure(ProjectCreationFailure::staging_failed,
+                ProjectCreationStage::staged_generation,
+                "injected failure after staged generation");
+        }
+        if (!validate_staged_project(staging.get(), request, policy)) {
+            return staged_failure(ProjectCreationFailure::staging_failed,
+                ProjectCreationStage::staged_validation,
+                "staged project failed bounded shape, preset, or exactly-one-orchestrator validation");
         }
         if (::fsync(human.get()) != 0 || ::fsync(shared.get()) != 0
                 || ::fsync(agent.get()) != 0
                 || ::fchmod(staging.get(), 0755) != 0
                 || ::fsync(staging.get()) != 0) {
-            cleanup();
-            return failure(ProjectCreationFailure::staging_failed,
+            return staged_failure(ProjectCreationFailure::staging_failed,
+                ProjectCreationStage::staged_validation,
                 "could not finalize the staged project");
         }
         // Everything below the stage is durable before the marker is removed.
         // Publication follows immediately, leaving no ordinary fallible work
         // in the crash-only interval between these two namespace operations.
         if (::unlinkat(staging.get(), kStagingMarker.data(), 0) != 0) {
-            cleanup();
-            return failure(ProjectCreationFailure::staging_failed,
+            return staged_failure(ProjectCreationFailure::staging_failed,
+                ProjectCreationStage::publication,
                 "could not finalize staged project ownership");
         }
         marker_present = false;
         if (request.failure_point
                 == ProjectCreationFailurePoint::after_marker_removal) {
-            cleanup();
-            return failure(ProjectCreationFailure::publish_failed,
+            return staged_failure(ProjectCreationFailure::publish_failed,
+                ProjectCreationStage::publication,
                 "injected failure after marker removal");
         }
         const auto published = request.failure_point
                 == ProjectCreationFailurePoint::publish_refused
             ? false
-            : publish_no_replace(destination.get(), stage, ".lingtai");
+            : publish_no_replace(destination.get(), stage_leaf, ".lingtai");
         if (!published) {
-            cleanup();
-            return failure(ProjectCreationFailure::publish_failed,
+            return staged_failure(ProjectCreationFailure::publish_failed,
+                ProjectCreationStage::publication,
                 request.failure_point == ProjectCreationFailurePoint::publish_refused
                     ? "injected project publication refusal"
                     : "project publication was refused; destination state was preserved");
@@ -562,11 +762,11 @@ ProjectCreationResult create_project(
             .project_dir = request.destination,
             .agent_key = fs::path(request.agent_directory),
             .failure = ProjectCreationFailure::none,
+            .stage = ProjectCreationStage::complete,
         };
-    } catch (const std::exception &error) {
-        return failure(ProjectCreationFailure::local_failure, error.what());
     } catch (...) {
         return failure(ProjectCreationFailure::local_failure,
+            ProjectCreationStage::none,
             "unexpected local project creation failure");
     }
 }

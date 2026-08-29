@@ -27,9 +27,27 @@ enum class ProjectCreationFailure {
     local_failure,
 };
 
+// Stable transaction boundary carried with every result. A failure reports
+// the boundary whose work was refused; success reports `complete`. Runtime
+// start remains a post-commit AgentLifecycleController result rather than a
+// creation stage.
+enum class ProjectCreationStage {
+    none,
+    draft_validation,
+    staging,
+    staged_generation,
+    staged_validation,
+    publication,
+    complete,
+};
+
+[[nodiscard]] const char *project_creation_stage_name(
+    ProjectCreationStage stage) noexcept;
+
 enum class ProjectCreationFailurePoint {
     none,
     after_staging,
+    after_generation,
     after_marker_removal,
     publish_refused,
 };
@@ -54,6 +72,7 @@ struct ProjectCreationResult {
     std::filesystem::path project_dir;
     std::filesystem::path agent_key;
     ProjectCreationFailure failure = ProjectCreationFailure::local_failure;
+    ProjectCreationStage stage = ProjectCreationStage::none;
     std::string detail;
 
     [[nodiscard]] explicit operator bool() const noexcept { return created; }

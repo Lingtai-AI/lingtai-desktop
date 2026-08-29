@@ -4,9 +4,11 @@
 #include "project_creation.h"
 
 #include <QtCore/QCoreApplication>
+#include <QtCore/QEventLoop>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
+#include <QtCore/QTimer>
 
 #include <filesystem>
 #include <fstream>
@@ -186,6 +188,40 @@ int main(int argc, char **argv) {
         require(!has_stage(destination), "successful creation left staging residue");
         assert_creation_shape(destination, global, runtime);
 
+        // Publication is independent of runtime readiness. The configured
+        // paths remain useful launch inputs, but a missing interpreter, env,
+        // or covenant must be reported only by the post-commit launch owner.
+        const auto runtime_independent = root / "runtime-independent";
+        fs::create_directories(runtime_independent);
+        request = request_for(
+            runtime_independent, global, root / "missing/venv/bin/python");
+        request.env_file = global / "missing.env";
+        request.covenant_file = global / "missing-covenant.md";
+        request.setup.covenant_file = request.covenant_file.string();
+        const auto created_without_runtime =
+            lingtai::desktop::create_project(request);
+        require(created_without_runtime
+                && created_without_runtime.stage
+                    == lingtai::desktop::ProjectCreationStage::complete
+                && fs::is_regular_file(
+                    runtime_independent / ".lingtai/main/init.json"),
+            "valid project draft must publish without a runnable kernel: "
+                + created_without_runtime.detail);
+
+        const auto invalid_orchestrator = root / "invalid-orchestrator";
+        fs::create_directories(invalid_orchestrator);
+        request = request_for(invalid_orchestrator, global, runtime);
+        request.setup.karma = false;
+        request.setup.nirvana = false;
+        const auto rejected_orchestrator =
+            lingtai::desktop::create_project(request);
+        require(!rejected_orchestrator
+                && rejected_orchestrator.stage
+                    == lingtai::desktop::ProjectCreationStage::staged_validation
+                && !fs::exists(invalid_orchestrator / ".lingtai")
+                && !has_stage(invalid_orchestrator),
+            "staged exactly-one-orchestrator validation did not fail closed");
+
         auto attached = lingtai::desktop::attach_project(destination);
         require(static_cast<bool>(attached), "created project must attach");
         auto rows = lingtai::desktop::project_agents(*attached.attachment);
@@ -229,11 +265,14 @@ int main(int argc, char **argv) {
 
         for (const auto point : {
                 lingtai::desktop::ProjectCreationFailurePoint::after_staging,
+                lingtai::desktop::ProjectCreationFailurePoint::after_generation,
                 lingtai::desktop::ProjectCreationFailurePoint::after_marker_removal,
                 lingtai::desktop::ProjectCreationFailurePoint::publish_refused}) {
             const auto failed_destination = root
                 / (point == lingtai::desktop::ProjectCreationFailurePoint::after_staging
                     ? "fail-stage"
+                    : point == lingtai::desktop::ProjectCreationFailurePoint::after_generation
+                        ? "fail-generation"
                     : point == lingtai::desktop::ProjectCreationFailurePoint::after_marker_removal
                         ? "fail-marker-removed" : "fail-publish-refused");
             fs::create_directories(failed_destination);
@@ -246,7 +285,51 @@ int main(int argc, char **argv) {
                     && read_file(failed_destination / "keep.txt")
                         == "unrelated\n",
                 "pre-commit failure left partial project or staging residue");
+            require(failed.stage
+                    == (point == lingtai::desktop::ProjectCreationFailurePoint::after_staging
+                            ? lingtai::desktop::ProjectCreationStage::staging
+                        : point == lingtai::desktop::ProjectCreationFailurePoint::after_generation
+                            ? lingtai::desktop::ProjectCreationStage::staged_generation
+                        : lingtai::desktop::ProjectCreationStage::publication),
+                "injected failure lost its typed transaction stage");
         }
+
+        // The asynchronous boundary must preserve both the typed stage and
+        // exact safe detail. A no-follow preset rejection is deterministic
+        // and fails before the first staging mutation.
+        const auto runner_failure_destination = root / "runner-failure";
+        fs::create_directories(runner_failure_destination);
+        auto runner_request = request_for(
+            runner_failure_destination, global, runtime);
+        runner_request.preset_path = global / "presets/saved/link.json";
+        fs::create_symlink(
+            global / "presets/saved/alpha.json", runner_request.preset_path);
+        auto runner_delivered = false;
+        auto runner_result = lingtai::desktop::ProjectCreationResult{};
+        {
+            lingtai::desktop::ProjectCreationRunner runner;
+            QEventLoop loop;
+            QTimer timeout;
+            timeout.setSingleShot(true);
+            QObject::connect(&timeout, &QTimer::timeout,
+                &loop, &QEventLoop::quit);
+            runner.run_create(runner_request, [&](auto result) {
+                runner_result = std::move(result);
+                runner_delivered = true;
+                loop.quit();
+            });
+            timeout.start(5000);
+            loop.exec();
+        }
+        require(runner_delivered
+                && runner_result.stage
+                    == lingtai::desktop::ProjectCreationStage::draft_validation
+                && runner_result.detail
+                    == "selected preset is unreadable, unsafe, oversized, or malformed"
+                && !fs::exists(runner_failure_destination / ".lingtai")
+                && !has_stage(runner_failure_destination),
+            "ProjectCreationRunner lost typed draft failure evidence");
+        fs::remove(runner_request.preset_path);
 
         auto suppressed_callbacks = 0;
         {

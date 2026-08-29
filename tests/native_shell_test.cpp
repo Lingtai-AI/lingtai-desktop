@@ -1151,12 +1151,6 @@ void verify_new_window_project_bootstrap(const fs::path &sandbox) {
         "capabilities": {"system": {}, "email": {}}
       }
     })JSON");
-    write_file(runtime_python, "#!/bin/sh\nexit 1\n");
-    fs::permissions(runtime_python,
-        fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec
-            | fs::perms::others_read | fs::perms::others_exec,
-        fs::perm_options::replace);
-
     const auto previous_home = qgetenv("HOME");
     const auto previous_global = qgetenv("LINGTAI_TUI_DIR");
     const auto previous_path = qgetenv("PATH");
@@ -1313,8 +1307,8 @@ void verify_new_window_project_bootstrap(const fs::path &sandbox) {
 
     // Controlled pre-publication failure through another real host-owned
     // secondary shell. The catalog and review pages accept their inputs while
-    // the fixture env exists; removing it immediately before Create makes
-    // ProjectCreation return its exact runtime preflight detail.
+    // its preset exists; replacing that preset with a symlink immediately
+    // before Create makes ProjectCreation return typed draft-stage evidence.
     const auto success_shell_count = host.shell_count();
     const auto failure_destination = sandbox / "existing-repository-failure";
     fs::create_directories(failure_destination / ".git");
@@ -1366,13 +1360,12 @@ void verify_new_window_project_bootstrap(const fs::path &sandbox) {
     failure_agents_continue->click();
     QCoreApplication::processEvents();
 
-    std::error_code env_remove_error;
-    require(fs::remove(global / ".env", env_remove_error)
-            && !env_remove_error,
-        "controlled failure could not remove its fake env");
+    const auto preset_target = global / "preset-target.json";
+    fs::rename(global / "presets/saved/alpha.json", preset_target);
+    fs::create_symlink(preset_target, global / "presets/saved/alpha.json");
     failure_create_start->click();
     const auto expected_failure = QStringLiteral(
-        "Project was not created: the configured runtime environment file is unavailable");
+        "Project was not created (draft_validation): selected preset is unreadable, unsafe, oversized, or malformed");
     require(wait_for_event_loop([&] {
         return failure_status->accessibilityName() == expected_failure;
     }, 5000), "controlled ProjectCreation detail was not delivered: "
@@ -1407,7 +1400,8 @@ void verify_new_window_project_bootstrap(const fs::path &sandbox) {
             && secondary.selection_state().active_project()->root()
                 == destination_root,
         "controlled failure must not disturb existing shell roots");
-    write_file(global / ".env", "TEST_API_KEY=fake\n");
+    fs::remove(global / "presets/saved/alpha.json");
+    fs::rename(preset_target, global / "presets/saved/alpha.json");
 
     std::cout
         << "DIAG new_window_bootstrap=GREEN\n"
@@ -3695,11 +3689,6 @@ void verify_first_project_bootstrap(
         "capabilities": {"system": {}, "email": {}}
       }
     })JSON");
-    write_file(runtime_python, "#!/bin/sh\nexit 1\n");
-    fs::permissions(runtime_python,
-        fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec
-            | fs::perms::others_read | fs::perms::others_exec,
-        fs::perm_options::replace);
     const auto previous_global = qgetenv("LINGTAI_TUI_DIR");
     const auto previous_path = qgetenv("PATH");
     qputenv("LINGTAI_TUI_DIR", QByteArray::fromStdString(global.string()));

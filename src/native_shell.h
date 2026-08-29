@@ -382,8 +382,8 @@ private:
     // shell lifetime; Telegram derives OneColumn vs Normal on every chats
     // resize, so Desktop's one recompute rides the same event stream.
     rpl::lifetime layout_lifetime_;
-    // True while a New Project subprocess is pending (preset discovery or
-    // spawn). While true the New Project and Open Project actions are
+    // True while a New Project worker operation is pending (preset discovery
+    // or staged creation). While true the New Project and Open Project actions are
     // disabled so duplicate activation is impossible.
     bool bootstrap_pending_ = false;
     // View-scoped: exists only for the shell's own lifetime, re-invokes the

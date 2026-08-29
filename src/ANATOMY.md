@@ -112,10 +112,13 @@ Domain models (pure, Qt-light state/derivation owners):
   one-leaf-at-a-time no-follow `openat`-based opens. Internal; links nothing;
   no domain policy.
 - `project_creation.{h,cpp}` — `create_project` and `ProjectCreationRunner`:
-  validated no-follow inputs, one owned sibling stage, shared preset-policy
-  reconciliation, fd-anchored recursive rollback before or after ownership
-  marker removal, exclusive atomic `.lingtai` publication, and joinable queued
-  exactly-once delivery to the UI thread with destruction-time suppression.
+  selected-preset/draft no-follow prevalidation, one owned sibling stage,
+  in-stage allowed-preset reconciliation, bounded shape and exactly-one-
+  orchestrator validation, typed stage/detail, fd-anchored recursive rollback
+  before or after ownership-marker removal, exclusive atomic `.lingtai`
+  publication, and joinable queued exactly-once delivery to the UI thread with
+  destruction-time suppression. It does not gate publication on runtime
+  readiness.
 
 Domain readers/projections (stateless, read-only, one source each):
 

@@ -137,10 +137,12 @@ kernel interpreter.
   including lease waits, preset updates, clear completion, hard-refresh
   escalation, aggregate results, and generation binding.
 - `src/project_creation.{h,cpp}` — `create_project` plus
-  `ProjectCreationRunner`: validated descriptor-relative staging, shared setup
-  policy shaping, descriptor-relative rollback before/after marker removal,
-  exclusive atomic `.lingtai` publication, and joinable asynchronous
-  preset/creation delivery for the New Project wizard.
+  `ProjectCreationRunner`: typed draft/staging/generation/validation/publication
+  results, selected-preset prevalidation, descriptor-relative staging,
+  in-stage allowed-policy shaping and exactly-one-orchestrator validation,
+  descriptor-relative rollback before/after marker removal, exclusive atomic
+  `.lingtai` publication, and joinable asynchronous delivery. Runtime readiness
+  remains a post-commit lifecycle concern.
 
 ## Owned UI owners (`src/ui/`)
 
