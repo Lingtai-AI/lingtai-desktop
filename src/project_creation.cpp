@@ -722,12 +722,13 @@ ProjectCreationResult create_project(
                 ProjectCreationStage::staged_generation,
                 "could not render the localized first-boot greeting safely");
         }
-        const auto comment = request.comment.empty()
+        const auto default_comment = request.comment.empty()
+            || blank(request.comment);
+        const auto comment = default_comment
             ? std::string(localized.adaptive_playbook)
             : request.comment;
         if (comment.size() > kMaximumJsonBytes || blank(comment)
-                || (request.comment.empty()
-                    && unresolved_placeholder(comment))) {
+                || (default_comment && unresolved_placeholder(comment))) {
             return staged_failure(ProjectCreationFailure::staging_failed,
                 ProjectCreationStage::staged_generation,
                 "localized or reviewed Agent comment content is not meaningful and bounded");
@@ -798,7 +799,7 @@ ProjectCreationResult create_project(
         }
         if (!validate_staged_project(staging.get(), request, policy,
                 localized.language, *greeting, comment,
-                request.comment.empty())) {
+                default_comment)) {
             return staged_failure(ProjectCreationFailure::staging_failed,
                 ProjectCreationStage::staged_validation,
                 "staged project failed bounded shape, preset, or exactly-one-orchestrator validation");

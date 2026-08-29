@@ -207,10 +207,11 @@ its code.
   canonical minimum human, first Agent, mailbox, and shared-library tree,
   validates allowed presets and reconciles selected/default/allowed policy
   inside staging, then writes a Desktop-owned localized `.prompt` and always
-  writes Agent-local `comment.md`. Empty create-new Comment text selects the
-  localized adaptive playbook; nonempty text is transported and written
-  byte-for-byte. The final `manifest.comment_file` always names that published
-  Agent-local file. Validation requires exact Agent children, bounded regular
+  writes Agent-local `comment.md`. Empty or whitespace-only create-new Comment
+  text selects the localized adaptive playbook; every nonblank text is
+  transported and written byte-for-byte. The final `manifest.comment_file`
+  always names that published Agent-local file. Validation requires exact
+  Agent children, bounded regular
   content, resolved generated placeholders, matching content/references, and
   exactly one orchestrator.
   It syncs every directory before removing the marker and exclusively renames

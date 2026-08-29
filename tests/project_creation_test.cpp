@@ -255,6 +255,33 @@ int main(int argc, char **argv) {
                     + localized.language);
         }
 
+        const auto whitespace_comment_destination = root
+            / "whitespace-comment-default";
+        fs::create_directories(whitespace_comment_destination);
+        request = request_for(
+            whitespace_comment_destination, global, runtime);
+        request.setup.language = "wen";
+        request.comment = " \n\t\r\n";
+        const auto whitespace_comment_result =
+            lingtai::desktop::create_project(request);
+        require(static_cast<bool>(whitespace_comment_result),
+            "whitespace-only optional Comment must select the adaptive playbook: "
+                + whitespace_comment_result.detail);
+        const auto whitespace_agent = whitespace_comment_destination
+            / ".lingtai/main";
+        const auto whitespace_playbook = read_file(
+            whitespace_agent / "comment.md");
+        const auto whitespace_init = read_object(
+            whitespace_agent / "init.json");
+        require(whitespace_playbook.find("# 随宜协作要略")
+                    != std::string::npos
+                && whitespace_playbook.size() > 200U
+                && !has_unresolved_placeholder(whitespace_playbook)
+                && whitespace_init.value("comment_file")
+                    .toString().toStdString()
+                    == (whitespace_agent / "comment.md").string(),
+            "whitespace-only Comment did not publish the selected localized playbook");
+
         // Publication is independent of runtime readiness. The configured
         // paths remain useful launch inputs, but a missing interpreter, env,
         // or covenant must be reported only by the post-commit launch owner.

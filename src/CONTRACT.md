@@ -109,10 +109,10 @@ bounded side-effect scope):
   (`project_creation.h`) — validates the draft and selected preset needed to
   begin, builds one owned sibling staging tree, applies allowed-preset policy
   and the compiled localized first-boot `.prompt` plus `comment.md` there, and
-  validates the exact bounded result. An empty create-new Comment selects the
-  localized adaptive playbook; nonempty create-new text is preserved byte for
-  byte. `manifest.comment_file` always names the final published Agent-local
-  `comment.md`. Creation rolls back only through held
+  validates the exact bounded result. An empty or whitespace-only create-new
+  Comment selects the localized adaptive playbook; every nonblank create-new
+  text is preserved byte for byte. `manifest.comment_file` always names the
+  final published Agent-local `comment.md`. Creation rolls back only through held
   descriptors, and exclusively publishes `.lingtai`. Every result carries a
   `ProjectCreationStage` and safe detail; the runner preserves those facts
   across queued delivery and joins its worker before destruction. Runtime,

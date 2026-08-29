@@ -75,8 +75,9 @@ Qt plugin path set and an 8 s watchdog.
 
 - `project_creation` proves the exact human/Agent/shared-library shape,
   selected-preset default/allowed parity, reviewed setup fields, localized
-  `en`/`zh`/`wen` `.prompt` and empty-comment adaptive playbooks, complete
-  generated-placeholder substitution, byte-exact nonempty comment content,
+  `en`/`zh`/`wen` `.prompt` plus empty/whitespace-only Comment adaptive
+  playbooks, complete generated-placeholder substitution, byte-exact nonblank
+  comment content,
   the final `manifest.comment_file`, publication
   with missing runtime/env/covenant inputs, staged validation, typed
   stage/detail survival through `ProjectCreationRunner`, normal attachment/
