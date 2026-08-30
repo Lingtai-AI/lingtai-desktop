@@ -175,7 +175,6 @@ std::optional<std::string> render_greeting(
             {"{{lang}}", resources.language},
             {"{{soul_delay}}", soul_delay},
             {"{{addr}}", "human"},
-            {"{{commands}}", resources.command_reference},
         }) {
         replace_all(result, token, replacement);
     }
