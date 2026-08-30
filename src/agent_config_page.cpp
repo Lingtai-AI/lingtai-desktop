@@ -423,7 +423,7 @@ AgentConfigPage::AgentConfigPage(QWidget *parent)
         soul_cadence_->setEnabled(enabled);
         if (soul_cadence_block_) soul_cadence_block_->setEnabled(enabled);
     });
-    context_limit_->setValue(300000);
+    context_limit_->setValue(500000);
     max_rpm_->setValue(60);
     max_aed_->setValue(5);
     karma_->setChecked(true);
@@ -501,7 +501,7 @@ void AgentConfigPage::load(const QString &default_preset, int allowed_count) {
         const QSignalBlocker block(language_);
         language_->setCurrentIndex(0);
     }
-    context_limit_->setValue(300000);
+    context_limit_->setValue(500000);
     soul_cadence_->setValue(0);
     max_rpm_->setValue(60);
     max_aed_->setValue(5);
