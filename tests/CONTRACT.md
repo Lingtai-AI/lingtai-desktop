@@ -126,16 +126,20 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   saved/template discovery, validation/skips, canonical ordering, exact facts,
   missing-directory behavior, typed scan failure, normalization, and no-write.
 - `tests/project_creation_test.cpp` — `project_creation`; project inputs,
-  destination contents, exact custom Comment bytes, pinned adaptive guidance
-  with injected clock/location, controlled saved/template manifest projection,
+  destination contents, exact custom Comment bytes, fixture-derived bounded
+  Desktop adaptations for all three languages with injected clock/location,
+  rendered-output rejection of TUI-only prose and commands outside the public
+  Desktop slash registry, controlled saved/template manifest projection,
   legacy/provider capability normalization, stable preset-policy de-duplication,
-  no-global-mutation snapshots, unsafe links, marker-present/marker-removed/
+  project-root `.recipe`/`.tui-asset` absence, no-global-mutation snapshots,
+  unsafe links, marker-present/marker-removed/
   publish-refused rollback, runner destruction, and expected output all live
   below injected fixture roots.
 - `tests/test_project_creation_source_contract.py` — static assertion that the
   production creation owner uses descriptor primitives, contains no path
-  recursive `remove_all` call or network/global guidance boundary, and that all
-  seven pinned adaptive fixtures retain their recorded SHA-256 values.
+  recursive `remove_all` call, network/global guidance boundary, or impossible
+  Desktop guidance, and that all seven pinned adaptive fixtures retain their
+  recorded SHA-256 values.
 - `tests/agent_sleep_test.cpp` — `agent_sleep`.
 - `tests/agent_lifecycle_test.cpp` — `agent_lifecycle`; the complete
   Desktop-owned lifecycle component contract with injected process, launcher,

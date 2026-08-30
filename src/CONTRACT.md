@@ -115,10 +115,15 @@ bounded side-effect scope):
   through. Legacy `bash` becomes `shell` (a conflicting pair fails closed),
   and the selected LLM's nonempty `api_key_env` is copied only to capabilities
   naming the same provider. An empty or whitespace-only create-new Comment
-  selects the pinned adaptive guidance; every nonblank create-new text is
-  preserved byte for byte. Guidance uses local `YYYY-MM-DD HH:MM` time and an
-  injected cached location or `unknown`; it never resolves location over the
-  network or writes global state. `manifest.comment_file` always names the
+  selects Desktop-owned guidance that preserves the pinned adaptive recipe's
+  structure and operating behavior while applying a bounded Desktop adaptation:
+  Desktop product names, only commands in Desktop's slash registry, Ctrl+O or
+  Cmd+O navigation, and platform-neutral add-on-status guidance. TUI-only
+  commands, shortcuts, paths, and localized full-command dumps are never
+  rendered. Every nonblank create-new text is preserved byte for byte. Guidance
+  uses local `YYYY-MM-DD HH:MM` time and an injected cached location or
+  `unknown`; it never resolves location over the network or writes global
+  state. `manifest.comment_file` always names the
   final published Agent-local `comment.md`. Creation rolls back only through held
   descriptors, and exclusively publishes `.lingtai`. Every result carries a
   `ProjectCreationStage` and safe detail; the runner preserves those facts
@@ -245,8 +250,10 @@ coalescing, and stale-while-revalidate presentation.
    first-boot behavior. TUI-only `.tui-asset`, project `.recipe`, recipe
    snapshots/reconciliation, global registry/config utilities, credential
    persistence, and phantom-process prechecks remain outside Desktop creation
-   ownership. Its adaptive source is compiled Desktop content pinned by a
-   seven-file, hash-checked test fixture; the fixture is never a runtime input.
+   ownership. The adaptive recipe source provenance is pinned by a seven-file,
+   hash-checked test fixture; the compiled guidance is a bounded Desktop-owned
+   adaptation rather than a verbatim TUI copy, and the fixture is never a
+   runtime input.
    `AgentSetupStore` is the sole existing-Agent configuration owner: it preserves
    the full documents and patches only the fields declared by
    `AgentSetupDraft`, the one soul-flow key in the exact configured env leaf,

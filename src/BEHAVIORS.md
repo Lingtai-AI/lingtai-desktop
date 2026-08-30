@@ -225,9 +225,14 @@ its code.
   removed, and the absolute selected reference is appended only when absent.
   It then writes a Desktop-owned localized `.prompt` and always
   writes Agent-local `comment.md`. Empty or whitespace-only create-new Comment
-  text selects guidance derived from the pinned adaptive recipe; local time is
-  formatted `YYYY-MM-DD HH:MM`, location uses an injected already-cached value
-  or `unknown`, and no location network lookup or global-state write occurs.
+  text selects a bounded Desktop-owned adaptation of the pinned adaptive
+  recipe: product wording names Desktop, slash commands are limited to the
+  Desktop registry, navigation names Ctrl+O or Cmd+O, add-on verification is
+  platform-neutral, and the localized TUI full-command dumps are omitted.
+  TUI-only commands, shortcuts, and asset paths cannot reach the rendered
+  guidance. Local time is formatted `YYYY-MM-DD HH:MM`, location uses an
+  injected already-cached value or `unknown`, and no location network lookup
+  or global-state write occurs.
   Every nonblank text is transported and written byte-for-byte. The final `manifest.comment_file`
   always names that published Agent-local file. Validation requires exact
   Agent children, bounded regular
