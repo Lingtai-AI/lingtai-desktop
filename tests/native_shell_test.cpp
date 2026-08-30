@@ -8007,7 +8007,7 @@ void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) 
     auto *soul_flow = required_child<QCheckBox>(
         *review_page, "lingtai_setup_review_soul_flow");
     require(language->itemData(0).toString() == QStringLiteral("en")
-            && context_limit->value() == 300000
+            && context_limit->value() == 500000
             && wizard->findChild<QLabel *>("lingtai_setup_agent_card") == nullptr
             && wizard->findChild<QLabel *>("lingtai_setup_review_summary") == nullptr
             && wizard->findChild<QLabel *>("lingtai_setup_step_index") != nullptr,
