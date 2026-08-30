@@ -2,6 +2,7 @@
 #include "agent_setup_store.h"
 #include "project_attachment.h"
 #include "project_creation.h"
+#include "slash_command.h"
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QEventLoop>
@@ -14,6 +15,8 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <regex>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -94,6 +97,159 @@ void replace_all(std::string &bytes, std::string_view token,
     }
 }
 
+void apply_adaptation(std::string &bytes, std::string_view source,
+        std::string_view replacement) {
+    require(bytes.find(source) != std::string::npos,
+        "pinned guidance no longer contains an adaptation source: "
+            + std::string(source));
+    replace_all(bytes, source, replacement);
+}
+
+std::string desktop_adapted_greeting(
+        std::string bytes, std::string_view language) {
+    if (language == "zh") {
+        for (const auto &[source, replacement] : {
+                std::pair<std::string_view, std::string_view>{
+                    "即使关闭 TUI 也会继续运行", "即使关闭桌面端也会继续运行"},
+                {"关闭 TUI 并不会停止你", "关闭桌面端并不会停止你"},
+                {"`/kanban` 或 `/viz` 看 agent 状态与网络视图",
+                    "`/kanban` 看 agent 状态与网络视图"},
+                {"按 **ctrl+o**", "按 **Ctrl+O** 或 **Cmd+O**"},
+                {"即使关闭 TUI 也能收到你的主动汇报",
+                    "即使关闭桌面端也能收到你的主动汇报"},
+                {"接入后，用 `/mcp` 可以检查 addon 是否配置成功、连接是否正常——`/mcp` 只用于检查状态，配置本身不是通过它完成的。",
+                    "接入后，请告诉他们可以直接让你核验 addon 是否配置成功、连接是否正常。"},
+                {"以下是所有可用的斜杠命令供参考：\n{{commands}}\n\n", ""},
+                {"规范的 slash-command 参考现在位于 `lingtai-tui-help` skill（`tui/internal/preset/skills/lingtai-tui-help/assets/slash-commands.<lang>.md`），在应用内由 `/help` 打开。不要在问候中列出所有命令。只提 `/` 面板、上面的 ctrl+o 提示、少量起步命令（`/suspend all`、`/kanban` 或 `/viz`、`/goal`）、tutorial-guide hook 和 IM 建议。",
+                    "规范的 slash-command 参考在桌面端由 `/help` 打开。不要在问候中列出所有命令。只提 `/` 面板、上面的 Ctrl+O 或 Cmd+O 提示、少量起步命令（`/suspend all`、`/kanban`、`/goal`）、tutorial-guide hook 和 IM 建议。"},
+            }) {
+            apply_adaptation(bytes, source, replacement);
+        }
+        return bytes;
+    }
+    if (language == "wen") {
+        for (const auto &[source, replacement] : {
+                std::pair<std::string_view, std::string_view>{
+                    "虽闭 TUI 犹运行不止", "虽闭桌面之窗犹运行不止"},
+                {"闭 TUI 不能止汝", "闭桌面之窗不能止汝"},
+                {"`/kanban` 或 `/viz` 观 agent 状态与灵网",
+                    "`/kanban` 观 agent 状态与灵网"},
+                {"按 **ctrl+o**", "按 **Ctrl+O** 或 **Cmd+O**"},
+                {"虽闭 TUI 犹可得汝主动之报",
+                    "虽闭桌面之窗犹可得汝主动之报"},
+                {"既接之后，以 `/mcp` 可验 addon 配置成否、连通与否——`/mcp` 唯司查验，配置非由此成。",
+                    "既接之后，告之可径请汝查验 addon 配置与连通之态。"},
+                {"以下诸令供参：\n{{commands}}\n\n", ""},
+                {"规范之 slash-command 参考今在 `lingtai-tui-help` skill（`tui/internal/preset/skills/lingtai-tui-help/assets/slash-commands.<lang>.md`），于器中由 `/help` 启之。勿于问候中尽列诸令。只言 `/` 面板、上文 ctrl+o 之示、最小入门诸令（`/suspend all`、`/kanban` 或 `/viz`、`/goal`）、tutorial-guide 之 hook 及接 IM 之荐。",
+                    "规范之 slash-command 参考于桌面之窗由 `/help` 启之。勿于问候中尽列诸令。只言 `/` 面板、上文 Ctrl+O 或 Cmd+O 之示、最小入门诸令（`/suspend all`、`/kanban`、`/goal`）、tutorial-guide 之 hook 及接 IM 之荐。"},
+            }) {
+            apply_adaptation(bytes, source, replacement);
+        }
+        return bytes;
+    }
+    for (const auto &[source, replacement] : {
+            std::pair<std::string_view, std::string_view>{
+                "keeps running even when the TUI is closed",
+                    "keeps running even when the LingTai Desktop window is closed"},
+            {"closing the TUI does NOT stop you",
+                "closing LingTai Desktop does NOT stop you"},
+            {"`/kanban` or `/viz` for agent status and the network view",
+                "`/kanban` for agent status and the network view"},
+            {"pressing **ctrl+o**", "pressing **Ctrl+O** or **Cmd+O**"},
+            {"even when the TUI is closed. Offer to walk them through the setup whenever they're ready. After setup, `/mcp` is where they check that the addon is configured and connected — it verifies status, it is not how the configuration is done.",
+                "even when LingTai Desktop is closed. Offer to walk them through the setup whenever they're ready. After setup, tell them to ask you to verify that the add-on is configured and connected."},
+            {"The canonical slash-command reference now lives in the `lingtai-tui-help` skill (`tui/internal/preset/skills/lingtai-tui-help/assets/slash-commands.<lang>.md`), surfaced in-app by `/help`. Do NOT list all commands in your greeting. Mention the `/` palette, the ctrl+o tip above, the tiny shortlist above (`/suspend all`, `/kanban` or `/viz`, `/goal`), the tutorial-guide hook, and the IM recommendation.",
+                "The canonical slash-command reference is surfaced in-app by `/help`. Do NOT list all commands in your greeting. Mention the `/` palette, the Ctrl+O or Cmd+O tip above, the tiny shortlist above (`/suspend all`, `/kanban`, `/goal`), the tutorial-guide hook, and the IM recommendation."},
+        }) {
+        apply_adaptation(bytes, source, replacement);
+    }
+    return bytes;
+}
+
+std::string desktop_adapted_playbook(std::string bytes) {
+    for (const auto &[source, replacement] : {
+            std::pair<std::string_view, std::string_view>{
+                "1. **Spawn an avatar** — create a sub-agent, then suggest /viz to see the network",
+                    "1. **Spawn an avatar** — create a sub-agent, then suggest /kanban to see the network"},
+                {"Interacting over IM (Telegram, Feishu, WeChat) is the best experience: the human can message you from their phone, replies arrive asynchronously, and your proactive updates reach them even when the TUI is closed. Your greeting already recommends connecting a channel; in the first session, follow up once at a natural moment if none is connected yet. If they're interested, walk them through the setup yourself. After setup, point them to `/mcp` to check that the addon is configured and connected — `/mcp` verifies status, it is not the configuration mechanism.",
+                    "Interacting over IM (Telegram, Feishu, WeChat) is the best experience: the human can message you from their phone, replies arrive asynchronously, and your proactive updates reach them even when LingTai Desktop is closed. Your greeting already recommends connecting a channel; in the first session, follow up once at a natural moment if none is connected yet. If they're interested, walk them through the setup yourself. After setup, tell them to ask you to verify that the add-on is configured and connected."},
+                {"Use `/help` as the canonical human-facing markdown reference for slash commands. The source docs live in the `lingtai-tui-help` skill (`tui/internal/preset/skills/lingtai-tui-help/assets/slash-commands.<lang>.md`); do not maintain a second full command explanation in recipes.",
+                    "Use `/help` as the canonical in-app reference for slash commands; do not maintain a second full command explanation in this playbook."},
+                {"| Human asks about themes, language, or display | `/settings` |\n", ""},
+                {"| Human asks what you can do or about extensions | `/skills` |\n", ""},
+                {"| Avatars are spawned or network grows | `/viz` |",
+                    "| Avatars are spawned or network grows | `/kanban` |"},
+                {"| Human mentions external messaging (email, Telegram, Feishu, WeChat) | `/mcp` — only to check configured addons and connection status; you handle the configuration itself |",
+                    "| Human mentions external messaging (email, Telegram, Feishu, WeChat) | Offer to verify that the add-on is configured and connected |"},
+                {"| Human mentions other projects or switching context | `/projects` |\n", ""},
+                {"| Human wants to chat with the secretary or ask about briefings | `/secretary` |\n", ""},
+                {"| Human asks about project summaries or briefing files | `/brief` |\n", ""},
+                {"| Human reports connectivity or startup issues | `/doctor` |\n", ""},
+                {"| Human explicitly wants to start completely over | `/nirvana` |\n", ""},
+                {"- Task is big enough to split → spawn an avatar, then suggest /viz",
+                    "- Task is big enough to split → spawn an avatar, then suggest /kanban"},
+                {"- **ctrl+o** (detailed behavior / soul view):",
+                    "- **Ctrl+O** or **Cmd+O** (detailed behavior / soul view):"},
+                {"- **ctrl+e** (editor): when the human is composing a long message\n", ""},
+                {"- **Option+click** (text selection): when the human tries to copy text — \"hold Option (Mac) or Shift to select text\"\n", ""},
+                {"- You keep running after the TUI closes",
+                    "- You keep running after LingTai Desktop closes"},
+                {"introduced: /viz, /kanban, avatar spawning, web search, ctrl+o",
+                    "introduced: /kanban, avatar spawning, web search, Ctrl+O or Cmd+O"},
+                {"not yet: /export, /mcp, /skills, daemon, /doctor, /insights",
+                    "not yet: /export, daemon, /insights"},
+                {"give only a tiny command foothold (`/suspend all`, `/kanban` or `/viz`, and `/goal`)",
+                    "give only a tiny command foothold (`/suspend all`, `/kanban`, and `/goal`)"},
+                {"3. **When avatars spawn**: always suggest /viz and /kanban.",
+                    "3. **When avatars spawn**: always suggest /kanban."},
+                {"4. **When stuck**: offer /insights, /doctor, or /refresh depending on the problem.",
+                    "4. **When stuck**: offer /insights or /refresh depending on the problem."},
+                {"\"skip the /viz suggestion, I already know about it\"",
+                    "\"skip the /kanban suggestion, I already know about it\""},
+            }) {
+        apply_adaptation(bytes, source, replacement);
+    }
+    return bytes;
+}
+
+std::set<std::string> desktop_slash_registry() {
+    auto result = std::set<std::string>{};
+    for (const auto &offer :
+            lingtai::desktop::matching_slash_commands("/")) {
+        result.emplace(offer.name);
+    }
+    require(!result.empty(), "Desktop slash-command registry is empty");
+    return result;
+}
+
+void require_desktop_guidance(
+        std::string_view prompt, std::string_view comment,
+        std::string_view language) {
+    const auto combined = std::string(prompt) + "\n" + std::string(comment);
+    for (const auto forbidden : {
+            "TUI", "lingtai-tui", "tui/internal/", "ctrl+e",
+            "Option+click", "/viz", "/mcp", "/settings", "/doctor",
+            "/projects", "/skills", "/nirvana", "/secretary", "/brief",
+            "/update-tui", "/daemons", "/notification", "/taskcard",
+            "/knowledge", "/system", "/mailbox", "/login", "/update",
+        }) {
+        require(combined.find(forbidden) == std::string::npos,
+            std::string("Desktop guidance contains forbidden TUI-only text for ")
+                + std::string(language) + ": " + forbidden);
+    }
+    const auto registry = desktop_slash_registry();
+    const auto backticked_command = std::regex(
+        R"COMMAND(`\/([A-Za-z0-9_-]+)(?: [^`]*)?`)COMMAND");
+    for (auto match = std::sregex_iterator(
+                combined.begin(), combined.end(), backticked_command);
+            match != std::sregex_iterator{}; ++match) {
+        const auto name = match->str(1);
+        require(registry.contains(name),
+            std::string("Desktop guidance names unregistered command for ")
+                + std::string(language) + ": /" + name);
+    }
+}
+
 fs::path adaptive_fixture() {
     return fs::path(LINGTAI_PROJECT_CREATION_FIXTURE_DIR)
         / "adaptive-ead292d48703192c31f0abda791a666ffc6c0263/.recipe";
@@ -159,7 +315,7 @@ void assert_creation_shape(const fs::path &destination,
         "Agent mailbox/shared-library shape missing");
     require(!fs::exists(lingtai / ".tui-asset"),
         "Desktop must not recreate TUI-only recipe state");
-    require(!fs::exists(lingtai / ".recipe"),
+    require(!fs::exists(destination / ".recipe"),
         "Desktop must not publish project-root recipe state");
 
     const auto init = read_object(agent / "init.json");
@@ -340,34 +496,26 @@ int main(int argc, char **argv) {
             const auto greeting = read_file(agent / ".prompt");
             const auto playbook = read_file(agent / "comment.md");
             const auto init = read_object(agent / "init.json");
-            auto expected_greeting = read_file(
-                adaptive_greeting(localized.language));
+            auto expected_greeting = desktop_adapted_greeting(
+                read_file(adaptive_greeting(localized.language)),
+                localized.language);
             replace_all(expected_greeting, "{{time}}", "2031-04-05 06:07");
             replace_all(expected_greeting, "{{location}}",
                 "Chicago, Illinois, US");
             replace_all(expected_greeting, "{{lang}}", localized.language);
             replace_all(expected_greeting, "{{soul_delay}}", "7200");
             replace_all(expected_greeting, "{{addr}}", "human");
-            const auto commands = expected_greeting.find("{{commands}}");
-            if (commands == std::string::npos) {
-                require(greeting == expected_greeting,
-                    "English greeting did not exactly follow the pinned adaptive fixture");
-            } else {
-                const auto prefix = expected_greeting.substr(0, commands);
-                const auto suffix = expected_greeting.substr(
-                    commands + std::string_view("{{commands}}").size());
-                require(greeting.starts_with(prefix)
-                        && greeting.ends_with(suffix)
-                        && greeting.find("  - /btw — ") != std::string::npos
-                        && greeting.find("  - /quit — ") != std::string::npos,
-                    std::string("localized command expansion drifted for ")
-                        + localized.language);
-            }
-            require(playbook == read_file(
-                        adaptive_comment(localized.language))
-                    && !has_unresolved_placeholder(playbook),
-                std::string("localized adaptive comment was not the pinned fixture for ")
+            const auto expected_playbook = desktop_adapted_playbook(
+                read_file(adaptive_comment(localized.language)));
+            require(greeting == expected_greeting,
+                std::string("Desktop-adapted greeting drifted for ")
                     + localized.language);
+            require(playbook == expected_playbook
+                    && !has_unresolved_placeholder(playbook),
+                std::string("Desktop-adapted playbook drifted for ")
+                    + localized.language);
+            require_desktop_guidance(
+                greeting, playbook, localized.language);
             require(init.value("manifest").toObject().value("language")
                         .toString().toStdString() == localized.language
                     && init.value("comment_file").toString().toStdString()
@@ -415,7 +563,8 @@ int main(int argc, char **argv) {
             whitespace_agent / "comment.md");
         const auto whitespace_init = read_object(
             whitespace_agent / "init.json");
-        require(whitespace_playbook == read_file(adaptive_comment("wen"))
+        require(whitespace_playbook == desktop_adapted_playbook(
+                    read_file(adaptive_comment("wen")))
                 && !has_unresolved_placeholder(whitespace_playbook)
                 && whitespace_init.value("comment_file")
                     .toString().toStdString()

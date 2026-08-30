@@ -69,6 +69,7 @@ class ProjectCreationSourceContractTest(unittest.TestCase):
     def test_guidance_has_no_network_or_global_state_boundary(self) -> None:
         implementation = SOURCE.read_text()
         header = SOURCE.with_suffix(".h").read_text()
+        resources = CONTENT_SOURCE.read_text()
         for forbidden in (
             "QNetworkAccessManager",
             "QNetworkRequest",
@@ -90,6 +91,22 @@ class ProjectCreationSourceContractTest(unittest.TestCase):
         self.assertIn("guidance_cached_location", header)
         self.assertIn("QDateTime::currentDateTime()", implementation)
         self.assertNotIn("currentDateTimeUtc", implementation)
+        for forbidden_guidance in (
+            "tui/internal/",
+            "update-tui",
+            "`/viz`",
+            "`/mcp`",
+            "`/settings`",
+            "`/doctor`",
+            "`/projects`",
+            "`/skills`",
+            "`/nirvana`",
+            "`/secretary`",
+            "`/brief`",
+            "ctrl+e",
+            "Option+click",
+        ):
+            self.assertNotIn(forbidden_guidance, resources)
 
 
 if __name__ == "__main__":

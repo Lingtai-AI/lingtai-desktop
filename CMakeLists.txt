@@ -577,7 +577,8 @@ target_compile_options(lingtai_project_creation_test PRIVATE
 target_compile_definitions(lingtai_project_creation_test PRIVATE
     LINGTAI_PROJECT_CREATION_FIXTURE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/resources/project_creation\")
 target_link_libraries(lingtai_project_creation_test PRIVATE
-    lingtai_desktop_project_creation lingtai_desktop_agent_projection)
+    lingtai_desktop_project_creation lingtai_desktop_agent_projection
+    lingtai_desktop_slash_command)
 
 
 add_executable(lingtai_agent_detail_view_test
