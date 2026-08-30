@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -55,6 +56,28 @@ bool has_stage(const fs::path &destination) {
         }
     }
     return false;
+}
+
+std::map<std::string, std::string> tree_snapshot(const fs::path &root) {
+    auto snapshot = std::map<std::string, std::string>{};
+    for (const auto &entry : fs::recursive_directory_iterator(root)) {
+        const auto relative = fs::relative(entry.path(), root).generic_string();
+        const auto status = entry.symlink_status();
+        const auto permissions = std::to_string(
+            static_cast<unsigned>(status.permissions()));
+        if (fs::is_symlink(status)) {
+            snapshot[relative] = "link:" + permissions + ":"
+                + fs::read_symlink(entry.path()).generic_string();
+        } else if (fs::is_directory(status)) {
+            snapshot[relative] = "directory:" + permissions;
+        } else if (fs::is_regular_file(status)) {
+            snapshot[relative] = "file:" + permissions + ":"
+                + read_file(entry.path());
+        } else {
+            snapshot[relative] = "other:" + permissions;
+        }
+    }
+    return snapshot;
 }
 
 bool has_unresolved_placeholder(std::string_view bytes) {
@@ -105,6 +128,7 @@ lingtai::desktop::ProjectCreationRequest request_for(
         .preset_path = global / "presets/saved/alpha.json",
         .allowed_preset_paths = {
             global / "presets/saved/beta.json",
+            global / "presets/saved/beta.json",
         },
         .runtime_python = runtime_python,
         .env_file = global / ".env",
@@ -145,6 +169,31 @@ void assert_creation_shape(const fs::path &destination,
             && manifest.value("context_limit").toInteger() == 300000
             && manifest.value("max_aed_attempts").toInteger() == 5,
         "reviewed Agent configuration not applied");
+    const auto expected_manifest_keys = std::vector<QString>{
+        "llm", "capabilities", "agent_name", "language",
+        "context_limit", "max_turns", "max_rpm", "max_aed_attempts",
+        "streaming", "admin", "soul", "preset",
+    };
+    require(manifest.size()
+            == static_cast<qsizetype>(expected_manifest_keys.size()),
+        "fresh manifest leaked an unowned selected-preset field");
+    for (const auto &key : expected_manifest_keys) {
+        require(manifest.contains(key),
+            "fresh manifest omitted owned field: " + key.toStdString());
+    }
+    const auto capabilities = manifest.value("capabilities").toObject();
+    const auto shell = capabilities.value("shell").toObject();
+    const auto email = capabilities.value("email").toObject();
+    const auto other = capabilities.value("other").toObject();
+    require(!capabilities.contains("bash")
+            && shell.value("provider").toString() == "openai"
+            && shell.value("api_key_env").toString() == "TEST_API_KEY"
+            && shell.value("mode").toString() == "strict"
+            && email.value("api_key_env").toString() == "TEST_API_KEY"
+            && other.value("api_key_env").toString() == "OTHER_KEY"
+            && !capabilities.value("system").toObject()
+                .contains("api_key_env"),
+        "legacy/provider-matched capabilities were not normalized exactly");
     const auto policy = manifest.value("preset").toObject();
     const auto selected = QString::fromStdString(
         (global / "presets/saved/alpha.json").string());
@@ -209,10 +258,43 @@ int main(int argc, char **argv) {
                   "    \"capabilities\": {\"system\": {}, \"email\": {}}\n"
                   "  }\n}\n";
         };
-        write_file(global / "presets/saved/alpha.json",
-            preset("alpha", "alpha-model"));
+        write_file(global / "presets/saved/alpha.json", R"JSON({
+  "name": "alpha",
+  "manifest": {
+    "llm": {"provider": "openai", "model": "alpha-model", "api_key_env": "TEST_API_KEY"},
+    "capabilities": {
+      "system": {},
+      "email": {"provider": "openai"},
+      "bash": {"provider": "openai", "api_key_env": "STALE_KEY", "mode": "strict"},
+      "other": {"provider": "anthropic", "api_key_env": "OTHER_KEY"}
+    },
+    "selected_only": {"must_not_leak": true},
+    "unowned_scalar": 73
+  }
+}
+)JSON");
         write_file(global / "presets/saved/beta.json",
             preset("beta", "beta-model"));
+        write_file(global / "presets/templates/gamma.json", R"JSON({
+  "name": "gamma",
+  "manifest": {
+    "llm": {"provider": "anthropic", "model": "gamma-model", "api_key_env": "ANTHROPIC_KEY"},
+    "capabilities": {
+      "bash": {"provider": "anthropic"},
+      "remote": {"provider": "openai", "api_key_env": "OPENAI_KEY"}
+    },
+    "template_only": ["must", "not", "leak"]
+  }
+}
+)JSON");
+        write_file(global / "presets/saved/conflicting-legacy.json", R"JSON({
+  "name": "conflicting-legacy",
+  "manifest": {
+    "llm": {"provider": "openai", "model": "conflict", "api_key_env": "TEST_API_KEY"},
+    "capabilities": {"bash": {"mode": "legacy"}, "shell": {"mode": "current"}}
+  }
+}
+)JSON");
         write_file(runtime, "#!/bin/sh\nexit 0\n");
         fs::permissions(runtime,
             fs::perms::owner_all | fs::perms::group_read
@@ -220,6 +302,7 @@ int main(int argc, char **argv) {
                 | fs::perms::others_exec,
             fs::perm_options::replace);
 
+        const auto global_before_creates = tree_snapshot(global);
         const auto destination = root / "project";
         fs::create_directories(destination / "notes");
         write_file(destination / "notes/keep.txt", "preserve me\n");
@@ -317,6 +400,60 @@ int main(int argc, char **argv) {
                     .toString().toStdString()
                     == (whitespace_agent / "comment.md").string(),
             "whitespace-only Comment did not publish the selected localized playbook");
+
+        const auto template_destination = root / "template-project";
+        fs::create_directories(template_destination);
+        request = request_for(template_destination, global, runtime);
+        request.preset_path = global / "presets/templates/gamma.json";
+        request.setup.language = "en";
+        request.comment.clear();
+        const auto template_result =
+            lingtai::desktop::create_project(request);
+        require(static_cast<bool>(template_result),
+            "template-preset creation failed: " + template_result.detail);
+        const auto template_manifest = read_object(
+            template_destination / ".lingtai/main/init.json")
+            .value("manifest").toObject();
+        const auto template_capabilities = template_manifest
+            .value("capabilities").toObject();
+        const auto template_policy = template_manifest.value("preset").toObject();
+        const auto template_selected = QString::fromStdString(
+            (global / "presets/templates/gamma.json").string());
+        require(template_manifest.size() == 12
+                && !template_manifest.contains("template_only")
+                && !template_capabilities.contains("bash")
+                && template_capabilities.value("shell").toObject()
+                    .value("api_key_env").toString() == "ANTHROPIC_KEY"
+                && template_capabilities.value("remote").toObject()
+                    .value("api_key_env").toString() == "OPENAI_KEY"
+                && template_policy.value("active").toString()
+                    == template_selected
+                && template_policy.value("default").toString()
+                    == template_selected
+                && template_policy.value("allowed").toArray().size() == 2
+                && template_policy.value("allowed").toArray().at(0).toString()
+                    == QString::fromStdString(
+                        (global / "presets/saved/beta.json").string())
+                && template_policy.value("allowed").toArray().at(1).toString()
+                    == template_selected,
+            "template manifest projection, capability normalization, or policy order drifted");
+
+        const auto conflict_destination = root / "legacy-conflict";
+        fs::create_directories(conflict_destination);
+        request = request_for(conflict_destination, global, runtime);
+        request.preset_path = global / "presets/saved/conflicting-legacy.json";
+        const auto legacy_conflict =
+            lingtai::desktop::create_project(request);
+        require(!legacy_conflict
+                && legacy_conflict.failure
+                    == lingtai::desktop::ProjectCreationFailure::invalid_preset
+                && legacy_conflict.stage
+                    == lingtai::desktop::ProjectCreationStage::staged_generation
+                && !fs::exists(conflict_destination / ".lingtai")
+                && !has_stage(conflict_destination),
+            "conflicting bash/shell capabilities did not fail closed");
+        require(tree_snapshot(global) == global_before_creates,
+            "project creation changed global preset, credential, or recipe state");
 
         // Publication is independent of runtime readiness. The configured
         // paths remain useful launch inputs, but a missing interpreter, env,
