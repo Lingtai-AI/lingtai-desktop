@@ -221,6 +221,34 @@ std::optional<QJsonObject> load_preset(const fs::path &path) {
     return root;
 }
 
+std::optional<QJsonObject> normalize_legacy_capabilities(
+        QJsonObject capabilities) {
+    if (!capabilities.contains("bash")) return capabilities;
+    const auto legacy = capabilities.value("bash");
+    if (capabilities.contains("shell")
+            && capabilities.value("shell") != legacy) {
+        return std::nullopt;
+    }
+    capabilities["shell"] = legacy;
+    capabilities.remove("bash");
+    return capabilities;
+}
+
+void propagate_provider_api_key_env(
+        const QJsonObject &llm, QJsonObject &capabilities) {
+    const auto provider = llm.value("provider").toString();
+    const auto api_key_env = llm.value("api_key_env").toString();
+    if (provider.isEmpty() || api_key_env.isEmpty()) return;
+    for (auto capability = capabilities.begin();
+            capability != capabilities.end(); ++capability) {
+        if (!capability.value().isObject()) continue;
+        auto values = capability.value().toObject();
+        if (values.value("provider").toString() != provider) continue;
+        values["api_key_env"] = api_key_env;
+        capability.value() = values;
+    }
+}
+
 std::optional<QJsonObject> parse_object(std::string_view bytes) {
     QJsonParseError error;
     const auto document = QJsonDocument::fromJson(
@@ -707,10 +735,25 @@ ProjectCreationResult create_project(
                 requested_allowed.push_back(text);
             }
         }
+        const auto selected_manifest =
+            selected_preset->value("manifest").toObject();
+        const auto selected_llm = selected_manifest.value("llm").toObject();
+        auto selected_capabilities = normalize_legacy_capabilities(
+            selected_manifest.value("capabilities").toObject());
+        if (!selected_capabilities) {
+            return staged_failure(ProjectCreationFailure::invalid_preset,
+                ProjectCreationStage::staged_generation,
+                "selected preset has conflicting bash and shell capabilities");
+        }
+        propagate_provider_api_key_env(
+            selected_llm, *selected_capabilities);
         const AgentSetupPresetSelection selection{
             .choice = AgentSetupPresetChoice::select_preset,
             .reference = request.preset_path.string(),
-            .manifest = selected_preset->value("manifest").toObject(),
+            .manifest = QJsonObject{
+                {"llm", selected_llm},
+                {"capabilities", *selected_capabilities},
+            },
         };
         const auto policy = reconcile_agent_setup_presets(
             {}, selection, requested_allowed);
@@ -739,7 +782,10 @@ ProjectCreationResult create_project(
                 "localized or reviewed Agent comment content is not meaningful and bounded");
         }
 
-        auto manifest = selected_preset->value("manifest").toObject();
+        auto manifest = QJsonObject{
+            {"llm", selected_llm},
+            {"capabilities", *selected_capabilities},
+        };
         manifest["agent_name"] = QString::fromStdString(request.agent_name);
         manifest["language"] = QString::fromUtf8(
             localized.language.data(),
