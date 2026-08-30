@@ -158,19 +158,24 @@ std::optional<std::string> render_greeting(
         const ProjectCreationResources &resources,
         const ProjectCreationRequest &request) {
     auto result = std::string(resources.greeting_template);
-    const auto timestamp = QDateTime::currentDateTimeUtc()
-        .toString(Qt::ISODateWithMs).toStdString();
+    const auto timestamp = request.guidance_local_time
+        ? request.guidance_local_time()
+        : QDateTime::currentDateTime()
+            .toString(QStringLiteral("yyyy-MM-dd HH:mm")).toStdString();
+    auto location = request.guidance_cached_location
+        ? request.guidance_cached_location() : std::string{};
+    if (blank(location)) location = "unknown";
     const auto soul_delay = request.setup.soul_delay
         ? QString::number(*request.setup.soul_delay, 'g', 15).toStdString()
-        : std::string("kernel-default");
+        : std::string("kernel default");
     for (const auto &[token, replacement] : {
             std::pair<std::string_view, std::string_view>{
                 "{{time}}", timestamp},
-            {"{{location}}", "unknown"},
-            {"{{language}}", resources.language},
+            {"{{location}}", location},
+            {"{{lang}}", resources.language},
             {"{{soul_delay}}", soul_delay},
-            {"{{agent_address}}", request.agent_directory},
-            {"{{human_address}}", "human"},
+            {"{{addr}}", "human"},
+            {"{{commands}}", resources.command_reference},
         }) {
         replace_all(result, token, replacement);
     }

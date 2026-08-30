@@ -170,7 +170,6 @@ void assert_creation_shape(const fs::path &destination,
         "reviewed comment bytes changed");
     const auto greeting = read_file(agent / ".prompt");
     require(greeting.find("欢迎人类") != std::string::npos
-            && greeting.find("main") != std::string::npos
             && greeting.find("human") != std::string::npos
             && greeting.find("2031-04-05 06:07") != std::string::npos
             && greeting.find("Chicago, Illinois, US") != std::string::npos

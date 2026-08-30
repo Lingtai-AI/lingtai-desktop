@@ -10,6 +10,7 @@ struct ProjectCreationResources {
     std::string_view language;
     std::string_view greeting_template;
     std::string_view adaptive_playbook;
+    std::string_view command_reference;
 };
 
 [[nodiscard]] const ProjectCreationResources &project_creation_resources(

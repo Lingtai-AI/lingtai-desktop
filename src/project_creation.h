@@ -63,6 +63,11 @@ struct ProjectCreationRequest {
     std::string agent_directory;
     AgentSetupDraft setup;
     std::string comment;
+    // Optional deterministic boundary for first-boot guidance. Production
+    // uses the local clock and the literal "unknown" location when these are
+    // absent; callers may provide an already-cached location, never a resolver.
+    std::function<std::string()> guidance_local_time;
+    std::function<std::string()> guidance_cached_location;
     ProjectCreationFailurePoint failure_point =
         ProjectCreationFailurePoint::none;
 };
