@@ -177,6 +177,46 @@ def unavailable_release_transport() -> FakeReleaseTransport:
 
 
 class DesktopUserCLIContractTest(unittest.TestCase):
+    def test_staged_app_smoke_uses_sixty_second_isolated_fail_closed_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            executable = root / "LingTai.app/Contents/MacOS/LingTai"
+            fake_home = root / "home"
+            fake_tmp = root / "tmp"
+            successful = mock.Mock(
+                returncode=0,
+                stdout=(
+                    "LINGTAI_NATIVE_SHELL_READY\n"
+                    "LINGTAI_LIB_UI_FULL_TARGET_SMOKE_OK\n"
+                ),
+            )
+            with mock.patch.object(cli.subprocess, "run", return_value=successful) as run:
+                cli.Platform().smoke(executable, fake_home, fake_tmp)
+            self.assertEqual(cli.STAGED_APP_SMOKE_TIMEOUT, 60)
+            run.assert_called_once_with(
+                [str(executable), "--smoke"],
+                env={
+                    "HOME": str(fake_home), "TMPDIR": str(fake_tmp),
+                    "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "en_US.UTF-8",
+                    "LC_ALL": "en_US.UTF-8",
+                },
+                stdout=cli.subprocess.PIPE, stderr=cli.subprocess.STDOUT,
+                text=True, timeout=60, check=False,
+            )
+
+            for output in (
+                "LINGTAI_NATIVE_SHELL_READY\n",
+                "LINGTAI_LIB_UI_FULL_TARGET_SMOKE_OK\nLINGTAI_NATIVE_SHELL_READY\n",
+            ):
+                with self.subTest(output=output), mock.patch.object(
+                    cli.subprocess, "run",
+                    return_value=mock.Mock(returncode=0, stdout=output),
+                ):
+                    with self.assertRaisesRegex(
+                        cli.DesktopCLIError, "markers are absent or out of order",
+                    ):
+                        cli.Platform().smoke(executable, fake_home, fake_tmp)
+
     def test_official_url_rejects_unicode_before_production_transport(self) -> None:
         connection = mock.Mock()
         connection.request.side_effect = UnicodeEncodeError(

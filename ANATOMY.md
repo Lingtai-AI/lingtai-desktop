@@ -23,7 +23,7 @@ scripts/verify-app-archive.py          independent safe archive verifier/extract
 scripts/macos_packaging.py             testable fail-closed macOS package owner
 scripts/package-macos.py               optional diagnostic/release DMG CLI
 scripts/verify-macos-package.py        optional independent DMG verifier
-scripts/desktop_user_cli.py            official download/check + user lifecycle policy
+scripts/desktop_user_cli.py            official download/check + user lifecycle/staged-smoke policy
 scripts/install-macos-app.py           thin Python 3 initial-bootstrap CLI
 cmake/macos/Info.plist.in              bundle metadata including the macOS floor
 src/                                  owned Qt adaptation surface (see src/ANATOMY.md)

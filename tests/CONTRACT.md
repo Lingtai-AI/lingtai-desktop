@@ -169,8 +169,8 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
 - `tests/test_native_shell.py` — `native_shell` (process persistence and
   smoke-order via the built smoke executable).
 - `tests/test_repository_contract.py` — manual `python3 -m unittest
-  tests.test_repository_contract`; the pinned-provenance and tracked-artifact
-  repository contract.
+  tests.test_repository_contract`; the canonical product-version,
+  pinned-provenance, and tracked-artifact repository contract.
 - `tests/test_macos_packaging.py` — manual `python3 -m unittest
   tests.test_macos_packaging`; the offline package-production and independent
   per-slice verification boundary contract, including publication races and
@@ -185,8 +185,9 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   official GitHub Release discovery/download, cached confirmed offers, and the
   App-archive install/update/launch/doctor/uninstall transaction. Its injected
   transport and macOS process boundaries make every response, clock, prompt,
-  TTY fact, App action, and failure offline and deterministic; explicit local
-  pairs remain covered.
+  TTY fact, App action, and failure offline and deterministic; the exact
+  isolated staged `--smoke` invocation, 60-second ceiling, and ordered-marker
+  failure closure are pinned, and explicit local pairs remain covered.
   Publication and uninstall tests must assert the complete before/after tree,
   not only the raised error: a refusal is evidence only when shared-parent
   metadata, racer-owned leaves, outside trees, every managed version/current,

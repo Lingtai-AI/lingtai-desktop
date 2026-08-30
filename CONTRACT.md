@@ -44,8 +44,12 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
   only, while interactive calls
   require an explicit default-No `y`/`yes` before the same verified transaction.
   Explicit `update` forces fresh discovery and never prompts, but malformed or
-  substituted owned cache state remains a fail-closed integrity precondition. The
-  command never mutates PATH/profiles and never weakens quarantine or Gatekeeper.
+  substituted owned cache state remains a fail-closed integrity precondition.
+  The staged App runs the exact `--smoke` invocation under its isolated
+  environment with a 60-second ceiling and must emit the ready then full-target
+  markers; timeout, nonzero exit, or absent/out-of-order markers aborts before
+  publication. The command never mutates PATH/profiles and never weakens
+  quarantine or Gatekeeper.
   Existing shared `.local` parent modes are outside its ownership. Managed
   publication becomes visible only after mode preparation, rollback removes
   only invocation-created inode identities, and uninstall rejects the entire

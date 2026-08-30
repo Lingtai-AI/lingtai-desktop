@@ -28,8 +28,9 @@ test proves. This file descends into `tests/` itself.
   `.deps/`, `build/`, `Qt/`, or system-temp paths and no leaked
   validation-root marker from lib-ui validation is tracked by git. It is run with
   `python3 -m unittest tests.test_repository_contract`, deliberately not as
-  a ctest: it is a repository contract, not a product behavior, and it is
-  deliberately not a repository-shape or CMake-source assertion suite.
+  a ctest: it is a repository contract, not a product behavior. Its one
+  CMake-source assertion owns the canonical product version; it is not a
+  general repository-shape suite.
 - `tests/test_app_archive.py` — the offline owner of the primary portable-App
   archive boundary: exact manifest/App-tree binding, safe private extraction,
   executable modes, internal symlink/hardlink preservation, incremental hostile
@@ -49,7 +50,9 @@ test proves. This file descends into `tests/` itself.
   cache freshness, noninteractive notices, default-No TTY offers, confirmed
   update continuation, and offline/rate-limit failure behavior without live
   GitHub. Its injected platform boundary proves exact independent archive
-  verification/extraction and smoke failures, exact open/foreground argv, managed modes/layout,
+  verification/extraction, the exact isolated `--smoke` invocation with its
+  60-second ceiling and ordered markers, smoke failures, exact open/foreground
+  argv, managed modes/layout,
   receipt/digest tamper rejection, atomic current preservation, collisions,
   symlink/traversal refusal, root refusal, and owned-only uninstall without
   invoking Finder, an App, Apple services, or the network.

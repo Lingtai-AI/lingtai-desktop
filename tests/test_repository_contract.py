@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Pinned toolkit provenance and tracked-artifact guard for LingTai Desktop.
+"""Pinned toolkit provenance, product version, and artifact guard for Desktop.
 
 This is deliberately the sole owner of the pinned-commit/lock-file check: no
 other test asserts that `cmake/desktop-app-toolkit-lock.json` still names the
-exact verified upstream commits. It is not a repository-shape or CMake-source
-assertion suite; those duplicate what a missing file or a broken link edge
-already fails the build on.
+exact verified upstream commits. Its one CMake-source assertion owns the
+canonical product version; it is not a general repository-shape suite.
 """
 from __future__ import annotations
 
@@ -16,6 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCK = ROOT / "cmake" / "desktop-app-toolkit-lock.json"
+CMAKE = ROOT / "CMakeLists.txt"
 REQUIRED_TOOLKIT = {
     "lib_ui": "9e9e5e1fc5ba7e3f4d5407b484210db3b46aa53d",
     "lib_base": "82d182a275e197fd717fecc86193d9d91f4fc5b5",
@@ -28,6 +28,15 @@ REQUIRED_TOOLKIT = {
 
 
 class RepositoryContractTest(unittest.TestCase):
+    def test_canonical_product_version_is_v018(self) -> None:
+        declarations = [
+            line for line in CMAKE.read_text().splitlines()
+            if line.startswith("project(lingtai_desktop VERSION ")
+        ]
+        self.assertEqual(declarations, [
+            "project(lingtai_desktop VERSION 0.1.8 LANGUAGES C CXX OBJC OBJCXX)",
+        ])
+
     def test_locked_toolkit_foundation_is_pinned(self) -> None:
         data = json.loads(LOCK.read_text())
         self.assertEqual(data["qt"]["version"], "6.11.1")

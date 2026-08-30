@@ -66,6 +66,7 @@ UPDATE_CACHE_KEYS = {"schema_version", "checked_at", "latest_version"}
 MAX_UPDATE_CACHE_BYTES = 512
 DEFAULT_UPDATE_CHECK_INTERVAL = 24 * 60 * 60
 AUTOMATIC_RELEASE_TIMEOUT = 2.0
+STAGED_APP_SMOKE_TIMEOUT = 60
 MANIFEST_KEYS = {
     "architectures", "archive_file_name", "archive_sha256",
     "archive_size_bytes", "artifact_kind", "bundle_executable",
@@ -216,7 +217,7 @@ class Platform:
             "LC_ALL": "en_US.UTF-8",
         }
         output = _run([executable, "--smoke"], label="staged App smoke",
-                      environment=environment, timeout=15)
+                      environment=environment, timeout=STAGED_APP_SMOKE_TIMEOUT)
         markers = ("LINGTAI_NATIVE_SHELL_READY", "LINGTAI_LIB_UI_FULL_TARGET_SMOKE_OK")
         positions = [output.find(marker) for marker in markers]
         if any(value < 0 for value in positions) or positions != sorted(positions):

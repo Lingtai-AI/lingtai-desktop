@@ -45,10 +45,11 @@ Qt plugin path set and an 8 s watchdog.
 
 ### Repository/build/static contracts
 
-- `test_repository_contract.py` proves the lock file still pins Qt 6.11.1,
-  the exact `tdesktop_commit`, and the seven exact toolkit commits, and that
-  no dependency/build/validation artifact is tracked by git. It is the sole
-  owner of pinned provenance (`test_repository_contract.py:2-8`).
+- `test_repository_contract.py` proves the canonical product version is
+  v0.1.8, the lock file still pins Qt 6.11.1, the exact `tdesktop_commit`, and
+  the seven exact toolkit commits, and that no dependency/build/validation
+  artifact is tracked by git. It is the sole owner of pinned provenance
+  (`test_repository_contract.py:2-8`).
 - `test_app_archive.py` proves the portable archive/manifest producer and
   independent extractor/verifier remain the authoritative artifact boundary.
 - `test_desktop_user_cli.py` proves entirely offline that bootstrap and explicit
@@ -56,7 +57,9 @@ Qt plugin path set and an 8 s watchdog.
   source, reject hostile metadata/redirects/statuses/stream sizes, clean partial
   downloads, bound every remote/managed version seam, and feed the existing
   installer. It also proves pre-transport URL encoding rejection, pre-update
-  command syntax validation, the owned private single-link cache and its
+  command syntax validation, the exact isolated staged `--smoke` invocation,
+  its 60-second ceiling and fail-closed ordered markers, the owned private
+  single-link cache and its
   hardlink-publication rollback, 24-hour zero-network freshness, normal-command
   noninteractive notices,
   interactive default-No offers, deliberate `y`/`yes` verified update followed

@@ -89,7 +89,10 @@ Their exact names, version, bytes, and App facts must agree; extraction rejects
 absolute/traversing or invalid names, escaping links, special
 devices/FIFOs/sockets, duplicates, and extra top-level content. Verification and
 smoke run in private disposable directories before atomic version publication
-under the user-level managed root.
+under the user-level managed root. The staged executable receives the exact
+isolated environment and `--smoke` invocation, with a 60-second ceiling and
+ordered ready/full-target marker requirements; timeout, exit, or marker failure
+aborts publication.
 
 The managed files are `$HOME/.local/bin/lingtai-desktop` and
 `$HOME/.local/share/lingtai-desktop/{cli,versions,receipts,current,update-check.json}`.
