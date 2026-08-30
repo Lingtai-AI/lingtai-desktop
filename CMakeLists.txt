@@ -574,6 +574,8 @@ add_executable(lingtai_project_creation_test
 init_target(lingtai_project_creation_test)
 target_compile_options(lingtai_project_creation_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
+target_compile_definitions(lingtai_project_creation_test PRIVATE
+    LINGTAI_PROJECT_CREATION_FIXTURE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/tests/resources/project_creation\")
 target_link_libraries(lingtai_project_creation_test PRIVATE
     lingtai_desktop_project_creation lingtai_desktop_agent_projection)
 

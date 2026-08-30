@@ -62,6 +62,32 @@ bool has_unresolved_placeholder(std::string_view bytes) {
         || bytes.find("}}") != std::string_view::npos;
 }
 
+void replace_all(std::string &bytes, std::string_view token,
+        std::string_view replacement) {
+    auto offset = std::size_t{0};
+    while ((offset = bytes.find(token, offset)) != std::string::npos) {
+        bytes.replace(offset, token.size(), replacement);
+        offset += replacement.size();
+    }
+}
+
+fs::path adaptive_fixture() {
+    return fs::path(LINGTAI_PROJECT_CREATION_FIXTURE_DIR)
+        / "adaptive-ead292d48703192c31f0abda791a666ffc6c0263/.recipe";
+}
+
+fs::path adaptive_greeting(std::string_view language) {
+    auto path = adaptive_fixture() / "greet";
+    if (language == "zh" || language == "wen") path /= language;
+    return path / "greet.md";
+}
+
+fs::path adaptive_comment(std::string_view language) {
+    auto path = adaptive_fixture() / "comment";
+    if (language == "zh" || language == "wen") path /= language;
+    return path / "comment.md";
+}
+
 lingtai::desktop::ProjectCreationRequest request_for(
         const fs::path &destination, const fs::path &global,
         const fs::path &runtime_python) {
@@ -87,6 +113,10 @@ lingtai::desktop::ProjectCreationRequest request_for(
         .agent_directory = "main",
         .setup = setup,
         .comment = "Keep the project scientifically honest.\n",
+        .guidance_local_time = [] { return "2031-04-05 06:07"; },
+        .guidance_cached_location = [] {
+            return "Chicago, Illinois, US";
+        },
     };
 }
 
@@ -105,6 +135,8 @@ void assert_creation_shape(const fs::path &destination,
         "Agent mailbox/shared-library shape missing");
     require(!fs::exists(lingtai / ".tui-asset"),
         "Desktop must not recreate TUI-only recipe state");
+    require(!fs::exists(lingtai / ".recipe"),
+        "Desktop must not publish project-root recipe state");
 
     const auto init = read_object(agent / "init.json");
     const auto manifest = init.value("manifest").toObject();
@@ -140,7 +172,8 @@ void assert_creation_shape(const fs::path &destination,
     require(greeting.find("欢迎人类") != std::string::npos
             && greeting.find("main") != std::string::npos
             && greeting.find("human") != std::string::npos
-            && greeting.find("unknown") != std::string::npos
+            && greeting.find("2031-04-05 06:07") != std::string::npos
+            && greeting.find("Chicago, Illinois, US") != std::string::npos
             && !has_unresolved_placeholder(greeting),
         "custom-comment creation lost its localized resolved greeting");
 
@@ -203,17 +236,11 @@ int main(int argc, char **argv) {
 
         struct LocalizedCase {
             const char *language;
-            const char *greeting_marker;
-            const char *playbook_marker;
         };
         for (const auto &localized : {
-                LocalizedCase{
-                    "en", "Welcome the human",
-                    "# Adaptive Collaboration Playbook"},
-                LocalizedCase{
-                    "zh", "欢迎人类", "# 自适应协作指南"},
-                LocalizedCase{
-                    "wen", "迎人", "# 随宜协作要略"},
+                LocalizedCase{"en"},
+                LocalizedCase{"zh"},
+                LocalizedCase{"wen"},
             }) {
             const auto localized_destination = root
                 / (std::string("localized-") + localized.language);
@@ -231,21 +258,33 @@ int main(int argc, char **argv) {
             const auto greeting = read_file(agent / ".prompt");
             const auto playbook = read_file(agent / "comment.md");
             const auto init = read_object(agent / "init.json");
-            require(greeting.find(localized.greeting_marker)
-                        != std::string::npos
-                    && greeting.find("main") != std::string::npos
-                    && greeting.find("human") != std::string::npos
-                    && greeting.find("unknown") != std::string::npos
-                    && greeting.find(localized.language) != std::string::npos
-                    && greeting.size() > 200U
-                    && !has_unresolved_placeholder(greeting),
-                std::string("localized greeting was incomplete for ")
-                    + localized.language);
-            require(playbook.find(localized.playbook_marker)
-                        != std::string::npos
-                    && playbook.size() > 200U
+            auto expected_greeting = read_file(
+                adaptive_greeting(localized.language));
+            replace_all(expected_greeting, "{{time}}", "2031-04-05 06:07");
+            replace_all(expected_greeting, "{{location}}",
+                "Chicago, Illinois, US");
+            replace_all(expected_greeting, "{{lang}}", localized.language);
+            replace_all(expected_greeting, "{{soul_delay}}", "7200");
+            replace_all(expected_greeting, "{{addr}}", "human");
+            const auto commands = expected_greeting.find("{{commands}}");
+            if (commands == std::string::npos) {
+                require(greeting == expected_greeting,
+                    "English greeting did not exactly follow the pinned adaptive fixture");
+            } else {
+                const auto prefix = expected_greeting.substr(0, commands);
+                const auto suffix = expected_greeting.substr(
+                    commands + std::string_view("{{commands}}").size());
+                require(greeting.starts_with(prefix)
+                        && greeting.ends_with(suffix)
+                        && greeting.find("  - /btw — ") != std::string::npos
+                        && greeting.find("  - /quit — ") != std::string::npos,
+                    std::string("localized command expansion drifted for ")
+                        + localized.language);
+            }
+            require(playbook == read_file(
+                        adaptive_comment(localized.language))
                     && !has_unresolved_placeholder(playbook),
-                std::string("localized adaptive playbook was incomplete for ")
+                std::string("localized adaptive comment was not the pinned fixture for ")
                     + localized.language);
             require(init.value("manifest").toObject().value("language")
                         .toString().toStdString() == localized.language
@@ -273,9 +312,7 @@ int main(int argc, char **argv) {
             whitespace_agent / "comment.md");
         const auto whitespace_init = read_object(
             whitespace_agent / "init.json");
-        require(whitespace_playbook.find("# 随宜协作要略")
-                    != std::string::npos
-                && whitespace_playbook.size() > 200U
+        require(whitespace_playbook == read_file(adaptive_comment("wen"))
                 && !has_unresolved_placeholder(whitespace_playbook)
                 && whitespace_init.value("comment_file")
                     .toString().toStdString()
