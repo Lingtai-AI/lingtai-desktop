@@ -126,12 +126,16 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   saved/template discovery, validation/skips, canonical ordering, exact facts,
   missing-directory behavior, typed scan failure, normalization, and no-write.
 - `tests/project_creation_test.cpp` — `project_creation`; project inputs,
-  destination contents, unsafe links, marker-present/marker-removed/publish-
-  refused rollback, runner destruction, and expected output all live below one
-  injected fixture root.
+  destination contents, exact custom Comment bytes, pinned adaptive guidance
+  with injected clock/location, controlled saved/template manifest projection,
+  legacy/provider capability normalization, stable preset-policy de-duplication,
+  no-global-mutation snapshots, unsafe links, marker-present/marker-removed/
+  publish-refused rollback, runner destruction, and expected output all live
+  below injected fixture roots.
 - `tests/test_project_creation_source_contract.py` — static assertion that the
-  production creation owner uses descriptor primitives and contains no path
-  recursive `remove_all` call.
+  production creation owner uses descriptor primitives, contains no path
+  recursive `remove_all` call or network/global guidance boundary, and that all
+  seven pinned adaptive fixtures retain their recorded SHA-256 values.
 - `tests/agent_sleep_test.cpp` — `agent_sleep`.
 - `tests/agent_lifecycle_test.cpp` — `agent_lifecycle`; the complete
   Desktop-owned lifecycle component contract with injected process, launcher,

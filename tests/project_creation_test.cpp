@@ -376,6 +376,27 @@ int main(int argc, char **argv) {
                     + localized.language);
         }
 
+        const auto no_cached_location_destination = root
+            / "no-cached-location";
+        fs::create_directories(no_cached_location_destination);
+        request = request_for(
+            no_cached_location_destination, global, runtime);
+        request.setup.language = "en";
+        request.comment.clear();
+        request.guidance_cached_location = {};
+        const auto no_cached_location_result =
+            lingtai::desktop::create_project(request);
+        require(static_cast<bool>(no_cached_location_result),
+            "no-cache adaptive creation failed: "
+                + no_cached_location_result.detail);
+        const auto no_cached_location_greeting = read_file(
+            no_cached_location_destination / ".lingtai/main/.prompt");
+        require(no_cached_location_greeting.find(
+                    "They are located in unknown.") != std::string::npos
+                && no_cached_location_greeting.find(
+                    "2031-04-05 06:07") != std::string::npos,
+            "missing cached location did not deterministically render unknown");
+
         const auto whitespace_comment_destination = root
             / "whitespace-comment-default";
         fs::create_directories(whitespace_comment_destination);

@@ -201,7 +201,9 @@ its code.
   New/Open activation is suppressed and the status shows the current phase.
 - The existing setup wizard owns destination, saved/template selection,
   editor, allowed/default policy, reviewed language/configuration, and explicit
-  Create/Cancel. Any dismissal remains a no-create cancellation.
+  Create/Cancel. Create mode starts at a `500000` context limit; an explicit
+  edit is transported exactly, while existing-Agent setup loads the stored
+  value unchanged. Any dismissal remains a no-create cancellation.
 - Immediately before dispatch, the shell removes only terminal `/` separators
   from a non-root destination, then maps exact `~` and `~/...` text through a
   nonempty traversal-free absolute `HOME`. It preserves all-separator root text
@@ -214,10 +216,19 @@ its code.
   selected preset before building one marker-owned sibling stage. It writes the
   canonical minimum human, first Agent, mailbox, and shared-library tree,
   validates allowed presets and reconciles selected/default/allowed policy
-  inside staging, then writes a Desktop-owned localized `.prompt` and always
+  inside staging. Fresh `manifest` starts only from the selected preset's `llm`
+  and normalized `capabilities`: legacy `bash` becomes `shell`, unequal
+  `bash`/`shell` definitions fail closed, and a nonempty LLM `api_key_env`
+  replaces that field only on same-provider capability objects. Creation then
+  adds its owned fields, so unrelated saved/template manifest keys do not
+  leak. Requested allowed references retain first-seen order, duplicates are
+  removed, and the absolute selected reference is appended only when absent.
+  It then writes a Desktop-owned localized `.prompt` and always
   writes Agent-local `comment.md`. Empty or whitespace-only create-new Comment
-  text selects the localized adaptive playbook; every nonblank text is
-  transported and written byte-for-byte. The final `manifest.comment_file`
+  text selects guidance derived from the pinned adaptive recipe; local time is
+  formatted `YYYY-MM-DD HH:MM`, location uses an injected already-cached value
+  or `unknown`, and no location network lookup or global-state write occurs.
+  Every nonblank text is transported and written byte-for-byte. The final `manifest.comment_file`
   always names that published Agent-local file. Validation requires exact
   Agent children, bounded regular
   content, resolved generated placeholders, matching content/references, and

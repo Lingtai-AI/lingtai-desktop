@@ -8,4 +8,3 @@ from the read-only `lingtai-tui` audit worktree at commit
 Desktop does not read this directory at runtime and does not publish `.recipe`
 or `.tui-asset` state. The fixture pins the user-visible source material used
 to specify Desktop-owned compiled guidance.
-
