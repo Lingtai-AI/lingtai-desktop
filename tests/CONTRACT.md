@@ -211,7 +211,11 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   Phase 3 owner. It proves latest/exact official support discovery, exact stable
   metadata/repository/tag/manifest/two-payload route and byte binding, hostile
   case/path/duplicate/redirect/JSON/length/SHA refusal, complete-validation-before-
-  publication, independent exact cache/cadence/decline and restoration, all
+  publication, independent exact cache/cadence/decline and restoration, including
+  post-publication-read late substitution: an exact retained prior cache inode is
+  restored without deleting/overwriting the racer, the racer is preserved under
+  one distinct failure-only leaf, and an initially absent-cache racer stays
+  canonical while publication refuses, all
   default-No/n/no/invalid/y/yes plus non-TTY/offline behavior, failed-target
   no-auto-retry, explicit support-before-App reporting, local-pair bypass,
   deterministic release production, and full official stage→pending→canonical

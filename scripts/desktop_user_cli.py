@@ -2006,6 +2006,43 @@ def _read_support_update_cache(paths: ManagedPaths) -> SupportUpdateCheck | None
     return check
 
 
+def _restore_support_update_cache_after_late_race(
+        path: Path, preserved_racer: Path,
+        previous_identity: tuple[int, int]) -> None:
+    """Restore the retained prior inode and preserve any late destination racer."""
+    if not _matches_identity(preserved_racer, previous_identity):
+        raise DesktopCLIError("prior support update-check cache was replaced")
+    try:
+        racer_identity = _identity(path)
+    except FileNotFoundError:
+        try:
+            os.link(preserved_racer, path, follow_symlinks=False)
+        except FileExistsError:
+            racer_identity = _identity(path)
+        except OSError as error:
+            raise DesktopCLIError(
+                "could not restore the prior support update-check cache"
+            ) from error
+        else:
+            if (not _matches_identity(path, previous_identity)
+                    or not _matches_identity(preserved_racer, previous_identity)):
+                raise DesktopCLIError(
+                    "support update-check cache restoration did not retain the exact prior inode"
+                )
+            preserved_racer.unlink()
+            if not _matches_identity(path, previous_identity):
+                raise DesktopCLIError(
+                    "support update-check cache restoration did not retain the exact prior inode"
+                )
+            return
+    _exchange_paths(preserved_racer, path)
+    if (not _matches_identity(path, previous_identity)
+            or not _matches_identity(preserved_racer, racer_identity)):
+        raise DesktopCLIError(
+            "support update-check cache race restoration did not preserve exact identities"
+        )
+
+
 def _write_support_update_cache(paths: ManagedPaths, check: SupportUpdateCheck) -> None:
     """Atomically exchange an existing cache and restore its exact inode on failure."""
     _require_real_directory(paths.support, "managed support")
@@ -2015,7 +2052,11 @@ def _write_support_update_cache(paths: ManagedPaths, check: SupportUpdateCheck) 
     if path.exists() or path.is_symlink():
         _read_support_update_cache(paths)
         previous_identity = _identity(path)
-    temporary = paths.support / f".update-check-{uuid.uuid4().hex}"
+    # A late destination substitution is exchanged into this distinct,
+    # failure-only preserved-racer namespace. Clean paths always remove it.
+    temporary = paths.support / (
+        f".preserved-support-update-cache-racer-{uuid.uuid4().hex}"
+    )
     temporary_identity: tuple[int, int] | None = None
     published = False
     retained_previous = False
@@ -2052,6 +2093,18 @@ def _write_support_update_cache(paths: ManagedPaths, check: SupportUpdateCheck) 
         if raw != payload or identity != temporary_identity:
             raise DesktopCLIError("support update-check cache publication was replaced")
         _fsync_directory(paths.support)
+        if not _matches_identity(path, temporary_identity):
+            if (previous_identity is not None and retained_previous
+                    and _matches_identity(temporary, previous_identity)):
+                _restore_support_update_cache_after_late_race(
+                    path, temporary, previous_identity,
+                )
+                published = False
+                retained_previous = False
+                _fsync_directory(paths.support)
+            raise DesktopCLIError(
+                "support update-check cache publication was replaced"
+            )
         if retained_previous:
             if not _matches_identity(temporary, previous_identity):
                 raise DesktopCLIError("prior support update-check cache was replaced")

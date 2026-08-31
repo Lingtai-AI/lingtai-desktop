@@ -268,12 +268,18 @@ original command continues. The independent canonical
 `support/update-check.json` stores support version/tag/generation/manifest/time
 and decline. Its own cadence fails open with a warning on corruption/provider
 failure, notices only in non-TTY, and prompts default No in TTY; only `y`/`yes`
-uses the official staging transaction (`scripts/desktop_user_cli.py:1984-2085`,
-`3221-3321`). Explicit official `update` forces support first and then App. A
+uses the official staging transaction. Cache replacement performs one final
+post-read destination identity check: a late existing-cache racer is atomically
+exchanged into the distinct failure-only
+`.preserved-support-update-cache-racer-*` namespace while the exact retained
+prior inode returns to canonical `update-check.json`; an initially absent-cache
+racer remains canonical and causes refusal; clean success leaves no transaction
+leaf (`scripts/desktop_user_cli.py:1984-2135`, `3274-3383`). Explicit official
+`update` forces support first and then App. A
 successful support stage reexecs the same canonical argv; the bootstrap consumes
 its marker before import, switches/self-tests/commits, and the injected one-shot
 guard resumes App work without looping (`scripts/support_bootstrap.py:1299-1354`,
-`scripts/desktop_user_cli.py:3454-3583`). A visible support failure leaves that
+`scripts/desktop_user_cli.py:3515-3648`). A visible support failure leaves that
 plane unchanged and may continue App. Diagnostic local App pairs bypass all
 support transport and cache work.
 Shared `.local` parents retain existing modes. Managed file modes are prepared

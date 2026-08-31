@@ -323,6 +323,10 @@ class DesktopSupportUpdatePhase3Test(unittest.TestCase):
             )
             cli._write_support_update_cache(paths, check)
             self.assertEqual(cli._read_support_update_cache(paths), check)
+            self.assertFalse(any(
+                path.name.startswith(".preserved-support-update-cache-racer-")
+                for path in paths.support.iterdir()
+            ))
             self.assertEqual(tree_snapshot(paths.update_cache), app_cache_before)
             value = json.loads(paths.support_update_cache.read_bytes())
             self.assertEqual(set(value), cli.SUPPORT_UPDATE_CACHE_KEYS)
@@ -631,6 +635,10 @@ class DesktopSupportUpdatePhase3Test(unittest.TestCase):
             self.assertEqual(paths.support_update_cache.read_bytes(), prior)
             self.assertEqual(cli._identity(paths.support_update_cache), identity)
             self.assertEqual(cli._read_support_update_cache(paths), old)
+            self.assertFalse(any(
+                path.name.startswith(".preserved-support-update-cache-racer-")
+                for path in paths.support.iterdir()
+            ))
 
     def test_support_cache_final_exchange_race_preserves_racer_and_refuses(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -675,8 +683,208 @@ class DesktopSupportUpdatePhase3Test(unittest.TestCase):
             self.assertEqual(paths.support_update_cache.read_bytes(), racer_bytes)
             self.assertEqual(
                 {path.name for path in paths.support.iterdir()
-                 if path.name.startswith(".update-check-")},
+                 if path.name.startswith(".update-check-")
+                 or path.name.startswith(".preserved-support-update-cache-racer-")},
                 set(),
+            )
+
+    def test_support_cache_post_read_late_race_restores_prior_and_preserves_racer(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, manifest = write_artifacts(root, "0.1.5")
+            home = root / "home"
+            home.mkdir()
+            cli.install(archive, manifest, home=home, platform=FakePlatform(), effective_uid=501)
+            paths = cli._paths(home)
+
+            old_manifest = cli.parse_support_manifest(
+                cli.build_support_manifest_bytes("0.1.6", "v0.1.6", self.payloads)
+            )
+            new_manifest = cli.parse_support_manifest(
+                cli.build_support_manifest_bytes("0.1.7", "v0.1.7", self.payloads)
+            )
+            old = cli.SupportUpdateCheck(
+                10, "0.1.6", "v0.1.6", old_manifest.generation_id,
+                old_manifest.manifest_sha256, False,
+            )
+            new = cli.SupportUpdateCheck(
+                20, "0.1.7", "v0.1.7", new_manifest.generation_id,
+                new_manifest.manifest_sha256, True,
+            )
+            cli._write_support_update_cache(paths, old)
+            self.assertEqual(cli._read_support_update_cache(paths), old)
+            prior_bytes = paths.support_update_cache.read_bytes()
+            prior_identity = cli._identity(paths.support_update_cache)
+            staged_bytes = cli._support_update_cache_bytes(new)
+            self.assertEqual(set(json.loads(staged_bytes)), cli.SUPPORT_UPDATE_CACHE_KEYS)
+
+            racer = paths.support / ".test-post-read-racer"
+            racer_check = dataclasses.replace(old, checked_at=99, declined=True)
+            racer_bytes = cli._support_update_cache_bytes(racer_check)
+            racer.write_bytes(racer_bytes)
+            racer.chmod(0o600)
+            racer_identity = cli._identity(racer)
+
+            real_read = cli._read_managed_support_file
+            target_reads = 0
+            raced = False
+            published_bytes: bytes | None = None
+            published_identity: tuple[int, int] | None = None
+
+            def read_then_race(
+                    path: Path, label: str, maximum_bytes: int,
+                    expected_size: int | None = None,
+                    expected_mode: int = cli.SUPPORT_PAYLOAD_MODE,
+            ) -> tuple[bytes, tuple[int, int]]:
+                nonlocal target_reads, raced, published_bytes, published_identity
+                result = real_read(
+                    path, label, maximum_bytes, expected_size, expected_mode,
+                )
+                if path == paths.support_update_cache:
+                    target_reads += 1
+                    if target_reads == 2:
+                        published_bytes, published_identity = result
+                        os.replace(racer, paths.support_update_cache)
+                        raced = True
+                return result
+
+            error: cli.DesktopCLIError | None = None
+            with mock.patch.object(
+                    cli, "_read_managed_support_file", side_effect=read_then_race,
+            ):
+                try:
+                    cli._write_support_update_cache(paths, new)
+                except cli.DesktopCLIError as caught:
+                    error = caught
+
+            prior_locations = [
+                path for path in paths.support.iterdir()
+                if cli._matches_identity(path, prior_identity)
+            ]
+            canonical_is_racer = cli._matches_identity(
+                paths.support_update_cache, racer_identity,
+            )
+            self.assertIsNotNone(
+                error,
+                "publication returned success after the post-read replacement; "
+                f"target_reads={target_reads} raced={raced} "
+                f"canonical_is_racer={canonical_is_racer} "
+                f"prior_locations={[path.name for path in prior_locations]}",
+            )
+            assert error is not None
+            self.assertRegex(str(error), "publication was replaced|raced")
+            self.assertTrue(raced)
+            self.assertEqual(target_reads, 2)
+            self.assertEqual(published_bytes, staged_bytes)
+            self.assertIsNotNone(published_identity)
+            assert published_identity is not None
+            self.assertEqual(cli._identity(paths.support_update_cache), prior_identity)
+            self.assertEqual(paths.support_update_cache.read_bytes(), prior_bytes)
+            self.assertEqual(cli._read_support_update_cache(paths), old)
+            self.assertFalse(racer.exists())
+
+            preserved = [
+                path for path in paths.support.iterdir()
+                if path.name.startswith(".preserved-support-update-cache-racer-")
+            ]
+            self.assertEqual(len(preserved), 1)
+            self.assertEqual(cli._identity(preserved[0]), racer_identity)
+            self.assertEqual(preserved[0].read_bytes(), racer_bytes)
+            self.assertEqual(preserved[0].stat().st_nlink, 1)
+            self.assertEqual(preserved[0].stat().st_mode & 0o777, 0o600)
+            self.assertFalse(any(
+                cli._matches_identity(path, published_identity)
+                for path in paths.support.iterdir()
+            ))
+            self.assertEqual(
+                [path.name for path in paths.support.iterdir()
+                 if path.name.startswith(".update-check-")],
+                [],
+            )
+
+    def test_absent_support_cache_post_read_late_racer_is_refused_without_clobber(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, manifest = write_artifacts(root, "0.1.5")
+            home = root / "home"
+            home.mkdir()
+            cli.install(archive, manifest, home=home, platform=FakePlatform(), effective_uid=501)
+            paths = cli._paths(home)
+            self.assertFalse(paths.support_update_cache.exists())
+
+            manifest_value = cli.parse_support_manifest(
+                cli.build_support_manifest_bytes("0.1.6", "v0.1.6", self.payloads)
+            )
+            new = cli.SupportUpdateCheck(
+                20, "0.1.6", "v0.1.6", manifest_value.generation_id,
+                manifest_value.manifest_sha256, False,
+            )
+            staged_bytes = cli._support_update_cache_bytes(new)
+            self.assertEqual(set(json.loads(staged_bytes)), cli.SUPPORT_UPDATE_CACHE_KEYS)
+            racer = paths.support / ".test-absent-post-read-racer"
+            racer_check = dataclasses.replace(new, checked_at=99, declined=True)
+            racer_bytes = cli._support_update_cache_bytes(racer_check)
+            racer.write_bytes(racer_bytes)
+            racer.chmod(0o600)
+            racer_identity = cli._identity(racer)
+
+            real_read = cli._read_managed_support_file
+            target_reads = 0
+            raced = False
+            published_identity: tuple[int, int] | None = None
+
+            def read_then_race(
+                    path: Path, label: str, maximum_bytes: int,
+                    expected_size: int | None = None,
+                    expected_mode: int = cli.SUPPORT_PAYLOAD_MODE,
+            ) -> tuple[bytes, tuple[int, int]]:
+                nonlocal target_reads, raced, published_identity
+                result = real_read(
+                    path, label, maximum_bytes, expected_size, expected_mode,
+                )
+                if path == paths.support_update_cache:
+                    target_reads += 1
+                    if target_reads == 1:
+                        self.assertEqual(result[0], staged_bytes)
+                        published_identity = result[1]
+                        os.replace(racer, paths.support_update_cache)
+                        raced = True
+                return result
+
+            error: cli.DesktopCLIError | None = None
+            with mock.patch.object(
+                    cli, "_read_managed_support_file", side_effect=read_then_race,
+            ):
+                try:
+                    cli._write_support_update_cache(paths, new)
+                except cli.DesktopCLIError as caught:
+                    error = caught
+
+            self.assertIsNotNone(
+                error,
+                "initially absent publication returned success after the post-read "
+                f"replacement; target_reads={target_reads} raced={raced} "
+                f"canonical_is_racer={cli._matches_identity(paths.support_update_cache, racer_identity)}",
+            )
+            assert error is not None
+            self.assertRegex(str(error), "publication was replaced|raced")
+            self.assertTrue(raced)
+            self.assertEqual(target_reads, 1)
+            self.assertFalse(racer.exists())
+            self.assertEqual(cli._identity(paths.support_update_cache), racer_identity)
+            self.assertEqual(paths.support_update_cache.read_bytes(), racer_bytes)
+            self.assertEqual(cli._read_support_update_cache(paths), racer_check)
+            self.assertIsNotNone(published_identity)
+            assert published_identity is not None
+            self.assertFalse(any(
+                cli._matches_identity(path, published_identity)
+                for path in paths.support.iterdir()
+            ))
+            self.assertEqual(
+                [path.name for path in paths.support.iterdir()
+                 if path.name.startswith(".update-check-")
+                 or path.name.startswith(".preserved-support-update-cache-racer-")],
+                [],
             )
 
     def test_official_stage_bootstrap_switch_commits_once_and_preserves_app_identity(self) -> None:
