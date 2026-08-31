@@ -33,17 +33,22 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
   official-release discovery/download, cached update offer, and
   install/update/current/receipt/doctor/launch/uninstall transaction. It also
   owns the exact `lingtai.desktop.support/v1` manifest/state/pending models,
+  including the exact numbered `release_tag == "v" + support_version` identity,
   immutable local support-generation staging, support diagnostics, and the
   no-write/no-network `support_self_test`; remote support discovery is not yet
   enabled. `scripts/support_bootstrap.py` is the stable, digest-bound installed
   launcher: before importing support code it validates the real managed chain,
   exact pointer/generation/manifest/payload set, carries the exact validated bytes
-  through import/self-test, handles one pending switch, and commits or rolls back
-  only after identity/hash and App/support-plane revalidation. Candidate code runs
-  in an isolated, minimal-environment child with private HOME/cwd/TMPDIR, bounded
+  through import/self-test, handles one pending switch only for the exact canonical
+  full invocation argv that staged it, and commits or rolls back only after
+  identity/hash and App/support-plane revalidation. Candidate code runs in an
+  isolated, minimal-environment child with private HOME/cwd/TMPDIR, bounded
   stdio/time, and a pre-candidate audit boundary denying writes, network, process/
-  exec, and native-loader escape. Rollback is failed-state-first and authenticates
-  a retained source-pointer identity across every durable recovery boundary.
+  exec, native-loader escape, and early exit. A denied capability hard-exits the
+  child, leaving no candidate-mutable violation ledger; the production parent
+  authenticates that sticky failure by wait status. Rollback is failed-state-first,
+  authenticates a retained source-pointer identity across every durable recovery
+  boundary, and can abort an uncommitted mutated target without trusting its bytes.
   It never discovers releases or mutates the App plane. `scripts/install-macos-app.py`
   is a thin initial bootstrap and duplicates no lifecycle policy.
   Remote acquisition is fixed to stable `Lingtai-AI/lingtai-desktop` GitHub
@@ -63,8 +68,13 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
   markers; timeout, nonzero exit, or absent/out-of-order markers aborts before
   publication. The command never mutates PATH/profiles and never weakens
   quarantine or Gatekeeper.
-  Existing shared `.local` parent modes are outside its ownership. A fresh install
-  journals the exact App/support identities before publication and resumes only
+  Existing shared `.local` parent modes are outside its ownership. Every App
+  receipt authority read enforces current-user ownership, regular single-link
+  type, mode 0600, bounded size, exact schema, and canonical bytes. An App update
+  atomically exchanges `current` while retaining the exact observed prior symlink;
+  a raced pointer is restored and rejected, and any later failure restores that
+  exact inode before new receipt/version cleanup. A fresh install journals the
+  exact App/support identities before publication and resumes only
   that bounded canonical transaction after process death; ordinary failure removes
   only exact still-owned invocation-created artifacts and empty directories.
   Managed publication becomes visible only after mode preparation, and App/support

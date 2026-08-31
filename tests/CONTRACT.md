@@ -188,10 +188,14 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   local N-to-N+1 transaction. The support proof includes hostile file kinds,
   exact sets/modes/hashes/links, semantic last-good/high-water/failed hash closure,
   prepublication anti-rollback/failed-target/argv policy, exact-byte import, and
-  enforced isolated no-write/network/process/native self-test. Focused matrices
-  cover ordinary and journaled fresh-install boundaries, payload/manifest/
-  generation/current TOCTOU wedges, authenticated rollback at each durable
-  boundary, exact one-shot explicit retry, support-independent App-only uninstall,
+  enforced isolated no-write/network/process/native/early-exit self-test whose
+  denied events cannot be erased by candidate globals. Focused matrices cover
+  ordinary and journaled fresh-install boundaries; payload/manifest/generation/
+  current TOCTOU wedges; exact staged-invocation argv binding; mutation-independent
+  last-good recovery; authenticated rollback at each durable boundary; exact
+  one-shot explicit retry; numbered tag/version coherence; App receipt owner/type/
+  link/mode/size/canonical-byte validation; post-current exact-pointer restoration;
+  concurrent App-current replacement; support-independent App-only uninstall,
   doctor, and full support preflight. Injected transport/platform/
   clock/TTY/prompt boundaries keep every response and App action offline and
   deterministic; explicit App pairs and one injected local support pair remain
