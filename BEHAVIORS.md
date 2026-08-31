@@ -27,7 +27,7 @@ restate per-owner behavior; owner-level detail lives in `src/`, `src/ui/`, and
   before exiting 0 under a 3 s timeout; readiness failure exits 98 and timeout
   exits 99. Proven by `tests/test_native_shell.py` (ctest name `native_shell`)
   and `scripts/smoke.py`.
-- **Repro-2 — Pinned release inputs.** The canonical product version is v0.1.8,
+- **Repro-2 — Pinned release inputs.** The canonical product version is v0.1.9,
   and the exact toolkit, third-party, Qt, and tdesktop-comparison commits in
   `cmake/desktop-app-toolkit-lock.json` never drift; no `.deps/`, `build/`,
   or `Qt/` tree is ever tracked. Proven by `tests/test_repository_contract.py`
@@ -72,7 +72,7 @@ restate per-owner behavior; owner-level detail lives in `src/`, `src/ui/`, and
 |---|---|---|
 | Repro-1 smoke marker order + exit codes | `tests/test_native_shell.py` (`native_shell`) | `ctest --test-dir build -R '^native_shell$'` |
 | Repro-1 real offscreen shell | `tests/native_shell_test.cpp` (`native_shell_behavior`) | `ctest --test-dir build -R '^native_shell_behavior$'` |
-| Repro-2 lock provenance + v0.1.8 + hygiene | `tests/test_repository_contract.py` | `python3 -m unittest tests.test_repository_contract` |
+| Repro-2 lock provenance + v0.1.9 + hygiene | `tests/test_repository_contract.py` | `python3 -m unittest tests.test_repository_contract` |
 | Core attachment/containment | `tests/project_attachment_test.cpp` (`project_attachment`) | `ctest --test-dir build -R '^project_attachment$'` |
 | Direct attachment selection facts | `tests/attachment_selection_test.cpp` (`attachment_selection`) | `ctest --test-dir build -R '^attachment_selection$'` |
 | C1 selection transitions | `tests/workspace_selection_test.cpp` (`workspace_selection`) | `ctest --test-dir build -R '^workspace_selection$'` |

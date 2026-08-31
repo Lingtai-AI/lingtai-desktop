@@ -28,13 +28,13 @@ REQUIRED_TOOLKIT = {
 
 
 class RepositoryContractTest(unittest.TestCase):
-    def test_canonical_product_version_is_v018(self) -> None:
+    def test_canonical_product_version_is_v019(self) -> None:
         declarations = [
             line for line in CMAKE.read_text().splitlines()
             if line.startswith("project(lingtai_desktop VERSION ")
         ]
         self.assertEqual(declarations, [
-            "project(lingtai_desktop VERSION 0.1.8 LANGUAGES C CXX OBJC OBJCXX)",
+            "project(lingtai_desktop VERSION 0.1.9 LANGUAGES C CXX OBJC OBJCXX)",
         ])
 
     def test_locked_toolkit_foundation_is_pinned(self) -> None:
