@@ -67,6 +67,15 @@ main executable bytes and universal architectures, recursive App-tree digest,
 and packaging-checkout HEAD/tree/dirty facts. Packaging provenance is not
 claimed as App-build provenance. The producer independently verifies the pair
 before exclusively publishing it, and preserves any racer-created destination.
+For the same numbered release, produce and independently validate the exact
+support manifest/two-payload set into a new output directory:
+
+```bash
+python3 scripts/support_release.py build \
+  --version 0.1.6 --output /private/tmp/lingtai-desktop-support-0.1.6
+python3 scripts/support_release.py validate \
+  /private/tmp/lingtai-desktop-support-0.1.6
+```
 
 Install exactly one versioned archive and its exact manifest from the latest
 official stable `Lingtai-AI/lingtai-desktop` GitHub Release (or select an exact
@@ -94,22 +103,33 @@ isolated environment and `--smoke` invocation, with a 60-second ceiling and
 ordered ready/full-target marker requirements; timeout, exit, or marker failure
 aborts publication.
 
-The managed files are `$HOME/.local/bin/lingtai-desktop` and
-`$HOME/.local/share/lingtai-desktop/{cli,versions,receipts,current,update-check.json}`.
-The command
+The managed files are `$HOME/.local/bin/lingtai-desktop`, the App plane under
+`$HOME/.local/share/lingtai-desktop/{versions,receipts,current,update-check.json}`,
+and the independent support plane under
+`$HOME/.local/share/lingtai-desktop/support/{versions,current,state.json,pending.json,update-check.json}`
+(`pending.json` and the support cache are optional). There is no flat mutable
+`cli/` directory. The command
 supports `open` (also the no-argument default), `foreground [-- APP_ARGS...]`,
 `version`, `doctor`, official `update [--version X.Y.Z]`, paired local-artifact
 `update --archive ... --manifest ...`, and
 explicit `uninstall --version X.Y.Z` / `uninstall --all`. A byte-identical
 same-version update is reverified and is an idempotent no-op; lower versions are
 refused. Each numeric version component is limited to nine ASCII decimal digits.
-Normal commands validate their syntax before consulting a private, single-link,
-fixed-schema 24-hour cache. When a newer
-stable version is known, noninteractive calls print a notice only; an interactive
-terminal offers a default-No prompt and only `y`/`yes` downloads, verifies, and
-atomically installs before continuing the requested command. Explicit `update`
-always performs a fresh official check and never prompts, but first requires any
-existing owned update-check cache to pass its integrity checks. The bootstrap
+Normal commands validate syntax before consulting the private, single-link,
+fixed-schema App and support caches on independent cadences. A newer support
+release produces a noninteractive notice only; an interactive terminal defaults
+No and only `y`/`yes` downloads all exact support assets, verifies their canonical
+manifest sizes/hashes, publishes one pending generation transaction, and reexecs
+the same command through the stable bootstrap. Ordinary support cache/network
+errors print a truthful warning and continue without replacing prior cache bytes.
+Explicit official `update` forces fresh support discovery/staging first and then
+fresh App update, reporting both planes; a support failure may leave that plane
+unchanged while App update continues. Paired local App updates perform no support
+network or cache operation. The bootstrap itself remains local/no-network,
+consumes the recursion marker before importing the selected generation, and
+cannot stage twice. V1 support authenticity means TLS plus the exact official
+GitHub repository/tag/asset route and manifest SHA-256 facts; it is not a signing
+claim. The bootstrap
 does not use a DMG, install under `/Applications`, use sudo, change PATH or shell
 profiles, clear quarantine, or bypass Gatekeeper. If `$HOME/.local/bin` is not
 already on PATH, invoke the launcher by its full path. Existing shared `.local`,

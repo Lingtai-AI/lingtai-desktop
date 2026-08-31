@@ -29,7 +29,8 @@ python3 -m unittest tests.test_project_creation_source_contract
 python3 -m unittest tests.test_macos_packaging
 python3 -m unittest tests.test_app_archive
 python3 -m unittest tests.test_desktop_user_cli
-python3 -m py_compile scripts/macos_packaging.py scripts/package-macos.py scripts/verify-macos-package.py scripts/app_archive.py scripts/package-app-archive.py scripts/verify-app-archive.py scripts/desktop_user_cli.py scripts/support_bootstrap.py scripts/install-macos-app.py
+python3 -m unittest tests.test_desktop_support_update
+python3 -m py_compile scripts/macos_packaging.py scripts/package-macos.py scripts/verify-macos-package.py scripts/app_archive.py scripts/package-app-archive.py scripts/verify-app-archive.py scripts/desktop_user_cli.py scripts/support_bootstrap.py scripts/support_release.py scripts/install-macos-app.py
 python3 -m json.tool cmake/desktop-app-toolkit-lock.json >/dev/null
 for script in scripts/*.sh; do bash -n "$script"; done
 export QT_ROOT="$HOME/Qt/6.11.1/macos"
@@ -65,6 +66,21 @@ python3 scripts/verify-app-archive.py \
   --manifest /private/tmp/lingtai-desktop-package/LingTai-0.1.5-macOS-universal.app.manifest.json
 ```
 
+Build and independently revalidate the exact three-file support release set only
+into a new disposable output directory:
+
+```bash
+python3 scripts/support_release.py build \
+  --version 0.1.6 --output /private/tmp/lingtai-desktop-support-0.1.6
+python3 scripts/support_release.py validate \
+  /private/tmp/lingtai-desktop-support-0.1.6
+```
+
+The support set is `support-manifest.json`, `desktop_user_cli.py`, and
+`verify-app-archive.py`, all mode 0600. Publication is deterministic and
+no-clobber. Its v1 trust when later downloaded is TLS + the exact official
+GitHub repository/tag/asset route + manifest hashes, never signing/signatures.
+
 Archive/manifest publication is exclusive and rollback is inode-bound; never
 replace its hard-link no-clobber publication with a final rename. Manifest
 `packaging_git_*` fields describe only the tracked packaging checkout, not the
@@ -78,9 +94,12 @@ HOME. Never run it against a developer's real HOME during validation.
 explicit updates discover only stable releases from the fixed official
 `Lingtai-AI/lingtai-desktop` GitHub source; the injected transport keeps every
 test offline. Preserve the explicit paired local-artifact path. Normal installed
-commands use the owned 24-hour cache and may install only after an interactive
-default-No `y`/`yes` confirmation; noninteractive commands notice only, and
-explicit `update` forces a fresh check without prompting. Do not add PATH/profile
+commands use independent App and support cache cadences. Support cache/provider
+errors warn and fail open for ordinary commands; noninteractive support checks
+notice only, and interactive checks stage only after a default-No `y`/`yes`.
+Explicit official `update` forces support first, canonical reexec, and then App;
+a visible support failure may leave support unchanged and continue App. Paired
+local App updates must perform zero support transport/cache work. Do not add PATH/profile
 mutation, sudo, quarantine/Gatekeeper bypass, another remote source, or a release
 claim.
 Preserve existing modes and unrelated contents in the shared `.local`,

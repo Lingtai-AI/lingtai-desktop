@@ -23,7 +23,8 @@ scripts/verify-app-archive.py          independent safe archive verifier/extract
 scripts/macos_packaging.py             testable fail-closed macOS package owner
 scripts/package-macos.py               optional diagnostic/release DMG CLI
 scripts/verify-macos-package.py        optional independent DMG verifier
-scripts/desktop_user_cli.py            App lifecycle + support models/local staging/self-test policy
+scripts/desktop_user_cli.py            App lifecycle + official/local managed support update owner
+scripts/support_release.py              deterministic exact support asset producer/validator
 scripts/support_bootstrap.py            stable pre-import support validator/switch/rollback launcher
 scripts/install-macos-app.py           thin Python 3 initial-bootstrap CLI
 cmake/macos/Info.plist.in              bundle metadata including the macOS floor
@@ -177,7 +178,9 @@ Each C++ contract executable maps to one ctest name (declared in
 guard), `test_app_archive.py` (portable archive production, independent safe
 extraction, exact manifest/App binding, and publication races), and
 `test_macos_packaging.py` (optional DMG mode, naming, path, and manifest
-contract). Route
+contract), `test_desktop_user_cli.py` (App lifecycle and stable/local support
+transaction), and `test_desktop_support_update.py` (official support transport,
+cache/consent/sequencing, producer, and stage-to-bootstrap commit). Route
 into `tests/ANATOMY.md` for the per-test contract mapping.
 
 ## Kernel artifacts Desktop reads
@@ -248,20 +251,38 @@ and final true-only action remain locals in the active wrapper call. Candidate
 injected/partial/extra markers fail the parent's exact singleton-marker grammar.
 There is no candidate-mutable ledger. Post-test
 generation, pointer, journal, state, and both managed planes are revalidated
-before commit. The active CLI can stage only an injected local generation
-in this phase; official network support discovery/cache publication is deferred.
+before commit. The active CLI stages either an injected local generation or an
+exact official generation discovered from the stable GitHub release. Official
+support discovery authenticates repository/tag/asset routes and canonical
+manifest facts before downloading both declared payloads into one identity-bound
+private scratch set; only complete verified Python bytes enter the generalized
+immutable generation/pending seam (`scripts/desktop_user_cli.py:648-848`,
+`2566-2694`). V1 trust is TLS + official GitHub origin/route + SHA-256, not a
+signature claim. The deterministic release-side producer/validator owns the exact
+manifest plus two payload files (`scripts/support_release.py:72-144`).
 Open and foreground launch only the receipt-validated current App by exact argv.
 Normal commands consult the App plane's owned mode-0600 `update-check.json` at most
 once per 24 hours: noninteractive calls notice only, and interactive calls use a
 default-No offer whose deliberate `y`/`yes` runs the verified update before the
-original command continues. Explicit `update` bypasses cache freshness and the
-offer. Diagnostic local-pair opt-in preserves the diagnostic classification.
+original command continues. The independent canonical
+`support/update-check.json` stores support version/tag/generation/manifest/time
+and decline. Its own cadence fails open with a warning on corruption/provider
+failure, notices only in non-TTY, and prompts default No in TTY; only `y`/`yes`
+uses the official staging transaction (`scripts/desktop_user_cli.py:1984-2085`,
+`3221-3321`). Explicit official `update` forces support first and then App. A
+successful support stage reexecs the same canonical argv; the bootstrap consumes
+its marker before import, switches/self-tests/commits, and the injected one-shot
+guard resumes App work without looping (`scripts/support_bootstrap.py:1299-1354`,
+`scripts/desktop_user_cli.py:3454-3583`). A visible support failure leaves that
+plane unchanged and may continue App. Diagnostic local App pairs bypass all
+support transport and cache work.
 Shared `.local` parents retain existing modes. Managed file modes are prepared
 before publication and rollback/removal is identity-bound. Candidate syntax, exact `v<support_version>` numbered release identity,
 argv, current/state relationship, anti-rollback, active/failed status, and explicit
-retry are validated before immutable generation publication. App-only update and
-`uninstall --version` do not inspect or mutate support, even when support is absent,
-tampered, symlinked, or unknown; local support stage/switch/rollback does not mutate
+retry are validated before immutable generation publication. Paired local App
+update and `uninstall --version` do not inspect or mutate support, even when
+support is absent, tampered, symlinked, or unknown; every support
+stage/switch/rollback does not mutate
 App inodes or bytes. `uninstall --all` preflights both complete
 planes, including every generation, pointer, state, optional cache/pending, and
 the digest-bound stable launcher, before its first deletion.

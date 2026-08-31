@@ -34,9 +34,16 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
   install/update/current/receipt/doctor/launch/uninstall transaction. It also
   owns the exact `lingtai.desktop.support/v1` manifest/state/pending models,
   including the exact numbered `release_tag == "v" + support_version` identity,
-  immutable local support-generation staging, support diagnostics, and the
-  no-write/no-network `support_self_test`; remote support discovery is not yet
-  enabled. `scripts/support_bootstrap.py` is the stable, digest-bound installed
+  immutable local and official support-generation staging, support diagnostics,
+  and the no-write/no-network `support_self_test`. Official support acquisition
+  accepts only the same stable `Lingtai-AI/lingtai-desktop` release, exact
+  `support-manifest.json` plus both exact payload assets, bounded official HTTPS
+  routes, and canonical manifest-declared size/SHA-256 facts; it publishes no
+  managed byte until all three private downloads compile and revalidate
+  (`scripts/desktop_user_cli.py:648-848`). `scripts/support_release.py` produces
+  and independently validates that deterministic exact three-file asset set
+  without clobber (`scripts/support_release.py:72-144`).
+  `scripts/support_bootstrap.py` is the stable, digest-bound installed
   launcher: before importing support code it validates the real managed chain,
   exact pointer/generation/manifest/payload set, carries the exact validated bytes
   through import/self-test, handles one pending switch only for the exact canonical
@@ -44,7 +51,10 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
   identity/hash and App/support-plane revalidation. Staging replaces the supplied
   full argv's first element with the absolute installed launcher before hashing,
   pending publication, and exec, while preserving every following argument and
-  never reinterpreting argv0 as an omitted command argument. Candidate code runs
+  never reinterpreting argv0 as an omitted command argument. The stable wrapper
+  consumes the value-only reexec marker before candidate import and injects only
+  its derived one-shot boolean after import, so the resumed command cannot loop
+  or stage support twice (`scripts/support_bootstrap.py:1299-1354`). Candidate code runs
   in an isolated, minimal-environment child with private HOME/cwd/TMPDIR, bounded
   stdio/time, and a pre-candidate audit boundary denying writes, network, process/
   exec, native-loader escape, frame escape, and early exit. A denied capability,
@@ -59,9 +69,13 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
   boundary, and can abort an uncommitted mutated target without trusting its bytes.
   It never discovers releases or mutates the App plane. `scripts/install-macos-app.py`
   is a thin initial bootstrap and duplicates no lifecycle policy.
-  Remote acquisition is fixed to stable `Lingtai-AI/lingtai-desktop` GitHub
-  Releases behind an injected HTTPS transport, and stops at a private temporary
-  archive/manifest pair consumed by the existing authoritative `install()` seam.
+  Remote acquisition for both planes is fixed to stable
+  `Lingtai-AI/lingtai-desktop` GitHub Releases behind an injected HTTPS
+  transport. App acquisition stops at a private archive/manifest pair consumed
+  by `install()`; support acquisition stops at a separately bounded private
+  manifest/two-payload set consumed by the same immutable generation/pending
+  transaction as local support staging. V1 trust is exactly TLS plus the official
+  GitHub origin/route and declared hashes; it is not release signing.
   Each URL hop must already be ASCII (ordinary percent-encoded paths remain
   accepted), and every numeric version component is bounded to nine ASCII
   decimal digits before integer, path, or cache use. Explicit local pairs remain
@@ -70,7 +84,18 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
   only, while interactive calls
   require an explicit default-No `y`/`yes` before the same verified transaction.
   Explicit `update` forces fresh discovery and never prompts, but malformed or
-  substituted owned cache state remains a fail-closed integrity precondition.
+  substituted owned App cache state remains a fail-closed integrity precondition.
+  Independently, `support/update-check.json` records the exact support
+  version/tag/generation/manifest digest/time/decline decision under a bounded
+  canonical schema and restoration-capable atomic replacement
+  (`scripts/desktop_user_cli.py:1951-2085`). Ordinary valid commands check it on
+  its own cadence: corruption or provider failure warns and continues without
+  replacing prior bytes, non-TTY only notices, and TTY defaults No and stages
+  only stripped `y`/`yes`. Explicit official update attempts support first with
+  exact one-shot retry, then App; a visible support failure may leave support
+  unchanged and continue the independent App transaction
+  (`scripts/desktop_user_cli.py:3221-3583`). Local App pairs touch no transport or
+  either cache.
   The staged App runs the exact `--smoke` invocation under its isolated
   environment with a 60-second ceiling and must emit the ready then full-target
   markers; timeout, nonzero exit, or absent/out-of-order markers aborts before
@@ -86,9 +111,10 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
   that bounded canonical transaction after process death; ordinary failure removes
   only exact still-owned invocation-created artifacts and empty directories.
   Managed publication becomes visible only after mode preparation, and App/support
-  transactions remain independent: an App operation never changes
-  `support/current`, support state, generations, or launcher; a support operation
-  never changes App versions, receipts, bundle bytes/inodes, or App `current`.
+  transactions remain independent even when the public `update` command sequences
+  both: each App transaction leaves `support/current`, support state, generations,
+  cache, and launcher unchanged, while each support transaction leaves App
+  versions, receipts, bundle bytes/inodes, cache, and App `current` unchanged.
   Support state binds last-good/high-water/failed generation hashes and permits a
   lower local last-good only with the exact failed high-water record. Public
   explicit retry is journaled and consumed once. `uninstall --version` is App-only

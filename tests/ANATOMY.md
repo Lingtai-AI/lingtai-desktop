@@ -77,6 +77,15 @@ test proves. This file descends into `tests/` itself.
   Authentic filesystem regressions additionally pin shared-parent preservation,
   pre-publication failure, symlink-root containment, and complete no-partial-
   delete behavior for unknown/tampered content in either managed plane.
+- `tests/test_desktop_support_update.py` — the fake-HOME/fake-transport Phase 3
+  support-update owner. It covers exact latest and numbered official support
+  release assets, hostile metadata/route/JSON/redirect/length/SHA conditions,
+  private complete downloads before publication, the independent exact support
+  cache and consent matrix, no-change/failed-target cadence behavior, local App
+  pair bypass, deterministic support release production/validation, and full
+  official staging through pending/canonical reexec/bootstrap commit while the
+  App plane remains byte/identity stable. It invokes no real network, App,
+  launcher, provider, or real HOME.
 - Compile-time guards embedded in unit tests: `workspace_selection_test.cpp`
   and `direct_conversation_route_test.cpp` start with
   `#ifdef QT_CORE_LIB / #error` so a Qt-core dependency leaking into a
@@ -301,6 +310,7 @@ no fixture); the test itself creates and removes its sandbox within that root
 | `test_app_archive.py` | Python `unittest` (no target) | manual: `python3 -m unittest tests.test_app_archive` | temporary injected directories only |
 | `test_macos_packaging.py` | Python `unittest` (no target) | manual: `python3 -m unittest tests.test_macos_packaging` | temporary injected directories only |
 | `test_desktop_user_cli.py` | Python `unittest` (no target) | manual: `python3 -m unittest tests.test_desktop_user_cli` | fake HOME + injected transport/platform/clock/TTY/prompt boundaries |
+| `test_desktop_support_update.py` | Python `unittest` (no target) | manual: `python3 -m unittest tests.test_desktop_support_update` | fake HOME + exact offline support-release transport/consent/executor boundaries |
 | `posix_descriptor_primitives_test.cpp` | `lingtai_posix_descriptor_primitives_test` | `posix_descriptor_primitives` | `posix-descriptor-primitives-fixture` |
 | `project_attachment_test.cpp` | `lingtai_project_attachment_test` | `project_attachment` | `project-attachment-fixture` |
 | `attachment_selection_test.cpp` | `lingtai_attachment_selection_test` | `attachment_selection` | `attachment-selection-fixture` |

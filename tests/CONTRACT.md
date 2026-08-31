@@ -17,7 +17,7 @@ must never be confused:
 
 - **Repository/static contracts** — `tests/test_repository_contract.py`,
   `tests/test_app_archive.py`, `tests/test_macos_packaging.py`,
-  `tests/test_desktop_user_cli.py`, and
+  `tests/test_desktop_user_cli.py`, `tests/test_desktop_support_update.py`, and
   the compile-time guards and `static_assert`s inside the unit tests. These
   pin provenance, enforce build edges (a Qt-free consumer stays Qt-free), and
   pin `noexcept`/exact return types. They protect the shape of the build and
@@ -203,8 +203,19 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   concurrent App-current replacement; support-independent App-only uninstall,
   doctor, and full support preflight. Injected transport/platform/
   clock/TTY/prompt boundaries keep every response and App action offline and
-  deterministic; explicit App pairs and one injected local support pair remain
-  covered while remote support discovery stays disabled.
+  deterministic; explicit App pairs and the injected local support transaction
+  remain covered. App-specific legacy matrices use the explicit one-shot skip
+  seam so their transport assertions stay scoped to the App plane.
+- `tests/test_desktop_support_update.py` — manual `python3 -m unittest
+  tests.test_desktop_support_update`; the dedicated fake-HOME/fake-transport
+  Phase 3 owner. It proves latest/exact official support discovery, exact stable
+  metadata/repository/tag/manifest/two-payload route and byte binding, hostile
+  case/path/duplicate/redirect/JSON/length/SHA refusal, complete-validation-before-
+  publication, independent exact cache/cadence/decline and restoration, all
+  default-No/n/no/invalid/y/yes plus non-TTY/offline behavior, failed-target
+  no-auto-retry, explicit support-before-App reporting, local-pair bypass,
+  deterministic release production, and full official stage→pending→canonical
+  reexec→bootstrap commit with App identity unchanged.
   Publication/refusal tests assert complete before/after trees, and support-only
   tests additionally retain App versions/receipts/current/bundle bytes and inode
   identities exactly. Evidence is valid only when shared-parent metadata,
