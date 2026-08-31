@@ -182,16 +182,21 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   rejection, bounded cleanup, and no-clobber publication races.
 - `tests/test_desktop_user_cli.py` — manual `python3 -m unittest
   tests.test_desktop_user_cli`; the deterministic fake-HOME contract for fixed
-  official GitHub Release discovery/download, cached confirmed offers, and the
-  App-archive install/update/launch/doctor/uninstall transaction. Its injected
-  transport and macOS process boundaries make every response, clock, prompt,
-  TTY fact, App action, and failure offline and deterministic; the exact
-  isolated staged `--smoke` invocation, 60-second ceiling, and ordered-marker
-  failure closure are pinned, and explicit local pairs remain covered.
-  Publication and uninstall tests must assert the complete before/after tree,
-  not only the raised error: a refusal is evidence only when shared-parent
-  metadata, racer-owned leaves, outside trees, every managed version/current,
-  and the launcher remain byte/type/mode identical as applicable.
+  official GitHub App release discovery/download, cached confirmed offers, and
+  the App archive transaction, plus canonical support manifest/state/pending
+  models, final fresh-install generation layout, stable pre-import launcher, and
+  local N-to-N+1 transaction. The support proof includes hostile file kinds,
+  exact sets/modes/hashes/links, anti-rollback/failed-target policy, real bounded
+  import/self-test, pointer/state/pending and rollback crash recovery, doctor,
+  App-only uninstall, and full support preflight. Injected transport/platform/
+  clock/TTY/prompt boundaries keep every response and App action offline and
+  deterministic; explicit App pairs and one injected local support pair remain
+  covered while remote support discovery stays disabled.
+  Publication/refusal tests assert complete before/after trees, and support-only
+  tests additionally retain App versions/receipts/current/bundle bytes and inode
+  identities exactly. Evidence is valid only when shared-parent metadata,
+  racer-owned leaves, outside trees, both managed planes, and the launcher remain
+  byte/type/mode/identity identical except for the authorized transaction.
 
 ## Maintenance
 

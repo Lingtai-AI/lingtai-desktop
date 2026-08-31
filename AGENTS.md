@@ -29,7 +29,7 @@ python3 -m unittest tests.test_project_creation_source_contract
 python3 -m unittest tests.test_macos_packaging
 python3 -m unittest tests.test_app_archive
 python3 -m unittest tests.test_desktop_user_cli
-python3 -m py_compile scripts/macos_packaging.py scripts/package-macos.py scripts/verify-macos-package.py scripts/app_archive.py scripts/package-app-archive.py scripts/verify-app-archive.py scripts/desktop_user_cli.py scripts/install-macos-app.py
+python3 -m py_compile scripts/macos_packaging.py scripts/package-macos.py scripts/verify-macos-package.py scripts/app_archive.py scripts/package-app-archive.py scripts/verify-app-archive.py scripts/desktop_user_cli.py scripts/support_bootstrap.py scripts/install-macos-app.py
 python3 -m json.tool cmake/desktop-app-toolkit-lock.json >/dev/null
 for script in scripts/*.sh; do bash -n "$script"; done
 export QT_ROOT="$HOME/Qt/6.11.1/macos"

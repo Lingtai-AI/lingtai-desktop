@@ -1187,7 +1187,8 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             )
             managed = home / ".local/share/lingtai-desktop"
             self.assertTrue(all(stat.S_IMODE(path.stat().st_mode) == 0o700 for path in (
-                managed, managed / "cli", managed / "versions", managed / "receipts"
+                managed, managed / "support", managed / "support/versions",
+                managed / "versions", managed / "receipts",
             )))
 
     def test_publication_preparation_failure_leaves_no_destination(self) -> None:
@@ -1200,31 +1201,6 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                 with self.assertRaises(cli.DesktopCLIError):
                     cli._publish_file_exclusive(source, destination, 0o600)
             self.assertFalse(destination.exists())
-
-    def test_identical_verifier_racer_survives_failed_publication_rollback(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            home = root / "home"
-            home.mkdir()
-            archive, manifest = write_artifacts(root)
-            verifier = home / ".local/share/lingtai-desktop/cli/verify-app-archive.py"
-            real_link = os.link
-            racer_bytes: bytes | None = None
-
-            def race_verifier(source: Path, destination: Path, **kwargs: object) -> None:
-                nonlocal racer_bytes
-                if Path(destination) == verifier:
-                    racer_bytes = Path(source).read_bytes()
-                    verifier.write_bytes(racer_bytes)
-                    verifier.chmod(0o600)
-                real_link(source, destination, **kwargs)
-
-            with mock.patch.object(cli.os, "link", side_effect=race_verifier):
-                with self.assertRaisesRegex(cli.DesktopCLIError, "refusing to overwrite"):
-                    cli.install(archive, manifest, home=home,
-                                platform=FakePlatform(), effective_uid=501)
-            self.assertIsNotNone(racer_bytes)
-            self.assertEqual(verifier.read_bytes(), racer_bytes)
 
     def test_uninstall_refuses_symlinked_managed_root_without_touching_outside_or_launcher(self) -> None:
         for command in ("version", "all"):
@@ -1320,7 +1296,9 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             self.assertEqual(os.readlink(managed / "current"), "versions/0.1.5")
             self.assertTrue((managed / "versions/0.1.5/LingTai.app").is_dir())
             self.assertTrue((managed / "receipts/0.1.5.json").is_file())
-            self.assertTrue((managed / "cli/desktop_user_cli.py").is_file())
+            support_target = os.readlink(managed / "support/current")
+            self.assertTrue((managed / "support" / support_target / "desktop_user_cli.py").is_file())
+            self.assertFalse((managed / "cli").exists())
             launcher = home / ".local/bin/lingtai-desktop"
             self.assertEqual(stat.S_IMODE(launcher.stat().st_mode), 0o755)
             self.assertEqual(platform.calls[0][0], "verify")
@@ -1370,15 +1348,17 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                                   output=out.append)
 
             make_app(app, "0.1.5")
-            verifier = home / ".local/share/lingtai-desktop/cli/verify-app-archive.py"
+            support = home / ".local/share/lingtai-desktop/support"
+            verifier = support / os.readlink(support / "current") / "verify-app-archive.py"
             verifier.write_text("tampered verifier")
-            with self.assertRaisesRegex(cli.DesktopCLIError, "unrelated launcher"):
+            verifier.chmod(0o600)
+            with self.assertRaises(cli.DesktopCLIError):
                 cli.run_installed(["doctor"], home=home, platform=platform,
                                   transport=transport, tty=lambda: False,
                                   output=out.append)
 
     def test_update_failure_matrix_preserves_old_current_and_owned_bytes(self) -> None:
-        for failure in ("verifier", "extract", "receipt", "launcher", "current"):
+        for failure in ("verifier", "extract", "receipt", "current"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 home = root / "home"
@@ -1603,6 +1583,269 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                 cli.parse_support_pending(
                     (json.dumps(pending_unknown, sort_keys=True, separators=(",", ":")) + "\n").encode()
                 )
+
+    def test_support_bootstrap_local_transaction_recovers_rolls_back_and_preserves_app_plane(self) -> None:
+        import importlib
+
+        bootstrap = importlib.import_module("scripts.support_bootstrap")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            home.mkdir()
+            archive, app_manifest = write_artifacts(root, "0.1.8")
+            platform = FakePlatform()
+            cli.install(
+                archive, app_manifest, home=home, platform=platform,
+                effective_uid=501,
+            )
+            paths = cli._paths(home)
+            support = paths.root / "support"
+            self.assertFalse((paths.root / "cli").exists())
+            self.assertEqual(
+                {item.name for item in support.iterdir()},
+                {"current", "state.json", "versions"},
+            )
+            initial_target = os.readlink(support / "current")
+            self.assertRegex(initial_target, r"^versions/0\.1\.8-[0-9a-f]{12}$")
+            initial_generation = initial_target.removeprefix("versions/")
+            self.assertEqual(
+                {item.name for item in (support / initial_target).iterdir()},
+                {"support-manifest.json", "desktop_user_cli.py", "verify-app-archive.py"},
+            )
+            self.assertEqual(stat.S_IMODE(paths.launcher.stat().st_mode), 0o755)
+            self.assertIn(b"lingtai.desktop.support/v1", paths.launcher.read_bytes())
+
+            delegated: list[tuple[Path, list[str]]] = []
+            with mock.patch.dict(os.environ, {
+                cli.SUPPORT_REEXEC_MARKER: "1", "SUPPORT_SENTINEL": "preserved",
+            }, clear=False):
+                self.assertEqual(bootstrap.run_launcher(
+                    ["version"], home=home,
+                    installed_runner=lambda module, arguments: (
+                        delegated.append((module, list(arguments))) or 17
+                    ),
+                ), 17)
+                self.assertNotIn(cli.SUPPORT_REEXEC_MARKER, os.environ)
+                self.assertEqual(os.environ["SUPPORT_SENTINEL"], "preserved")
+            self.assertEqual(delegated[0][0].parent.name, initial_generation)
+            self.assertEqual(delegated[0][1], ["version"])
+
+            def app_plane_facts() -> tuple[tuple[str, str, int, int, int, bytes], ...]:
+                result: list[tuple[str, str, int, int, int, bytes]] = []
+                owned = [paths.versions, paths.receipts]
+                if paths.current.exists() or paths.current.is_symlink():
+                    owned.append(paths.current)
+                for owned_root in owned:
+                    candidates = [owned_root]
+                    if owned_root.is_dir() and not owned_root.is_symlink():
+                        candidates.extend(owned_root.rglob("*"))
+                    for path in sorted(candidates, key=os.fspath):
+                        facts = path.lstat()
+                        relative = os.fspath(path.relative_to(paths.root))
+                        if path.is_symlink():
+                            kind, content = "symlink", os.fsencode(os.readlink(path))
+                        elif path.is_dir():
+                            kind, content = "directory", b""
+                        elif path.is_file():
+                            kind, content = "file", path.read_bytes()
+                        else:
+                            kind, content = "other", b""
+                        result.append((
+                            relative, kind, stat.S_IMODE(facts.st_mode),
+                            facts.st_dev, facts.st_ino, content,
+                        ))
+                return tuple(result)
+
+            app_before = app_plane_facts()
+            module_source = Path(cli.__file__).read_bytes()
+            verifier_source = (Path(cli.__file__).parent / "verify-app-archive.py").read_bytes()
+            next_module = module_source + b"\nSUPPORT_FIXTURE_GENERATION = 'next'\n"
+            next_verifier = verifier_source + b"\n# support fixture next\n"
+            fixture = root / "support-fixture"
+            fixture.mkdir()
+            module_path = fixture / "desktop_user_cli.py"
+            verifier_path = fixture / "verify-app-archive.py"
+            module_path.write_bytes(next_module)
+            verifier_path.write_bytes(next_verifier)
+            module_path.chmod(0o600)
+            verifier_path.chmod(0o600)
+            argv = [os.fspath(paths.launcher), "doctor"]
+            environment = {"HOME": os.fspath(home), "SENTINEL": "preserved"}
+            exec_calls: list[tuple[Path, list[str], dict[str, str], Path]] = []
+            original_cwd = Path.cwd()
+
+            staged = cli.stage_local_support_update(
+                module_path, verifier_path,
+                support_version="0.1.9", release_tag="v0.1.9",
+                argv=argv, environment=environment, home=home,
+                exec_launcher=lambda launcher, live_argv, live_environment: exec_calls.append((
+                    launcher, list(live_argv), dict(live_environment), Path.cwd(),
+                )),
+            )
+            self.assertEqual(os.readlink(support / "current"), initial_target)
+            self.assertTrue((support / "pending.json").is_file())
+            self.assertTrue((support / "versions" / staged).is_dir())
+            self.assertEqual(exec_calls[0][0], paths.launcher)
+            self.assertEqual(exec_calls[0][1], argv)
+            self.assertEqual(exec_calls[0][2]["SENTINEL"], "preserved")
+            self.assertEqual(
+                exec_calls[0][2][cli.SUPPORT_REEXEC_MARKER], "1",
+            )
+            self.assertEqual(exec_calls[0][3], original_cwd)
+            self.assertEqual(app_plane_facts(), app_before)
+            before_invalid = tree_snapshot(support)
+            with self.assertRaises(bootstrap.BootstrapError):
+                bootstrap.run_launcher(
+                    ["doctor", "unexpected"], home=home,
+                    installed_runner=lambda *_: 0,
+                )
+            self.assertEqual(tree_snapshot(support), before_invalid)
+
+            selected = bootstrap.process_pending(home=home)
+            self.assertEqual(selected.generation_id, staged)
+            self.assertEqual(os.readlink(support / "current"), f"versions/{staged}")
+            self.assertFalse((support / "pending.json").exists())
+            state = cli.parse_support_state((support / "state.json").read_bytes())
+            self.assertEqual(state.high_water_version, "0.1.9")
+            self.assertEqual(state.last_good_generation, staged)
+            self.assertEqual(app_plane_facts(), app_before)
+
+            doctor_output: list[str] = []
+            cli.run_installed(
+                ["doctor"], home=home, platform=platform,
+                transport=unavailable_release_transport(), tty=lambda: False,
+                output=doctor_output.append,
+            )
+            joined = "\n".join(doctor_output)
+            self.assertIn("bootstrap protocol: 1", joined)
+            self.assertIn(f"support generation: {staged}", joined)
+            self.assertIn("support high-water: 0.1.9", joined)
+            self.assertIn("support pending: none", joined)
+
+            def stage_version(version: str, suffix: bytes) -> str:
+                module_path.write_bytes(module_source + suffix)
+                verifier_path.write_bytes(verifier_source + suffix)
+                module_path.chmod(0o600)
+                verifier_path.chmod(0o600)
+                return cli.stage_local_support_update(
+                    module_path, verifier_path,
+                    support_version=version, release_tag=f"v{version}",
+                    argv=argv, environment=environment, home=home,
+                    exec_launcher=lambda *_: None,
+                )
+
+            failed_target = stage_version("0.1.10", b"\n# import failure fixture\n")
+            selected = bootstrap.process_pending(
+                home=home,
+                self_test_runner=lambda generation: (_ for _ in ()).throw(
+                    bootstrap.BootstrapError("injected support self-test failure")
+                ),
+            )
+            self.assertEqual(selected.generation_id, staged)
+            self.assertEqual(os.readlink(support / "current"), f"versions/{staged}")
+            failed_state = cli.parse_support_state((support / "state.json").read_bytes())
+            self.assertIn(failed_target, [item.generation_id for item in failed_state.failed_generations])
+            self.assertEqual(failed_state.high_water_version, "0.1.9")
+            self.assertEqual(app_plane_facts(), app_before)
+
+            rollback_target = stage_version("0.1.11", b"\n# rollback state crash fixture\n")
+            bootstrap._FAILPOINT = "rollback-state-published"
+            try:
+                with self.assertRaises(bootstrap.InjectedCrash):
+                    bootstrap.process_pending(
+                        home=home,
+                        self_test_runner=lambda generation: (_ for _ in ()).throw(
+                            bootstrap.BootstrapError("injected support self-test failure")
+                        ),
+                    )
+            finally:
+                bootstrap._FAILPOINT = None
+            self.assertEqual(os.readlink(support / "current"), f"versions/{staged}")
+            self.assertTrue((support / "pending.json").exists())
+            rollback_state = cli.parse_support_state((support / "state.json").read_bytes())
+            self.assertIn(
+                rollback_target,
+                [item.generation_id for item in rollback_state.failed_generations],
+            )
+            recovered = bootstrap.process_pending(
+                home=home,
+                self_test_runner=lambda generation: (_ for _ in ()).throw(
+                    AssertionError("recorded failed target was retried")
+                ),
+            )
+            self.assertEqual(recovered.generation_id, staged)
+            self.assertFalse((support / "pending.json").exists())
+
+            crash_target = stage_version("0.1.12", b"\n# pointer crash fixture\n")
+            bootstrap._FAILPOINT = "pointer-replaced"
+            try:
+                with self.assertRaises(bootstrap.InjectedCrash):
+                    bootstrap.process_pending(
+                        home=home, self_test_runner=lambda generation: None,
+                    )
+            finally:
+                bootstrap._FAILPOINT = None
+            self.assertEqual(os.readlink(support / "current"), f"versions/{crash_target}")
+            self.assertTrue((support / "pending.json").exists())
+            recovered = bootstrap.process_pending(
+                home=home, self_test_runner=lambda generation: None,
+            )
+            self.assertEqual(recovered.generation_id, crash_target)
+            self.assertFalse((support / "pending.json").exists())
+            self.assertEqual(app_plane_facts(), app_before)
+
+            state_target = stage_version("0.1.13", b"\n# state crash fixture\n")
+            bootstrap._FAILPOINT = "state-published"
+            try:
+                with self.assertRaises(bootstrap.InjectedCrash):
+                    bootstrap.process_pending(
+                        home=home, self_test_runner=lambda generation: None,
+                    )
+            finally:
+                bootstrap._FAILPOINT = None
+            self.assertEqual(os.readlink(support / "current"), f"versions/{state_target}")
+            self.assertTrue((support / "pending.json").exists())
+            recovered = bootstrap.process_pending(
+                home=home, self_test_runner=lambda generation: None,
+            )
+            self.assertEqual(recovered.generation_id, state_target)
+            self.assertFalse((support / "pending.json").exists())
+            self.assertEqual(app_plane_facts(), app_before)
+
+            removal_target = stage_version("0.1.14", b"\n# pending removal crash fixture\n")
+            bootstrap._FAILPOINT = "pending-removed"
+            try:
+                with self.assertRaises(bootstrap.InjectedCrash):
+                    bootstrap.process_pending(
+                        home=home, self_test_runner=lambda generation: None,
+                    )
+            finally:
+                bootstrap._FAILPOINT = None
+            self.assertEqual(os.readlink(support / "current"), f"versions/{removal_target}")
+            self.assertFalse((support / "pending.json").exists())
+            recovered = bootstrap.process_pending(
+                home=home, self_test_runner=lambda generation: None,
+            )
+            self.assertEqual(recovered.generation_id, removal_target)
+            self.assertEqual(app_plane_facts(), app_before)
+
+            support_before_app_uninstall = tree_snapshot(support)
+            launcher_before = paths.launcher.read_bytes()
+            cli.uninstall_version("0.1.8", home=home, effective_uid=501)
+            self.assertEqual(tree_snapshot(support), support_before_app_uninstall)
+            self.assertEqual(paths.launcher.read_bytes(), launcher_before)
+
+            foreign = support / "KEEP"
+            foreign.write_text("foreign", encoding="utf-8")
+            before_refusal = tree_snapshot(home)
+            with self.assertRaises(cli.DesktopCLIError):
+                cli.uninstall_all(home=home, effective_uid=501)
+            self.assertEqual(tree_snapshot(home), before_refusal)
+            foreign.unlink()
+            cli.uninstall_all(home=home, effective_uid=501)
+            self.assertFalse(paths.root.exists())
+            self.assertFalse(paths.launcher.exists())
 
     def test_production_source_contains_no_quarantine_bypass(self) -> None:
         source = (Path(__file__).parents[1] / "scripts/desktop_user_cli.py").read_text()

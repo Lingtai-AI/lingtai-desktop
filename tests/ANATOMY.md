@@ -45,21 +45,22 @@ test proves. This file descends into `tests/` itself.
   and bounded secret-free manifest shape. It invokes no Apple, GitHub, signing,
   mount, or packaging service.
 - `tests/test_desktop_user_cli.py` — the fake-HOME user-install lifecycle
-  contract. Its injected transport proves fixed official stable-release
-  metadata/asset selection, per-hop HTTPS policy, bounded streaming/cleanup,
-  cache freshness, noninteractive notices, default-No TTY offers, confirmed
-  update continuation, and offline/rate-limit failure behavior without live
-  GitHub. Its injected platform boundary proves exact independent archive
-  verification/extraction, the exact isolated `--smoke` invocation with its
-  60-second ceiling and ordered markers, smoke failures, exact open/foreground
-  argv, managed modes/layout,
-  receipt/digest tamper rejection, atomic current preservation, collisions,
-  symlink/traversal refusal, root refusal, and owned-only uninstall without
-  invoking Finder, an App, Apple services, or the network.
-  Authentic filesystem regressions additionally pin shared-parent mode/content
-  preservation, pre-link mode-preparation failure, identical verifier races,
-  symlink-root uninstall containment, and no-partial-delete behavior for an
-  unknown root child or a tampered later version.
+  contract. Its injected transport proves the existing fixed official App
+  metadata/assets, HTTPS bounds, cache/TTY offers, and offline failure behavior.
+  Its injected platform proves archive verification/extraction, isolated
+  60-second ordered-marker smoke, exact open/foreground argv, App receipts and
+  pointer safety without Finder, an App, Apple services, or live network.
+  The same module's support layer proves canonical exact manifest/state/pending
+  bytes, deterministic generation IDs, two-file mode/hash/size/link/type
+  validation, high-water and failed-target closure, final no-flat-layout fresh
+  install, stable bootstrap delegation, real bounded candidate import/self-test,
+  local stage/pending/re-exec, commit and rollback, and pointer/state/pending/
+  rollback durable-boundary recovery. It snapshots App bytes and inode identities
+  around every support-only operation, proves App-only uninstall preserves
+  support, and proves `--all` rejects unknown support before any deletion.
+  Authentic filesystem regressions additionally pin shared-parent preservation,
+  pre-publication failure, symlink-root containment, and complete no-partial-
+  delete behavior for unknown/tampered content in either managed plane.
 - Compile-time guards embedded in unit tests: `workspace_selection_test.cpp`
   and `direct_conversation_route_test.cpp` start with
   `#ifdef QT_CORE_LIB / #error` so a Qt-core dependency leaking into a

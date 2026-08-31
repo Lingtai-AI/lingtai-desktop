@@ -23,7 +23,8 @@ scripts/verify-app-archive.py          independent safe archive verifier/extract
 scripts/macos_packaging.py             testable fail-closed macOS package owner
 scripts/package-macos.py               optional diagnostic/release DMG CLI
 scripts/verify-macos-package.py        optional independent DMG verifier
-scripts/desktop_user_cli.py            official download/check + user lifecycle/staged-smoke policy
+scripts/desktop_user_cli.py            App lifecycle + support models/local staging/self-test policy
+scripts/support_bootstrap.py            stable pre-import support validator/switch/rollback launcher
 scripts/install-macos-app.py           thin Python 3 initial-bootstrap CLI
 cmake/macos/Info.plist.in              bundle metadata including the macOS floor
 src/                                  owned Qt adaptation surface (see src/ANATOMY.md)
@@ -217,19 +218,28 @@ minimum is macOS 13.0.
 The user-level lifecycle acquires stable releases only from the fixed official
 `Lingtai-AI/lingtai-desktop` GitHub API/asset hosts, through a per-hop validated
 injectable HTTPS boundary, or consumes an explicit local archive pair. Downloads
-remain private temporary inputs to the unchanged authoritative installer. It
-installs under `$HOME/.local`, carries the independent verifier with the managed CLI,
-binds each version to a bounded receipt and deterministic bundle-tree digest,
-and switches the relative `current` symlink only after exclusive publication.
-Open and foreground launch only that receipt-validated current App by exact
-argv. Normal commands consult the owned mode-0600 `update-check.json` at most
+remain private temporary inputs to the unchanged authoritative App installer.
+The App plane binds each `versions/<app-version>` to a bounded receipt and
+recursive bundle digest, then switches App `current` only after exclusive
+publication. Independently, a fresh installation publishes exactly two mode-0600
+payloads under immutable `support/versions/<generation-id>`, a canonical manifest,
+mode-0600 state, and support `current`; there is no flat `cli/` layout. The stable
+launcher validates that chain before import and resumes only the exact
+`pending.json` from->to transaction, with bounded target self-test, state commit,
+or pointer rollback. The active CLI can stage only an injected local generation
+in this phase; official network support discovery/cache publication is deferred.
+Open and foreground launch only the receipt-validated current App by exact argv.
+Normal commands consult the App plane's owned mode-0600 `update-check.json` at most
 once per 24 hours: noninteractive calls notice only, and interactive calls use a
 default-No offer whose deliberate `y`/`yes` runs the verified update before the
 original command continues. Explicit `update` bypasses cache freshness and the
 offer. Diagnostic local-pair opt-in preserves the diagnostic classification.
 Shared `.local` parents retain existing modes. Managed file modes are prepared
-before exclusive publication, rollback identity is inode-bound, and uninstall
-uses a complete exact-child/receipt/digest/ancestor preflight before mutation.
+before publication and rollback/removal is identity-bound. App-only update and
+`uninstall --version` do not mutate support; local support stage/switch/rollback
+does not mutate App inodes or bytes. `uninstall --all` preflights both complete
+planes, including every generation, pointer, state, optional cache/pending, and
+the digest-bound stable launcher, before its first deletion.
 Persistent Desktop state is deliberately minimal: the one composer outbox
 leaf, fixed lifecycle markers, an authorized refresh's atomic active-preset
 update, the started Agent's own `logs/` directory, and an explicit setup

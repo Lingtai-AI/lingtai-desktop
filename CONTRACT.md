@@ -29,10 +29,18 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
   extraction, exact archive/App-tree binding, and universal executable
   verification. The older DMG producer/verifier remains an optional release
   experiment and is not an installer input.
-- `scripts/desktop_user_cli.py` solely owns the unprivileged, HOME-derived
+- `scripts/desktop_user_cli.py` solely owns the unprivileged, HOME-derived App
   official-release discovery/download, cached update offer, and
-  install/update/current/receipt/doctor/launch/uninstall transaction.
-  `scripts/install-macos-app.py` is a thin bootstrap and duplicates no policy.
+  install/update/current/receipt/doctor/launch/uninstall transaction. It also
+  owns the exact `lingtai.desktop.support/v1` manifest/state/pending models,
+  immutable local support-generation staging, support diagnostics, and the
+  no-write/no-network `support_self_test`; remote support discovery is not yet
+  enabled. `scripts/support_bootstrap.py` is the stable, digest-bound installed
+  launcher: before importing support code it validates the real managed chain,
+  exact pointer/generation/manifest/payload set, handles one pending switch,
+  runs the target self-test in a bounded child, and commits or pointer-rolls back.
+  It never discovers releases or mutates the App plane. `scripts/install-macos-app.py`
+  is a thin initial bootstrap and duplicates no lifecycle policy.
   Remote acquisition is fixed to stable `Lingtai-AI/lingtai-desktop` GitHub
   Releases behind an injected HTTPS transport, and stops at a private temporary
   archive/manifest pair consumed by the existing authoritative `install()` seam.
@@ -52,9 +60,14 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
   quarantine or Gatekeeper.
   Existing shared `.local` parent modes are outside its ownership. Managed
   publication becomes visible only after mode preparation, rollback removes
-  only invocation-created inode identities, and uninstall rejects the entire
-  transaction before deletion if any ancestor, root child, receipt, version,
-  bundle digest, CLI file, verifier, or launcher is unknown or substituted.
+  only invocation-created inode identities, and App/support transactions remain
+  independent: an App operation never changes `support/current`, support state,
+  generations, or launcher; a support operation never changes App versions,
+  receipts, bundle bytes/inodes, or App `current`. `uninstall --version` is
+  App-only. `uninstall --all` rejects the complete operation before deletion if
+  any ancestor/root child, App receipt/version/bundle, support generation/file,
+  support pointer/state/pending/cache, or stable launcher is unknown, linked,
+  mode-mismatched, invalid, or substituted.
 - `ShellHost` owns application composition and the one fallback kernel
   interpreter; `main.cpp` owns the `--smoke` path. The shell performs no
   project, registry, or settings writes beyond the explicit user-triggered
