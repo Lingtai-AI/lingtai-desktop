@@ -1731,7 +1731,9 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                 )
             self.assertEqual(tree_snapshot(support), before_invalid)
 
-            selected = bootstrap.process_pending(home=home)
+            selected = bootstrap.process_pending(
+                home=home, invocation_argv=argv,
+            )
             self.assertEqual(selected.generation_id, staged)
             self.assertEqual(os.readlink(support / "current"), f"versions/{staged}")
             self.assertFalse((support / "pending.json").exists())
@@ -1767,6 +1769,7 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             failed_target = stage_version("0.1.10", b"\n# import failure fixture\n")
             selected = bootstrap.process_pending(
                 home=home,
+                invocation_argv=argv,
                 self_test_runner=lambda generation: (_ for _ in ()).throw(
                     bootstrap.BootstrapError("injected support self-test failure")
                 ),
@@ -1784,6 +1787,7 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                 with self.assertRaises(bootstrap.InjectedCrash):
                     bootstrap.process_pending(
                         home=home,
+                        invocation_argv=argv,
                         self_test_runner=lambda generation: (_ for _ in ()).throw(
                             bootstrap.BootstrapError("injected support self-test failure")
                         ),
@@ -1801,6 +1805,7 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             )
             recovered = bootstrap.process_pending(
                 home=home,
+                invocation_argv=argv,
                 self_test_runner=lambda generation: (_ for _ in ()).throw(
                     AssertionError("recorded failed target was retried")
                 ),
@@ -1813,14 +1818,16 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             try:
                 with self.assertRaises(bootstrap.InjectedCrash):
                     bootstrap.process_pending(
-                        home=home, self_test_runner=lambda generation: None,
+                        home=home,
+                        invocation_argv=argv, self_test_runner=lambda generation: None,
                     )
             finally:
                 bootstrap._FAILPOINT = None
             self.assertEqual(os.readlink(support / "current"), f"versions/{crash_target}")
             self.assertTrue((support / "pending.json").exists())
             recovered = bootstrap.process_pending(
-                home=home, self_test_runner=lambda generation: None,
+                home=home,
+                invocation_argv=argv, self_test_runner=lambda generation: None,
             )
             self.assertEqual(recovered.generation_id, crash_target)
             self.assertFalse((support / "pending.json").exists())
@@ -1831,14 +1838,16 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             try:
                 with self.assertRaises(bootstrap.InjectedCrash):
                     bootstrap.process_pending(
-                        home=home, self_test_runner=lambda generation: None,
+                        home=home,
+                        invocation_argv=argv, self_test_runner=lambda generation: None,
                     )
             finally:
                 bootstrap._FAILPOINT = None
             self.assertEqual(os.readlink(support / "current"), f"versions/{state_target}")
             self.assertTrue((support / "pending.json").exists())
             recovered = bootstrap.process_pending(
-                home=home, self_test_runner=lambda generation: None,
+                home=home,
+                invocation_argv=argv, self_test_runner=lambda generation: None,
             )
             self.assertEqual(recovered.generation_id, state_target)
             self.assertFalse((support / "pending.json").exists())
@@ -1849,14 +1858,16 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             try:
                 with self.assertRaises(bootstrap.InjectedCrash):
                     bootstrap.process_pending(
-                        home=home, self_test_runner=lambda generation: None,
+                        home=home,
+                        invocation_argv=argv, self_test_runner=lambda generation: None,
                     )
             finally:
                 bootstrap._FAILPOINT = None
             self.assertEqual(os.readlink(support / "current"), f"versions/{removal_target}")
             self.assertFalse((support / "pending.json").exists())
             recovered = bootstrap.process_pending(
-                home=home, self_test_runner=lambda generation: None,
+                home=home,
+                invocation_argv=argv, self_test_runner=lambda generation: None,
             )
             self.assertEqual(recovered.generation_id, removal_target)
             self.assertEqual(app_plane_facts(), app_before)
@@ -2135,7 +2146,11 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                 foreign_pointer.append((facts.st_dev, facts.st_ino))
 
             with self.assertRaises(bootstrap.BootstrapError):
-                bootstrap.process_pending(home=home, self_test_runner=replace_current)
+                bootstrap.process_pending(
+                    home=home,
+                    invocation_argv=[os.fspath(paths.launcher), "version"],
+                    self_test_runner=replace_current,
+                )
             state = cli.parse_support_state(paths.support_state.read_bytes())
             self.assertNotEqual(state.last_good_generation, target)
             self.assertTrue(paths.support_pending.exists())
@@ -2222,12 +2237,28 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                         if phase == "after-self-test":
                             mutate()
 
-                    with self.assertRaises(bootstrap.BootstrapError):
-                        bootstrap.process_pending(home=home, self_test_runner=runner)
+                    if wedge == "current":
+                        with self.assertRaises(bootstrap.BootstrapError):
+                            bootstrap.process_pending(
+                                home=home,
+                                invocation_argv=[
+                                    os.fspath(paths.launcher), "version",
+                                ],
+                                self_test_runner=runner,
+                            )
+                    else:
+                        selected = bootstrap.process_pending(
+                            home=home,
+                            invocation_argv=[
+                                os.fspath(paths.launcher), "version",
+                            ],
+                            self_test_runner=runner,
+                        )
+                        self.assertEqual(selected.generation_id, source)
                     self.assertFalse(marker.exists())
                     state = cli.parse_support_state(paths.support_state.read_bytes())
                     self.assertEqual(state.last_good_generation, source)
-                    self.assertTrue(paths.support_pending.exists())
+                    self.assertEqual(paths.support_pending.exists(), wedge == "current")
                     self.assertEqual(
                         tuple(identity_tree_snapshot(path) for path in (
                             paths.versions, paths.receipts, paths.current,
@@ -2348,6 +2379,7 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                 with self.assertRaises(bootstrap.InjectedCrash):
                     bootstrap.process_pending(
                         home=home,
+                        invocation_argv=[os.fspath(paths.launcher), "version"],
                         self_test_runner=lambda _: (_ for _ in ()).throw(
                             bootstrap.BootstrapError("candidate failed")
                         ),
@@ -2356,6 +2388,7 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                 bootstrap._FAILPOINT = None
             recovered = bootstrap.process_pending(
                 home=home,
+                invocation_argv=[os.fspath(paths.launcher), "version"],
                 self_test_runner=lambda _: (_ for _ in ()).throw(
                     AssertionError("failed target retried")
                 ),
@@ -2416,6 +2449,7 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                     with self.assertRaises(bootstrap.InjectedCrash):
                         bootstrap.process_pending(
                             home=home,
+                            invocation_argv=[os.fspath(paths.launcher), "version"],
                             self_test_runner=lambda _: (_ for _ in ()).throw(
                                 bootstrap.BootstrapError("candidate rejected")
                             ),
@@ -2493,7 +2527,11 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             identity = (foreign.lstat().st_dev, foreign.lstat().st_ino)
             before = paths.support_state.read_bytes()
             with self.assertRaises(bootstrap.BootstrapError):
-                bootstrap.process_pending(home=home, self_test_runner=lambda _: None)
+                bootstrap.process_pending(
+                    home=home,
+                    invocation_argv=[os.fspath(paths.launcher), "version"],
+                    self_test_runner=lambda _: None,
+                )
             self.assertEqual((foreign.lstat().st_dev, foreign.lstat().st_ino), identity)
             self.assertEqual(paths.support_state.read_bytes(), before)
             self.assertTrue(paths.support_pending.exists())
@@ -2563,7 +2601,10 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             old_cwd = Path.cwd()
             try:
                 os.chdir(cwd)
-                selected = bootstrap.process_pending(home=home)
+                selected = bootstrap.process_pending(
+                    home=home,
+                    invocation_argv=[os.fspath(paths.launcher), "version"],
+                )
             finally:
                 os.chdir(old_cwd)
             self.assertEqual(selected.generation_id, source)
@@ -2644,7 +2685,10 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             old_cwd = Path.cwd()
             try:
                 os.chdir(cwd)
-                selected = bootstrap.process_pending(home=home)
+                selected = bootstrap.process_pending(
+                    home=home,
+                    invocation_argv=[os.fspath(paths.launcher), "version"],
+                )
             finally:
                 os.chdir(old_cwd)
             self.assertEqual(selected.generation_id, source)
@@ -2759,6 +2803,7 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             )
             bootstrap.process_pending(
                 home=home,
+                invocation_argv=[os.fspath(paths.launcher)],
                 self_test_runner=lambda _: (_ for _ in ()).throw(
                     bootstrap.BootstrapError("first attempt failed")
                 ),
@@ -2778,7 +2823,9 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             )
             self.assertEqual(retried, target)
             selected = bootstrap.process_pending(
-                home=home, self_test_runner=lambda _: None,
+                home=home,
+                invocation_argv=[os.fspath(paths.launcher)],
+                self_test_runner=lambda _: None,
             )
             self.assertEqual(selected.generation_id, target)
             self.assertFalse(paths.support_pending.exists())
@@ -2955,6 +3002,277 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                 self.assertEqual(identity_tree_snapshot(paths.launcher), launcher_before)
                 if outside is not None:
                     self.assertEqual(identity_tree_snapshot(outside), outside_before)
+
+    def test_repair_self_test_violation_record_cannot_be_cleared_by_candidate(self) -> None:
+        import importlib
+
+        bootstrap = importlib.import_module("scripts.support_bootstrap")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = (
+                b"import __main__\n"
+                b"import os\n"
+                b"def support_self_test():\n"
+                b"    try:\n"
+                b"        os._exit(0)\n"
+                b"    except PermissionError:\n"
+                b"        pass\n"
+                b"    __main__.violations.clear()\n"
+                b"    return True\n"
+            )
+            generation = bootstrap.Generation(
+                root / "1.0.0-000000000000", "1.0.0", "1.0.0-000000000000",
+                "0" * 64, (1, 1), (), b"manifest", (
+                    ("desktop_user_cli.py", source),
+                    ("verify-app-archive.py", b"# verifier\n"),
+                ),
+            )
+            with self.assertRaisesRegex(bootstrap.BootstrapError, "isolated exit"):
+                bootstrap._production_self_test(generation)
+
+    def test_repair_pending_transaction_is_bound_to_exact_invocation_argv(self) -> None:
+        import importlib
+
+        bootstrap = importlib.import_module("scripts.support_bootstrap")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            home.mkdir()
+            archive, manifest = write_artifacts(root)
+            cli.install(
+                archive, manifest, home=home, platform=FakePlatform(), effective_uid=501,
+            )
+            paths = cli._paths(home)
+            source = os.readlink(paths.support_current).removeprefix("versions/")
+            fixture = root / "fixture"
+            fixture.mkdir()
+            module = fixture / "desktop_user_cli.py"
+            verifier = fixture / "verify-app-archive.py"
+            module.write_bytes(Path(cli.__file__).read_bytes() + b"\n# argv-bound target\n")
+            verifier.write_bytes(
+                (Path(cli.__file__).parent / "verify-app-archive.py").read_bytes()
+                + b"\n# argv-bound target\n"
+            )
+            module.chmod(0o600)
+            verifier.chmod(0o600)
+            target = cli.stage_local_support_update(
+                module, verifier, support_version="0.1.6", release_tag="v0.1.6",
+                argv=[os.fspath(paths.launcher), "version"], home=home,
+                exec_launcher=lambda *_: None,
+            )
+            delegated: list[tuple[Path, list[str]]] = []
+            with self.assertRaisesRegex(bootstrap.BootstrapError, "invocation"):
+                bootstrap.run_launcher(
+                    ["doctor"], home=home, self_test_runner=lambda _: None,
+                    installed_runner=lambda path, arguments: (
+                        delegated.append((path, list(arguments))) or 0
+                    ),
+                )
+            self.assertEqual(delegated, [])
+            self.assertTrue(paths.support_pending.exists())
+            self.assertEqual(
+                os.readlink(paths.support_current), f"versions/{source}",
+            )
+            self.assertEqual(
+                bootstrap.run_launcher(
+                    ["version"], home=home, self_test_runner=lambda _: None,
+                    installed_runner=lambda path, arguments: (
+                        delegated.append((path, list(arguments))) or 23
+                    ),
+                ), 23,
+            )
+            self.assertEqual(delegated, [(
+                paths.support_versions / target / "desktop_user_cli.py", ["version"],
+            )])
+            self.assertFalse(paths.support_pending.exists())
+
+    def test_repair_app_post_current_failure_restores_exact_previous_pointer(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            home.mkdir()
+            platform = FakePlatform()
+            archive1, manifest1 = write_artifacts(root, "0.1.5")
+            cli.install(
+                archive1, manifest1, home=home, platform=platform, effective_uid=501,
+            )
+            paths = cli._paths(home)
+            previous_identity = cli._identity(paths.current)
+            previous_target = os.readlink(paths.current)
+            newer = root / "newer"
+            newer.mkdir()
+            archive2, manifest2 = write_artifacts(newer, "0.1.6")
+            with mock.patch.object(
+                    cli, "_FAILPOINT", "app-current-post-visible",
+            ), self.assertRaisesRegex(cli.DesktopCLIError, "post-publication"):
+                cli.install(
+                    archive2, manifest2, home=home, platform=platform,
+                    effective_uid=501, update=True,
+                )
+            self.assertEqual(cli._identity(paths.current), previous_identity)
+            self.assertEqual(os.readlink(paths.current), previous_target)
+            self.assertFalse((paths.versions / "0.1.6").exists())
+            self.assertFalse((paths.receipts / "0.1.6.json").exists())
+            self.assertEqual(cli._active(paths)[0], "0.1.5")
+
+    def test_repair_mutated_self_tested_target_recovers_last_good_without_target_trust(self) -> None:
+        import importlib
+
+        bootstrap = importlib.import_module("scripts.support_bootstrap")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            home.mkdir()
+            archive, manifest = write_artifacts(root)
+            cli.install(
+                archive, manifest, home=home, platform=FakePlatform(), effective_uid=501,
+            )
+            paths = cli._paths(home)
+            source = os.readlink(paths.support_current).removeprefix("versions/")
+            fixture = root / "fixture"
+            fixture.mkdir()
+            module = fixture / "desktop_user_cli.py"
+            verifier = fixture / "verify-app-archive.py"
+            module.write_bytes(Path(cli.__file__).read_bytes() + b"\n# mutable target\n")
+            verifier.write_bytes(
+                (Path(cli.__file__).parent / "verify-app-archive.py").read_bytes()
+                + b"\n# mutable target\n"
+            )
+            module.chmod(0o600)
+            verifier.chmod(0o600)
+            target = cli.stage_local_support_update(
+                module, verifier, support_version="0.1.6", release_tag="v0.1.6",
+                argv=[os.fspath(paths.launcher), "version"], home=home,
+                exec_launcher=lambda *_: None,
+            )
+
+            def mutate_after_self_test(generation: object) -> None:
+                self.assertEqual(generation.generation_id, target)
+                (generation.path / "desktop_user_cli.py").chmod(0o644)
+
+            selected = bootstrap.process_pending(
+                home=home,
+                invocation_argv=[os.fspath(paths.launcher), "version"],
+                self_test_runner=mutate_after_self_test,
+            )
+            self.assertEqual(selected.generation_id, source)
+            self.assertEqual(
+                os.readlink(paths.support_current), f"versions/{source}",
+            )
+            self.assertFalse(paths.support_pending.exists())
+            delegated: list[Path] = []
+            self.assertEqual(bootstrap.run_launcher(
+                ["version"], home=home,
+                installed_runner=lambda module_path, _arguments: (
+                    delegated.append(module_path) or 31
+                ),
+            ), 31)
+            self.assertEqual(delegated, [
+                paths.support_versions / source / "desktop_user_cli.py",
+            ])
+
+    def test_repair_app_receipt_rejects_hardlink_and_wrong_mode_on_all_authority_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            home.mkdir()
+            archive, manifest = write_artifacts(root)
+            cli.install(
+                archive, manifest, home=home, platform=FakePlatform(), effective_uid=501,
+            )
+            paths = cli._paths(home)
+            receipt = paths.receipts / "0.1.5.json"
+            alias = root / "receipt-hardlink"
+            os.link(receipt, alias)
+            receipt.chmod(0o644)
+            self.assertEqual(receipt.stat().st_nlink, 2)
+            with self.assertRaisesRegex(cli.DesktopCLIError, "ownership, mode, or size"):
+                cli._active(paths)
+            with self.assertRaisesRegex(cli.DesktopCLIError, "ownership, mode, or size"):
+                cli.doctor(home=home)
+            alias.unlink()
+            receipt.chmod(0o600)
+            value = json.loads(receipt.read_bytes())
+            receipt.write_bytes(json.dumps(value, sort_keys=True).encode())
+            receipt.chmod(0o600)
+            with self.assertRaisesRegex(cli.DesktopCLIError, "canonical"):
+                cli._active(paths)
+            with self.assertRaisesRegex(cli.DesktopCLIError, "canonical"):
+                cli.doctor(home=home)
+
+    def test_repair_support_release_tag_must_exactly_match_support_version(self) -> None:
+        payloads = {
+            "desktop_user_cli.py": b"def installed_main(argv=None):\n    return 0\n",
+            "verify-app-archive.py": b"# verifier\n",
+        }
+        with self.assertRaisesRegex(cli.DesktopCLIError, "tag.*version|version.*tag"):
+            cli.build_support_manifest_bytes("0.1.6", "v9.9.9", payloads)
+
+        valid = cli.parse_support_manifest(
+            cli.build_support_manifest_bytes("0.1.6", "v0.1.6", payloads)
+        )
+        identity = cli._support_manifest_identity_value(
+            "0.1.6", "v9.9.9", cli.SUPPORT_REPOSITORY,
+            cli.SUPPORT_BOOTSTRAP_PROTOCOL, cli.SUPPORT_BOOTSTRAP_PROTOCOL,
+            valid.files,
+        )
+        mismatched = dict(identity)
+        mismatched["generation_id"] = cli._support_generation_id(identity)
+        raw = cli._canonical_json_bytes(
+            mismatched, cli.MAX_SUPPORT_MANIFEST_BYTES, "support manifest",
+        )
+        with self.assertRaisesRegex(cli.DesktopCLIError, "tag.*version|version.*tag"):
+            cli.parse_support_manifest(raw)
+
+        import importlib
+        bootstrap = importlib.import_module("scripts.support_bootstrap")
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest = Path(temporary) / "support-manifest.json"
+            manifest.write_bytes(raw)
+            manifest.chmod(0o600)
+            with self.assertRaisesRegex(bootstrap.BootstrapError, "release identity"):
+                bootstrap._manifest(manifest)
+
+    def test_repair_app_current_replacement_race_preserves_racer_pointer(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            home.mkdir()
+            platform = FakePlatform()
+            archive1, manifest1 = write_artifacts(root, "0.1.5")
+            cli.install(
+                archive1, manifest1, home=home, platform=platform, effective_uid=501,
+            )
+            paths = cli._paths(home)
+            previous_target = os.readlink(paths.current)
+            newer = root / "newer"
+            newer.mkdir()
+            archive2, manifest2 = write_artifacts(newer, "0.1.6")
+            original_symlink = os.symlink
+            raced_identity: list[tuple[int, int]] = []
+
+            def race_before_publication(
+                    target: str, link_name: os.PathLike[str] | str,
+                    *args: object, **kwargs: object) -> None:
+                link = Path(link_name)
+                if link.parent == paths.root and link.name.startswith(".current-"):
+                    paths.current.unlink()
+                    original_symlink(previous_target, paths.current)
+                    raced_identity.append(cli._identity(paths.current))
+                original_symlink(target, link_name, *args, **kwargs)
+
+            with mock.patch.object(cli.os, "symlink", side_effect=race_before_publication), \
+                 self.assertRaisesRegex(cli.DesktopCLIError, "raced|changed|replaced"):
+                cli.install(
+                    archive2, manifest2, home=home, platform=platform,
+                    effective_uid=501, update=True,
+                )
+            self.assertEqual(len(raced_identity), 1)
+            self.assertEqual(cli._identity(paths.current), raced_identity[0])
+            self.assertEqual(os.readlink(paths.current), previous_target)
+            self.assertFalse((paths.versions / "0.1.6").exists())
+            self.assertFalse((paths.receipts / "0.1.6.json").exists())
+            self.assertEqual(cli._active(paths)[0], "0.1.5")
 
     def test_production_source_contains_no_quarantine_bypass(self) -> None:
         source = (Path(__file__).parents[1] / "scripts/desktop_user_cli.py").read_text()

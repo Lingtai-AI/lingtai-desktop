@@ -41,7 +41,7 @@ GIT_SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 RECEIPT_SCHEMA = 2
 LAUNCHER_MARKER = "# lingtai-desktop-support-bootstrap-v1"
 SUPPORT_REEXEC_MARKER = "LINGTAI_DESKTOP_SUPPORT_REEXEC"
-STABLE_BOOTSTRAP_SHA256 = "58f780183df9214bdba42078397bbd5954d66b76a2f848c4710818b6a259df29"
+STABLE_BOOTSTRAP_SHA256 = "032d6ade864e7154bb880228367e2229ac2ac3b21360ba8ab51f9b9f40f4df61"
 ARTIFACT_KIND = "lingtai-portable-app-archive"
 MANIFEST_SCHEMA = 1
 EXECUTABLE_RELATIVE = "Contents/MacOS/LingTai"
@@ -797,10 +797,8 @@ def build_support_manifest_bytes(
         minimum_bootstrap_protocol: int = SUPPORT_BOOTSTRAP_PROTOCOL) -> bytes:
     if not _is_safe_version(support_version):
         raise DesktopCLIError("support version is not a safe x.y.z value")
-    if (not isinstance(release_tag, str) or not release_tag.isascii()
-            or not release_tag.startswith("v")
-            or not _is_safe_version(release_tag[1:])):
-        raise DesktopCLIError("support release tag is invalid")
+    if release_tag != f"v{support_version}":
+        raise DesktopCLIError("support release tag does not match support version")
     if set(payloads) != set(SUPPORT_PAYLOAD_NAMES):
         raise DesktopCLIError("support payload set is not exact")
     if (type(bootstrap_protocol) is not int
@@ -849,9 +847,8 @@ def parse_support_manifest(
     minimum_protocol = value.get("minimum_bootstrap_protocol")
     if not _is_safe_version(support_version):
         raise DesktopCLIError("support version is not a safe x.y.z value")
-    if (not isinstance(release_tag, str) or not release_tag.isascii()
-            or not release_tag.startswith("v") or not _is_safe_version(release_tag[1:])):
-        raise DesktopCLIError("support release tag is invalid")
+    if release_tag != f"v{support_version}":
+        raise DesktopCLIError("support release tag does not match support version")
     if repository != SUPPORT_REPOSITORY:
         raise DesktopCLIError("support manifest repository identity is invalid")
     if (type(installed_bootstrap_protocol) is not int
@@ -910,7 +907,8 @@ def _read_managed_support_file(path: Path, label: str, maximum_bytes: int,
     descriptor: int | None = None
     try:
         descriptor, facts = _open_regular_nofollow(path, label)
-        if (facts.st_nlink != 1 or stat.S_IMODE(facts.st_mode) != expected_mode
+        if (facts.st_uid != os.geteuid() or facts.st_nlink != 1
+                or stat.S_IMODE(facts.st_mode) != expected_mode
                 or facts.st_size <= 0 or facts.st_size > maximum_bytes
                 or (expected_size is not None and facts.st_size != expected_size)):
             raise DesktopCLIError(f"{label} ownership, mode, or size is invalid")
@@ -1425,6 +1423,52 @@ def _rename_exclusive(source: Path, destination: Path) -> None:
         os.rename(source, destination)
 
 
+def _exchange_paths(first: Path, second: Path) -> None:
+    """Atomically exchange two same-filesystem names or fail closed."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform == "darwin":
+        exchange = libc.renamex_np
+        exchange.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        exchange.restype = ctypes.c_int
+        result = exchange(os.fsencode(first), os.fsencode(second), 0x00000002)  # RENAME_SWAP
+    else:
+        exchange = getattr(libc, "renameat2", None)
+        if exchange is None:
+            raise DesktopCLIError("atomic current-pointer exchange is unavailable")
+        exchange.argtypes = [
+            ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        exchange.restype = ctypes.c_int
+        result = exchange(
+            -100, os.fsencode(first), -100, os.fsencode(second),
+            0x00000002,  # Linux RENAME_EXCHANGE
+        )
+    if result != 0:
+        error_number = ctypes.get_errno()
+        raise DesktopCLIError(
+            f"could not atomically exchange managed current pointer ({error_number})"
+        )
+
+
+def _restore_app_current(
+        paths: ManagedPaths, backup: Path, previous_identity: tuple[int, int],
+        published_identity: tuple[int, int]) -> None:
+    if (not _matches_identity(paths.current, published_identity)
+            or not _matches_identity(backup, previous_identity)):
+        raise DesktopCLIError(
+            "refusing to restore changed App current pointer; new target is retained"
+        )
+    _exchange_paths(backup, paths.current)
+    if (not _matches_identity(paths.current, previous_identity)
+            or not _matches_identity(backup, published_identity)):
+        raise DesktopCLIError(
+            "App current rollback exchange did not restore exact previous pointer"
+        )
+    backup.unlink()
+    _fsync_directory(paths.root)
+
+
 def _remove_owned_version(path: Path, expected_digest: str,
                           expected_identity: tuple[int, int] | None = None) -> None:
     if expected_identity is not None and not _matches_identity(path, expected_identity):
@@ -1577,10 +1621,12 @@ def _read_receipt(paths: ManagedPaths, version: str) -> dict[str, object]:
     if not _is_safe_version(version):
         raise DesktopCLIError("version must be a safe x.y.z value")
     receipt_path = paths.receipts / f"{version}.json"
-    raw = _read_bytes_nofollow(receipt_path, "receipt", 8192)
+    raw, _ = _read_managed_support_file(
+        receipt_path, "receipt", 8192, expected_mode=0o600,
+    )
     try:
-        receipt = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as error:
+        receipt = json.loads(raw, object_pairs_hook=_exact_json_object)
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError) as error:
         raise DesktopCLIError("receipt is invalid") from error
     if not isinstance(receipt, dict) or set(receipt) != RECEIPT_KEYS or receipt.get("schema_version") != RECEIPT_SCHEMA:
         raise DesktopCLIError("receipt does not match the bounded exact schema")
@@ -1618,6 +1664,9 @@ def _read_receipt(paths: ManagedPaths, version: str) -> dict[str, object]:
     digest = receipt.get("bundle_tree_sha256")
     if not isinstance(digest, str) or SHA_PATTERN.fullmatch(digest) is None:
         raise DesktopCLIError("receipt bundle digest is invalid")
+    canonical = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode()
+    if raw != canonical:
+        raise DesktopCLIError("receipt bytes are not canonical")
     return receipt
 
 
@@ -2496,6 +2545,8 @@ def install(archive: Path, manifest_path: Path, *, home: Path | None = None,
     version_created = False
     app_current_identity: tuple[int, int] | None = None
     app_current_created = False
+    app_previous_current_identity: tuple[int, int] | None = None
+    app_current_backup: Path | None = None
     support_publication: InitialSupportPublication | None = None
     journal_created = False
     managed_root_identity: tuple[int, int] | None = None
@@ -2571,6 +2622,7 @@ def install(archive: Path, manifest_path: Path, *, home: Path | None = None,
             receipt_identity = _publish_file_exclusive(
                 staged_receipt, final_receipt, 0o600,
             )
+            staged_receipt.unlink()
             receipt_created = True
         _trip_initial("receipt")
 
@@ -2607,8 +2659,17 @@ def install(archive: Path, manifest_path: Path, *, home: Path | None = None,
             )
         _trip_initial("support")
 
-        old_target = os.readlink(paths.current) if paths.current.is_symlink() else None
-        if paths.current.exists() and not paths.current.is_symlink():
+        old_target: str | None = None
+        observed_current_identity: tuple[int, int] | None = None
+        if paths.current.is_symlink():
+            current_facts = paths.current.lstat()
+            if current_facts.st_nlink != 1:
+                raise DesktopCLIError("managed current is not a single-link symlink")
+            old_target = os.readlink(paths.current)
+            observed_current_identity = (current_facts.st_dev, current_facts.st_ino)
+            if not _matches_identity(paths.current, observed_current_identity):
+                raise DesktopCLIError("managed current changed during observation")
+        elif paths.current.exists():
             raise DesktopCLIError("managed current is not a symlink")
         expected_current = f"versions/{manifest.version}"
         if resume_initial and old_target is not None:
@@ -2616,7 +2677,7 @@ def install(archive: Path, manifest_path: Path, *, home: Path | None = None,
                 raise DesktopCLIError(
                     "initial App current does not match recovery journal"
                 )
-            app_current_identity = _identity(paths.current)
+            app_current_identity = observed_current_identity
         else:
             temporary_current = paths.root / f".current-{uuid.uuid4().hex}"
             temporary_identity: tuple[int, int] | None = None
@@ -2625,11 +2686,58 @@ def install(archive: Path, manifest_path: Path, *, home: Path | None = None,
                 temporary_identity = _identity(temporary_current)
                 if _FAILPOINT == "current":
                     raise DesktopCLIError("injected current switch failure")
-                os.replace(temporary_current, paths.current)
-                if not _matches_identity(paths.current, temporary_identity):
-                    raise DesktopCLIError("managed current publication was replaced")
-                app_current_identity = temporary_identity
-                app_current_created = old_target is None
+                if old_target is None:
+                    try:
+                        os.link(
+                            temporary_current, paths.current,
+                            follow_symlinks=False,
+                        )
+                    except FileExistsError as error:
+                        raise DesktopCLIError(
+                            "refusing raced App current publication"
+                        ) from error
+                    if not _matches_identity(paths.current, temporary_identity):
+                        raise DesktopCLIError("managed current publication was replaced")
+                    temporary_current.unlink()
+                    app_current_identity = temporary_identity
+                    app_current_created = True
+                else:
+                    assert observed_current_identity is not None
+                    if not _matches_identity(paths.current, observed_current_identity):
+                        raise DesktopCLIError(
+                            "refusing to replace raced App current pointer"
+                        )
+                    _exchange_paths(temporary_current, paths.current)
+                    app_current_identity = temporary_identity
+                    app_previous_current_identity = observed_current_identity
+                    app_current_backup = temporary_current
+                    if (not _matches_identity(paths.current, temporary_identity)
+                            or not _matches_identity(
+                                temporary_current, observed_current_identity,
+                            )
+                            or os.readlink(temporary_current) != old_target):
+                        # The exchange captured a concurrent replacement. Put that
+                        # exact inode back before rejecting this transaction.
+                        raced_identity = _identity(temporary_current)
+                        if (not _matches_identity(paths.current, temporary_identity)
+                                or not _matches_identity(
+                                    temporary_current, raced_identity,
+                                )):
+                            raise DesktopCLIError(
+                                "App current changed during race reconciliation; "
+                                "new target is retained"
+                            )
+                        _exchange_paths(temporary_current, paths.current)
+                        if not _matches_identity(paths.current, raced_identity):
+                            raise DesktopCLIError(
+                                "raced App current pointer could not be restored"
+                            )
+                        app_current_identity = None
+                        app_previous_current_identity = None
+                        app_current_backup = None
+                        raise DesktopCLIError(
+                            "refusing to overwrite raced App current pointer"
+                        )
                 _fsync_directory(paths.root)
             finally:
                 _unlink_if_identity(temporary_current, temporary_identity)
@@ -2648,10 +2756,40 @@ def install(archive: Path, manifest_path: Path, *, home: Path | None = None,
             paths.initial_install.unlink()
             _fsync_directory(paths.root)
         _trip_initial("journal-removed")
+        if app_current_backup is not None:
+            assert app_current_identity is not None
+            assert app_previous_current_identity is not None
+            if (not _matches_identity(paths.current, app_current_identity)
+                    or not _matches_identity(
+                        app_current_backup, app_previous_current_identity,
+                    )):
+                raise DesktopCLIError(
+                    "App current changed before transaction commit; "
+                    "rollback target is retained"
+                )
+            app_current_backup.unlink()
+            app_current_backup = None
+            _fsync_directory(paths.root)
         return manifest.version
     except InjectedInitialInstallCrash:
         raise
     except BaseException:
+        # Restore or remove App current before deleting any version or receipt it
+        # may still select. If exact restoration cannot be authenticated, stop
+        # cleanup and retain the new target rather than strand the pointer.
+        if (managed_root_identity is not None
+                and _matches_identity(paths.root, managed_root_identity)):
+            if app_current_backup is not None:
+                assert app_current_identity is not None
+                assert app_previous_current_identity is not None
+                _restore_app_current(
+                    paths, app_current_backup, app_previous_current_identity,
+                    app_current_identity,
+                )
+                app_current_backup = None
+            elif app_current_created and app_current_identity is not None:
+                _unlink_if_identity(paths.current, app_current_identity)
+                _fsync_directory(paths.root)
         if support_publication is not None:
             if support_publication.launcher_created:
                 _unlink_if_identity(
@@ -2671,10 +2809,6 @@ def install(archive: Path, manifest_path: Path, *, home: Path | None = None,
                     _remove_validated_support_generation(
                         support_publication.generation
                     )
-        if (app_current_created and app_current_identity is not None
-                and managed_root_identity is not None
-                and _matches_identity(paths.root, managed_root_identity)):
-            _unlink_if_identity(paths.current, app_current_identity)
         if (version_created and version_identity is not None
                 and _matches_identity(paths.versions / manifest.version, version_identity)):
             _remove_owned_version(

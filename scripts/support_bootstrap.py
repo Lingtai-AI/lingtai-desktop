@@ -197,6 +197,13 @@ def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _argv_sha256(argv: Sequence[str]) -> str:
+    values = list(argv)
+    if not values or any(not isinstance(item, str) for item in values):
+        raise BootstrapError("support invocation argv is invalid")
+    return _sha(_canonical(values, 64 * 1024, "support invocation argv"))
+
+
 def _paths(home: Path | None) -> SupportPaths:
     raw = Path(home) if home is not None else Path(os.environ.get("HOME", ""))
     if not os.fspath(raw) or not raw.is_absolute():
@@ -235,8 +242,8 @@ def _read_file(path: Path, label: str, limit: int, *, mode: int,
             | getattr(os, "O_NONBLOCK", 0),
         )
         facts = os.fstat(descriptor)
-        if (not stat.S_ISREG(facts.st_mode) or facts.st_nlink != 1
-                or stat.S_IMODE(facts.st_mode) != mode
+        if (not stat.S_ISREG(facts.st_mode) or facts.st_uid != os.geteuid()
+                or facts.st_nlink != 1 or stat.S_IMODE(facts.st_mode) != mode
                 or facts.st_size <= 0 or facts.st_size > limit
                 or (expected_size is not None and facts.st_size != expected_size)):
             raise BootstrapError(f"{label} ownership, mode, or size is invalid")
@@ -274,8 +281,7 @@ def _manifest(path: Path) -> tuple[dict[str, object], bytes, tuple[int, int]]:
     protocol = value.get("bootstrap_protocol")
     minimum = value.get("minimum_bootstrap_protocol")
     if (not _is_version(version) or not _is_generation(generation)
-            or not isinstance(release_tag, str) or not release_tag.startswith("v")
-            or not _is_version(release_tag[1:])
+            or not isinstance(release_tag, str) or release_tag != f"v{version}"
             or value.get("repository") != SUPPORT_REPOSITORY):
         raise BootstrapError("support manifest release identity is invalid")
     if (type(protocol) is not int or protocol != SUPPORT_BOOTSTRAP_PROTOCOL
@@ -821,9 +827,10 @@ def _candidate_policy(candidate: Generation, state: State, *, explicit_retry: bo
 
 
 def _production_self_test(generation: Generation) -> None:
-    # The audit hook is installed before candidate compilation. A denied attempt is
-    # remembered even if candidate code catches PermissionError, so an attempted
-    # escape always fails the transaction. No filesystem mutation is needed by the
+    # The audit hook is installed before candidate compilation. A denied attempt
+    # hard-exits the isolated child, so candidate handlers cannot suppress it and
+    # the production parent authenticates failure by wait status. No filesystem
+    # mutation is needed by the
     # v1 self-test, therefore the strongest portable policy is no writes anywhere.
     code = r'''
 import ctypes  # Preload the candidate's required stdlib wrapper before policy.
@@ -831,52 +838,56 @@ import os
 import sys
 import types
 
-violations = []
+# A denied capability terminates this isolated child through the original
+# interpreter primitive.  There is deliberately no candidate-process ledger:
+# the production parent authenticates the sticky violation through the child's
+# nonzero wait status, and candidate code has no mutable audit record to clear.
+def install_policy():
+    hard_exit = os._exit
+    mutation_events = frozenset({
+        "os.chdir", "os.chflags", "os.chmod", "os.chown", "os.exec",
+        "os.fork", "os.forkpty", "os.kill", "os.link", "os.mkdir",
+        "os.mkfifo", "os.mknod", "os.posix_spawn", "os.remove",
+        "os.removexattr", "os.rename", "os.rmdir", "os.setuid", "os.setxattr",
+        "os.spawn", "os.symlink", "os.system", "os.truncate", "os.unlink",
+        "os.utime",
+        "shutil.copyfile", "shutil.copymode", "shutil.copystat", "shutil.move",
+        "subprocess.Popen",
+    })
+    danger_prefixes = ("socket.", "ctypes.dlopen", "ctypes.dlsym")
+    write_flags = (
+        getattr(os, "O_WRONLY", 1) | getattr(os, "O_RDWR", 2)
+        | getattr(os, "O_APPEND", 0) | getattr(os, "O_CREAT", 0)
+        | getattr(os, "O_TRUNC", 0)
+    )
 
-def deny_process_exit(*args):
-    violations.append("os._exit")
-    raise PermissionError("support self-test policy denied process exit")
+    def deny_process_exit(*args):
+        hard_exit(74)
 
-# CPython 3.9 emits no audit event for _exit(). Replace both public aliases
-# before candidate code so a candidate cannot turn early child exit 0 into a
-# forged passing self-test.
-os._exit = deny_process_exit
-try:
-    import posix as _posix
-    _posix._exit = deny_process_exit
-except ImportError:
-    pass
+    def deny(event, args):
+        denied = event in mutation_events or event.startswith(danger_prefixes)
+        if event == "open":
+            mode = args[1] if len(args) > 1 else None
+            flags = args[2] if len(args) > 2 else 0
+            denied = (
+                isinstance(mode, str) and any(token in mode for token in "wax+")
+            ) or (isinstance(flags, int) and bool(flags & write_flags))
+        if denied:
+            hard_exit(74)
 
-mutation_events = {
-    "os.chdir", "os.chflags", "os.chmod", "os.chown", "os.exec",
-    "os.fork", "os.forkpty", "os.kill", "os.link", "os.mkdir",
-    "os.mkfifo", "os.mknod", "os.posix_spawn", "os.remove",
-    "os.removexattr", "os.rename", "os.rmdir", "os.setuid", "os.setxattr",
-    "os.spawn", "os.symlink", "os.system", "os.truncate", "os.unlink",
-    "os.utime",
-    "shutil.copyfile", "shutil.copymode", "shutil.copystat", "shutil.move",
-    "subprocess.Popen",
-}
-danger_prefixes = ("socket.", "ctypes.dlopen", "ctypes.dlsym")
-write_flags = (
-    getattr(os, "O_WRONLY", 1) | getattr(os, "O_RDWR", 2)
-    | getattr(os, "O_APPEND", 0) | getattr(os, "O_CREAT", 0)
-    | getattr(os, "O_TRUNC", 0)
-)
+    # CPython 3.9 emits no audit event for _exit(). Replace both public aliases
+    # before candidate code so a candidate cannot turn early child exit 0 into a
+    # forged passing self-test.
+    os._exit = deny_process_exit
+    try:
+        import posix as _posix
+        _posix._exit = deny_process_exit
+    except ImportError:
+        pass
+    sys.addaudithook(deny)
 
-def deny(event, args):
-    denied = event in mutation_events or event.startswith(danger_prefixes)
-    if event == "open":
-        mode = args[1] if len(args) > 1 else None
-        flags = args[2] if len(args) > 2 else 0
-        denied = (
-            isinstance(mode, str) and any(token in mode for token in "wax+")
-        ) or (isinstance(flags, int) and bool(flags & write_flags))
-    if denied:
-        violations.append(event)
-        raise PermissionError("support self-test policy denied mutation or escape")
-
-sys.addaudithook(deny)
+install_policy()
+del install_policy
 source = sys.stdin.buffer.read(2 * 1024 * 1024 + 1)
 if not source or len(source) > 2 * 1024 * 1024:
     raise SystemExit(2)
@@ -892,7 +903,7 @@ try:
     result = module.support_self_test()
 except BaseException:
     raise SystemExit(3)
-raise SystemExit(0 if result is True and not violations else 4)
+raise SystemExit(0 if result is True else 4)
 '''
     try:
         with tempfile.TemporaryDirectory(prefix="lingtai-support-self-test-") as scratch_text:
@@ -1006,7 +1017,35 @@ def _rollback_target(paths: SupportPaths, state: State, state_identity: tuple[in
     _unlink_pending(paths, pending_identity)
 
 
+def _abort_invalid_pending_target(
+        paths: SupportPaths, state: State, source: Generation, pending: Pending,
+        current_generation: str, current_identity: tuple[int, int],
+        pending_identity: tuple[int, int]) -> Generation:
+    """Abort an uncommitted target without deriving any authority from its bytes."""
+    _validate_state_relationship(paths, state, {source.generation_id: source})
+    if state.last_good_generation != source.generation_id:
+        raise BootstrapError("invalid support target is already committed")
+    expected_source_identity = (
+        pending.expected_current_dev, pending.expected_current_ino,
+    )
+    if current_generation == source.generation_id:
+        if current_identity != expected_source_identity:
+            raise BootstrapError("invalid support target has an unauthenticated source pointer")
+        rollback = _rollback_path(paths, pending)
+        if rollback.exists() or rollback.is_symlink():
+            _discard_rollback_pointer(paths, pending)
+    elif current_generation == pending.to_generation:
+        _restore_from_rollback(
+            paths, pending, current_generation, current_identity,
+        )
+    else:
+        raise BootstrapError("invalid support target has an unrelated current pointer")
+    _unlink_pending(paths, pending_identity)
+    return _revalidate_generation(paths, source)
+
+
 def process_pending(*, home: Path | None = None,
+                    invocation_argv: Sequence[str] | None = None,
                     self_test_runner: Callable[[Generation], None] | None = None) -> Generation:
     paths = _paths(home)
     _layout(paths)
@@ -1027,12 +1066,26 @@ def process_pending(*, home: Path | None = None,
         return active
 
     pending, pending_identity = pending_loaded
+    if (invocation_argv is None
+            or _argv_sha256(invocation_argv) != pending.requested_argv_sha256):
+        raise BootstrapError(
+            "support pending transaction does not authorize this invocation argv"
+        )
     if current_generation not in {pending.from_generation, pending.to_generation}:
         raise BootstrapError("support pending transaction does not match current pointer")
     source = _validate_generation(paths, pending.from_generation)
-    target = _validate_generation(paths, pending.to_generation)
+    try:
+        target = _validate_generation(paths, pending.to_generation)
+    except BootstrapError:
+        return _abort_invalid_pending_target(
+            paths, state, source, pending, current_generation, current_identity,
+            pending_identity,
+        )
     if target.manifest_sha256 != pending.to_manifest_sha256:
-        raise BootstrapError("support pending target manifest digest is invalid")
+        return _abort_invalid_pending_target(
+            paths, state, source, pending, current_generation, current_identity,
+            pending_identity,
+        )
     _validate_state_relationship(
         paths, state, {source.generation_id: source, target.generation_id: target},
     )
@@ -1093,6 +1146,13 @@ def process_pending(*, home: Path | None = None,
         runner(target)
         _trip("after-self-test")
     except Exception:
+        try:
+            target = _revalidate_generation(paths, target)
+        except BootstrapError:
+            return _abort_invalid_pending_target(
+                paths, state, source, pending, current_generation,
+                current_identity, pending_identity,
+            )
         _rollback_target(
             paths, state, state_identity, source, target, pending,
             current_generation, current_identity, pending_identity,
@@ -1102,7 +1162,13 @@ def process_pending(*, home: Path | None = None,
     # Candidate success is not authority: revalidate exact bytes/identities, both
     # managed planes, journal/state, and the exact selected pointer before commit.
     _revalidate_generation(paths, source)
-    target = _revalidate_generation(paths, target)
+    try:
+        target = _revalidate_generation(paths, target)
+    except BootstrapError:
+        return _abort_invalid_pending_target(
+            paths, state, source, pending, current_generation, current_identity,
+            pending_identity,
+        )
     observed_generation, observed_identity = _current(paths)
     if (observed_generation != target.generation_id
             or observed_identity != current_identity):
@@ -1191,10 +1257,14 @@ def run_launcher(arguments: Sequence[str], *, home: Path | None = None,
     # Syntax is deliberately checked before pending state can be switched.
     _validate_arguments(arguments)
     os.environ.pop(SUPPORT_REEXEC_MARKER, None)
-    active = process_pending(home=home, self_test_runner=self_test_runner)
+    paths = _paths(home)
+    invocation_argv = [os.fspath(paths.launcher), *list(arguments)]
+    active = process_pending(
+        home=home, invocation_argv=invocation_argv,
+        self_test_runner=self_test_runner,
+    )
     # Revalidate immediately before import and bind that exact validation to one
     # unchanged current-pointer inode; never search an arbitrary generation.
-    paths = _paths(home)
     current_generation, current_identity = _current(paths)
     if current_generation != active.generation_id:
         raise BootstrapError("support current changed before active import")
