@@ -41,7 +41,7 @@ GIT_SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 RECEIPT_SCHEMA = 2
 LAUNCHER_MARKER = "# lingtai-desktop-support-bootstrap-v1"
 SUPPORT_REEXEC_MARKER = "LINGTAI_DESKTOP_SUPPORT_REEXEC"
-STABLE_BOOTSTRAP_SHA256 = "75f71687fbb926d7f206da5db5ed0237e40aa741b6dda7fefe66f046e8313a62"
+STABLE_BOOTSTRAP_SHA256 = "eb807d604222e0390c688930475092276fb1d6c3705a95b21711376cc93f8e6d"
 ARTIFACT_KIND = "lingtai-portable-app-archive"
 MANIFEST_SCHEMA = 1
 EXECUTABLE_RELATIVE = "Contents/MacOS/LingTai"
@@ -2267,9 +2267,13 @@ def stage_local_support_update(
     current_name, current_identity = _support_current(paths)
     if current_name != current_generation.manifest.generation_id:
         raise DesktopCLIError("support current changed during staging")
-    live_argv = list(sys.argv if argv is None else argv)
-    if not live_argv:
+    requested_argv = list(sys.argv if argv is None else argv)
+    if not requested_argv:
         raise DesktopCLIError("support re-exec argv must include the launcher")
+    # The stable launcher always reconstructs its own installed absolute argv[0].
+    # Hash and execute that same canonical full invocation while preserving every
+    # caller-supplied argument after argv[0] byte-for-byte and in order.
+    live_argv = [os.fspath(paths.launcher), *requested_argv[1:]]
     _argv_sha256(live_argv)
     module_bytes, _ = _read_managed_support_file(
         Path(module_path), "local support CLI fixture", MAX_SUPPORT_PAYLOAD_BYTES,

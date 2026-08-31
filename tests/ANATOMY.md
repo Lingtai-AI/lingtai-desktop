@@ -54,13 +54,21 @@ test proves. This file descends into `tests/` itself.
   bytes, deterministic generation IDs, exact numbered tag/version identity,
   two-file mode/hash/size/link/type validation, semantic high-water/last-good/
   failed-target closure, final no-flat-layout fresh install, stable bootstrap
-  delegation, exact-byte import, exact staged full-argv authorization, and an
-  enforced private-child candidate self-test with no candidate-clearable
-  violation ledger. Its review-repair tables exercise all fresh ordinary/
-  publication-fsync and journal crash boundaries; payload, manifest, generation,
-  and current wedges before/after self-test; invalid-target last-good recovery;
-  rollback failed-state/temp/pointer/pending replay; top-level and self-test-body
-  write/network/subprocess/exec/native/early-exit attacks; App receipt hardlink/
+  delegation, exact-byte import, canonical staged full-argv authorization, and an
+  enforced private-child candidate self-test with a wrapper-local trusted terminal
+  action and no candidate-clearable violation ledger. Product-entry regressions
+  inject the review's forged `T`, replace candidate-visible `__main__` names, call
+  inherited-fd `os.write`/`posix.write`, emit partial/extra markers, close the fd,
+  and verify direct rejection plus full-transaction rollback; clean exact `True`,
+  exception, timeout, and sticky denied early exit remain covered. Bare and
+  alternate argv0, default staging, explicit retry, and an argument-looking argv0
+  are normalized to the installed launcher before hash/exec and replayed through
+  stable `run_launcher`, while `doctor` cannot consume a `version` transaction.
+  Its review-repair tables exercise all fresh ordinary/publication-fsync and
+  journal crash boundaries; payload, manifest, generation, and current wedges
+  before/after self-test; invalid-target last-good recovery; rollback failed-state/
+  temp/pointer/pending replay; top-level and self-test-body write/network/
+  subprocess/exec/native/early-exit attacks; App receipt hardlink/
   mode/canonical-byte refusal; post-switch exact-pointer rollback; concurrent
   App-current replacement; and syntax/policy no-mutation staging. It
   snapshots App bytes and inode identities around every support-only operation,

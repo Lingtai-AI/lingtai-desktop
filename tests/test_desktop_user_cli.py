@@ -3098,16 +3098,35 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                 + b"try:\n    os.write(audit_fd, b'T')\nexcept PermissionError:\n    pass\n"
                 + b"os.close(audit_fd)\n" + replace_main_finalizers
             ),
+            "candidate-frame-introspection": (
+                b"import sys\n"
+                b"try:\n    sys._getframe()\nexcept PermissionError:\n    pass\n"
+                b"def support_self_test():\n    return True\n"
+            ),
+            "wrapper-frame-introspection": (
+                b"import sys\n"
+                b"def support_self_test():\n"
+                b"    sys._getframe(1)\n"
+                b"    return True\n"
+            ),
         }
         for label, source in rejected.items():
             with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
                 with self.assertRaisesRegex(bootstrap.BootstrapError, "isolated exit"):
                     bootstrap._production_self_test(generation(Path(temporary), source))
 
-        with tempfile.TemporaryDirectory() as temporary:
-            bootstrap._production_self_test(generation(
-                Path(temporary), b"def support_self_test():\n    return True\n",
-            ))
+        accepted = {
+            "clean-true": b"def support_self_test():\n    return True\n",
+            "clean-true-after-main-global-replacement": (
+                b"import __main__\n"
+                b"for name in ('finish_policy', 'install_policy', 'run_candidate', 'violations'):\n"
+                b"    setattr(__main__, name, lambda *_: None)\n"
+                b"def support_self_test():\n    return True\n"
+            ),
+        }
+        for label, source in accepted.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                bootstrap._production_self_test(generation(Path(temporary), source))
 
     def test_review_fix_forged_self_test_cannot_commit_pending_transaction(self) -> None:
         import importlib

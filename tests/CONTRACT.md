@@ -188,10 +188,15 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   local N-to-N+1 transaction. The support proof includes hostile file kinds,
   exact sets/modes/hashes/links, semantic last-good/high-water/failed hash closure,
   prepublication anti-rollback/failed-target/argv policy, exact-byte import, and
-  enforced isolated no-write/network/process/native/early-exit self-test whose
-  denied events cannot be erased by candidate globals. Focused matrices cover
-  ordinary and journaled fresh-install boundaries; payload/manifest/generation/
-  current TOCTOU wedges; exact staged-invocation argv binding; mutation-independent
+  enforced isolated no-write/network/process/native/frame/early-exit self-test.
+  Its wrapper-owned terminal marker cannot be forged by inherited `os.write` or
+  `posix.write`, candidate `__main__` replacement, partial/extra bytes, or descriptor
+  close, while clean exact `True`, exception, timeout, and sticky denied-event
+  dispositions remain explicit. Focused matrices cover ordinary and journaled
+  fresh-install boundaries; payload/manifest/generation/current TOCTOU wedges;
+  canonical absolute-launcher staging for bare, alternate, default, retry, and
+  argument-looking argv0 forms; exact stable-launcher replay and executor/hash
+  identity; command substitution rejection; mutation-independent
   last-good recovery; authenticated rollback at each durable boundary; exact
   one-shot explicit retry; numbered tag/version coherence; App receipt owner/type/
   link/mode/size/canonical-byte validation; post-current exact-pointer restoration;

@@ -233,15 +233,20 @@ process-death boundaries, while ordinary rollback uses an early directory/inode
 ledger and never removes replacements or shared parents. The stable launcher
 validates that chain into retained exact bytes before import and resumes only the
 exact `pending.json` from->to transaction under the canonical full argv that
-staged it. It retains the original source symlink under the journal's random
-rollback name, publishes failed state before pointer rollback, and authenticates
-that inode during replay. An uncommitted target that fails final identity
-validation aborts back to that source without trusting target bytes. Candidate
-self-test runs in a private minimal-environment child under a no-write/network/
-process/native/early-exit audit policy; denied capability use records into a
-production-parent-owned pipe before candidate handling resumes, and the parent
-requires one trusted clean marker plus exact true/zero-exit completion. There is
-no candidate-mutable ledger. Post-test
+staged it. Local staging canonicalizes caller argv0 to the absolute installed
+launcher before hashing, publication, and exec, preserving the remaining full-
+argv order exactly. It retains the original source symlink under the journal's
+random rollback name, publishes failed state before pointer rollback, and
+authenticates that inode during replay. An uncommitted target that fails final
+identity validation aborts back to that source without trusting target bytes.
+Candidate self-test runs in a private minimal-environment child under a no-write/
+network/process/native/frame/early-exit audit policy. The wrapper removes the
+inherited audit descriptor from candidate argv and replaces candidate-visible
+`os.write`/`posix.write` aliases with sticky denial, while its raw terminal writer
+and final true-only action remain locals in the active wrapper call. Candidate
+`__main__` replacement therefore cannot suppress the genuine final marker, and
+injected/partial/extra markers fail the parent's exact singleton-marker grammar.
+There is no candidate-mutable ledger. Post-test
 generation, pointer, journal, state, and both managed planes are revalidated
 before commit. The active CLI can stage only an injected local generation
 in this phase; official network support discovery/cache publication is deferred.

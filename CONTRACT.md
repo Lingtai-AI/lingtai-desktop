@@ -41,13 +41,19 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
   exact pointer/generation/manifest/payload set, carries the exact validated bytes
   through import/self-test, handles one pending switch only for the exact canonical
   full invocation argv that staged it, and commits or rolls back only after
-  identity/hash and App/support-plane revalidation. Candidate code runs in an
-  isolated, minimal-environment child with private HOME/cwd/TMPDIR, bounded
+  identity/hash and App/support-plane revalidation. Staging replaces the supplied
+  full argv's first element with the absolute installed launcher before hashing,
+  pending publication, and exec, while preserving every following argument and
+  never reinterpreting argv0 as an omitted command argument. Candidate code runs
+  in an isolated, minimal-environment child with private HOME/cwd/TMPDIR, bounded
   stdio/time, and a pre-candidate audit boundary denying writes, network, process/
-  exec, native-loader escape, and early exit. A denied capability records a sticky
-  marker in a production-parent-owned pipe before candidate handling resumes,
-  leaving no candidate-mutable violation ledger; the parent accepts only one
-  trusted clean marker plus an exact true result and zero wait status. Rollback is
+  exec, native-loader escape, frame escape, and early exit. A denied capability,
+  including candidate use of public `os.write`/`posix.write`, records a sticky
+  marker in a production-parent-owned pipe before candidate handling resumes.
+  The inherited audit descriptor is removed from candidate argv, and the genuine
+  terminal write remains local to the active wrapper call rather than a mutable
+  candidate-visible global. The parent accepts only that wrapper-owned singleton
+  clean marker plus an exact true result and zero wait status. Rollback is
   failed-state-first,
   authenticates a retained source-pointer identity across every durable recovery
   boundary, and can abort an uncommitted mutated target without trusting its bytes.

@@ -838,11 +838,19 @@ import os
 import sys
 import types
 
-# The audit decision is recorded in the production parent's pipe, never in
-# candidate-addressable child state. The final trusted marker also authenticates
-# that an exact True result reached the harness normally.
-def install_policy(audit_fd):
-    write_audit = os.write
+# The trusted terminal write remains a fast local in this active wrapper call.
+# Candidate-visible deny functions can signal the hidden audit hook, but do not
+# retain the raw writer used by either the hook or the terminal boundary.
+def run_candidate(expected_path, audit_fd, source):
+    terminal_write = os.write
+    terminal_fd = audit_fd
+    wrapper_globals = globals()
+    name = "lingtai_support_self_test"
+    module = types.ModuleType(name)
+    module.__file__ = expected_path
+    module.__package__ = ""
+    module.__loader__ = None
+    candidate_globals = module.__dict__
     mutation_events = frozenset({
         "os.chdir", "os.chflags", "os.chmod", "os.chown", "os.exec",
         "os.fork", "os.forkpty", "os.kill", "os.link", "os.mkdir",
@@ -853,68 +861,89 @@ def install_policy(audit_fd):
         "shutil.copyfile", "shutil.copymode", "shutil.copystat", "shutil.move",
         "subprocess.Popen",
     })
+    introspection_events = frozenset({
+        "gc.get_objects", "gc.get_referents", "gc.get_referrers",
+        "sys._current_frames", "sys.setprofile", "sys.settrace",
+    })
+    sensitive_attributes = frozenset({
+        "ag_code", "ag_frame", "cr_code", "cr_frame", "f_back", "f_code",
+        "gi_code", "gi_frame", "tb_frame",
+    })
     danger_prefixes = ("socket.", "ctypes.dlopen", "ctypes.dlsym")
+    public_deny_event = "lingtai.support_self_test.public_write_or_exit"
     write_flags = (
         getattr(os, "O_WRONLY", 1) | getattr(os, "O_RDWR", 2)
         | getattr(os, "O_APPEND", 0) | getattr(os, "O_CREAT", 0)
         | getattr(os, "O_TRUNC", 0)
     )
 
-    def report_violation():
-        try:
-            write_audit(audit_fd, b"V")
-        except OSError as error:
-            raise SystemExit(75) from error
-        raise PermissionError("support self-test policy denied mutation or escape")
-
-    def deny_process_exit(*args):
-        report_violation()
-
-    def deny(event, args):
-        denied = event in mutation_events or event.startswith(danger_prefixes)
-        if event == "open":
+    def deny(event, args, _write=os.write, _fd=audit_fd):
+        denied = (
+            event == public_deny_event or event in mutation_events
+            or event in introspection_events or event.startswith(danger_prefixes)
+        )
+        if event == "sys._getframe":
+            denied = bool(args) and (
+                args[0].f_globals is candidate_globals
+                or args[0].f_globals is wrapper_globals
+            )
+        elif event == "open":
             mode = args[1] if len(args) > 1 else None
             flags = args[2] if len(args) > 2 else 0
             denied = (
                 isinstance(mode, str) and any(token in mode for token in "wax+")
             ) or (isinstance(flags, int) and bool(flags & write_flags))
+        elif event in {"object.__getattr__", "object.__setattr__", "object.__delattr__"}:
+            denied = len(args) > 1 and args[1] in sensitive_attributes
         if denied:
-            report_violation()
+            try:
+                _write(_fd, b"V")
+            except OSError as error:
+                raise SystemExit(75) from error
+            raise PermissionError("support self-test policy denied mutation or escape")
 
-    def finish(success):
-        write_audit(audit_fd, b"T" if success else b"F")
+    sys.addaudithook(deny)
+    audit_event = sys.audit
 
-    # CPython 3.9 emits no audit event for _exit(). Replace both public aliases
-    # before candidate code so every early-exit attempt reaches the audit pipe.
-    os._exit = deny_process_exit
+    def deny_public_write_or_exit(*args, **kwargs):
+        audit_event(public_deny_event)
+        raise PermissionError("support self-test policy denied write or exit")
+
+    # CPython 3.9 emits no audit event for raw writes or _exit(). Replace every
+    # public alias before candidate compilation; only the wrapper's unexposed
+    # local terminal writer remains authoritative.
+    os.write = deny_public_write_or_exit
+    os._exit = deny_public_write_or_exit
     try:
         import posix as _posix
-        _posix._exit = deny_process_exit
+        _posix.write = deny_public_write_or_exit
+        _posix._exit = deny_public_write_or_exit
     except ImportError:
         pass
-    sys.addaudithook(deny)
-    return finish
 
-finish_policy = install_policy(int(sys.argv[2]))
-del install_policy
+    # The descriptor number is transport setup, not candidate authority.
+    sys.argv[:] = [sys.argv[0]]
+    sys.modules[name] = module
+    try:
+        exec(compile(source, expected_path, "exec", dont_inherit=True), module.__dict__)
+        result = module.support_self_test()
+    except BaseException:
+        try:
+            terminal_write(terminal_fd, b"F")
+        except OSError:
+            return 75
+        return 3
+    try:
+        terminal_write(terminal_fd, b"T" if result is True else b"F")
+    except OSError:
+        return 75
+    return 0 if result is True else 4
+
 source = sys.stdin.buffer.read(2 * 1024 * 1024 + 1)
 if not source or len(source) > 2 * 1024 * 1024:
     raise SystemExit(2)
-expected_path = sys.argv[1]
-name = "lingtai_support_self_test"
-module = types.ModuleType(name)
-module.__file__ = expected_path
-module.__package__ = ""
-module.__loader__ = None
-sys.modules[name] = module
-try:
-    exec(compile(source, expected_path, "exec", dont_inherit=True), module.__dict__)
-    result = module.support_self_test()
-except BaseException:
-    finish_policy(False)
-    raise SystemExit(3)
-finish_policy(result is True)
-raise SystemExit(0 if result is True else 4)
+exit_status = run_candidate(sys.argv[1], int(sys.argv[2]), source)
+raise SystemExit(exit_status)
 '''
     audit_read: int | None = None
     audit_write: int | None = None
