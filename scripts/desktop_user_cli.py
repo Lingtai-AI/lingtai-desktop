@@ -41,7 +41,7 @@ GIT_SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 RECEIPT_SCHEMA = 2
 LAUNCHER_MARKER = "# lingtai-desktop-support-bootstrap-v1"
 SUPPORT_REEXEC_MARKER = "LINGTAI_DESKTOP_SUPPORT_REEXEC"
-STABLE_BOOTSTRAP_SHA256 = "eb807d604222e0390c688930475092276fb1d6c3705a95b21711376cc93f8e6d"
+STABLE_BOOTSTRAP_SHA256 = "6c246f7af6602eeee0d697bcd5c830029939bd786ba3ecbf3cf8c41846ac02e6"
 ARTIFACT_KIND = "lingtai-portable-app-archive"
 MANIFEST_SCHEMA = 1
 EXECUTABLE_RELATIVE = "Contents/MacOS/LingTai"
@@ -69,6 +69,14 @@ MAX_UPDATE_CACHE_BYTES = 512
 DEFAULT_UPDATE_CHECK_INTERVAL = 24 * 60 * 60
 AUTOMATIC_RELEASE_TIMEOUT = 2.0
 STAGED_APP_SMOKE_TIMEOUT = 60
+SUPPORT_UPDATE_CACHE_SCHEMA = "lingtai.desktop.support-update-check/v1"
+SUPPORT_UPDATE_CACHE_KEYS = {
+    "schema", "checked_at", "latest_support_version", "release_tag",
+    "generation_id", "manifest_sha256", "declined",
+}
+MAX_SUPPORT_UPDATE_CACHE_BYTES = 2048
+DEFAULT_SUPPORT_UPDATE_CHECK_INTERVAL = 24 * 60 * 60
+_SUPPORT_REEXEC_CONSUMED = False  # Set only by the stable bootstrap after import.
 MANIFEST_KEYS = {
     "architectures", "archive_file_name", "archive_sha256",
     "archive_size_bytes", "artifact_kind", "bundle_executable",
@@ -187,6 +195,16 @@ class UpdateCheck:
 
 
 @dataclasses.dataclass(frozen=True)
+class SupportUpdateCheck:
+    checked_at: int
+    latest_support_version: str
+    release_tag: str
+    generation_id: str
+    manifest_sha256: str
+    declined: bool
+
+
+@dataclasses.dataclass(frozen=True)
 class SupportPayload:
     name: str
     size: int
@@ -204,6 +222,15 @@ class SupportManifest:
     minimum_bootstrap_protocol: int
     files: tuple[SupportPayload, ...]
     manifest_sha256: str
+
+
+@dataclasses.dataclass(frozen=True)
+class OfficialSupportRelease:
+    version: str
+    manifest: SupportManifest
+    manifest_asset: ReleaseAsset
+    payload_assets: Mapping[str, ReleaseAsset]
+    manifest_bytes: bytes
 
 
 @dataclasses.dataclass(frozen=True)
@@ -499,10 +526,11 @@ def _open_official_response(url: str, transport: ReleaseTransport,
 
 def _read_official_bytes(url: str, transport: ReleaseTransport,
                          maximum_bytes: int, timeout: float,
-                         deadline: float | None = None) -> bytes:
+                         deadline: float | None = None,
+                         expected_bytes: int | None = None) -> bytes:
     response = _open_official_response(url, transport, timeout, deadline)
     try:
-        advertised = _content_length(response, maximum_bytes)
+        advertised = _content_length(response, maximum_bytes, expected_bytes)
         result = bytearray()
         while True:
             _remaining_official_timeout(timeout, deadline)
@@ -515,6 +543,8 @@ def _read_official_bytes(url: str, transport: ReleaseTransport,
                 raise DesktopCLIError("official release response is too large")
         if advertised is not None and len(result) != advertised:
             raise DesktopCLIError("official release response was truncated")
+        if expected_bytes is not None and len(result) != expected_bytes:
+            raise DesktopCLIError("official release response length does not match asset metadata")
         return bytes(result)
     except DesktopCLIError:
         raise
@@ -596,10 +626,89 @@ def discover_official_release(version: str | None = None, *,
     return OfficialRelease(discovered_version, archives[0], manifests[0])
 
 
+def _support_asset_from_metadata(
+        value: object, expected_names: Sequence[str], version: str) -> ReleaseAsset | None:
+    if not isinstance(value, dict):
+        raise DesktopCLIError("official release asset metadata is invalid")
+    name = value.get("name")
+    if not isinstance(name, str) or not name.isascii():
+        raise DesktopCLIError("official release asset metadata is invalid")
+    folded = {candidate.casefold(): candidate for candidate in expected_names}
+    path_tail = name.replace("\\", "/").rsplit("/", 1)[-1]
+    if ((name.casefold() in folded and name != folded[name.casefold()])
+            or (path_tail.casefold() in folded and name != folded[path_tail.casefold()])):
+        raise DesktopCLIError("official support release asset name is ambiguous")
+    if name not in expected_names:
+        return None
+    maximum = (MAX_SUPPORT_MANIFEST_BYTES if name == SUPPORT_MANIFEST_NAME
+               else MAX_SUPPORT_PAYLOAD_BYTES)
+    return _asset_from_metadata(value, name, version, maximum)
+
+
+def discover_official_support_release(
+        version: str | None = None, *, transport: ReleaseTransport | None = None,
+        timeout: float = EXPLICIT_RELEASE_TIMEOUT,
+        deadline: float | None = None) -> OfficialSupportRelease:
+    """Discover and authenticate official support metadata without publishing state.
+
+    Authenticity means the TLS-protected official GitHub route plus the exact
+    repository/tag/name metadata and manifest SHA-256 declarations. It is not a
+    code-signing or release-signing claim.
+    """
+    if version is not None and not _is_safe_version(version):
+        raise DesktopCLIError("support release version must be a safe x.y.z value")
+    transport = transport or ReleaseTransport()
+    url = OFFICIAL_LATEST_RELEASE_URL if version is None else OFFICIAL_RELEASE_TAG_URL.format(version)
+    raw = _read_official_bytes(
+        url, transport, MAX_RELEASE_METADATA_BYTES, timeout, deadline,
+    )
+    try:
+        metadata = json.loads(raw, object_pairs_hook=_exact_json_object)
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError) as error:
+        raise DesktopCLIError("official support release metadata is not bounded valid JSON") from error
+    if not isinstance(metadata, dict):
+        raise DesktopCLIError("official support release metadata must be an object")
+    tag = metadata.get("tag_name")
+    draft = metadata.get("draft")
+    prerelease = metadata.get("prerelease")
+    assets = metadata.get("assets")
+    if (not isinstance(tag, str) or not tag.startswith("v")
+            or not _is_safe_version(tag[1:]) or type(draft) is not bool
+            or type(prerelease) is not bool or draft or prerelease
+            or not isinstance(assets, list)):
+        raise DesktopCLIError("official support release metadata is not a stable release")
+    discovered = tag[1:]
+    if version is not None and discovered != version:
+        raise DesktopCLIError("official support release tag does not match requested version")
+    expected = (SUPPORT_MANIFEST_NAME, *SUPPORT_PAYLOAD_NAMES)
+    selected: dict[str, list[ReleaseAsset]] = {name: [] for name in expected}
+    for value in assets:
+        asset = _support_asset_from_metadata(value, expected, discovered)
+        if asset is not None:
+            selected[asset.name].append(asset)
+    if any(len(selected[name]) != 1 for name in expected):
+        raise DesktopCLIError("official release must contain one exact support manifest and payload asset set")
+    manifest_asset = selected[SUPPORT_MANIFEST_NAME][0]
+    manifest_bytes = _read_official_bytes(
+        manifest_asset.url, transport, MAX_SUPPORT_MANIFEST_BYTES, timeout,
+        deadline, manifest_asset.size_bytes,
+    )
+    manifest = parse_support_manifest(manifest_bytes)
+    if manifest.support_version != discovered or manifest.release_tag != tag:
+        raise DesktopCLIError("official support manifest does not bind discovered release tag")
+    payload_assets = {name: selected[name][0] for name in SUPPORT_PAYLOAD_NAMES}
+    for declared in manifest.files:
+        if payload_assets[declared.name].size_bytes != declared.size:
+            raise DesktopCLIError("official support asset size does not match manifest")
+    return OfficialSupportRelease(
+        discovered, manifest, manifest_asset, payload_assets, manifest_bytes,
+    )
+
+
 def _download_official_asset(asset: ReleaseAsset, destination: Path,
                              transport: ReleaseTransport, maximum_bytes: int,
-                             timeout: float) -> None:
-    response = _open_official_response(asset.url, transport, timeout)
+                             timeout: float, deadline: float | None = None) -> None:
+    response = _open_official_response(asset.url, transport, timeout, deadline)
     descriptor: int | None = None
     try:
         advertised = _content_length(response, maximum_bytes, asset.size_bytes)
@@ -610,7 +719,9 @@ def _download_official_asset(asset: ReleaseAsset, destination: Path,
         with os.fdopen(descriptor, "wb") as stream:
             descriptor = None
             while True:
+                _remaining_official_timeout(timeout, deadline)
                 block = response.read(min(1024 * 1024, maximum_bytes + 1 - written))
+                _remaining_official_timeout(timeout, deadline)
                 if not block:
                     break
                 written += len(block)
@@ -620,7 +731,8 @@ def _download_official_asset(asset: ReleaseAsset, destination: Path,
         if written != asset.size_bytes or (advertised is not None and written != advertised):
             raise DesktopCLIError("official release asset was truncated")
         facts = _regular_nofollow(destination, f"downloaded {asset.name}")
-        if facts.st_size != asset.size_bytes or stat.S_IMODE(facts.st_mode) != 0o600:
+        if (facts.st_size != asset.size_bytes or stat.S_IMODE(facts.st_mode) != 0o600
+                or facts.st_uid != os.geteuid() or facts.st_nlink != 1):
             raise DesktopCLIError("downloaded official release asset facts are invalid")
     except DesktopCLIError:
         raise
@@ -654,6 +766,67 @@ def downloaded_official_release(version: str | None = None, *,
         _download_official_asset(release.archive, archive, transport,
                                  MAX_ARCHIVE_BYTES, timeout)
         yield release, archive, manifest
+    finally:
+        if (_matches_identity(scratch, scratch_identity) and not scratch.is_symlink()
+                and scratch.is_dir()):
+            shutil.rmtree(scratch)
+
+
+@contextlib.contextmanager
+def downloaded_official_support_release(
+        version: str | None = None, *, transport: ReleaseTransport | None = None,
+        timeout: float = EXPLICIT_RELEASE_TIMEOUT):
+    transport = transport or ReleaseTransport()
+    deadline = time.monotonic() + timeout
+    release = discover_official_support_release(
+        version, transport=transport, timeout=timeout, deadline=deadline,
+    )
+    try:
+        scratch = Path(tempfile.mkdtemp(prefix="lingtai-desktop-support-download-"))
+    except OSError as error:
+        raise DesktopCLIError("support release temporary directory could not be created") from error
+    os.chmod(scratch, 0o700, follow_symlinks=False)
+    scratch_identity = _identity(scratch)
+    manifest_path = scratch / SUPPORT_MANIFEST_NAME
+    payload_paths = {name: scratch / name for name in SUPPORT_PAYLOAD_NAMES}
+    identities: dict[str, tuple[int, int]] = {}
+    try:
+        _download_official_asset(
+            release.manifest_asset, manifest_path, transport,
+            MAX_SUPPORT_MANIFEST_BYTES, timeout, deadline,
+        )
+        manifest_raw, identities[SUPPORT_MANIFEST_NAME] = _read_managed_support_file(
+            manifest_path, "downloaded support manifest", MAX_SUPPORT_MANIFEST_BYTES,
+            expected_size=release.manifest_asset.size_bytes,
+        )
+        if manifest_raw != release.manifest_bytes:
+            raise DesktopCLIError("downloaded support manifest changed after discovery")
+        for declared in release.manifest.files:
+            path = payload_paths[declared.name]
+            _download_official_asset(
+                release.payload_assets[declared.name], path, transport,
+                MAX_SUPPORT_PAYLOAD_BYTES, timeout, deadline,
+            )
+            content, identities[declared.name] = _read_managed_support_file(
+                path, f"downloaded support payload {declared.name}",
+                MAX_SUPPORT_PAYLOAD_BYTES, expected_size=declared.size,
+            )
+            if _sha256_bytes(content) != declared.sha256:
+                raise DesktopCLIError(
+                    f"downloaded support payload {declared.name} SHA-256 does not match manifest"
+                )
+            try:
+                compile(content, declared.name, "exec", dont_inherit=True)
+            except (SyntaxError, ValueError, TypeError) as error:
+                raise DesktopCLIError("downloaded support payload is not valid Python") from error
+        if {entry.name for entry in os.scandir(scratch)} != {
+                SUPPORT_MANIFEST_NAME, *SUPPORT_PAYLOAD_NAMES}:
+            raise DesktopCLIError("downloaded support release file set changed")
+        if not _matches_identity(scratch, scratch_identity) or any(
+                not _matches_identity(scratch / name, identity)
+                for name, identity in identities.items()):
+            raise DesktopCLIError("downloaded support release changed during validation")
+        yield release, manifest_path, payload_paths
     finally:
         if (_matches_identity(scratch, scratch_identity) and not scratch.is_symlink()
                 and scratch.is_dir()):
@@ -1779,24 +1952,132 @@ def _preflight_uninstall(paths: ManagedPaths) -> UninstallPlan:
     )
 
 
-def _read_support_update_cache(paths: ManagedPaths) -> tuple[int, int] | None:
+def _support_update_cache_value(check: SupportUpdateCheck) -> dict[str, object]:
+    return {
+        "checked_at": check.checked_at,
+        "declined": check.declined,
+        "generation_id": check.generation_id,
+        "latest_support_version": check.latest_support_version,
+        "manifest_sha256": check.manifest_sha256,
+        "release_tag": check.release_tag,
+        "schema": SUPPORT_UPDATE_CACHE_SCHEMA,
+    }
+
+
+def _support_update_cache_bytes(check: SupportUpdateCheck) -> bytes:
+    if (type(check.checked_at) is not int or check.checked_at < 0
+            or not _is_safe_version(check.latest_support_version)
+            or check.release_tag != f"v{check.latest_support_version}"
+            or not _is_safe_support_generation(check.generation_id)
+            or _support_generation_version(check.generation_id)
+            != check.latest_support_version
+            or not isinstance(check.manifest_sha256, str)
+            or SHA_PATTERN.fullmatch(check.manifest_sha256) is None
+            or type(check.declined) is not bool):
+        raise DesktopCLIError("support update-check values are invalid")
+    return _canonical_json_bytes(
+        _support_update_cache_value(check), MAX_SUPPORT_UPDATE_CACHE_BYTES,
+        "support update-check cache",
+    )
+
+
+def _read_support_update_cache(paths: ManagedPaths) -> SupportUpdateCheck | None:
     path = paths.support_update_cache
     if not path.exists() and not path.is_symlink():
         return None
-    facts = _regular_nofollow(path, "support update-check cache")
-    if stat.S_IMODE(facts.st_mode) != 0o600 or facts.st_nlink != 1:
-        raise DesktopCLIError("support update-check cache ownership or mode is invalid")
-    raw = _read_bytes_nofollow(path, "support update-check cache", MAX_UPDATE_CACHE_BYTES)
+    raw, _ = _read_managed_support_file(
+        path, "support update-check cache", MAX_SUPPORT_UPDATE_CACHE_BYTES,
+    )
     try:
         value = json.loads(raw, object_pairs_hook=_exact_json_object)
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError) as error:
         raise DesktopCLIError("support update-check cache is invalid") from error
-    if (not isinstance(value, dict) or set(value) != UPDATE_CACHE_KEYS
-            or value.get("schema_version") != UPDATE_CACHE_SCHEMA
-            or type(value.get("checked_at")) is not int or value["checked_at"] < 0
-            or not _is_safe_version(value.get("latest_version"))):
+    if (not isinstance(value, dict) or set(value) != SUPPORT_UPDATE_CACHE_KEYS
+            or value.get("schema") != SUPPORT_UPDATE_CACHE_SCHEMA):
         raise DesktopCLIError("support update-check cache does not match the exact schema")
-    return _identity(path)
+    check = SupportUpdateCheck(
+        value.get("checked_at"), value.get("latest_support_version"),
+        value.get("release_tag"), value.get("generation_id"),
+        value.get("manifest_sha256"), value.get("declined"),
+    )
+    canonical = _support_update_cache_bytes(check)
+    if raw != canonical:
+        raise DesktopCLIError("support update-check cache bytes are not canonical")
+    return check
+
+
+def _write_support_update_cache(paths: ManagedPaths, check: SupportUpdateCheck) -> None:
+    """Atomically exchange an existing cache and restore its exact inode on failure."""
+    _require_real_directory(paths.support, "managed support")
+    payload = _support_update_cache_bytes(check)
+    path = paths.support_update_cache
+    previous_identity: tuple[int, int] | None = None
+    if path.exists() or path.is_symlink():
+        _read_support_update_cache(paths)
+        previous_identity = _identity(path)
+    temporary = paths.support / f".update-check-{uuid.uuid4().hex}"
+    temporary_identity: tuple[int, int] | None = None
+    published = False
+    retained_previous = False
+    try:
+        temporary_identity = _write_private_staged(
+            temporary, payload, "support update-check cache",
+        )
+        if previous_identity is None:
+            try:
+                os.link(temporary, path, follow_symlinks=False)
+            except FileExistsError as error:
+                raise DesktopCLIError("refusing to replace a raced support update-check cache") from error
+            temporary.unlink()
+            published = True
+        else:
+            if not _matches_identity(path, previous_identity):
+                raise DesktopCLIError("refusing to replace a raced support update-check cache")
+            _exchange_paths(temporary, path)
+            published = True
+            if (not _matches_identity(path, temporary_identity)
+                    or not _matches_identity(temporary, previous_identity)):
+                # If the destination changed in the final pre-exchange window,
+                # swap it back rather than overwriting or deleting the racer.
+                if (_matches_identity(path, temporary_identity)
+                        and (temporary.exists() or temporary.is_symlink())):
+                    _exchange_paths(temporary, path)
+                    published = False
+                raise DesktopCLIError("refusing to replace a raced support update-check cache")
+            retained_previous = True
+        raw, identity = _read_managed_support_file(
+            path, "support update-check cache", MAX_SUPPORT_UPDATE_CACHE_BYTES,
+            expected_size=len(payload),
+        )
+        if raw != payload or identity != temporary_identity:
+            raise DesktopCLIError("support update-check cache publication was replaced")
+        _fsync_directory(paths.support)
+        if retained_previous:
+            if not _matches_identity(temporary, previous_identity):
+                raise DesktopCLIError("prior support update-check cache was replaced")
+            temporary.unlink()
+            retained_previous = False
+            _fsync_directory(paths.support)
+    except Exception:
+        if (previous_identity is not None and published
+                and temporary_identity is not None
+                and _matches_identity(path, temporary_identity)
+                and _matches_identity(temporary, previous_identity)):
+            _exchange_paths(temporary, path)
+            published = False
+            retained_previous = False
+            _fsync_directory(paths.support)
+        elif (previous_identity is None and published
+              and temporary_identity is not None
+              and _matches_identity(path, temporary_identity)):
+            path.unlink()
+            published = False
+            _fsync_directory(paths.support)
+        raise
+    finally:
+        # After a successful restoration the staged inode is back at the
+        # temporary name. Never unlink a retained prior/racer identity here.
+        _unlink_if_identity(temporary, temporary_identity)
 
 
 def _preflight_support_uninstall(paths: ManagedPaths) -> SupportUninstallPlan:
@@ -1826,8 +2107,10 @@ def _preflight_support_uninstall(paths: ManagedPaths) -> SupportUninstallPlan:
             rollback_pointer_name = pending.rollback_pointer_name
             rollback_pointer_identity = expected
             allowed.add(pending.rollback_pointer_name)
-    cache_identity = _read_support_update_cache(paths)
-    if cache_identity is not None:
+    cache = _read_support_update_cache(paths)
+    cache_identity = (_identity(paths.support_update_cache)
+                      if cache is not None else None)
+    if cache is not None:
         allowed.add("update-check.json")
     if {path.name for path in paths.support.iterdir()} != allowed:
         raise DesktopCLIError("managed support contains unknown or missing files")
@@ -2041,13 +2324,45 @@ def _publish_private_file_exclusive(path: Path, payload: bytes, label: str) -> t
         _unlink_if_identity(temporary, temporary_identity)
 
 
+def _verified_support_payloads(
+        manifest_bytes: bytes, payloads: Mapping[str, bytes]) -> SupportManifest:
+    manifest = parse_support_manifest(manifest_bytes)
+    if set(payloads) != set(SUPPORT_PAYLOAD_NAMES):
+        raise DesktopCLIError("support payload set is not exact")
+    for declared in manifest.files:
+        content = payloads.get(declared.name)
+        if (not isinstance(content, bytes) or len(content) != declared.size
+                or _sha256_bytes(content) != declared.sha256):
+            raise DesktopCLIError(
+                f"support payload {declared.name} does not match authoritative manifest"
+            )
+        try:
+            compile(content, declared.name, "exec", dont_inherit=True)
+        except (SyntaxError, ValueError, TypeError) as error:
+            raise DesktopCLIError("support payload is not valid Python") from error
+    rebuilt = build_support_manifest_bytes(
+        manifest.support_version, manifest.release_tag, payloads,
+    )
+    if rebuilt != manifest_bytes:
+        raise DesktopCLIError("support manifest is not the canonical payload authority")
+    return manifest
+
+
 def _publish_support_generation(
         paths: ManagedPaths, payloads: Mapping[str, bytes], *,
-        support_version: str, release_tag: str) -> ValidatedSupportGeneration:
-    manifest_bytes = build_support_manifest_bytes(
-        support_version, release_tag, payloads,
-    )
-    generation_id = json.loads(manifest_bytes)["generation_id"]
+        support_version: str | None = None, release_tag: str | None = None,
+        manifest_bytes: bytes | None = None) -> ValidatedSupportGeneration:
+    if manifest_bytes is None:
+        if support_version is None or release_tag is None:
+            raise DesktopCLIError("support generation publication lacks manifest identity")
+        manifest_bytes = build_support_manifest_bytes(
+            support_version, release_tag, payloads,
+        )
+    manifest = _verified_support_payloads(manifest_bytes, payloads)
+    if (support_version is not None and manifest.support_version != support_version
+            or release_tag is not None and manifest.release_tag != release_tag):
+        raise DesktopCLIError("support generation arguments disagree with manifest")
+    generation_id = manifest.generation_id
     final = paths.support_versions / generation_id
     if final.exists() or final.is_symlink():
         existing = validate_support_generation(final)
@@ -2248,17 +2563,14 @@ def _argv_sha256(argv: Sequence[str]) -> str:
     return _sha256_bytes(payload)
 
 
-def stage_local_support_update(
-        module_path: Path, verifier_path: Path, *,
-        support_version: str, release_tag: str,
-        argv: Sequence[str] | None = None,
-        environment: Mapping[str, str] | None = None,
-        home: Path | None = None,
-        effective_uid: int | None = None,
-        explicit_retry: bool = False,
-        exec_launcher: Callable[[Path, list[str], dict[str, str]], object] | None = None) -> str:
-    """Stage an offline local generation fixture and re-exec; remote discovery stays disabled."""
+def _stage_verified_support_payloads(
+        manifest_bytes: bytes, payloads: Mapping[str, bytes], *,
+        argv: Sequence[str] | None, environment: Mapping[str, str] | None,
+        home: Path | None, effective_uid: int | None, explicit_retry: bool,
+        exec_launcher: Callable[[Path, list[str], dict[str, str]], object] | None,
+        allow_no_change: bool) -> str | None:
     _require_nonroot(effective_uid)
+    candidate = _verified_support_payloads(manifest_bytes, payloads)
     paths = _paths(home)
     current_generation = _validate_owned_cli(paths)
     if _read_support_pending(paths) is not None:
@@ -2270,31 +2582,11 @@ def stage_local_support_update(
     requested_argv = list(sys.argv if argv is None else argv)
     if not requested_argv:
         raise DesktopCLIError("support re-exec argv must include the launcher")
-    # The stable launcher always reconstructs its own installed absolute argv[0].
-    # Hash and execute that same canonical full invocation while preserving every
-    # caller-supplied argument after argv[0] byte-for-byte and in order.
     live_argv = [os.fspath(paths.launcher), *requested_argv[1:]]
     _argv_sha256(live_argv)
-    module_bytes, _ = _read_managed_support_file(
-        Path(module_path), "local support CLI fixture", MAX_SUPPORT_PAYLOAD_BYTES,
-    )
-    verifier_bytes, _ = _read_managed_support_file(
-        Path(verifier_path), "local support verifier fixture", MAX_SUPPORT_PAYLOAD_BYTES,
-    )
-    payloads = {
-        SUPPORT_PAYLOAD_NAMES[0]: module_bytes,
-        SUPPORT_PAYLOAD_NAMES[1]: verifier_bytes,
-    }
-    manifest_bytes = build_support_manifest_bytes(
-        support_version, release_tag, payloads,
-    )
-    candidate = parse_support_manifest(manifest_bytes)
-    try:
-        compile(module_bytes, "desktop_user_cli.py", "exec", dont_inherit=True)
-        compile(verifier_bytes, "verify-app-archive.py", "exec", dont_inherit=True)
-    except (SyntaxError, ValueError, TypeError) as error:
-        raise DesktopCLIError("local support payload is not valid Python") from error
     if candidate.generation_id == current_name:
+        if allow_no_change:
+            return None
         raise DesktopCLIError("local support fixture is already active")
     validate_support_candidate(candidate, state, explicit_retry=explicit_retry)
     confirmed_name, confirmed_identity = _support_current(paths)
@@ -2304,7 +2596,7 @@ def stage_local_support_update(
     final = paths.support_versions / candidate.generation_id
     generation_preexisting = final.exists() or final.is_symlink()
     target = _publish_support_generation(
-        paths, payloads, support_version=support_version, release_tag=release_tag,
+        paths, payloads, manifest_bytes=manifest_bytes,
     )
     if (target.manifest != candidate
             or target.manifest.manifest_sha256 != _sha256_bytes(manifest_bytes)):
@@ -2335,6 +2627,69 @@ def stage_local_support_update(
     )
     executor(paths.launcher, live_argv, live_environment)
     return target.manifest.generation_id
+
+
+def stage_local_support_update(
+        module_path: Path, verifier_path: Path, *,
+        support_version: str, release_tag: str,
+        argv: Sequence[str] | None = None,
+        environment: Mapping[str, str] | None = None,
+        home: Path | None = None,
+        effective_uid: int | None = None,
+        explicit_retry: bool = False,
+        exec_launcher: Callable[[Path, list[str], dict[str, str]], object] | None = None) -> str:
+    """Stage an offline local generation fixture; no network or cache is touched."""
+    module_bytes, _ = _read_managed_support_file(
+        Path(module_path), "local support CLI fixture", MAX_SUPPORT_PAYLOAD_BYTES,
+    )
+    verifier_bytes, _ = _read_managed_support_file(
+        Path(verifier_path), "local support verifier fixture", MAX_SUPPORT_PAYLOAD_BYTES,
+    )
+    payloads = {
+        SUPPORT_PAYLOAD_NAMES[0]: module_bytes,
+        SUPPORT_PAYLOAD_NAMES[1]: verifier_bytes,
+    }
+    manifest_bytes = build_support_manifest_bytes(
+        support_version, release_tag, payloads,
+    )
+    result = _stage_verified_support_payloads(
+        manifest_bytes, payloads, argv=argv, environment=environment,
+        home=home, effective_uid=effective_uid, explicit_retry=explicit_retry,
+        exec_launcher=exec_launcher, allow_no_change=False,
+    )
+    assert result is not None
+    return result
+
+
+def stage_official_support_update(
+        version: str | None = None, *, argv: Sequence[str] | None = None,
+        environment: Mapping[str, str] | None = None,
+        home: Path | None = None, transport: ReleaseTransport | None = None,
+        timeout: float = EXPLICIT_RELEASE_TIMEOUT,
+        effective_uid: int | None = None, explicit_retry: bool = False,
+        exec_launcher: Callable[[Path, list[str], dict[str, str]], object] | None = None) -> str | None:
+    """Fully download, validate, then stage one official support transaction."""
+    with downloaded_official_support_release(
+            version, transport=transport, timeout=timeout) as downloaded:
+        release, manifest_path, payload_paths = downloaded
+        manifest_bytes, _ = _read_managed_support_file(
+            manifest_path, "verified official support manifest",
+            MAX_SUPPORT_MANIFEST_BYTES,
+            expected_size=release.manifest_asset.size_bytes,
+        )
+        payloads: dict[str, bytes] = {}
+        for declared in release.manifest.files:
+            payloads[declared.name], _ = _read_managed_support_file(
+                payload_paths[declared.name],
+                f"verified official support payload {declared.name}",
+                MAX_SUPPORT_PAYLOAD_BYTES, expected_size=declared.size,
+            )
+        return _stage_verified_support_payloads(
+            manifest_bytes, payloads, argv=argv, environment=environment,
+            home=home, effective_uid=effective_uid,
+            explicit_retry=explicit_retry, exec_launcher=exec_launcher,
+            allow_no_change=True,
+        )
 
 
 def support_self_test() -> bool:
@@ -2854,6 +3209,117 @@ def _default_tty() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
+def _record_support_update_cache(
+        paths: ManagedPaths, check: SupportUpdateCheck,
+        output: Callable[[str], None]) -> None:
+    try:
+        _write_support_update_cache(paths, check)
+    except DesktopCLIError as error:
+        output(f"Support update cache was not recorded: {error}")
+
+
+def _automatic_support_update_offer(
+        *, paths: ManagedPaths, arguments: Sequence[str], home: Path | None,
+        transport: ReleaseTransport | None, effective_uid: int | None,
+        now: int, interval: int, tty: Callable[[], bool],
+        prompt: Callable[[str], str], output: Callable[[str], None],
+        exec_launcher: Callable[[Path, list[str], dict[str, str]], object] | None) -> bool:
+    """Fail-open support metadata cadence; return true only after re-exec was requested."""
+    try:
+        cached = _read_support_update_cache(paths)
+    except DesktopCLIError as error:
+        output(f"Support update cache is invalid; continuing without a support check: {error}")
+        return False
+    fresh = cached is not None and 0 <= now - cached.checked_at < interval
+    if fresh:
+        check = cached
+        assert check is not None
+    else:
+        try:
+            deadline = time.monotonic() + AUTOMATIC_RELEASE_TIMEOUT
+            release = discover_official_support_release(
+                transport=transport, timeout=AUTOMATIC_RELEASE_TIMEOUT,
+                deadline=deadline,
+            )
+            check = SupportUpdateCheck(
+                now, release.version, release.manifest.release_tag,
+                release.manifest.generation_id,
+                release.manifest.manifest_sha256, False,
+            )
+        except DesktopCLIError as error:
+            output(f"Support update check failed; continuing with installed support: {error}")
+            return False
+
+    try:
+        active = _validate_owned_cli(paths)
+        state, _ = _read_support_state(paths)
+        current_version = active.manifest.support_version
+        if check.generation_id == active.manifest.generation_id:
+            if not fresh:
+                _record_support_update_cache(paths, check, output)
+            return False
+        if _version_tuple(check.latest_support_version) <= _version_tuple(current_version):
+            if not fresh:
+                _record_support_update_cache(paths, check, output)
+            return False
+        # Fresh cache entries may decide whether discovery is due, but never
+        # override rollback/substitution/failed-target policy.
+        if _version_tuple(check.latest_support_version) < _version_tuple(state.high_water_version):
+            raise DesktopCLIError("cached support target is below the high-water mark")
+        if (_version_tuple(check.latest_support_version)
+                == _version_tuple(state.high_water_version)
+                and check.manifest_sha256 != state.high_water_manifest_sha256):
+            raise DesktopCLIError("cached support target substitutes a same-version manifest")
+        if any(
+                failed.generation_id == check.generation_id
+                and failed.manifest_sha256 == check.manifest_sha256
+                for failed in state.failed_generations):
+            raise DesktopCLIError("support target was already recorded as failed")
+    except DesktopCLIError as error:
+        output(f"Support update check was rejected; continuing with installed support: {error}")
+        return False
+
+    if fresh and check.declined:
+        return False
+    notice = (
+        f"Support update available: {check.latest_support_version} "
+        f"(installed {current_version}); run 'lingtai-desktop update'."
+    )
+    try:
+        interactive = bool(tty())
+    except Exception:
+        interactive = False
+    if not interactive:
+        _record_support_update_cache(paths, dataclasses.replace(check, declined=False), output)
+        output(notice)
+        return False
+    try:
+        answer = prompt(
+            f"LingTai Desktop support {check.latest_support_version} is available "
+            f"(installed {current_version}). Stage it now? [y/N] "
+        )
+    except (EOFError, OSError):
+        answer = ""
+    if answer.strip().lower() not in {"y", "yes"}:
+        _record_support_update_cache(paths, dataclasses.replace(check, declined=True), output)
+        return False
+    try:
+        staged = stage_official_support_update(
+            check.latest_support_version,
+            argv=[os.fspath(paths.launcher), *list(arguments)],
+            home=home, transport=transport, effective_uid=effective_uid,
+            exec_launcher=exec_launcher,
+        )
+    except DesktopCLIError as error:
+        output(f"Support update failed; continuing with installed support: {error}")
+        return False
+    _record_support_update_cache(paths, dataclasses.replace(check, declined=False), output)
+    if staged is None:
+        return False
+    output(f"Support plane staged {staged}; re-exec requested")
+    return True
+
+
 def _automatic_update_offer(*, paths: ManagedPaths, installed_version: str,
                             home: Path | None, platform: Platform,
                             transport: ReleaseTransport | None,
@@ -2991,8 +3457,11 @@ def run_installed(arguments: Sequence[str], *, home: Path | None = None,
                   effective_uid: int | None = None,
                   clock: Callable[[], float] | None = None,
                   check_interval: int = DEFAULT_UPDATE_CHECK_INTERVAL,
+                  support_check_interval: int = DEFAULT_SUPPORT_UPDATE_CHECK_INTERVAL,
                   tty: Callable[[], bool] | None = None,
                   prompt: Callable[[str], str] | None = None,
+                  exec_launcher: Callable[[Path, list[str], dict[str, str]], object] | None = None,
+                  skip_support_check: bool = False,
                   output: Callable[[str], None] = print) -> int:
     platform = platform or Platform()
     clock = clock or time.time
@@ -3007,6 +3476,15 @@ def run_installed(arguments: Sequence[str], *, home: Path | None = None,
         version, app, receipt = _active(paths)
         _validate_owned_cli(paths)
         now = max(0, int(clock()))
+        if (not skip_support_check and _automatic_support_update_offer(
+            paths=paths, arguments=arguments, home=home,
+            transport=transport, effective_uid=effective_uid, now=now,
+            interval=support_check_interval, tty=tty, prompt=prompt,
+            output=output, exec_launcher=exec_launcher,
+        )):
+            # A real executor never returns. An injected executor represents the
+            # handoff and must not run either the old command or the App offer.
+            return 0
         if _automatic_update_offer(
             paths=paths, installed_version=version, home=home,
             platform=platform, transport=transport,
@@ -3058,6 +3536,25 @@ def run_installed(arguments: Sequence[str], *, home: Path | None = None,
                 effective_uid=effective_uid, update=True,
             )
         else:
+            if not skip_support_check:
+                try:
+                    _read_support_update_cache(paths)
+                    staged_support = stage_official_support_update(
+                        values.version,
+                        argv=[os.fspath(paths.launcher), *list(arguments)],
+                        home=home, transport=transport,
+                        effective_uid=effective_uid, explicit_retry=True,
+                        exec_launcher=exec_launcher,
+                    )
+                except DesktopCLIError as error:
+                    output(f"Support update failed; continuing App update: {error}")
+                else:
+                    if staged_support is not None:
+                        output(f"Support plane staged {staged_support}; re-exec requested")
+                        return 0
+                    output("Support plane is already current; continuing App update")
+            else:
+                output("Support plane re-exec guard consumed; continuing App update")
             _read_update_cache(paths)
             version = install_official(
                 values.version, home=home, platform=platform,
@@ -3071,6 +3568,7 @@ def run_installed(arguments: Sequence[str], *, home: Path | None = None,
                     f"cache was not recorded: {error}"
                 )
                 return 0
+        output(f"App plane updated to {version}")
         output(f"updated LingTai Desktop to {version}")
         return 0
     if command == "uninstall":
@@ -3176,7 +3674,9 @@ def installed_parser() -> argparse.ArgumentParser:
 def installed_main(argv: Sequence[str] | None = None) -> int:
     values = installed_parser().parse_args(argv)
     try:
-        return run_installed(values.arguments)
+        return run_installed(
+            values.arguments, skip_support_check=_SUPPORT_REEXEC_CONSUMED,
+        )
     except DesktopCLIError as error:
         print(f"lingtai-desktop: {error}", file=sys.stderr)
         return 1

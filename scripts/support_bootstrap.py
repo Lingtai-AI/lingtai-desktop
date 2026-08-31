@@ -1296,7 +1296,8 @@ def _validate_arguments(arguments: Sequence[str]) -> None:
     )
 
 
-def _load_and_run(generation: Generation, arguments: Sequence[str]) -> int:
+def _load_and_run(generation: Generation, arguments: Sequence[str], *,
+                  support_reexec_consumed: bool = False) -> int:
     module_path = generation.path / "desktop_user_cli.py"
     name = f"lingtai_desktop_active_{generation.generation_id.replace('-', '_')}"
     try:
@@ -1310,6 +1311,9 @@ def _load_and_run(generation: Generation, arguments: Sequence[str]) -> int:
             "exec", dont_inherit=True,
         )
         exec(code, module.__dict__)
+        # The marker itself was removed before candidate import. Only this
+        # wrapper-derived, one-shot boolean crosses the trust boundary.
+        module.__dict__["_SUPPORT_REEXEC_CONSUMED"] = bool(support_reexec_consumed)
         entry = getattr(module, "installed_main")
     except BootstrapError:
         raise
@@ -1325,7 +1329,7 @@ def run_launcher(arguments: Sequence[str], *, home: Path | None = None,
                  installed_runner: Callable[[Path, Sequence[str]], int] | None = None) -> int:
     # Syntax is deliberately checked before pending state can be switched.
     _validate_arguments(arguments)
-    os.environ.pop(SUPPORT_REEXEC_MARKER, None)
+    support_reexec_consumed = os.environ.pop(SUPPORT_REEXEC_MARKER, None) == "1"
     paths = _paths(home)
     invocation_argv = [os.fspath(paths.launcher), *list(arguments)]
     active = process_pending(
@@ -1344,7 +1348,9 @@ def run_launcher(arguments: Sequence[str], *, home: Path | None = None,
         raise BootstrapError("support current changed during active validation")
     if installed_runner is not None:
         return int(installed_runner(active.path / "desktop_user_cli.py", list(arguments)))
-    return _load_and_run(active, arguments)
+    return _load_and_run(
+        active, arguments, support_reexec_consumed=support_reexec_consumed,
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:

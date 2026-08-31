@@ -714,7 +714,8 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             monotonic_values = iter((100.0, 100.25, 100.5, 100.75, 101.0, 101.25, 102.1))
             with mock.patch.object(cli.time, "monotonic", side_effect=monotonic_values):
                 self.assertEqual(cli.run_installed(
-                    ["open"], home=home, platform=platform, transport=transport,
+                    arguments=["open"], home=home, platform=platform, transport=transport,
+                    skip_support_check=True,
                     clock=lambda: 1_000.0, tty=lambda: False,
                     output=lambda _: None, effective_uid=501,
                 ), 0)
@@ -799,7 +800,8 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                     side_effect=cli.DesktopCLIError("injected cache record failure"),
             ):
                 self.assertEqual(cli.run_installed(
-                    ["update"], home=home, platform=platform,
+                    arguments=["update"], home=home, platform=platform,
+                    skip_support_check=True,
                     transport=official_release_transport(
                         new_archive, new_manifest, "0.1.6",
                     ),
@@ -822,7 +824,8 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             unused_transport = official_release_transport(new_archive, new_manifest, "0.1.6")
             with self.assertRaisesRegex(cli.DesktopCLIError, "cache is invalid"):
                 cli.run_installed(
-                    ["update"], home=home, platform=platform,
+                    arguments=["update"], home=home, platform=platform,
+                    skip_support_check=True,
                     transport=unused_transport, effective_uid=501,
                 )
             self.assertEqual(unused_transport.calls, [])
@@ -845,7 +848,8 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             refreshed = official_release_transport(new_archive, new_manifest, "0.1.6")
             first_output: list[str] = []
             cli.run_installed(
-                ["version"], home=home, platform=platform,
+                arguments=["version"], home=home, platform=platform,
+                skip_support_check=True,
                 transport=refreshed, output=first_output.append,
                 clock=lambda: 1_000.0, tty=lambda: False,
                 prompt=lambda _: (_ for _ in ()).throw(AssertionError("non-TTY prompted")),
@@ -865,7 +869,8 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                     no_network = FakeReleaseTransport({})
                     output: list[str] = []
                     cli.run_installed(
-                        arguments, home=home, platform=platform,
+                        arguments=arguments, home=home, platform=platform,
+                        skip_support_check=True,
                         transport=no_network, output=output.append,
                         clock=lambda: 1_001.0, tty=lambda: False,
                         prompt=lambda _: (_ for _ in ()).throw(AssertionError("non-TTY prompted")),
@@ -888,7 +893,8 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                         return value
 
                     cli.run_installed(
-                        ["version"], home=home, platform=platform,
+                        arguments=["version"], home=home, platform=platform,
+                        skip_support_check=True,
                         transport=FakeReleaseTransport({}), output=lambda _: None,
                         clock=lambda: 1_001.0, tty=lambda: True, prompt=decline,
                     )
@@ -898,7 +904,8 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             confirmed_transport = official_release_transport(new_archive, new_manifest, "0.1.6")
             confirmed_output: list[str] = []
             cli.run_installed(
-                ["version"], home=home, platform=platform,
+                arguments=["version"], home=home, platform=platform,
+                skip_support_check=True,
                 transport=confirmed_transport, output=confirmed_output.append,
                 clock=lambda: 1_002.0, tty=lambda: True, prompt=lambda _: "YES",
                 effective_uid=501,
@@ -913,7 +920,8 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             cli.install(old_archive, old_manifest, home=explicit_home,
                         platform=explicit_platform, effective_uid=501)
             cli.run_installed(
-                ["update"], home=explicit_home, platform=explicit_platform,
+                arguments=["update"], home=explicit_home, platform=explicit_platform,
+                skip_support_check=True,
                 transport=official_release_transport(new_archive, new_manifest, "0.1.6"),
                 output=lambda _: None, clock=lambda: 2_000.0, tty=lambda: True,
                 prompt=lambda _: (_ for _ in ()).throw(AssertionError("explicit update prompted")),
@@ -922,7 +930,8 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             explicit_cache = explicit_home / ".local/share/lingtai-desktop/update-check.json"
             self.assertEqual(json.loads(explicit_cache.read_text())["checked_at"], 2000)
             cli.run_installed(
-                ["uninstall", "--version", "0.1.5"], home=explicit_home,
+                arguments=["uninstall", "--version", "0.1.5"], home=explicit_home,
+                skip_support_check=True,
                 platform=explicit_platform, transport=FakeReleaseTransport({}),
                 tty=lambda: True,
                 prompt=lambda _: (_ for _ in ()).throw(AssertionError("uninstall prompted")),
@@ -935,7 +944,8 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                         platform=FakePlatform(), effective_uid=501)
             initial_check = official_release_transport(new_archive, new_manifest, "0.1.6")
             cli.run_installed(
-                ["version"], home=failure_home, platform=FakePlatform(),
+                arguments=["version"], home=failure_home, platform=FakePlatform(),
+                skip_support_check=True,
                 transport=initial_check, output=lambda _: None,
                 clock=lambda: 3_000.0, tty=lambda: False,
             )
@@ -945,7 +955,8 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             failing_platform.fail = "verifier"
             failure_output: list[str] = []
             cli.run_installed(
-                ["open"], home=failure_home, platform=failing_platform,
+                arguments=["open"], home=failure_home, platform=failing_platform,
+                skip_support_check=True,
                 transport=official_release_transport(new_archive, new_manifest, "0.1.6"),
                 output=failure_output.append, clock=lambda: 3_001.0,
                 tty=lambda: True, prompt=lambda _: "y", effective_uid=501,
@@ -974,7 +985,8 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                 with self.subTest(check_failure=label):
                     offline_output: list[str] = []
                     cli.run_installed(
-                        ["version"], home=failure_home, platform=FakePlatform(),
+                        arguments=["version"], home=failure_home, platform=FakePlatform(),
+                        skip_support_check=True,
                         transport=failed_check, output=offline_output.append,
                         clock=lambda: 3_000.0 + cli.DEFAULT_UPDATE_CHECK_INTERVAL + 1,
                         tty=lambda: False,
@@ -1134,7 +1146,8 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                 cli.install(archive, manifest, home=home,
                             platform=FakePlatform(), effective_uid=501)
                 cli.run_installed(
-                    ["version"], home=home, platform=FakePlatform(),
+                    arguments=["version"], home=home, platform=FakePlatform(),
+                    skip_support_check=True,
                     transport=official_release_transport(new_archive, new_manifest, "0.1.6"),
                     clock=lambda: 10_000.0, tty=lambda: False, output=lambda _: None,
                 )
@@ -1176,7 +1189,8 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                     ordinary_output: list[str] = []
                     no_network = FakeReleaseTransport({})
                     cli.run_installed(
-                        ["version"], home=home, platform=FakePlatform(),
+                        arguments=["version"], home=home, platform=FakePlatform(),
+                        skip_support_check=True,
                         transport=no_network, clock=lambda: 10_001.0,
                         tty=lambda: False, output=ordinary_output.append,
                     )
