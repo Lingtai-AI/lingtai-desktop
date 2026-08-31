@@ -1222,7 +1222,11 @@ class DesktopSupportUpdatePhase3Test(unittest.TestCase):
                     follow_symlinks: bool = True,
             ) -> None:
                 nonlocal reappeared_during_recovery
-                if (source.parent == paths.support
+                if ((source.parent == paths.support
+                     or (source.parent.parent == paths.support
+                         and source.parent.name.startswith(
+                             ".support-update-cache-txn-"
+                         )))
                         and destination == paths.support_update_cache
                         and real_matches(source, prior_identity)
                         and disappeared_before_restore

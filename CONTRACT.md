@@ -87,20 +87,28 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
   substituted owned App cache state remains a fail-closed integrity precondition.
   Independently, `support/update-check.json` records the exact support
   version/tag/generation/manifest digest/time/decline decision under a bounded
-  canonical schema and restoration-capable atomic replacement. Publication
-  validates a provisional stage but success linearizes only at the final atomic
-  exchange of a second independent staged inode into canonical. Any racer that
-  wins before that point is atomically displaced and never accepted as staged
-  success: an existing cache restores its exact retained prior and preserves the
-  racer under a distinct failure-only
-  `.preserved-support-update-cache-racer-*` leaf; an initially absent cache
-  atomically returns the racer to canonical. Restoration has its own bounded
-  linearization path: exchange when canonical exists, exclusive hard link when
-  it disappeared, retrying boundedly if name state changes between observation
-  and operation. Clean publication retains no transaction leaf, ends with one
-  mode-0600 link, and later cleanup removes only recorded identities. No
-  snapshot-at-Python-return guarantee is made against mutation after an atomic
-  success/restoration point (`scripts/desktop_user_cli.py:1984-2262`). Ordinary
+  canonical schema and restoration-capable atomic replacement. One descriptor
+  observation binds prior bytes to prior identity. Ordinary rollback/commit
+  leaves exist only in an updater-owned random mode-0700 cooperative private
+  transaction namespace; arbitrary uncooperative same-UID replacement inside that namespace is outside
+  the supported threat model. Canonical `support/update-check.json` is the
+  canonical arbitrary-racer boundary, and every inode displaced from it receives
+  the same arbitrary-racer protection. Publication validates a provisional stage,
+  then atomically exchanges a second independent stage into canonical; the commit
+  boundary includes the immediately following support-directory fsync. Any
+  pre-commit failure restores the exact prior inode or exact absence. Once that
+  fsync succeeds, cleanup never touches canonical: cleanup/unlink/directory-fsync
+  failures return committed success with one bounded diagnostic. Racers are never
+  overwritten or deleted: an absent-cache racer returns to canonical, while a
+  displaced racer that cannot coexist with the restored prior moves by atomic
+  no-replace rename to `.preserved-support-update-cache-racer-<random>`.
+  Preserved canonical-racer diagnostics are not ordinary updater-owned residue;
+  doctor lists them and full uninstall blocks before deletion pending inspection.
+  Restoration retries boundedly with exchange for a live canonical destination
+  and exclusive hard link after disappearance. Clean publication retains no
+  private transaction namespace and ends with one mode-0600 link. No
+  snapshot-at-Python-return guarantee is made against mutation after the durable
+  commit/restoration point (`scripts/desktop_user_cli.py:1984-2360`). Ordinary
   valid commands check it on
   its own cadence: corruption or provider failure warns and continues without
   replacing prior bytes, non-TTY only notices, and TTY defaults No and stages

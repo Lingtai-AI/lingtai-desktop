@@ -7,6 +7,7 @@ import argparse
 import contextlib
 import ctypes
 import dataclasses
+import errno
 import hashlib
 import http.client
 import json
@@ -132,6 +133,9 @@ SUPPORT_PENDING_KEYS = {
     "explicit_retry", "rollback_pointer_name",
 }
 SUPPORT_ROLLBACK_POINTER_PATTERN = re.compile(r"\.rollback-[0-9a-f]{32}")
+SUPPORT_CACHE_RACER_PATTERN = re.compile(
+    r"\.preserved-support-update-cache-racer-[0-9a-f]{32}"
+)
 INITIAL_INSTALL_SCHEMA = "lingtai.desktop.initial-install/v1"
 INITIAL_INSTALL_NAME = "initial-install.json"
 MAX_INITIAL_INSTALL_BYTES = 2048
@@ -202,6 +206,15 @@ class SupportUpdateCheck:
     generation_id: str
     manifest_sha256: str
     declined: bool
+
+
+@dataclasses.dataclass(frozen=True)
+class SupportCacheTransaction:
+    directory: Path
+    directory_identity: tuple[int, int]
+    rollback: Path
+    commit: Path
+    absence: Path
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1981,13 +1994,7 @@ def _support_update_cache_bytes(check: SupportUpdateCheck) -> bytes:
     )
 
 
-def _read_support_update_cache(paths: ManagedPaths) -> SupportUpdateCheck | None:
-    path = paths.support_update_cache
-    if not path.exists() and not path.is_symlink():
-        return None
-    raw, _ = _read_managed_support_file(
-        path, "support update-check cache", MAX_SUPPORT_UPDATE_CACHE_BYTES,
-    )
+def _decode_support_update_cache(raw: bytes) -> SupportUpdateCheck:
     try:
         value = json.loads(raw, object_pairs_hook=_exact_json_object)
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError) as error:
@@ -2004,6 +2011,24 @@ def _read_support_update_cache(paths: ManagedPaths) -> SupportUpdateCheck | None
     if raw != canonical:
         raise DesktopCLIError("support update-check cache bytes are not canonical")
     return check
+
+
+def _read_support_update_cache_observation(
+        paths: ManagedPaths,
+) -> tuple[SupportUpdateCheck, tuple[int, int]] | None:
+    """Return bytes and identity from the same no-follow descriptor observation."""
+    path = paths.support_update_cache
+    if not path.exists() and not path.is_symlink():
+        return None
+    raw, identity = _read_managed_support_file(
+        path, "support update-check cache", MAX_SUPPORT_UPDATE_CACHE_BYTES,
+    )
+    return _decode_support_update_cache(raw), identity
+
+
+def _read_support_update_cache(paths: ManagedPaths) -> SupportUpdateCheck | None:
+    observed = _read_support_update_cache_observation(paths)
+    return None if observed is None else observed[0]
 
 
 def _restore_support_update_cache_identity(
@@ -2084,72 +2109,319 @@ def _restore_support_update_cache_identity(
     ) from last_error
 
 
-def _write_support_update_cache(paths: ManagedPaths, check: SupportUpdateCheck) -> None:
-    """Publish with one final atomic exchange as the success linearization point."""
+def _rename_path_noreplace(source: Path, destination: Path) -> None:
+    """Atomically rename without replacing any destination, on supported hosts."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform == "darwin":
+        rename = libc.renamex_np
+        rename.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        rename.restype = ctypes.c_int
+        result = rename(
+            os.fsencode(source), os.fsencode(destination), 0x00000004,
+        )  # RENAME_EXCL
+    else:
+        rename = getattr(libc, "renameat2", None)
+        if rename is None:
+            raise DesktopCLIError("atomic no-replace rename is unavailable")
+        rename.argtypes = [
+            ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        rename.restype = ctypes.c_int
+        result = rename(
+            -100, os.fsencode(source), -100, os.fsencode(destination),
+            0x00000001,  # Linux RENAME_NOREPLACE
+        )
+    if result == 0:
+        return
+    error_number = ctypes.get_errno()
+    if error_number == errno.EEXIST:
+        raise FileExistsError(
+            error_number, os.strerror(error_number), os.fspath(destination),
+        )
+    if error_number == errno.ENOENT:
+        raise FileNotFoundError(
+            error_number, os.strerror(error_number), os.fspath(source),
+        )
+    raise DesktopCLIError(
+        f"could not atomically preserve support update-check cache ({error_number})"
+    )
+
+
+def _new_support_cache_transaction(paths: ManagedPaths) -> SupportCacheTransaction:
+    try:
+        directory = Path(tempfile.mkdtemp(
+            prefix=".support-update-cache-txn-", dir=paths.support,
+        ))
+        os.chmod(directory, 0o700, follow_symlinks=False)
+        facts = directory.lstat()
+    except OSError as error:
+        raise DesktopCLIError(
+            "could not create private support update-check transaction"
+        ) from error
+    if (not stat.S_ISDIR(facts.st_mode) or stat.S_IMODE(facts.st_mode) != 0o700
+            or facts.st_uid != os.geteuid() or facts.st_nlink != 2):
+        raise DesktopCLIError("private support update-check transaction is invalid")
+    return SupportCacheTransaction(
+        directory, (facts.st_dev, facts.st_ino), directory / "rollback",
+        directory / "commit", directory / "absence",
+    )
+
+
+def _bounded_exception_text(error: BaseException, maximum: int = 360) -> str:
+    text = " ".join(str(error).replace("\x00", "").split())
+    if not text:
+        text = error.__class__.__name__
+    return text[:maximum]
+
+
+def _preserve_support_cache_racer(
+        paths: ManagedPaths, source: Path,
+        expected_identity: tuple[int, int],
+) -> Path:
+    """Move a displaced canonical object to a collision-proof diagnostic name."""
+    if not _matches_identity(source, expected_identity):
+        raise DesktopCLIError("displaced support update-check racer was replaced")
+    for _ in range(8):
+        destination = paths.support / (
+            f".preserved-support-update-cache-racer-{uuid.uuid4().hex}"
+        )
+        try:
+            _rename_path_noreplace(source, destination)
+        except FileExistsError:
+            continue
+        if not _matches_identity(destination, expected_identity):
+            raise DesktopCLIError(
+                "preserved support update-check racer changed identity"
+            )
+        return destination
+    raise DesktopCLIError(
+        "could not allocate a preserved support update-check racer diagnostic"
+    )
+
+
+def _cleanup_support_cache_transaction(
+        paths: ManagedPaths, transaction: SupportCacheTransaction,
+        owned_identities: set[tuple[int, int]],
+) -> list[str]:
+    """Best-effort cooperative cleanup; never removes an unrecorded identity."""
+    problems: list[str] = []
+    for leaf in (transaction.rollback, transaction.commit, transaction.absence):
+        for attempt in range(2):
+            try:
+                identity = _identity(leaf)
+            except FileNotFoundError:
+                break
+            except OSError as error:
+                problems.append(f"inspect {leaf.name}: {_bounded_exception_text(error)}")
+                break
+            if identity not in owned_identities:
+                problems.append(f"unrecognized private leaf {leaf.name} was retained")
+                break
+            try:
+                leaf.unlink()
+                break
+            except OSError as error:
+                problems.append(f"unlink {leaf.name}: {_bounded_exception_text(error)}")
+                if attempt:
+                    break
+    try:
+        _fsync_directory(transaction.directory)
+    except Exception as error:
+        problems.append(f"transaction fsync: {_bounded_exception_text(error)}")
+    for attempt in range(2):
+        try:
+            if not _matches_identity(
+                    transaction.directory, transaction.directory_identity):
+                problems.append("private transaction directory was replaced")
+                break
+            transaction.directory.rmdir()
+            break
+        except OSError as error:
+            problems.append(f"remove transaction: {_bounded_exception_text(error)}")
+            if attempt:
+                break
+    try:
+        _fsync_directory(paths.support)
+    except Exception as error:
+        problems.append(f"support cleanup fsync: {_bounded_exception_text(error)}")
+    return problems
+
+
+def _write_support_update_cache(
+        paths: ManagedPaths, check: SupportUpdateCheck,
+) -> str | None:
+    """Publish atomically; return only a bounded post-commit cleanup diagnostic."""
     _require_real_directory(paths.support, "managed support")
     payload = _support_update_cache_bytes(check)
     path = paths.support_update_cache
-    previous_identity: tuple[int, int] | None = None
-    if path.exists() or path.is_symlink():
-        _read_support_update_cache(paths)
-        previous_identity = _identity(path)
-    transaction = uuid.uuid4().hex
-    # Both owned leaves begin as independent, single-link staged payloads. The
-    # rollback leaf retains an existing prior after provisional exchange. The
-    # commit leaf is swapped into canonical only as the final atomic operation;
-    # if that swap displaces a racer, the leaf becomes its diagnostic owner.
-    rollback = paths.support / (
-        f".preserved-support-update-cache-racer-{transaction}-rollback"
-    )
-    commit = paths.support / (
-        f".preserved-support-update-cache-racer-{transaction}-commit"
-    )
+    observation = _read_support_update_cache_observation(paths)
+    previous_identity = None if observation is None else observation[1]
+    transaction = _new_support_cache_transaction(paths)
     provisional_identity: tuple[int, int] | None = None
     commit_identity: tuple[int, int] | None = None
-    provisional_published = False
     retained_previous = False
-    final_commit_won = False
+    provisional_published = False
+    final_exchange = False
+    committed = False
+    preserved_diagnostics: list[Path] = []
 
-    def cleanup_owned_stages() -> None:
-        for owned in (rollback, commit):
-            _unlink_if_identity(owned, provisional_identity)
-            _unlink_if_identity(owned, commit_identity)
+    def owned() -> set[tuple[int, int]]:
+        return {
+            identity for identity in (provisional_identity, commit_identity)
+            if identity is not None
+        }
 
+    def preserve_unknown_leaves() -> list[str]:
+        problems: list[str] = []
+        for leaf in (transaction.rollback, transaction.commit, transaction.absence):
+            try:
+                identity = _identity(leaf)
+            except FileNotFoundError:
+                continue
+            except OSError as error:
+                problems.append(
+                    f"inspect displaced racer: {_bounded_exception_text(error)}"
+                )
+                continue
+            if identity in owned() or identity == previous_identity:
+                continue
+            try:
+                preserved_diagnostics.append(
+                    _preserve_support_cache_racer(paths, leaf, identity)
+                )
+            except Exception as error:
+                problems.append(
+                    f"preserve displaced racer: {_bounded_exception_text(error)}"
+                )
+        return problems
+
+    def restore_absence() -> list[str]:
+        problems: list[str] = []
+        # If final exchange displaced a racer, restore that exact object first.
+        try:
+            at_commit = _identity(transaction.commit)
+        except OSError:
+            at_commit = None
+        if at_commit is not None and at_commit not in owned():
+            try:
+                displaced = _restore_support_update_cache_identity(
+                    path, transaction.commit, at_commit,
+                )
+                if displaced is not None and displaced not in owned():
+                    preserved_diagnostics.append(
+                        _preserve_support_cache_racer(
+                            paths, transaction.commit, displaced,
+                        )
+                    )
+                return problems
+            except Exception as error:
+                problems.append(f"restore canonical racer: {_bounded_exception_text(error)}")
+                return problems
+
+        # Move, inspect, and either delete only our inode or return a racer. This
+        # closes the lstat/unlink substitution window at an initially absent name.
+        try:
+            _rename_path_noreplace(path, transaction.absence)
+        except FileNotFoundError:
+            return problems
+        except FileExistsError as error:
+            problems.append(f"absence recovery collision: {_bounded_exception_text(error)}")
+            return problems
+        except Exception as error:
+            problems.append(f"restore exact absence: {_bounded_exception_text(error)}")
+            return problems
+        try:
+            moved = _identity(transaction.absence)
+        except OSError as error:
+            problems.append(f"inspect absence recovery: {_bounded_exception_text(error)}")
+            return problems
+        if moved in owned():
+            return problems
+        try:
+            _rename_path_noreplace(transaction.absence, path)
+        except FileExistsError:
+            try:
+                preserved_diagnostics.append(
+                    _preserve_support_cache_racer(paths, transaction.absence, moved)
+                )
+            except Exception as error:
+                problems.append(f"preserve absence racer: {_bounded_exception_text(error)}")
+        except Exception as error:
+            problems.append(f"return canonical racer: {_bounded_exception_text(error)}")
+        return problems
+
+    def recover_precommit() -> list[str]:
+        nonlocal retained_previous, provisional_published, final_exchange
+        problems: list[str] = []
+        if previous_identity is not None and retained_previous:
+            try:
+                displaced = _restore_support_update_cache_identity(
+                    path, transaction.rollback, previous_identity,
+                )
+                retained_previous = False
+                provisional_published = False
+                final_exchange = False
+                if displaced is not None and displaced not in owned():
+                    preserved_diagnostics.append(
+                        _preserve_support_cache_racer(
+                            paths, transaction.rollback, displaced,
+                        )
+                    )
+            except Exception as error:
+                problems.append(f"restore prior cache: {_bounded_exception_text(error)}")
+        elif previous_identity is None and provisional_published:
+            problems.extend(restore_absence())
+            provisional_published = False
+            final_exchange = False
+        problems.extend(preserve_unknown_leaves())
+        return problems
+
+    primary: Exception | None = None
+    recovery_problems: list[str] = []
     try:
         provisional_identity = _write_private_staged(
-            rollback, payload, "support update-check cache",
+            transaction.rollback, payload, "support update-check cache",
         )
         commit_identity = _write_private_staged(
-            commit, payload, "support update-check cache",
+            transaction.commit, payload, "support update-check cache",
         )
+        _fsync_directory(transaction.directory)
+
         if previous_identity is None:
             try:
-                os.link(rollback, path, follow_symlinks=False)
+                os.link(transaction.rollback, path, follow_symlinks=False)
             except FileExistsError as error:
                 raise DesktopCLIError(
                     "refusing to replace a raced support update-check cache"
                 ) from error
-            rollback.unlink()
             provisional_published = True
+            transaction.rollback.unlink()
         else:
             if not _matches_identity(path, previous_identity):
                 raise DesktopCLIError(
                     "refusing to replace a raced support update-check cache"
                 )
-            _exchange_paths(rollback, path)
+            _exchange_paths(transaction.rollback, path)
+            retained_previous = True
             provisional_published = True
             if (not _matches_identity(path, provisional_identity)
-                    or not _matches_identity(rollback, previous_identity)):
-                # The pre-exchange racer is returned to canonical; only the
-                # exact provisional stage may then be cleaned.
+                    or not _matches_identity(
+                        transaction.rollback, previous_identity,
+                    )):
+                # A racer may have replaced canonical after the descriptor-bound
+                # prior observation but before this provisional exchange. If our
+                # stage is now canonical, return the displaced object atomically;
+                # it was never a retained prior and must remain canonical.
                 if (_matches_identity(path, provisional_identity)
-                        and (rollback.exists() or rollback.is_symlink())):
-                    _exchange_paths(rollback, path)
+                        and (transaction.rollback.exists()
+                             or transaction.rollback.is_symlink())):
+                    _exchange_paths(transaction.rollback, path)
+                    retained_previous = False
                     provisional_published = False
                 raise DesktopCLIError(
                     "refusing to replace a raced support update-check cache"
                 )
-            retained_previous = True
 
         raw, identity = _read_managed_support_file(
             path, "support update-check cache", MAX_SUPPORT_UPDATE_CACHE_BYTES,
@@ -2160,104 +2432,56 @@ def _write_support_update_cache(paths: ManagedPaths, check: SupportUpdateCheck) 
                 "support update-check cache publication was replaced"
             )
         _fsync_directory(paths.support)
-
-        # This observation remains useful for early refusal/restoration, but it
-        # is not the success claim. A substitution after it is closed by the
-        # unconditional final atomic exchange below.
         if not _matches_identity(path, provisional_identity):
-            if (previous_identity is not None and retained_previous
-                    and _matches_identity(rollback, previous_identity)):
-                _restore_support_update_cache_identity(
-                    path, rollback, previous_identity,
-                )
-                provisional_published = False
-                retained_previous = False
-                cleanup_owned_stages()
-                _fsync_directory(paths.support)
             raise DesktopCLIError(
                 "support update-check cache publication was replaced"
             )
 
-        # Success linearizes here: regardless of the destination name immediately
-        # before this syscall, canonical receives the exact independent commit
-        # inode and the displaced name is preserved at `commit` atomically.
-        _exchange_paths(commit, path)
-        final_commit_won = True
-        provisional_published = False
-        displaced_identity = _identity(commit)
+        # The exchange is not yet committed: the immediately following support
+        # directory fsync is part of the publication boundary and can roll back.
+        _exchange_paths(transaction.commit, path)
+        final_exchange = True
+        displaced_identity = _identity(transaction.commit)
         if displaced_identity != provisional_identity:
-            if (previous_identity is not None and retained_previous
-                    and _matches_identity(rollback, previous_identity)):
-                _restore_support_update_cache_identity(
-                    path, rollback, previous_identity,
-                )
-                retained_previous = False
-                final_commit_won = False
-                cleanup_owned_stages()
-                _fsync_directory(paths.support)
-            elif previous_identity is None:
-                _restore_support_update_cache_identity(
-                    path, commit, displaced_identity,
-                )
-                final_commit_won = False
-                cleanup_owned_stages()
-                _fsync_directory(paths.support)
             raise DesktopCLIError(
                 "support update-check cache publication raced at atomic commit"
             )
-
-        if retained_previous:
-            if not _matches_identity(rollback, previous_identity):
-                raise DesktopCLIError(
-                    "prior support update-check cache was replaced"
-                )
-            _unlink_if_identity(rollback, previous_identity)
-            retained_previous = False
-        _unlink_if_identity(commit, provisional_identity)
         _fsync_directory(paths.support)
-    except Exception:
-        try:
-            if (previous_identity is not None and retained_previous
-                    and _matches_identity(rollback, previous_identity)):
-                _restore_support_update_cache_identity(
-                    path, rollback, previous_identity,
-                )
-                retained_previous = False
-                provisional_published = False
-                final_commit_won = False
-                cleanup_owned_stages()
-                _fsync_directory(paths.support)
-            elif previous_identity is None:
-                if final_commit_won:
-                    displaced: tuple[int, int] | None
-                    try:
-                        displaced = _identity(commit)
-                    except OSError:
-                        displaced = None
-                    if (displaced is not None
-                            and displaced not in {
-                                provisional_identity, commit_identity,
-                            }):
-                        _restore_support_update_cache_identity(
-                            path, commit, displaced,
-                        )
-                    else:
-                        _unlink_if_identity(path, commit_identity)
-                    final_commit_won = False
-                elif provisional_published:
-                    _unlink_if_identity(path, provisional_identity)
-                    provisional_published = False
-                cleanup_owned_stages()
-                _fsync_directory(paths.support)
-        except Exception as recovery_error:
-            raise DesktopCLIError(
-                "support update-check cache recovery failed"
-            ) from recovery_error
-        raise
+        committed = True
+
+        # After the commit boundary canonical is immutable to this transaction.
+        # Cleanup failures are diagnostics, never rollback instructions.
+        committed_cleanup_identities = owned()
+        if previous_identity is not None:
+            committed_cleanup_identities.add(previous_identity)
+        cleanup_problems = _cleanup_support_cache_transaction(
+            paths, transaction, committed_cleanup_identities,
+        )
+        if cleanup_problems:
+            detail = "; ".join(cleanup_problems)[:420]
+            return f"cleanup durability incomplete: {detail}"
+        return None
+    except Exception as error:
+        primary = error
+        if not committed:
+            recovery_problems.extend(recover_precommit())
     finally:
-        # Known staged identities are always safe to remove. Any different inode
-        # is a displaced racer and remains under its explicit diagnostic leaf.
-        cleanup_owned_stages()
+        if primary is not None:
+            cleanup_problems = _cleanup_support_cache_transaction(
+                paths, transaction, owned(),
+            )
+            recovery_problems.extend(cleanup_problems)
+
+    assert primary is not None
+    primary_text = _bounded_exception_text(primary)
+    if recovery_problems:
+        detail = "; ".join(recovery_problems)[:420]
+        message = f"{primary_text}; cleanup incomplete: {detail}"
+    else:
+        message = primary_text
+    if isinstance(primary, DesktopCLIError) and message == str(primary):
+        raise primary
+    raise DesktopCLIError(message[:600]) from primary
 
 
 def _preflight_support_uninstall(paths: ManagedPaths) -> SupportUninstallPlan:
@@ -2292,8 +2516,20 @@ def _preflight_support_uninstall(paths: ManagedPaths) -> SupportUninstallPlan:
                       if cache is not None else None)
     if cache is not None:
         allowed.add("update-check.json")
-    if {path.name for path in paths.support.iterdir()} != allowed:
+    present = {path.name for path in paths.support.iterdir()}
+    preserved_racers = sorted(
+        name for name in present
+        if SUPPORT_CACHE_RACER_PATTERN.fullmatch(name) is not None
+    )
+    unknown = present - allowed - set(preserved_racers)
+    missing = allowed - present
+    if unknown or missing:
         raise DesktopCLIError("managed support contains unknown or missing files")
+    if preserved_racers:
+        raise DesktopCLIError(
+            "managed support contains preserved canonical-racer diagnostics; "
+            "inspect them before uninstall --all"
+        )
     generations: list[ValidatedSupportGeneration] = []
     for path in sorted(paths.support_versions.iterdir(), key=lambda item: item.name):
         if not _is_safe_support_generation(path.name):
@@ -2450,11 +2686,14 @@ def _fsync_directory(path: Path) -> None:
 
 def _write_private_staged(path: Path, payload: bytes, label: str) -> tuple[int, int]:
     descriptor: int | None = None
+    created_identity: tuple[int, int] | None = None
     try:
         descriptor = os.open(
             path, os.O_WRONLY | os.O_CREAT | os.O_EXCL
             | getattr(os, "O_NOFOLLOW", 0), 0o600,
         )
+        opened = os.fstat(descriptor)
+        created_identity = (opened.st_dev, opened.st_ino)
         with os.fdopen(descriptor, "wb") as stream:
             descriptor = None
             stream.write(payload)
@@ -2465,16 +2704,32 @@ def _write_private_staged(path: Path, payload: bytes, label: str) -> tuple[int, 
             path, f"staged {label}", max(len(payload), 1),
             expected_size=len(payload),
         )
-        if content != payload:
-            raise DesktopCLIError(f"staged {label} bytes changed")
+        if content != payload or identity != created_identity:
+            raise DesktopCLIError(f"staged {label} bytes or identity changed")
         return identity
-    except DesktopCLIError:
-        raise
-    except OSError as error:
-        raise DesktopCLIError(f"could not stage {label}") from error
+    except Exception as primary:
+        cleanup_errors: list[str] = []
+        for attempt in range(2):
+            try:
+                _unlink_if_identity(path, created_identity)
+                break
+            except OSError as cleanup_error:
+                cleanup_errors.append(_bounded_exception_text(cleanup_error))
+                if attempt:
+                    break
+        primary_text = _bounded_exception_text(primary)
+        if cleanup_errors:
+            raise DesktopCLIError(
+                f"{primary_text}; staged cleanup incomplete: "
+                + "; ".join(cleanup_errors)[:360]
+            ) from primary
+        if isinstance(primary, DesktopCLIError):
+            raise
+        raise DesktopCLIError(f"could not stage {label}: {primary_text}") from primary
     finally:
         if descriptor is not None:
-            os.close(descriptor)
+            with contextlib.suppress(OSError):
+                os.close(descriptor)
 
 
 def _publish_private_file_exclusive(path: Path, payload: bytes, label: str) -> tuple[int, int]:
@@ -3393,9 +3648,15 @@ def _record_support_update_cache(
         paths: ManagedPaths, check: SupportUpdateCheck,
         output: Callable[[str], None]) -> None:
     try:
-        _write_support_update_cache(paths, check)
+        cleanup_diagnostic = _write_support_update_cache(paths, check)
     except DesktopCLIError as error:
         output(f"Support update cache was not recorded: {error}")
+    else:
+        if cleanup_diagnostic is not None:
+            output(
+                "Support update cache was committed, but cleanup durability failed: "
+                + cleanup_diagnostic
+            )
 
 
 def _automatic_support_update_offer(
@@ -3609,6 +3870,10 @@ def support_diagnostics(paths: ManagedPaths) -> dict[str, object]:
         referenced.update((pending.from_generation, pending.to_generation))
     failed = [item.generation_id for item in state.failed_generations]
     orphans = sorted(set(generations) - referenced)
+    preserved_cache_racers = sorted(
+        path.name for path in paths.support.iterdir()
+        if SUPPORT_CACHE_RACER_PATTERN.fullmatch(path.name) is not None
+    )
     return {
         "bootstrap_protocol": SUPPORT_BOOTSTRAP_PROTOCOL,
         "bootstrap_sha256": STABLE_BOOTSTRAP_SHA256,
@@ -3620,6 +3885,7 @@ def support_diagnostics(paths: ManagedPaths) -> dict[str, object]:
         "pending": pending_text,
         "failed_generations": failed,
         "orphan_generations": orphans,
+        "preserved_cache_racers": preserved_cache_racers,
     }
 
 
@@ -3706,6 +3972,10 @@ def run_installed(arguments: Sequence[str], *, home: Path | None = None,
             output(f"support pending: {diagnostics['pending']}")
             output("support failed: " + (", ".join(diagnostics["failed_generations"]) or "none"))  # type: ignore[arg-type]
             output("support orphans: " + (", ".join(diagnostics["orphan_generations"]) or "none"))  # type: ignore[arg-type]
+            output(
+                "support preserved cache racers: "
+                + (", ".join(diagnostics["preserved_cache_racers"]) or "none")  # type: ignore[arg-type]
+            )
         return 0
     if command == "update":
         parser = argparse.ArgumentParser(prog="lingtai-desktop update")

@@ -268,18 +268,27 @@ original command continues. The independent canonical
 `support/update-check.json` stores support version/tag/generation/manifest/time
 and decline. Its own cadence fails open with a warning on corruption/provider
 failure, notices only in non-TTY, and prompts default No in TTY; only `y`/`yes`
-uses the official staging transaction. Cache replacement validates one
-provisional staged inode while retaining an existing prior, but success
-linearizes only when a final atomic exchange installs a second independent
-single-link staged inode at canonical `update-check.json`. A substitution before
-that exchange is displaced without overwrite and causes refusal: an existing
-prior is atomically restored and the racer remains under a distinct failure-only
-`.preserved-support-update-cache-racer-*` leaf; an initially absent-cache racer
-is atomically returned to canonical. Restoration itself uses a bounded retry:
-an atomic exchange linearizes against a live destination, while an exclusive
-hard link linearizes if the destination disappeared. Clean success removes only
-identity-matching stage/prior leaves. Mutation after the atomic success or
-restoration point is an external later mutation, not a snapshot-at-return claim
+uses the official staging transaction. Cache replacement stages its ordinary
+rollback and commit leaves inside an updater-owned random mode-0700 **cooperative
+private transaction namespace**; arbitrary uncooperative same-UID replacement
+inside that namespace is outside the supported threat model. The canonical
+`support/update-check.json` name remains the **canonical arbitrary-racer
+boundary**, as does every object atomically displaced from that name. Prior bytes
+and identity come from one no-follow descriptor observation. Publication first
+validates a provisional inode while retaining an existing prior, then performs a
+final atomic exchange with a second independent inode. Commit requires the
+immediately following support-directory fsync too: failure before or during that
+fsync restores the exact prior/absence, while later cleanup failure reports a
+bounded committed-cleanup diagnostic and never rolls canonical back. An existing
+prior is restored without overwriting a racer; an initially absent-cache racer is
+returned to canonical. Any other displaced racer is moved with atomic no-replace
+to `.preserved-support-update-cache-racer-<random>`. These **preserved
+canonical-racer diagnostics are not ordinary updater-owned residue**: doctor
+lists them and `uninstall --all` blocks before deletion until they are inspected.
+Restoration uses bounded exchange/exclusive-link retries when canonical changes
+or disappears. Clean success removes the private namespace and all exact owned
+leaves. Mutation after the durable commit/restoration boundary is an external
+later mutation, not a snapshot-at-return claim
 (`scripts/desktop_user_cli.py:1984-2262`, `3401-3510`). Explicit official
 `update` forces support first and then App. A
 successful support stage reexecs the same canonical argv; the bootstrap consumes
