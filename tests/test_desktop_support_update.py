@@ -1301,6 +1301,381 @@ class DesktopSupportUpdatePhase3Test(unittest.TestCase):
             self.assertEqual(preserved[0].stat().st_nlink, 1)
             self.assertEqual(leaves, preserved)
 
+    def _installed_cache_pair(
+            self, root: Path,
+    ) -> tuple[cli.ManagedPaths, cli.SupportUpdateCheck, cli.SupportUpdateCheck]:
+        archive, manifest = write_artifacts(root, "0.1.5")
+        home = root / "home"
+        home.mkdir()
+        cli.install(
+            archive, manifest, home=home, platform=FakePlatform(), effective_uid=501,
+        )
+        paths = cli._paths(home)
+        old_manifest = cli.parse_support_manifest(
+            cli.build_support_manifest_bytes("0.1.6", "v0.1.6", self.payloads)
+        )
+        new_manifest = cli.parse_support_manifest(
+            cli.build_support_manifest_bytes("0.1.7", "v0.1.7", self.payloads)
+        )
+        old = cli.SupportUpdateCheck(
+            10, "0.1.6", "v0.1.6", old_manifest.generation_id,
+            old_manifest.manifest_sha256, False,
+        )
+        new = cli.SupportUpdateCheck(
+            20, "0.1.7", "v0.1.7", new_manifest.generation_id,
+            new_manifest.manifest_sha256, True,
+        )
+        cli._write_support_update_cache(paths, old)
+        return paths, old, new
+
+    def _cache_transaction_entries(self, paths: cli.ManagedPaths) -> list[Path]:
+        return [
+            path for path in paths.support.iterdir()
+            if path.name.startswith(".support-update-cache-txn-")
+            or path.name.startswith(".preserved-support-update-cache-racer-")
+        ]
+
+    def _assert_exact_cache(
+            self, path: Path, payload: bytes, identity: tuple[int, int],
+    ) -> None:
+        facts = path.lstat()
+        self.assertTrue(path.is_file())
+        self.assertFalse(path.is_symlink())
+        self.assertEqual((facts.st_dev, facts.st_ino), identity)
+        self.assertEqual(path.read_bytes(), payload)
+        self.assertEqual(facts.st_mode & 0o777, 0o600)
+        self.assertEqual(facts.st_nlink, 1)
+
+    def test_support_cache_prior_bytes_and_identity_share_one_descriptor_observation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paths, old, new = self._installed_cache_pair(root)
+            prior_bytes = paths.support_update_cache.read_bytes()
+            prior_identity = cli._identity(paths.support_update_cache)
+            foreign = paths.support / ".test-descriptor-observation-racer"
+            foreign_check = dataclasses.replace(old, checked_at=99, declined=True)
+            foreign_bytes = cli._support_update_cache_bytes(foreign_check)
+            foreign.write_bytes(foreign_bytes)
+            foreign.chmod(0o600)
+            foreign_identity = cli._identity(foreign)
+
+            real_read = cli._read_managed_support_file
+            replaced_after_read = False
+
+            def read_then_replace(
+                    path: Path, label: str, maximum_bytes: int,
+                    expected_size: int | None = None,
+                    expected_mode: int = cli.SUPPORT_PAYLOAD_MODE,
+            ) -> tuple[bytes, tuple[int, int]]:
+                nonlocal replaced_after_read
+                result = real_read(
+                    path, label, maximum_bytes, expected_size, expected_mode,
+                )
+                if path == paths.support_update_cache and not replaced_after_read:
+                    self.assertEqual(result, (prior_bytes, prior_identity))
+                    os.replace(foreign, paths.support_update_cache)
+                    replaced_after_read = True
+                return result
+
+            caught: BaseException | None = None
+            with mock.patch.object(
+                    cli, "_read_managed_support_file", side_effect=read_then_replace,
+            ):
+                try:
+                    cli._write_support_update_cache(paths, new)
+                except BaseException as error:
+                    caught = error
+
+            self.assertTrue(replaced_after_read)
+            self.assertIsInstance(caught, cli.DesktopCLIError)
+            self._assert_exact_cache(
+                paths.support_update_cache, foreign_bytes, foreign_identity,
+            )
+            self.assertEqual(cli._read_support_update_cache(paths), foreign_check)
+            self.assertFalse(any(
+                cli._matches_identity(path, prior_identity)
+                for path in paths.support.iterdir()
+            ))
+            self.assertEqual(self._cache_transaction_entries(paths), [])
+
+    def test_first_support_cache_stage_readback_failure_cleans_private_transaction(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            paths, old, new = self._installed_cache_pair(Path(temporary))
+            prior_bytes = paths.support_update_cache.read_bytes()
+            prior_identity = cli._identity(paths.support_update_cache)
+            real_read = cli._read_managed_support_file
+            stage_reads = 0
+
+            def fail_first_stage_read(
+                    path: Path, label: str, maximum_bytes: int,
+                    expected_size: int | None = None,
+                    expected_mode: int = cli.SUPPORT_PAYLOAD_MODE,
+            ) -> tuple[bytes, tuple[int, int]]:
+                nonlocal stage_reads
+                if label == "staged support update-check cache":
+                    stage_reads += 1
+                    if stage_reads == 1:
+                        raise cli.DesktopCLIError("injected first stage readback failure")
+                return real_read(
+                    path, label, maximum_bytes, expected_size, expected_mode,
+                )
+
+            with mock.patch.object(
+                    cli, "_read_managed_support_file", side_effect=fail_first_stage_read,
+            ):
+                with self.assertRaisesRegex(
+                        cli.DesktopCLIError, "injected first stage readback failure"):
+                    cli._write_support_update_cache(paths, new)
+            self.assertEqual(stage_reads, 1)
+            self._assert_exact_cache(
+                paths.support_update_cache, prior_bytes, prior_identity,
+            )
+            self.assertEqual(cli._read_support_update_cache(paths), old)
+            self.assertEqual(self._cache_transaction_entries(paths), [])
+
+    def test_second_support_cache_stage_readback_failure_cleans_private_transaction(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            paths, old, new = self._installed_cache_pair(Path(temporary))
+            prior_bytes = paths.support_update_cache.read_bytes()
+            prior_identity = cli._identity(paths.support_update_cache)
+            real_read = cli._read_managed_support_file
+            stage_reads = 0
+
+            def fail_second_stage_read(
+                    path: Path, label: str, maximum_bytes: int,
+                    expected_size: int | None = None,
+                    expected_mode: int = cli.SUPPORT_PAYLOAD_MODE,
+            ) -> tuple[bytes, tuple[int, int]]:
+                nonlocal stage_reads
+                if label == "staged support update-check cache":
+                    stage_reads += 1
+                    if stage_reads == 2:
+                        raise cli.DesktopCLIError("injected second stage readback failure")
+                return real_read(
+                    path, label, maximum_bytes, expected_size, expected_mode,
+                )
+
+            with mock.patch.object(
+                    cli, "_read_managed_support_file", side_effect=fail_second_stage_read,
+            ):
+                with self.assertRaisesRegex(
+                        cli.DesktopCLIError, "injected second stage readback failure"):
+                    cli._write_support_update_cache(paths, new)
+            self.assertEqual(stage_reads, 2)
+            self._assert_exact_cache(
+                paths.support_update_cache, prior_bytes, prior_identity,
+            )
+            self.assertEqual(cli._read_support_update_cache(paths), old)
+            self.assertEqual(self._cache_transaction_entries(paths), [])
+
+    def test_absent_support_cache_never_unlinks_a_flat_private_stage_leaf(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, manifest = write_artifacts(root, "0.1.5")
+            home = root / "home"
+            home.mkdir()
+            cli.install(
+                archive, manifest, home=home, platform=FakePlatform(), effective_uid=501,
+            )
+            paths = cli._paths(home)
+            self.assertFalse(paths.support_update_cache.exists())
+            candidate_manifest = cli.parse_support_manifest(
+                cli.build_support_manifest_bytes("0.1.6", "v0.1.6", self.payloads)
+            )
+            candidate = cli.SupportUpdateCheck(
+                20, "0.1.6", "v0.1.6", candidate_manifest.generation_id,
+                candidate_manifest.manifest_sha256, False,
+            )
+            candidate_bytes = cli._support_update_cache_bytes(candidate)
+            real_unlink = Path.unlink
+            flat_stage_unlink = False
+
+            def refuse_flat_stage_unlink(path: Path, *args, **kwargs) -> None:
+                nonlocal flat_stage_unlink
+                if (path.parent == paths.support
+                        and path.name.startswith(
+                            ".preserved-support-update-cache-racer-"
+                        )
+                        and path.name.endswith("-rollback")):
+                    flat_stage_unlink = True
+                    raise PermissionError("injected support-root private-leaf unlink refusal")
+                real_unlink(path, *args, **kwargs)
+
+            caught: BaseException | None = None
+            with mock.patch.object(Path, "unlink", new=refuse_flat_stage_unlink):
+                try:
+                    cli._write_support_update_cache(paths, candidate)
+                except BaseException as error:
+                    caught = error
+            self.assertIsNone(caught, f"unexpected publication failure: {caught}")
+            self.assertFalse(flat_stage_unlink)
+            self._assert_exact_cache(
+                paths.support_update_cache, candidate_bytes,
+                cli._identity(paths.support_update_cache),
+            )
+            self.assertEqual(cli._read_support_update_cache(paths), candidate)
+            self.assertEqual(self._cache_transaction_entries(paths), [])
+
+    def test_support_cache_precommit_publication_fsync_failure_restores_prior(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            paths, old, new = self._installed_cache_pair(Path(temporary))
+            prior_bytes = paths.support_update_cache.read_bytes()
+            prior_identity = cli._identity(paths.support_update_cache)
+            real_exchange = cli._exchange_paths
+            real_fsync = cli._fsync_directory
+            final_exchange = False
+            injected = False
+
+            def record_final_exchange(first: Path, second: Path) -> None:
+                nonlocal final_exchange
+                real_exchange(first, second)
+                if (second == paths.support_update_cache
+                        and (first.name == "commit" or first.name.endswith("-commit"))):
+                    final_exchange = True
+
+            def fail_publication_fsync(path: Path) -> None:
+                nonlocal injected
+                if final_exchange and path == paths.support and not injected:
+                    injected = True
+                    raise cli.DesktopCLIError(
+                        "injected pre-commit publication directory fsync failure"
+                    )
+                real_fsync(path)
+
+            with mock.patch.object(
+                    cli, "_exchange_paths", side_effect=record_final_exchange,
+            ), mock.patch.object(
+                    cli, "_fsync_directory", side_effect=fail_publication_fsync,
+            ):
+                with self.assertRaisesRegex(
+                        cli.DesktopCLIError, "injected pre-commit"):
+                    cli._write_support_update_cache(paths, new)
+            self.assertTrue(final_exchange)
+            self.assertTrue(injected)
+            self._assert_exact_cache(
+                paths.support_update_cache, prior_bytes, prior_identity,
+            )
+            self.assertEqual(cli._read_support_update_cache(paths), old)
+            self.assertEqual(self._cache_transaction_entries(paths), [])
+
+    def test_support_cache_postcommit_cleanup_fsync_is_a_committed_diagnostic(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            paths, _, new = self._installed_cache_pair(Path(temporary))
+            new_bytes = cli._support_update_cache_bytes(new)
+            real_exchange = cli._exchange_paths
+            real_fsync = cli._fsync_directory
+            final_exchange = False
+            post_exchange_fsyncs = 0
+            injected = False
+            output: list[str] = []
+
+            def record_final_exchange(first: Path, second: Path) -> None:
+                nonlocal final_exchange
+                real_exchange(first, second)
+                if (second == paths.support_update_cache
+                        and (first.name == "commit" or first.name.endswith("-commit"))):
+                    final_exchange = True
+
+            def fail_cleanup_fsync(path: Path) -> None:
+                nonlocal post_exchange_fsyncs, injected
+                if final_exchange:
+                    post_exchange_fsyncs += 1
+                    if post_exchange_fsyncs == 2:
+                        injected = True
+                        raise cli.DesktopCLIError(
+                            "injected post-commit cleanup durability failure"
+                        )
+                real_fsync(path)
+
+            with mock.patch.object(
+                    cli, "_exchange_paths", side_effect=record_final_exchange,
+            ), mock.patch.object(
+                    cli, "_fsync_directory", side_effect=fail_cleanup_fsync,
+            ):
+                cli._record_support_update_cache(paths, new, output.append)
+            self.assertTrue(final_exchange)
+            self.assertTrue(injected)
+            self.assertGreaterEqual(post_exchange_fsyncs, 2)
+            self.assertEqual(len(output), 1)
+            self.assertRegex(output[0], "committed.*cleanup|cleanup.*committed")
+            self.assertLessEqual(len(output[0]), 600)
+            self.assertNotIn("Traceback", output[0])
+            canonical_identity = cli._identity(paths.support_update_cache)
+            self._assert_exact_cache(
+                paths.support_update_cache, new_bytes, canonical_identity,
+            )
+            self.assertEqual(cli._read_support_update_cache(paths), new)
+            self.assertEqual(self._cache_transaction_entries(paths), [])
+
+    def test_support_cache_primary_failure_is_not_masked_by_cleanup_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            paths, old, new = self._installed_cache_pair(Path(temporary))
+            prior_bytes = paths.support_update_cache.read_bytes()
+            prior_identity = cli._identity(paths.support_update_cache)
+            real_fsync = cli._fsync_directory
+            real_unlink = Path.unlink
+            primary_injected = False
+            cleanup_injected = False
+
+            def fail_primary_once(path: Path) -> None:
+                nonlocal primary_injected
+                if path == paths.support and not primary_injected:
+                    primary_injected = True
+                    raise cli.DesktopCLIError(
+                        "injected primary support cache transaction failure"
+                    )
+                real_fsync(path)
+
+            def fail_one_cleanup_unlink(path: Path, *args, **kwargs) -> None:
+                nonlocal cleanup_injected
+                if (not cleanup_injected
+                        and (path.name == "commit" or path.name.endswith("-commit"))):
+                    cleanup_injected = True
+                    raise PermissionError("injected secondary cleanup refusal")
+                real_unlink(path, *args, **kwargs)
+
+            caught: BaseException | None = None
+            with mock.patch.object(
+                    cli, "_fsync_directory", side_effect=fail_primary_once,
+            ), mock.patch.object(Path, "unlink", new=fail_one_cleanup_unlink):
+                try:
+                    cli._write_support_update_cache(paths, new)
+                except BaseException as error:
+                    caught = error
+            self.assertTrue(primary_injected)
+            self.assertTrue(cleanup_injected)
+            self.assertIsInstance(caught, cli.DesktopCLIError)
+            assert caught is not None
+            self.assertIn("injected primary support cache transaction failure", str(caught))
+            self.assertIn("cleanup", str(caught).lower())
+            self.assertLessEqual(len(str(caught)), 600)
+            self.assertNotIn("Traceback", str(caught))
+            self._assert_exact_cache(
+                paths.support_update_cache, prior_bytes, prior_identity,
+            )
+            self.assertEqual(cli._read_support_update_cache(paths), old)
+            self.assertEqual(self._cache_transaction_entries(paths), [])
+
+    def test_support_cache_contract_names_cooperative_private_and_canonical_boundaries(self) -> None:
+        repository = Path(__file__).resolve().parents[1]
+        documents = "\n".join(
+            (repository / relative).read_text()
+            for relative in (
+                "ANATOMY.md", "CONTRACT.md", "tests/ANATOMY.md", "tests/CONTRACT.md",
+            )
+        )
+        self.assertIn("cooperative private transaction namespace", documents)
+        self.assertIn(
+            "arbitrary uncooperative same-UID replacement inside that namespace is outside",
+            documents,
+        )
+        self.assertIn("canonical arbitrary-racer boundary", documents)
+        self.assertIn(
+            "preserved canonical-racer diagnostics are not ordinary updater-owned residue",
+            documents,
+        )
+        self.assertNotIn("later cleanup removes only recorded identities", documents)
+
     def test_official_stage_bootstrap_switch_commits_once_and_preserves_app_identity(self) -> None:
         import importlib
         bootstrap = importlib.import_module("scripts.support_bootstrap")
