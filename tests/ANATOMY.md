@@ -52,11 +52,15 @@ test proves. This file descends into `tests/` itself.
   pointer safety without Finder, an App, Apple services, or live network.
   The same module's support layer proves canonical exact manifest/state/pending
   bytes, deterministic generation IDs, two-file mode/hash/size/link/type
-  validation, high-water and failed-target closure, final no-flat-layout fresh
-  install, stable bootstrap delegation, real bounded candidate import/self-test,
-  local stage/pending/re-exec, commit and rollback, and pointer/state/pending/
-  rollback durable-boundary recovery. It snapshots App bytes and inode identities
-  around every support-only operation, proves App-only uninstall preserves
+  validation, semantic high-water/last-good/failed-target closure, final no-flat-
+  layout fresh install, stable bootstrap delegation, exact-byte import, and an
+  enforced private-child candidate self-test. Its review-repair tables exercise
+  all fresh ordinary/publication-fsync and journal crash boundaries; payload,
+  manifest, generation, and current wedges before/after self-test; rollback failed-
+  state/temp/pointer/pending replay; top-level and self-test-body write/network/
+  subprocess/exec/native attacks; and syntax/policy no-mutation staging. It
+  snapshots App bytes and inode identities around every support-only operation,
+  proves App-only uninstall ignores valid, absent, tampered, symlinked, and unknown
   support, and proves `--all` rejects unknown support before any deletion.
   Authentic filesystem regressions additionally pin shared-parent preservation,
   pre-publication failure, symlink-root containment, and complete no-partial-

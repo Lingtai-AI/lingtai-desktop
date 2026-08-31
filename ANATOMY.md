@@ -223,10 +223,17 @@ The App plane binds each `versions/<app-version>` to a bounded receipt and
 recursive bundle digest, then switches App `current` only after exclusive
 publication. Independently, a fresh installation publishes exactly two mode-0600
 payloads under immutable `support/versions/<generation-id>`, a canonical manifest,
-mode-0600 state, and support `current`; there is no flat `cli/` layout. The stable
-launcher validates that chain before import and resumes only the exact
-`pending.json` from->to transaction, with bounded target self-test, state commit,
-or pointer rollback. The active CLI can stage only an injected local generation
+mode-0600 state, and support `current`; there is no flat `cli/` layout. A bounded
+`initial-install.json` binds the exact App manifest and support generation across
+process-death boundaries, while ordinary rollback uses an early directory/inode
+ledger and never removes replacements or shared parents. The stable launcher
+validates that chain into retained exact bytes before import and resumes only the
+exact `pending.json` from->to transaction. It retains the original source symlink
+under the journal's random rollback name, publishes failed state before pointer
+rollback, and authenticates that inode during replay. Candidate self-test runs in
+a private minimal-environment child under a no-write/network/process/native audit
+policy; post-test generation, pointer, journal, state, and both managed planes are
+revalidated before commit. The active CLI can stage only an injected local generation
 in this phase; official network support discovery/cache publication is deferred.
 Open and foreground launch only the receipt-validated current App by exact argv.
 Normal commands consult the App plane's owned mode-0600 `update-check.json` at most
@@ -235,9 +242,12 @@ default-No offer whose deliberate `y`/`yes` runs the verified update before the
 original command continues. Explicit `update` bypasses cache freshness and the
 offer. Diagnostic local-pair opt-in preserves the diagnostic classification.
 Shared `.local` parents retain existing modes. Managed file modes are prepared
-before publication and rollback/removal is identity-bound. App-only update and
-`uninstall --version` do not mutate support; local support stage/switch/rollback
-does not mutate App inodes or bytes. `uninstall --all` preflights both complete
+before publication and rollback/removal is identity-bound. Candidate syntax,
+argv, current/state relationship, anti-rollback, active/failed status, and explicit
+retry are validated before immutable generation publication. App-only update and
+`uninstall --version` do not inspect or mutate support, even when support is absent,
+tampered, symlinked, or unknown; local support stage/switch/rollback does not mutate
+App inodes or bytes. `uninstall --all` preflights both complete
 planes, including every generation, pointer, state, optional cache/pending, and
 the digest-bound stable launcher, before its first deletion.
 Persistent Desktop state is deliberately minimal: the one composer outbox

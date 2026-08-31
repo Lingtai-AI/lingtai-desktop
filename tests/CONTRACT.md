@@ -186,9 +186,13 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   the App archive transaction, plus canonical support manifest/state/pending
   models, final fresh-install generation layout, stable pre-import launcher, and
   local N-to-N+1 transaction. The support proof includes hostile file kinds,
-  exact sets/modes/hashes/links, anti-rollback/failed-target policy, real bounded
-  import/self-test, pointer/state/pending and rollback crash recovery, doctor,
-  App-only uninstall, and full support preflight. Injected transport/platform/
+  exact sets/modes/hashes/links, semantic last-good/high-water/failed hash closure,
+  prepublication anti-rollback/failed-target/argv policy, exact-byte import, and
+  enforced isolated no-write/network/process/native self-test. Focused matrices
+  cover ordinary and journaled fresh-install boundaries, payload/manifest/
+  generation/current TOCTOU wedges, authenticated rollback at each durable
+  boundary, exact one-shot explicit retry, support-independent App-only uninstall,
+  doctor, and full support preflight. Injected transport/platform/
   clock/TTY/prompt boundaries keep every response and App action offline and
   deterministic; explicit App pairs and one injected local support pair remain
   covered while remote support discovery stays disabled.

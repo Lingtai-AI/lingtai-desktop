@@ -88,6 +88,10 @@ Preserve existing modes and unrelated contents in the shared `.local`,
 prepared before its no-clobber link becomes visible, rollback may remove only
 the exact inode created by that invocation, and uninstall must complete its
 whole-tree no-symlink/digest/known-child preflight before its first deletion.
+For managed support, retain exact validated payload bytes through self-test/import,
+authenticate rollback pointers and journals by inode, and revalidate both planes
+before commit. Candidate self-test must remain isolated and mutation-denying;
+`uninstall --version` must remain App-only and must not inspect support.
 
 Keep the one focused repository-contract test focused on pinned dependency
 provenance and tracked-artifact hygiene. Add a test only for a clearly
