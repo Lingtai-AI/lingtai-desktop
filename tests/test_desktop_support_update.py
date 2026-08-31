@@ -1350,6 +1350,40 @@ class DesktopSupportUpdatePhase3Test(unittest.TestCase):
         self.assertEqual(facts.st_mode & 0o777, 0o600)
         self.assertEqual(facts.st_nlink, 1)
 
+    def test_support_cache_transaction_chmod_failure_cleans_created_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            paths, old, new = self._installed_cache_pair(Path(temporary))
+            prior_bytes = paths.support_update_cache.read_bytes()
+            prior_identity = cli._identity(paths.support_update_cache)
+            real_chmod = os.chmod
+            injected = False
+
+            def fail_transaction_chmod(path, mode, *args, **kwargs) -> None:
+                nonlocal injected
+                candidate = Path(path)
+                if (candidate.parent == paths.support
+                        and candidate.name.startswith(".support-update-cache-txn-")):
+                    injected = True
+                    raise PermissionError("injected transaction chmod failure")
+                real_chmod(path, mode, *args, **kwargs)
+
+            with mock.patch.object(cli.os, "chmod", side_effect=fail_transaction_chmod):
+                with self.assertRaises(cli.DesktopCLIError) as caught:
+                    cli._write_support_update_cache(paths, new)
+
+            self.assertTrue(injected)
+            self.assertIn(
+                "could not create private support update-check transaction",
+                str(caught.exception),
+            )
+            self.assertLessEqual(len(str(caught.exception)), 600)
+            self.assertNotIn("Traceback", str(caught.exception))
+            self._assert_exact_cache(
+                paths.support_update_cache, prior_bytes, prior_identity,
+            )
+            self.assertEqual(cli._read_support_update_cache(paths), old)
+            self.assertEqual(self._cache_transaction_entries(paths), [])
+
     def test_support_cache_prior_bytes_and_identity_share_one_descriptor_observation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
