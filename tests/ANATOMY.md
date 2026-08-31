@@ -81,9 +81,11 @@ test proves. This file descends into `tests/` itself.
   support-update owner. It covers exact latest and numbered official support
   release assets, hostile metadata/route/JSON/redirect/length/SHA conditions,
   private complete downloads before publication, the independent exact support
-  cache and consent matrix (including post-read late-race refusal, exact prior-inode
-  restoration, preserved racer identity/bytes, absent-cache no-clobber, and clean
-  no-race residue), no-change/failed-target cadence behavior, local App
+  cache and consent matrix (including post-read and post-final-check race refusal,
+  a final atomic success-exchange boundary, exact prior-inode restoration,
+  preserved racer identity/bytes, absent-cache no-clobber, disappearing-destination
+  bounded link recovery, exact mode/link facts, and clean no-race residue),
+  no-change/failed-target cadence behavior, local App
   pair bypass, deterministic support release production/validation, and full
   official staging through pending/canonical reexec/bootstrap commit while the
   App plane remains byte/identity stable. It invokes no real network, App,

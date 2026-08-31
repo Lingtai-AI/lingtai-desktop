@@ -2006,45 +2006,86 @@ def _read_support_update_cache(paths: ManagedPaths) -> SupportUpdateCheck | None
     return check
 
 
-def _restore_support_update_cache_after_late_race(
-        path: Path, preserved_racer: Path,
-        previous_identity: tuple[int, int]) -> None:
-    """Restore the retained prior inode and preserve any late destination racer."""
-    if not _matches_identity(preserved_racer, previous_identity):
-        raise DesktopCLIError("prior support update-check cache was replaced")
-    try:
-        racer_identity = _identity(path)
-    except FileNotFoundError:
+def _restore_support_update_cache_identity(
+        path: Path, preserved: Path,
+        required_identity: tuple[int, int]) -> tuple[int, int] | None:
+    """Re-establish one retained inode at canonical without clobbering a racer.
+
+    Atomic exchange is the restoration linearization point when canonical exists.
+    If it disappears before that exchange, an exclusive hard link is the
+    linearization point instead. A bounded retry lets either operation recover
+    from the other name-state winning the immediately preceding observation.
+    """
+    last_error: Exception | None = None
+    for _ in range(4):
+        if not _matches_identity(preserved, required_identity):
+            raise DesktopCLIError("retained support update-check cache was replaced")
         try:
-            os.link(preserved_racer, path, follow_symlinks=False)
-        except FileExistsError:
-            racer_identity = _identity(path)
+            _identity(path)
+        except FileNotFoundError:
+            try:
+                os.link(preserved, path, follow_symlinks=False)
+            except FileExistsError as error:
+                last_error = error
+                continue
+            except OSError as error:
+                last_error = error
+                continue
+            if (not _matches_identity(path, required_identity)
+                    or not _matches_identity(preserved, required_identity)):
+                raise DesktopCLIError(
+                    "support update-check cache link restoration changed identity"
+                )
+            linked = path.lstat()
+            if (not stat.S_ISREG(linked.st_mode)
+                    or stat.S_IMODE(linked.st_mode) != 0o600
+                    or linked.st_nlink != 2):
+                raise DesktopCLIError(
+                    "support update-check cache link restoration has invalid facts"
+                )
+            _unlink_if_identity(preserved, required_identity)
+            restored = path.lstat()
+            if ((restored.st_dev, restored.st_ino) != required_identity
+                    or not stat.S_ISREG(restored.st_mode)
+                    or stat.S_IMODE(restored.st_mode) != 0o600
+                    or restored.st_nlink != 1):
+                raise DesktopCLIError(
+                    "support update-check cache link restoration was not exact"
+                )
+            return None
+        except OSError as error:
+            last_error = error
+            continue
+        try:
+            _exchange_paths(preserved, path)
+        except DesktopCLIError as error:
+            last_error = error
+            continue
+        if not _matches_identity(path, required_identity):
+            raise DesktopCLIError(
+                "support update-check cache exchange restoration was not exact"
+            )
+        try:
+            displaced_identity = _identity(preserved)
+            restored = path.lstat()
         except OSError as error:
             raise DesktopCLIError(
-                "could not restore the prior support update-check cache"
+                "support update-check cache restoration identities could not be verified"
             ) from error
-        else:
-            if (not _matches_identity(path, previous_identity)
-                    or not _matches_identity(preserved_racer, previous_identity)):
-                raise DesktopCLIError(
-                    "support update-check cache restoration did not retain the exact prior inode"
-                )
-            preserved_racer.unlink()
-            if not _matches_identity(path, previous_identity):
-                raise DesktopCLIError(
-                    "support update-check cache restoration did not retain the exact prior inode"
-                )
-            return
-    _exchange_paths(preserved_racer, path)
-    if (not _matches_identity(path, previous_identity)
-            or not _matches_identity(preserved_racer, racer_identity)):
-        raise DesktopCLIError(
-            "support update-check cache race restoration did not preserve exact identities"
-        )
+        if (not stat.S_ISREG(restored.st_mode)
+                or stat.S_IMODE(restored.st_mode) != 0o600
+                or restored.st_nlink != 1):
+            raise DesktopCLIError(
+                "support update-check cache exchange restoration has invalid facts"
+            )
+        return displaced_identity
+    raise DesktopCLIError(
+        "could not restore the retained support update-check cache after bounded retries"
+    ) from last_error
 
 
 def _write_support_update_cache(paths: ManagedPaths, check: SupportUpdateCheck) -> None:
-    """Atomically exchange an existing cache and restore its exact inode on failure."""
+    """Publish with one final atomic exchange as the success linearization point."""
     _require_real_directory(paths.support, "managed support")
     payload = _support_update_cache_bytes(check)
     path = paths.support_update_cache
@@ -2052,85 +2093,171 @@ def _write_support_update_cache(paths: ManagedPaths, check: SupportUpdateCheck) 
     if path.exists() or path.is_symlink():
         _read_support_update_cache(paths)
         previous_identity = _identity(path)
-    # A late destination substitution is exchanged into this distinct,
-    # failure-only preserved-racer namespace. Clean paths always remove it.
-    temporary = paths.support / (
-        f".preserved-support-update-cache-racer-{uuid.uuid4().hex}"
+    transaction = uuid.uuid4().hex
+    # Both owned leaves begin as independent, single-link staged payloads. The
+    # rollback leaf retains an existing prior after provisional exchange. The
+    # commit leaf is swapped into canonical only as the final atomic operation;
+    # if that swap displaces a racer, the leaf becomes its diagnostic owner.
+    rollback = paths.support / (
+        f".preserved-support-update-cache-racer-{transaction}-rollback"
     )
-    temporary_identity: tuple[int, int] | None = None
-    published = False
+    commit = paths.support / (
+        f".preserved-support-update-cache-racer-{transaction}-commit"
+    )
+    provisional_identity: tuple[int, int] | None = None
+    commit_identity: tuple[int, int] | None = None
+    provisional_published = False
     retained_previous = False
+    final_commit_won = False
+
+    def cleanup_owned_stages() -> None:
+        for owned in (rollback, commit):
+            _unlink_if_identity(owned, provisional_identity)
+            _unlink_if_identity(owned, commit_identity)
+
     try:
-        temporary_identity = _write_private_staged(
-            temporary, payload, "support update-check cache",
+        provisional_identity = _write_private_staged(
+            rollback, payload, "support update-check cache",
+        )
+        commit_identity = _write_private_staged(
+            commit, payload, "support update-check cache",
         )
         if previous_identity is None:
             try:
-                os.link(temporary, path, follow_symlinks=False)
+                os.link(rollback, path, follow_symlinks=False)
             except FileExistsError as error:
-                raise DesktopCLIError("refusing to replace a raced support update-check cache") from error
-            temporary.unlink()
-            published = True
+                raise DesktopCLIError(
+                    "refusing to replace a raced support update-check cache"
+                ) from error
+            rollback.unlink()
+            provisional_published = True
         else:
             if not _matches_identity(path, previous_identity):
-                raise DesktopCLIError("refusing to replace a raced support update-check cache")
-            _exchange_paths(temporary, path)
-            published = True
-            if (not _matches_identity(path, temporary_identity)
-                    or not _matches_identity(temporary, previous_identity)):
-                # If the destination changed in the final pre-exchange window,
-                # swap it back rather than overwriting or deleting the racer.
-                if (_matches_identity(path, temporary_identity)
-                        and (temporary.exists() or temporary.is_symlink())):
-                    _exchange_paths(temporary, path)
-                    published = False
-                raise DesktopCLIError("refusing to replace a raced support update-check cache")
+                raise DesktopCLIError(
+                    "refusing to replace a raced support update-check cache"
+                )
+            _exchange_paths(rollback, path)
+            provisional_published = True
+            if (not _matches_identity(path, provisional_identity)
+                    or not _matches_identity(rollback, previous_identity)):
+                # The pre-exchange racer is returned to canonical; only the
+                # exact provisional stage may then be cleaned.
+                if (_matches_identity(path, provisional_identity)
+                        and (rollback.exists() or rollback.is_symlink())):
+                    _exchange_paths(rollback, path)
+                    provisional_published = False
+                raise DesktopCLIError(
+                    "refusing to replace a raced support update-check cache"
+                )
             retained_previous = True
+
         raw, identity = _read_managed_support_file(
             path, "support update-check cache", MAX_SUPPORT_UPDATE_CACHE_BYTES,
             expected_size=len(payload),
         )
-        if raw != payload or identity != temporary_identity:
-            raise DesktopCLIError("support update-check cache publication was replaced")
+        if raw != payload or identity != provisional_identity:
+            raise DesktopCLIError(
+                "support update-check cache publication was replaced"
+            )
         _fsync_directory(paths.support)
-        if not _matches_identity(path, temporary_identity):
+
+        # This observation remains useful for early refusal/restoration, but it
+        # is not the success claim. A substitution after it is closed by the
+        # unconditional final atomic exchange below.
+        if not _matches_identity(path, provisional_identity):
             if (previous_identity is not None and retained_previous
-                    and _matches_identity(temporary, previous_identity)):
-                _restore_support_update_cache_after_late_race(
-                    path, temporary, previous_identity,
+                    and _matches_identity(rollback, previous_identity)):
+                _restore_support_update_cache_identity(
+                    path, rollback, previous_identity,
                 )
-                published = False
+                provisional_published = False
                 retained_previous = False
+                cleanup_owned_stages()
                 _fsync_directory(paths.support)
             raise DesktopCLIError(
                 "support update-check cache publication was replaced"
             )
+
+        # Success linearizes here: regardless of the destination name immediately
+        # before this syscall, canonical receives the exact independent commit
+        # inode and the displaced name is preserved at `commit` atomically.
+        _exchange_paths(commit, path)
+        final_commit_won = True
+        provisional_published = False
+        displaced_identity = _identity(commit)
+        if displaced_identity != provisional_identity:
+            if (previous_identity is not None and retained_previous
+                    and _matches_identity(rollback, previous_identity)):
+                _restore_support_update_cache_identity(
+                    path, rollback, previous_identity,
+                )
+                retained_previous = False
+                final_commit_won = False
+                cleanup_owned_stages()
+                _fsync_directory(paths.support)
+            elif previous_identity is None:
+                _restore_support_update_cache_identity(
+                    path, commit, displaced_identity,
+                )
+                final_commit_won = False
+                cleanup_owned_stages()
+                _fsync_directory(paths.support)
+            raise DesktopCLIError(
+                "support update-check cache publication raced at atomic commit"
+            )
+
         if retained_previous:
-            if not _matches_identity(temporary, previous_identity):
-                raise DesktopCLIError("prior support update-check cache was replaced")
-            temporary.unlink()
+            if not _matches_identity(rollback, previous_identity):
+                raise DesktopCLIError(
+                    "prior support update-check cache was replaced"
+                )
+            _unlink_if_identity(rollback, previous_identity)
             retained_previous = False
-            _fsync_directory(paths.support)
+        _unlink_if_identity(commit, provisional_identity)
+        _fsync_directory(paths.support)
     except Exception:
-        if (previous_identity is not None and published
-                and temporary_identity is not None
-                and _matches_identity(path, temporary_identity)
-                and _matches_identity(temporary, previous_identity)):
-            _exchange_paths(temporary, path)
-            published = False
-            retained_previous = False
-            _fsync_directory(paths.support)
-        elif (previous_identity is None and published
-              and temporary_identity is not None
-              and _matches_identity(path, temporary_identity)):
-            path.unlink()
-            published = False
-            _fsync_directory(paths.support)
+        try:
+            if (previous_identity is not None and retained_previous
+                    and _matches_identity(rollback, previous_identity)):
+                _restore_support_update_cache_identity(
+                    path, rollback, previous_identity,
+                )
+                retained_previous = False
+                provisional_published = False
+                final_commit_won = False
+                cleanup_owned_stages()
+                _fsync_directory(paths.support)
+            elif previous_identity is None:
+                if final_commit_won:
+                    displaced: tuple[int, int] | None
+                    try:
+                        displaced = _identity(commit)
+                    except OSError:
+                        displaced = None
+                    if (displaced is not None
+                            and displaced not in {
+                                provisional_identity, commit_identity,
+                            }):
+                        _restore_support_update_cache_identity(
+                            path, commit, displaced,
+                        )
+                    else:
+                        _unlink_if_identity(path, commit_identity)
+                    final_commit_won = False
+                elif provisional_published:
+                    _unlink_if_identity(path, provisional_identity)
+                    provisional_published = False
+                cleanup_owned_stages()
+                _fsync_directory(paths.support)
+        except Exception as recovery_error:
+            raise DesktopCLIError(
+                "support update-check cache recovery failed"
+            ) from recovery_error
         raise
     finally:
-        # After a successful restoration the staged inode is back at the
-        # temporary name. Never unlink a retained prior/racer identity here.
-        _unlink_if_identity(temporary, temporary_identity)
+        # Known staged identities are always safe to remove. Any different inode
+        # is a displaced racer and remains under its explicit diagnostic leaf.
+        cleanup_owned_stages()
 
 
 def _preflight_support_uninstall(paths: ManagedPaths) -> SupportUninstallPlan:

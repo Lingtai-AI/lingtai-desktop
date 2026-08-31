@@ -87,13 +87,21 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
   substituted owned App cache state remains a fail-closed integrity precondition.
   Independently, `support/update-check.json` records the exact support
   version/tag/generation/manifest digest/time/decline decision under a bounded
-  canonical schema and restoration-capable atomic replacement. Its final
-  destination identity check refuses post-read substitution: with an existing
-  cache it atomically restores the exact retained prior inode and leaves the
-  racer untouched under one distinct failure-only
-  `.preserved-support-update-cache-racer-*` leaf; with no prior cache it leaves
-  the racer canonical. Clean publication retains no transaction leaf
-  (`scripts/desktop_user_cli.py:1984-2135`). Ordinary valid commands check it on
+  canonical schema and restoration-capable atomic replacement. Publication
+  validates a provisional stage but success linearizes only at the final atomic
+  exchange of a second independent staged inode into canonical. Any racer that
+  wins before that point is atomically displaced and never accepted as staged
+  success: an existing cache restores its exact retained prior and preserves the
+  racer under a distinct failure-only
+  `.preserved-support-update-cache-racer-*` leaf; an initially absent cache
+  atomically returns the racer to canonical. Restoration has its own bounded
+  linearization path: exchange when canonical exists, exclusive hard link when
+  it disappeared, retrying boundedly if name state changes between observation
+  and operation. Clean publication retains no transaction leaf, ends with one
+  mode-0600 link, and later cleanup removes only recorded identities. No
+  snapshot-at-Python-return guarantee is made against mutation after an atomic
+  success/restoration point (`scripts/desktop_user_cli.py:1984-2262`). Ordinary
+  valid commands check it on
   its own cadence: corruption or provider failure warns and continues without
   replacing prior bytes, non-TTY only notices, and TTY defaults No and stages
   only stripped `y`/`yes`. Explicit official update attempts support first with

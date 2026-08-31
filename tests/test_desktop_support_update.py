@@ -321,7 +321,42 @@ class DesktopSupportUpdatePhase3Test(unittest.TestCase):
                 release_tag="v0.1.6", generation_id=generation.generation_id,
                 manifest_sha256=generation.manifest_sha256, declined=True,
             )
-            cli._write_support_update_cache(paths, check)
+            real_stage = cli._write_private_staged
+            real_exchange = cli._exchange_paths
+            staged_identities: list[tuple[int, int]] = []
+            exchange_events: list[
+                tuple[tuple[int, int], tuple[int, int], tuple[int, int], tuple[int, int]]
+            ] = []
+            def record_real_stage(
+                    path: Path, payload: bytes, label: str,
+            ) -> tuple[int, int]:
+                identity = real_stage(path, payload, label)
+                if label == "support update-check cache":
+                    staged_identities.append(identity)
+                return identity
+            def record_real_exchange(first: Path, second: Path) -> None:
+                before = (cli._identity(first), cli._identity(second))
+                real_exchange(first, second)
+                exchange_events.append((
+                    before[0], before[1], cli._identity(first), cli._identity(second),
+                ))
+            with mock.patch.object(
+                    cli, "_write_private_staged", side_effect=record_real_stage,
+            ), mock.patch.object(
+                    cli, "_exchange_paths", side_effect=record_real_exchange,
+            ):
+                cli._write_support_update_cache(paths, check)
+            self.assertEqual(len(staged_identities), 2)
+            self.assertNotEqual(staged_identities[0], staged_identities[1])
+            self.assertEqual(exchange_events, [(
+                staged_identities[1], staged_identities[0],
+                staged_identities[0], staged_identities[1],
+            )])
+            self.assertEqual(
+                cli._identity(paths.support_update_cache), staged_identities[1],
+            )
+            self.assertEqual(paths.support_update_cache.stat().st_nlink, 1)
+            self.assertEqual(paths.support_update_cache.stat().st_mode & 0o777, 0o600)
             self.assertEqual(cli._read_support_update_cache(paths), check)
             self.assertFalse(any(
                 path.name.startswith(".preserved-support-update-cache-racer-")
@@ -886,6 +921,385 @@ class DesktopSupportUpdatePhase3Test(unittest.TestCase):
                  or path.name.startswith(".preserved-support-update-cache-racer-")],
                 [],
             )
+
+    def test_support_cache_post_final_check_race_restores_prior_and_preserves_racer(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, manifest = write_artifacts(root, "0.1.5")
+            home = root / "home"
+            home.mkdir()
+            cli.install(archive, manifest, home=home, platform=FakePlatform(), effective_uid=501)
+            paths = cli._paths(home)
+
+            old_manifest = cli.parse_support_manifest(
+                cli.build_support_manifest_bytes("0.1.6", "v0.1.6", self.payloads)
+            )
+            new_manifest = cli.parse_support_manifest(
+                cli.build_support_manifest_bytes("0.1.7", "v0.1.7", self.payloads)
+            )
+            old = cli.SupportUpdateCheck(
+                10, "0.1.6", "v0.1.6", old_manifest.generation_id,
+                old_manifest.manifest_sha256, False,
+            )
+            new = cli.SupportUpdateCheck(
+                20, "0.1.7", "v0.1.7", new_manifest.generation_id,
+                new_manifest.manifest_sha256, True,
+            )
+            cli._write_support_update_cache(paths, old)
+            prior_bytes = paths.support_update_cache.read_bytes()
+            prior_identity = cli._identity(paths.support_update_cache)
+            prior_facts = paths.support_update_cache.stat()
+            self.assertEqual(prior_facts.st_mode & 0o777, 0o600)
+            self.assertEqual(prior_facts.st_nlink, 1)
+
+            racer = paths.support / ".test-post-final-check-racer"
+            racer_check = dataclasses.replace(old, checked_at=99, declined=True)
+            racer_bytes = cli._support_update_cache_bytes(racer_check)
+            racer.write_bytes(racer_bytes)
+            racer.chmod(0o600)
+            racer_identity = cli._identity(racer)
+
+            real_stage = cli._write_private_staged
+            real_matches = cli._matches_identity
+            staged_identities: list[tuple[int, int]] = []
+            canonical_staged_checks = 0
+            triggered = False
+
+            def record_real_stage(path: Path, payload: bytes, label: str) -> tuple[int, int]:
+                identity = real_stage(path, payload, label)
+                if label == "support update-check cache":
+                    staged_identities.append(identity)
+                return identity
+
+            def match_then_race(path: Path, expected: tuple[int, int]) -> bool:
+                nonlocal canonical_staged_checks, triggered
+                result = real_matches(path, expected)
+                if (path == paths.support_update_cache and result
+                        and expected in staged_identities):
+                    canonical_staged_checks += 1
+                    if canonical_staged_checks == 2 and not triggered:
+                        os.replace(racer, paths.support_update_cache)
+                        triggered = True
+                return result
+
+            error: cli.DesktopCLIError | None = None
+            with mock.patch.object(
+                    cli, "_write_private_staged", side_effect=record_real_stage,
+            ), mock.patch.object(cli, "_matches_identity", side_effect=match_then_race):
+                try:
+                    cli._write_support_update_cache(paths, new)
+                except cli.DesktopCLIError as caught:
+                    error = caught
+
+            leaves = [
+                path for path in paths.support.iterdir()
+                if path.name.startswith(".update-check-")
+                or path.name.startswith(".preserved-support-update-cache-racer-")
+            ]
+            outcome = {
+                "triggered": triggered,
+                "canonical_staged_checks": canonical_staged_checks,
+                "returned_success": error is None,
+                "canonical_exists": paths.support_update_cache.exists(),
+                "canonical_is_prior": real_matches(
+                    paths.support_update_cache, prior_identity,
+                ),
+                "canonical_is_racer": real_matches(
+                    paths.support_update_cache, racer_identity,
+                ),
+                "prior_locations": [
+                    path.name for path in paths.support.iterdir()
+                    if real_matches(path, prior_identity)
+                ],
+                "leaves": [path.name for path in leaves],
+            }
+            self.assertIsNotNone(error, json.dumps(outcome, sort_keys=True))
+            assert error is not None
+            self.assertRegex(str(error), "publication was replaced|raced")
+            self.assertTrue(triggered)
+            self.assertGreaterEqual(canonical_staged_checks, 2)
+            self.assertEqual(cli._identity(paths.support_update_cache), prior_identity)
+            self.assertEqual(paths.support_update_cache.read_bytes(), prior_bytes)
+            self.assertEqual(cli._read_support_update_cache(paths), old)
+            restored_facts = paths.support_update_cache.stat()
+            self.assertEqual(restored_facts.st_mode & 0o777, 0o600)
+            self.assertEqual(restored_facts.st_nlink, 1)
+            self.assertFalse(racer.exists())
+            preserved = [
+                path for path in leaves
+                if real_matches(path, racer_identity)
+            ]
+            self.assertEqual(len(preserved), 1, json.dumps(outcome, sort_keys=True))
+            self.assertEqual(preserved[0].read_bytes(), racer_bytes)
+            self.assertEqual(preserved[0].stat().st_mode & 0o777, 0o600)
+            self.assertEqual(preserved[0].stat().st_nlink, 1)
+            self.assertFalse(any(
+                real_matches(path, identity)
+                for path in paths.support.iterdir()
+                for identity in staged_identities
+            ))
+            self.assertEqual(leaves, preserved)
+
+    def test_absent_support_cache_post_final_check_racer_is_refused_without_clobber(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, manifest = write_artifacts(root, "0.1.5")
+            home = root / "home"
+            home.mkdir()
+            cli.install(archive, manifest, home=home, platform=FakePlatform(), effective_uid=501)
+            paths = cli._paths(home)
+            self.assertFalse(paths.support_update_cache.exists())
+
+            manifest_value = cli.parse_support_manifest(
+                cli.build_support_manifest_bytes("0.1.6", "v0.1.6", self.payloads)
+            )
+            new = cli.SupportUpdateCheck(
+                20, "0.1.6", "v0.1.6", manifest_value.generation_id,
+                manifest_value.manifest_sha256, False,
+            )
+            racer = paths.support / ".test-absent-post-final-check-racer"
+            racer_check = dataclasses.replace(new, checked_at=99, declined=True)
+            racer_bytes = cli._support_update_cache_bytes(racer_check)
+            racer.write_bytes(racer_bytes)
+            racer.chmod(0o600)
+            racer_identity = cli._identity(racer)
+
+            real_stage = cli._write_private_staged
+            real_matches = cli._matches_identity
+            staged_identities: list[tuple[int, int]] = []
+            canonical_staged_checks = 0
+            triggered = False
+
+            def record_real_stage(path: Path, payload: bytes, label: str) -> tuple[int, int]:
+                identity = real_stage(path, payload, label)
+                if label == "support update-check cache":
+                    staged_identities.append(identity)
+                return identity
+
+            def match_then_race(path: Path, expected: tuple[int, int]) -> bool:
+                nonlocal canonical_staged_checks, triggered
+                result = real_matches(path, expected)
+                if (path == paths.support_update_cache and result
+                        and expected in staged_identities):
+                    canonical_staged_checks += 1
+                    if canonical_staged_checks == 1 and not triggered:
+                        os.replace(racer, paths.support_update_cache)
+                        triggered = True
+                return result
+
+            error: cli.DesktopCLIError | None = None
+            with mock.patch.object(
+                    cli, "_write_private_staged", side_effect=record_real_stage,
+            ), mock.patch.object(cli, "_matches_identity", side_effect=match_then_race):
+                try:
+                    cli._write_support_update_cache(paths, new)
+                except cli.DesktopCLIError as caught:
+                    error = caught
+
+            leaves = [
+                path for path in paths.support.iterdir()
+                if path.name.startswith(".update-check-")
+                or path.name.startswith(".preserved-support-update-cache-racer-")
+            ]
+            outcome = {
+                "triggered": triggered,
+                "canonical_staged_checks": canonical_staged_checks,
+                "returned_success": error is None,
+                "canonical_exists": paths.support_update_cache.exists(),
+                "canonical_is_racer": real_matches(
+                    paths.support_update_cache, racer_identity,
+                ),
+                "leaves": [path.name for path in leaves],
+            }
+            self.assertIsNotNone(error, json.dumps(outcome, sort_keys=True))
+            assert error is not None
+            self.assertRegex(str(error), "publication was replaced|raced")
+            self.assertTrue(triggered)
+            self.assertGreaterEqual(canonical_staged_checks, 1)
+            self.assertFalse(racer.exists())
+            self.assertEqual(cli._identity(paths.support_update_cache), racer_identity)
+            self.assertEqual(paths.support_update_cache.read_bytes(), racer_bytes)
+            self.assertEqual(cli._read_support_update_cache(paths), racer_check)
+            racer_facts = paths.support_update_cache.stat()
+            self.assertEqual(racer_facts.st_mode & 0o777, 0o600)
+            self.assertEqual(racer_facts.st_nlink, 1)
+            self.assertFalse(any(
+                real_matches(path, identity)
+                for path in paths.support.iterdir()
+                for identity in staged_identities
+            ))
+            self.assertEqual(leaves, [])
+
+    def test_support_cache_restore_recovers_when_detected_racer_disappears(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, manifest = write_artifacts(root, "0.1.5")
+            home = root / "home"
+            home.mkdir()
+            cli.install(archive, manifest, home=home, platform=FakePlatform(), effective_uid=501)
+            paths = cli._paths(home)
+
+            old_manifest = cli.parse_support_manifest(
+                cli.build_support_manifest_bytes("0.1.6", "v0.1.6", self.payloads)
+            )
+            new_manifest = cli.parse_support_manifest(
+                cli.build_support_manifest_bytes("0.1.7", "v0.1.7", self.payloads)
+            )
+            old = cli.SupportUpdateCheck(
+                10, "0.1.6", "v0.1.6", old_manifest.generation_id,
+                old_manifest.manifest_sha256, False,
+            )
+            new = cli.SupportUpdateCheck(
+                20, "0.1.7", "v0.1.7", new_manifest.generation_id,
+                new_manifest.manifest_sha256, True,
+            )
+            cli._write_support_update_cache(paths, old)
+            prior_bytes = paths.support_update_cache.read_bytes()
+            prior_identity = cli._identity(paths.support_update_cache)
+
+            racer = paths.support / ".test-disappearing-restoration-racer"
+            racer_check = dataclasses.replace(old, checked_at=99, declined=True)
+            racer_bytes = cli._support_update_cache_bytes(racer_check)
+            racer.write_bytes(racer_bytes)
+            racer.chmod(0o600)
+            racer_identity = cli._identity(racer)
+            reappearing = paths.support / ".test-reappearing-restoration-racer"
+            reappearing_check = dataclasses.replace(old, checked_at=199, declined=False)
+            reappearing_bytes = cli._support_update_cache_bytes(reappearing_check)
+            reappearing.write_bytes(reappearing_bytes)
+            reappearing.chmod(0o600)
+            reappearing_identity = cli._identity(reappearing)
+
+            real_read = cli._read_managed_support_file
+            real_exchange = cli._exchange_paths
+            real_link = os.link
+            real_matches = cli._matches_identity
+            real_stage = cli._write_private_staged
+            staged_identities: list[tuple[int, int]] = []
+            target_reads = 0
+            post_read_replaced = False
+            restore_identity_captured: tuple[int, int] | None = None
+            disappeared_before_restore = False
+            reappeared_during_recovery = False
+            exchange_count = 0
+
+            def record_real_stage(path: Path, payload: bytes, label: str) -> tuple[int, int]:
+                identity = real_stage(path, payload, label)
+                if label == "support update-check cache":
+                    staged_identities.append(identity)
+                return identity
+
+            def read_then_race(
+                    path: Path, label: str, maximum_bytes: int,
+                    expected_size: int | None = None,
+                    expected_mode: int = cli.SUPPORT_PAYLOAD_MODE,
+            ) -> tuple[bytes, tuple[int, int]]:
+                nonlocal target_reads, post_read_replaced
+                result = real_read(
+                    path, label, maximum_bytes, expected_size, expected_mode,
+                )
+                if path == paths.support_update_cache:
+                    target_reads += 1
+                    if target_reads == 2:
+                        os.replace(racer, paths.support_update_cache)
+                        post_read_replaced = True
+                return result
+
+            def exchange_then_disappear(first: Path, second: Path) -> None:
+                nonlocal exchange_count, restore_identity_captured
+                nonlocal disappeared_before_restore
+                exchange_count += 1
+                if (second == paths.support_update_cache
+                        and real_matches(first, prior_identity)
+                        and not disappeared_before_restore):
+                    restore_identity_captured = cli._identity(paths.support_update_cache)
+                    paths.support_update_cache.unlink()
+                    disappeared_before_restore = True
+                real_exchange(first, second)
+
+            def link_then_reappear(
+                    source: Path, destination: Path, *,
+                    follow_symlinks: bool = True,
+            ) -> None:
+                nonlocal reappeared_during_recovery
+                if (source.parent == paths.support
+                        and destination == paths.support_update_cache
+                        and real_matches(source, prior_identity)
+                        and disappeared_before_restore
+                        and not reappeared_during_recovery):
+                    os.replace(reappearing, paths.support_update_cache)
+                    reappeared_during_recovery = True
+                real_link(
+                    source, destination, follow_symlinks=follow_symlinks,
+                )
+
+            error: cli.DesktopCLIError | None = None
+            with mock.patch.object(
+                    cli, "_write_private_staged", side_effect=record_real_stage,
+            ), mock.patch.object(
+                    cli, "_read_managed_support_file", side_effect=read_then_race,
+            ), mock.patch.object(
+                    cli, "_exchange_paths", side_effect=exchange_then_disappear,
+            ), mock.patch.object(
+                    cli.os, "link", side_effect=link_then_reappear,
+            ):
+                try:
+                    cli._write_support_update_cache(paths, new)
+                except cli.DesktopCLIError as caught:
+                    error = caught
+
+            leaves = [
+                path for path in paths.support.iterdir()
+                if path.name.startswith(".update-check-")
+                or path.name.startswith(".preserved-support-update-cache-racer-")
+            ]
+            outcome = {
+                "post_read_replaced": post_read_replaced,
+                "disappeared_before_restore": disappeared_before_restore,
+                "reappeared_during_recovery": reappeared_during_recovery,
+                "restore_identity_was_racer": restore_identity_captured == racer_identity,
+                "exchange_count": exchange_count,
+                "returned_success": error is None,
+                "canonical_exists": paths.support_update_cache.exists(),
+                "canonical_is_prior": real_matches(
+                    paths.support_update_cache, prior_identity,
+                ),
+                "prior_locations": [
+                    path.name for path in paths.support.iterdir()
+                    if real_matches(path, prior_identity)
+                ],
+                "leaves": [path.name for path in leaves],
+            }
+            self.assertIsNotNone(error, json.dumps(outcome, sort_keys=True))
+            self.assertTrue(post_read_replaced, json.dumps(outcome, sort_keys=True))
+            self.assertTrue(disappeared_before_restore, json.dumps(outcome, sort_keys=True))
+            self.assertTrue(reappeared_during_recovery, json.dumps(outcome, sort_keys=True))
+            self.assertEqual(restore_identity_captured, racer_identity)
+            self.assertTrue(
+                paths.support_update_cache.exists(), json.dumps(outcome, sort_keys=True),
+            )
+            self.assertEqual(cli._identity(paths.support_update_cache), prior_identity)
+            self.assertEqual(paths.support_update_cache.read_bytes(), prior_bytes)
+            self.assertEqual(cli._read_support_update_cache(paths), old)
+            restored_facts = paths.support_update_cache.stat()
+            self.assertEqual(restored_facts.st_mode & 0o777, 0o600)
+            self.assertEqual(restored_facts.st_nlink, 1)
+            self.assertFalse(racer.exists())
+            self.assertFalse(reappearing.exists())
+            self.assertFalse(any(
+                real_matches(path, identity)
+                for path in paths.support.iterdir()
+                for identity in staged_identities
+            ))
+            preserved = [
+                path for path in leaves
+                if real_matches(path, reappearing_identity)
+            ]
+            self.assertEqual(len(preserved), 1, json.dumps(outcome, sort_keys=True))
+            self.assertEqual(preserved[0].read_bytes(), reappearing_bytes)
+            self.assertEqual(preserved[0].stat().st_mode & 0o777, 0o600)
+            self.assertEqual(preserved[0].stat().st_nlink, 1)
+            self.assertEqual(leaves, preserved)
 
     def test_official_stage_bootstrap_switch_commits_once_and_preserves_app_identity(self) -> None:
         import importlib

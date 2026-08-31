@@ -268,13 +268,19 @@ original command continues. The independent canonical
 `support/update-check.json` stores support version/tag/generation/manifest/time
 and decline. Its own cadence fails open with a warning on corruption/provider
 failure, notices only in non-TTY, and prompts default No in TTY; only `y`/`yes`
-uses the official staging transaction. Cache replacement performs one final
-post-read destination identity check: a late existing-cache racer is atomically
-exchanged into the distinct failure-only
-`.preserved-support-update-cache-racer-*` namespace while the exact retained
-prior inode returns to canonical `update-check.json`; an initially absent-cache
-racer remains canonical and causes refusal; clean success leaves no transaction
-leaf (`scripts/desktop_user_cli.py:1984-2135`, `3274-3383`). Explicit official
+uses the official staging transaction. Cache replacement validates one
+provisional staged inode while retaining an existing prior, but success
+linearizes only when a final atomic exchange installs a second independent
+single-link staged inode at canonical `update-check.json`. A substitution before
+that exchange is displaced without overwrite and causes refusal: an existing
+prior is atomically restored and the racer remains under a distinct failure-only
+`.preserved-support-update-cache-racer-*` leaf; an initially absent-cache racer
+is atomically returned to canonical. Restoration itself uses a bounded retry:
+an atomic exchange linearizes against a live destination, while an exclusive
+hard link linearizes if the destination disappeared. Clean success removes only
+identity-matching stage/prior leaves. Mutation after the atomic success or
+restoration point is an external later mutation, not a snapshot-at-return claim
+(`scripts/desktop_user_cli.py:1984-2262`, `3401-3510`). Explicit official
 `update` forces support first and then App. A
 successful support stage reexecs the same canonical argv; the bootstrap consumes
 its marker before import, switches/self-tests/commits, and the injected one-shot
