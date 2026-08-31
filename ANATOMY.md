@@ -274,21 +274,28 @@ private transaction namespace**; arbitrary uncooperative same-UID replacement
 inside that namespace is outside the supported threat model. The canonical
 `support/update-check.json` name remains the **canonical arbitrary-racer
 boundary**, as does every object atomically displaced from that name. Prior bytes
-and identity come from one no-follow descriptor observation. Publication first
-validates a provisional inode while retaining an existing prior, then performs a
-final atomic exchange with a second independent inode. Commit requires the
-immediately following support-directory fsync too: failure before or during that
-fsync restores the exact prior/absence, while later cleanup failure reports a
-bounded committed-cleanup diagnostic and never rolls canonical back. An existing
-prior is restored without overwriting a racer; an initially absent-cache racer is
-returned to canonical. Any other displaced racer is moved with atomic no-replace
-to `.preserved-support-update-cache-racer-<random>`. These **preserved
+and identity come from one no-follow descriptor observation. Setup failure after
+private-directory allocation self-cleans only the exact same-owner, same-identity,
+empty updater-created directory and fsyncs `support`; a wrong type, wrong owner,
+replacement, or unexpected content is retained and only bounded cleanup detail is
+appended to the primary error. Publication first validates a provisional inode
+while retaining an existing prior, then performs a final atomic exchange with a
+second independent inode. That exchange syscall is the publication linearization
+point. Its immediately following support-directory fsync is the separate
+transaction commit/durability boundary. If that fsync fails, the still-uncommitted
+transaction attempts exact prior/absence recovery and preserves any intervening
+racer. Later cleanup failure reports a bounded committed-cleanup diagnostic and
+never rolls canonical back. An existing prior is restored without overwriting a
+racer; an initially absent-cache racer is returned to canonical. Any other
+displaced racer is moved with atomic no-replace to
+`.preserved-support-update-cache-racer-<random>`. These **preserved
 canonical-racer diagnostics are not ordinary updater-owned residue**: doctor
 lists them and `uninstall --all` blocks before deletion until they are inspected.
 Restoration uses bounded exchange/exclusive-link retries when canonical changes
 or disappears. Clean success removes the private namespace and all exact owned
-leaves. Mutation after the durable commit/restoration boundary is an external
-later mutation, not a snapshot-at-return claim
+leaves. For snapshot semantics, mutation after the exchange syscall is a later
+external canonical mutation, even though failure before the durability boundary
+still triggers recovery; no snapshot-at-return claim is made
 (`scripts/desktop_user_cli.py:1984-2262`, `3401-3510`). Explicit official
 `update` forces support first and then App. A
 successful support stage reexecs the same canonical argv; the bootstrap consumes

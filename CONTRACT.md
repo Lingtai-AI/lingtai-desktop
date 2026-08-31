@@ -93,11 +93,17 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
   transaction namespace; arbitrary uncooperative same-UID replacement inside that namespace is outside
   the supported threat model. Canonical `support/update-check.json` is the
   canonical arbitrary-racer boundary, and every inode displaced from it receives
-  the same arbitrary-racer protection. Publication validates a provisional stage,
-  then atomically exchanges a second independent stage into canonical; the commit
-  boundary includes the immediately following support-directory fsync. Any
-  pre-commit failure restores the exact prior inode or exact absence. Once that
-  fsync succeeds, cleanup never touches canonical: cleanup/unlink/directory-fsync
+  the same arbitrary-racer protection. A post-allocation setup failure removes and
+  support-directory-fsyncs only the exact same-owner, same-identity, empty
+  updater-created private directory; wrong type, wrong owner, replacement, or
+  unexpected content is retained, with bounded cleanup/durability detail appended
+  without masking the primary error. Publication validates a provisional stage,
+  then atomically exchanges a second independent stage into canonical. That final
+  exchange syscall is the publication linearization point; its immediately
+  following support-directory fsync is the transaction commit/durability boundary.
+  Fsync failure leaves the transaction uncommitted, attempts exact prior-inode or
+  exact-absence recovery, and preserves any intervening racer. Once that fsync
+  succeeds, cleanup never touches canonical: cleanup/unlink/directory-fsync
   failures return committed success with one bounded diagnostic. Racers are never
   overwritten or deleted: an absent-cache racer returns to canonical, while a
   displaced racer that cannot coexist with the restored prior moves by atomic
@@ -106,9 +112,11 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
   doctor lists them and full uninstall blocks before deletion pending inspection.
   Restoration retries boundedly with exchange for a live canonical destination
   and exclusive hard link after disappearance. Clean publication retains no
-  private transaction namespace and ends with one mode-0600 link. No
-  snapshot-at-Python-return guarantee is made against mutation after the durable
-  commit/restoration point (`scripts/desktop_user_cli.py:1984-2360`). Ordinary
+  private transaction namespace and ends with one mode-0600 link. For snapshot
+  semantics, mutation after the exchange syscall is a later external canonical
+  mutation even though failure before commit still triggers recovery; no
+  snapshot-at-Python-return guarantee is made
+  (`scripts/desktop_user_cli.py:1984-2360`). Ordinary
   valid commands check it on
   its own cadence: corruption or provider failure warns and continues without
   replacing prior bytes, non-TTY only notices, and TTY defaults No and stages

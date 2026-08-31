@@ -82,10 +82,11 @@ test proves. This file descends into `tests/` itself.
   release assets, hostile metadata/route/JSON/redirect/length/SHA conditions,
   private complete downloads before publication, the independent exact support
   cache and consent matrix (including one-descriptor prior bytes/identity,
-  private-namespace stage-read cleanup, no flat support-root stage unlink,
-  post-read and post-final-check race refusal, final-exchange-plus-directory-fsync
-  commit semantics, exact prior-inode restoration, committed cleanup diagnostics,
-  primary-error preservation, preserved racer identity/bytes, absent-cache
+  post-`mkdtemp` setup-failure self-clean, private-namespace stage-read cleanup, no
+  flat support-root stage unlink, post-read and post-final-check race refusal,
+  final-exchange publication linearization followed by support-directory-fsync
+  commit/durability semantics, exact prior-inode restoration, committed cleanup
+  diagnostics, primary-error preservation, preserved racer identity/bytes, absent-cache
   no-clobber, disappearing-destination bounded link recovery, exact mode/link
   facts, and clean no-race residue),
   no-change/failed-target cadence behavior, local App

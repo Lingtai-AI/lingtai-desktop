@@ -2148,24 +2148,98 @@ def _rename_path_noreplace(source: Path, destination: Path) -> None:
     )
 
 
+def _cleanup_failed_support_cache_transaction_creation(
+        paths: ManagedPaths, directory: Path,
+        expected_identity: tuple[int, int] | None,
+) -> list[str]:
+    """Remove only the still-empty updater-created directory after setup failure."""
+    if expected_identity is None:
+        return ["private transaction identity unavailable; directory retained"]
+    try:
+        facts = directory.lstat()
+    except FileNotFoundError:
+        return []
+    except Exception as error:
+        return [f"inspect transaction: {_bounded_exception_text(error)}"]
+    if (facts.st_dev, facts.st_ino) != expected_identity:
+        return ["private transaction directory was replaced; retained"]
+    if not stat.S_ISDIR(facts.st_mode):
+        return ["private transaction path has wrong type; retained"]
+    if facts.st_uid != os.geteuid():
+        return ["private transaction directory has wrong owner; retained"]
+    if facts.st_nlink != 2:
+        return ["private transaction directory has unexpected links; retained"]
+    try:
+        with os.scandir(directory) as entries:
+            if next(entries, None) is not None:
+                return ["private transaction directory has unexpected content; retained"]
+    except Exception as error:
+        return [f"inspect transaction content: {_bounded_exception_text(error)}"]
+    try:
+        final_facts = directory.lstat()
+    except FileNotFoundError:
+        return []
+    except Exception as error:
+        return [f"reinspect transaction: {_bounded_exception_text(error)}"]
+    if ((final_facts.st_dev, final_facts.st_ino) != expected_identity
+            or not stat.S_ISDIR(final_facts.st_mode)
+            or final_facts.st_uid != os.geteuid()
+            or final_facts.st_nlink != 2):
+        return ["private transaction directory changed before cleanup; retained"]
+    try:
+        directory.rmdir()
+    except FileNotFoundError:
+        return []
+    except Exception as error:
+        return [f"remove transaction: {_bounded_exception_text(error)}"]
+    try:
+        _fsync_directory(paths.support)
+    except Exception as error:
+        return [f"support cleanup fsync: {_bounded_exception_text(error)}"]
+    return []
+
+
 def _new_support_cache_transaction(paths: ManagedPaths) -> SupportCacheTransaction:
+    directory: Path | None = None
+    directory_identity: tuple[int, int] | None = None
     try:
         directory = Path(tempfile.mkdtemp(
             prefix=".support-update-cache-txn-", dir=paths.support,
         ))
+        initial_facts = directory.lstat()
+        if (not stat.S_ISDIR(initial_facts.st_mode)
+                or initial_facts.st_uid != os.geteuid()
+                or initial_facts.st_nlink != 2):
+            raise DesktopCLIError("private support update-check transaction is invalid")
+        directory_identity = (initial_facts.st_dev, initial_facts.st_ino)
         os.chmod(directory, 0o700, follow_symlinks=False)
         facts = directory.lstat()
-    except OSError as error:
-        raise DesktopCLIError(
+        if (not stat.S_ISDIR(facts.st_mode) or stat.S_IMODE(facts.st_mode) != 0o700
+                or facts.st_uid != os.geteuid() or facts.st_nlink != 2
+                or (facts.st_dev, facts.st_ino) != directory_identity):
+            raise DesktopCLIError("private support update-check transaction is invalid")
+        return SupportCacheTransaction(
+            directory, directory_identity, directory / "rollback",
+            directory / "commit", directory / "absence",
+        )
+    except (OSError, DesktopCLIError) as error:
+        primary = error if isinstance(error, DesktopCLIError) else DesktopCLIError(
             "could not create private support update-check transaction"
+        )
+        cleanup_problems = [] if directory is None else (
+            _cleanup_failed_support_cache_transaction_creation(
+                paths, directory, directory_identity,
+            )
+        )
+        if not cleanup_problems:
+            if isinstance(error, DesktopCLIError):
+                raise
+            raise primary from error
+        primary_text = _bounded_exception_text(primary)
+        detail = "; ".join(cleanup_problems)[:420]
+        raise DesktopCLIError(
+            f"{primary_text}; cleanup incomplete: {detail}"[:600]
         ) from error
-    if (not stat.S_ISDIR(facts.st_mode) or stat.S_IMODE(facts.st_mode) != 0o700
-            or facts.st_uid != os.geteuid() or facts.st_nlink != 2):
-        raise DesktopCLIError("private support update-check transaction is invalid")
-    return SupportCacheTransaction(
-        directory, (facts.st_dev, facts.st_ino), directory / "rollback",
-        directory / "commit", directory / "absence",
-    )
 
 
 def _bounded_exception_text(error: BaseException, maximum: int = 360) -> str:

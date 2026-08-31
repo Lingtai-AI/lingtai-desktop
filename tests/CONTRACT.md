@@ -214,15 +214,19 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   publication, independent exact cache/cadence/decline and restoration, including
   post-publication-read and post-final-check substitution on both prior-present and
   prior-absent branches. The selected threat contract calls this a cooperative private transaction namespace; arbitrary uncooperative same-UID replacement inside that namespace is outside the supported threat model. Canonical is the canonical arbitrary-racer boundary, and preserved canonical-racer diagnostics are not ordinary updater-owned residue.
-  Tests bind prior bytes and identity to one descriptor read, prove both stage
-  readback failures clean the namespace, and ensure initially absent publication
-  never depends on unlinking a flat support-root stage. The final exchange plus
-  its immediately following support-directory fsync form the commit boundary:
-  pre-commit fsync failure restores exact prior state, while post-commit cleanup
-  fsync failure leaves the new canonical cache and emits one bounded committed
-  diagnostic. A simultaneous primary error remains primary even when cleanup
-  also fails. The tests bind the real final atomic exchange as the publication
-  operation, prove that an exact retained prior inode is restored without
+  Tests bind prior bytes and identity to one descriptor read, prove post-`mkdtemp`
+  chmod failure and both stage readback failures clean the private namespace, and
+  ensure initially absent publication never depends on unlinking a flat
+  support-root stage. The final exchange is the publication linearization point;
+  its immediately following support-directory fsync is the transaction
+  commit/durability boundary. Pre-commit fsync failure attempts exact prior-state
+  recovery while preserving intervening racers, whereas post-commit cleanup fsync
+  failure leaves the new canonical cache and emits one bounded committed
+  diagnostic. Mutation after the exchange is later external canonical mutation
+  for snapshot semantics even while failure before commit triggers recovery. A
+  simultaneous primary error remains primary even when cleanup also fails. The
+  tests bind the real final atomic exchange as the publication operation, prove
+  that an exact retained prior inode is restored without
   deleting/overwriting the racer, prove that an initially absent-cache racer is
   atomically returned to canonical, and force canonical to disappear after
   restoration identity capture so bounded exclusive-link recovery restores the
