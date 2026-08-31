@@ -88,6 +88,32 @@ def tree_snapshot(root: Path) -> tuple[tuple[str, str, int, bytes], ...]:
     return tuple(result)
 
 
+def identity_tree_snapshot(
+        root: Path) -> tuple[tuple[str, str, int, int, int, bytes], ...]:
+    result: list[tuple[str, str, int, int, int, bytes]] = []
+    if not root.exists() and not root.is_symlink():
+        return tuple()
+    candidates = [root]
+    if root.is_dir() and not root.is_symlink():
+        candidates.extend(root.rglob("*"))
+    for path in sorted(candidates, key=os.fspath):
+        relative = "." if path == root else os.fspath(path.relative_to(root))
+        facts = path.lstat()
+        if path.is_symlink():
+            kind, content = "symlink", os.fsencode(os.readlink(path))
+        elif path.is_dir():
+            kind, content = "directory", b""
+        elif path.is_file():
+            kind, content = "file", path.read_bytes()
+        else:
+            kind, content = "other", b""
+        result.append((
+            relative, kind, stat.S_IMODE(facts.st_mode), facts.st_dev, facts.st_ino,
+            content,
+        ))
+    return tuple(result)
+
+
 class FakePlatform(cli.Platform):
     def __init__(self) -> None:
         self.calls: list[list[str]] = []
@@ -1394,8 +1420,9 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             with self.assertRaisesRegex(cli.DesktopCLIError, "effective uid 0"):
                 cli.install(archive, manifest, home=home, platform=FakePlatform(), effective_uid=0)
             managed = home / ".local/share/lingtai-desktop"
-            import shutil
-            shutil.rmtree(managed)
+            if managed.exists():
+                shutil.rmtree(managed)
+            managed.parent.mkdir(parents=True, exist_ok=True)
             managed.symlink_to(root / "outside")
             with self.assertRaisesRegex(cli.DesktopCLIError, "symlink"):
                 cli.install(archive, manifest, home=home, platform=FakePlatform(), effective_uid=501)
@@ -1574,6 +1601,8 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                 expected_current_dev=1,
                 expected_current_ino=2,
                 requested_argv_sha256="a" * 64,
+                explicit_retry=False,
+                rollback_pointer_name=".rollback-" + "b" * 32,
             )
             pending_bytes = cli.support_pending_bytes(pending)
             self.assertEqual(cli.parse_support_pending(pending_bytes), pending)
@@ -1761,7 +1790,9 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                     )
             finally:
                 bootstrap._FAILPOINT = None
-            self.assertEqual(os.readlink(support / "current"), f"versions/{staged}")
+            self.assertEqual(
+                os.readlink(support / "current"), f"versions/{rollback_target}"
+            )
             self.assertTrue((support / "pending.json").exists())
             rollback_state = cli.parse_support_state((support / "state.json").read_bytes())
             self.assertIn(
@@ -1846,6 +1877,1083 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             cli.uninstall_all(home=home, effective_uid=501)
             self.assertFalse(paths.root.exists())
             self.assertFalse(paths.launcher.exists())
+
+    def test_review_high1_fresh_failure_retry_is_complete_and_offline_usable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            home.mkdir()
+            shared = (home / ".local", home / ".local/bin", home / ".local/share")
+            for directory in shared:
+                directory.mkdir(parents=True, exist_ok=True)
+                directory.chmod(0o755)
+            foreign = home / ".local/share/FOREIGN"
+            foreign.write_text("preserve", encoding="utf-8")
+            foreign_identity = (foreign.lstat().st_dev, foreign.lstat().st_ino)
+            archive, manifest = write_artifacts(root)
+            with mock.patch.object(cli, "_FAILPOINT", "receipt"):
+                with self.assertRaisesRegex(cli.DesktopCLIError, "receipt"):
+                    cli.install(
+                        archive, manifest, home=home, platform=FakePlatform(),
+                        effective_uid=501,
+                    )
+            cli.install(
+                archive, manifest, home=home, platform=FakePlatform(), effective_uid=501,
+            )
+            self.assertEqual(
+                (foreign.lstat().st_dev, foreign.lstat().st_ino), foreign_identity,
+            )
+            self.assertEqual(foreign.read_text(encoding="utf-8"), "preserve")
+            managed = home / ".local/share/lingtai-desktop"
+            cache = managed / "update-check.json"
+            cache.write_bytes(cli._update_cache_bytes("0.1.5", 4_000_000_000))
+            cache.chmod(0o600)
+            result = cli.subprocess.run(
+                [home / ".local/bin/lingtai-desktop", "version"],
+                env={
+                    "HOME": os.fspath(home),
+                    "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+                    "LANG": "C", "LC_ALL": "C",
+                },
+                stdout=cli.subprocess.PIPE, stderr=cli.subprocess.PIPE,
+                text=True, timeout=10, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("version: 0.1.5", result.stdout)
+
+    def test_review_high1_all_ordinary_fresh_boundaries_clean_then_retry(self) -> None:
+        failpoints = (
+            "extraction", "receipt", "support-generation-published",
+            "support-state-published", "support-current-published", "launcher",
+            "launcher-post-visible", "support-validation", "current",
+            "app-current-post-visible",
+        )
+        for failpoint in failpoints:
+            with self.subTest(failpoint=failpoint), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                home = root / "home"
+                home.mkdir()
+                shared = (home / ".local", home / ".local/bin", home / ".local/share")
+                for directory in shared:
+                    directory.mkdir(parents=True, exist_ok=True)
+                    directory.chmod(0o755)
+                shared_identities = {
+                    path: (path.lstat().st_dev, path.lstat().st_ino) for path in shared
+                }
+                foreign = home / ".local/share/FOREIGN"
+                foreign.write_bytes(b"foreign")
+                foreign_identity = (foreign.lstat().st_dev, foreign.lstat().st_ino)
+                archive, manifest = write_artifacts(root)
+                with mock.patch.object(cli, "_FAILPOINT", failpoint):
+                    with self.assertRaises(cli.DesktopCLIError):
+                        cli.install(
+                            archive, manifest, home=home, platform=FakePlatform(),
+                            effective_uid=501,
+                        )
+                self.assertFalse((home / ".local/share/lingtai-desktop").exists())
+                self.assertFalse((home / ".local/bin/lingtai-desktop").exists())
+                self.assertEqual(
+                    {path: (path.lstat().st_dev, path.lstat().st_ino) for path in shared},
+                    shared_identities,
+                )
+                self.assertEqual(
+                    (foreign.lstat().st_dev, foreign.lstat().st_ino), foreign_identity,
+                )
+                cli.install(
+                    archive, manifest, home=home, platform=FakePlatform(),
+                    effective_uid=501,
+                )
+                self.assertEqual(cli._active(cli._paths(home))[0], "0.1.5")
+                cli._validate_owned_cli(cli._paths(home))
+
+    def test_review_high1_parent_fsync_failures_clean_visible_identity_then_retry(self) -> None:
+        for parent_name in ("lingtai-desktop", "support"):
+            with self.subTest(parent=parent_name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                home = root / "home"
+                home.mkdir()
+                archive, manifest = write_artifacts(root)
+                original = cli._fsync_directory
+                injected = [False]
+
+                def fail_once(path: Path) -> None:
+                    if path.name == parent_name and not injected[0]:
+                        injected[0] = True
+                        raise cli.DesktopCLIError("injected parent fsync failure")
+                    original(path)
+
+                with mock.patch.object(cli, "_fsync_directory", side_effect=fail_once):
+                    with self.assertRaisesRegex(cli.DesktopCLIError, "parent fsync"):
+                        cli.install(
+                            archive, manifest, home=home, platform=FakePlatform(),
+                            effective_uid=501,
+                        )
+                self.assertTrue(injected[0])
+                self.assertFalse((home / ".local/share/lingtai-desktop").exists())
+                self.assertFalse((home / ".local/bin/lingtai-desktop").exists())
+                cli.install(
+                    archive, manifest, home=home, platform=FakePlatform(),
+                    effective_uid=501,
+                )
+                cli._validate_owned_cli(cli._paths(home))
+
+    def test_review_high1_crash_journal_resumes_every_publication_boundary(self) -> None:
+        boundaries = (
+            "journal", "extraction", "receipt", "version",
+            "support-generation", "support-state", "support-current",
+            "support-launcher", "support-validation", "support", "app-current",
+        )
+        for boundary in boundaries:
+            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                home = root / "home"
+                home.mkdir()
+                archive, manifest = write_artifacts(root)
+                with mock.patch.object(cli, "_FAILPOINT", f"crash:{boundary}"):
+                    with self.assertRaises(cli.InjectedInitialInstallCrash):
+                        cli.install(
+                            archive, manifest, home=home, platform=FakePlatform(),
+                            effective_uid=501,
+                        )
+                journal = home / ".local/share/lingtai-desktop/initial-install.json"
+                self.assertTrue(journal.is_file())
+                cli.install(
+                    archive, manifest, home=home, platform=FakePlatform(),
+                    effective_uid=501,
+                )
+                paths = cli._paths(home)
+                self.assertFalse(journal.exists())
+                self.assertEqual(cli._active(cli._paths(home))[0], "0.1.5")
+                cli._validate_owned_cli(paths)
+                result = cli.subprocess.run(
+                    [paths.launcher, "version"],
+                    env={"HOME": os.fspath(home), "PATH": "/usr/bin:/bin",
+                         "LANG": "C", "LC_ALL": "C"},
+                    stdout=cli.subprocess.PIPE, stderr=cli.subprocess.PIPE,
+                    text=True, timeout=10, check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("version: 0.1.5", result.stdout)
+
+    def test_review_high1_crash_retry_preserves_racer_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            home.mkdir()
+            archive, manifest = write_artifacts(root)
+            with mock.patch.object(cli, "_FAILPOINT", "crash:support-current"):
+                with self.assertRaises(cli.InjectedInitialInstallCrash):
+                    cli.install(
+                        archive, manifest, home=home, platform=FakePlatform(),
+                        effective_uid=501,
+                    )
+            paths = cli._paths(home)
+            paths.support_current.unlink()
+            paths.support_current.symlink_to("versions/foreign-racer")
+            identity = (paths.support_current.lstat().st_dev,
+                        paths.support_current.lstat().st_ino)
+            with self.assertRaises(cli.DesktopCLIError):
+                cli.install(
+                    archive, manifest, home=home, platform=FakePlatform(),
+                    effective_uid=501,
+                )
+            self.assertEqual(
+                (paths.support_current.lstat().st_dev,
+                 paths.support_current.lstat().st_ino), identity,
+            )
+            self.assertEqual(os.readlink(paths.support_current), "versions/foreign-racer")
+
+    def test_review_high2_executes_validated_bytes_and_refuses_pointer_commit_race(self) -> None:
+        import importlib
+
+        bootstrap = importlib.import_module("scripts.support_bootstrap")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            versions = root / "support/versions"
+            versions.mkdir(parents=True)
+            payloads = {
+                "desktop_user_cli.py": b"def installed_main(argv=None):\n    return 11\n",
+                "verify-app-archive.py": b"# verifier\n",
+            }
+            manifest_bytes = cli.build_support_manifest_bytes("1.0.0", "v1.0.0", payloads)
+            generation_id = json.loads(manifest_bytes)["generation_id"]
+            generation_path = versions / generation_id
+            generation_path.mkdir(mode=0o700)
+            (generation_path / "support-manifest.json").write_bytes(manifest_bytes)
+            for name, payload in payloads.items():
+                (generation_path / name).write_bytes(payload)
+            for child in generation_path.iterdir():
+                child.chmod(0o600)
+            paths = dataclasses.replace(
+                bootstrap._paths(root),
+                support=root / "support", versions=versions,
+            )
+            generation = bootstrap._validate_generation(paths, generation_id)
+            injected_marker = root / "UNVALIDATED-EXECUTED"
+            (generation_path / "desktop_user_cli.py").write_text(
+                "from pathlib import Path\n"
+                f"Path({os.fspath(injected_marker)!r}).write_text('executed')\n"
+                "def installed_main(argv=None):\n    return 73\n",
+                encoding="utf-8",
+            )
+            (generation_path / "desktop_user_cli.py").chmod(0o600)
+            self.assertEqual(bootstrap._load_and_run(generation, ["version"]), 11)
+            self.assertFalse(injected_marker.exists())
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            home.mkdir()
+            archive, manifest = write_artifacts(root)
+            cli.install(archive, manifest, home=home,
+                        platform=FakePlatform(), effective_uid=501)
+            paths = cli._paths(home)
+            support = paths.support
+            source = os.readlink(paths.support_current).removeprefix("versions/")
+            fixture = root / "fixture"
+            fixture.mkdir()
+            module = fixture / "desktop_user_cli.py"
+            verifier = fixture / "verify-app-archive.py"
+            module.write_bytes(Path(cli.__file__).read_bytes() + b"\n# target race\n")
+            verifier.write_bytes(
+                (Path(cli.__file__).parent / "verify-app-archive.py").read_bytes()
+                + b"\n# target race\n"
+            )
+            module.chmod(0o600)
+            verifier.chmod(0o600)
+            target = cli.stage_local_support_update(
+                module, verifier, support_version="0.1.6", release_tag="v0.1.6",
+                argv=[os.fspath(paths.launcher), "version"], home=home,
+                exec_launcher=lambda *_: None,
+            )
+            foreign_pointer: list[tuple[int, int]] = []
+
+            def replace_current(_: object) -> None:
+                paths.support_current.unlink()
+                paths.support_current.symlink_to(f"versions/{source}")
+                facts = paths.support_current.lstat()
+                foreign_pointer.append((facts.st_dev, facts.st_ino))
+
+            with self.assertRaises(bootstrap.BootstrapError):
+                bootstrap.process_pending(home=home, self_test_runner=replace_current)
+            state = cli.parse_support_state(paths.support_state.read_bytes())
+            self.assertNotEqual(state.last_good_generation, target)
+            self.assertTrue(paths.support_pending.exists())
+            self.assertEqual(os.readlink(paths.support_current), f"versions/{source}")
+            self.assertEqual(
+                (paths.support_current.lstat().st_dev, paths.support_current.lstat().st_ino),
+                foreign_pointer[0],
+            )
+
+    def test_review_high2_all_generation_and_pointer_wedges_fail_closed(self) -> None:
+        import importlib
+
+        bootstrap = importlib.import_module("scripts.support_bootstrap")
+        for phase in ("before-self-test", "after-self-test"):
+            for wedge in ("payload", "manifest", "generation", "current"):
+                with (self.subTest(phase=phase, wedge=wedge),
+                      tempfile.TemporaryDirectory() as temporary):
+                    root = Path(temporary)
+                    home = root / "home"
+                    home.mkdir()
+                    archive, manifest = write_artifacts(root)
+                    cli.install(
+                        archive, manifest, home=home, platform=FakePlatform(),
+                        effective_uid=501,
+                    )
+                    paths = cli._paths(home)
+                    source = os.readlink(paths.support_current).removeprefix("versions/")
+                    app_before = tuple(identity_tree_snapshot(path) for path in (
+                        paths.versions, paths.receipts, paths.current, paths.update_cache,
+                    ))
+                    fixture = root / "fixture"
+                    fixture.mkdir()
+                    module = fixture / "desktop_user_cli.py"
+                    verifier = fixture / "verify-app-archive.py"
+                    module.write_bytes(Path(cli.__file__).read_bytes() + b"\n# wedge target\n")
+                    verifier.write_bytes(
+                        (Path(cli.__file__).parent / "verify-app-archive.py").read_bytes()
+                        + b"\n# wedge target\n"
+                    )
+                    module.chmod(0o600)
+                    verifier.chmod(0o600)
+                    target = cli.stage_local_support_update(
+                        module, verifier, support_version="0.1.6", release_tag="v0.1.6",
+                        argv=[os.fspath(paths.launcher), "version"], home=home,
+                        exec_launcher=lambda *_: None,
+                    )
+                    target_path = paths.support_versions / target
+                    marker = root / "UNMANIFESTED-MARKER"
+                    foreign_identity: list[tuple[int, int]] = []
+
+                    def mutate() -> None:
+                        if wedge == "payload":
+                            payload = target_path / "desktop_user_cli.py"
+                            payload.write_text(
+                                "from pathlib import Path\n"
+                                f"Path({os.fspath(marker)!r}).write_text('executed')\n"
+                                "def support_self_test(): return True\n",
+                                encoding="utf-8",
+                            )
+                            payload.chmod(0o600)
+                        elif wedge == "manifest":
+                            changed = target_path / "support-manifest.json"
+                            changed.write_bytes(b"{}\n")
+                            changed.chmod(0o600)
+                        elif wedge == "generation":
+                            saved = root / "validated-generation"
+                            target_path.rename(saved)
+                            shutil.copytree(saved, target_path)
+                            foreign_identity.append((
+                                target_path.lstat().st_dev, target_path.lstat().st_ino,
+                            ))
+                        else:
+                            paths.support_current.unlink()
+                            paths.support_current.symlink_to(f"versions/{source}")
+                            foreign_identity.append((
+                                paths.support_current.lstat().st_dev,
+                                paths.support_current.lstat().st_ino,
+                            ))
+
+                    def runner(generation: object) -> None:
+                        if phase == "before-self-test":
+                            mutate()
+                        bootstrap._production_self_test(generation)
+                        if phase == "after-self-test":
+                            mutate()
+
+                    with self.assertRaises(bootstrap.BootstrapError):
+                        bootstrap.process_pending(home=home, self_test_runner=runner)
+                    self.assertFalse(marker.exists())
+                    state = cli.parse_support_state(paths.support_state.read_bytes())
+                    self.assertEqual(state.last_good_generation, source)
+                    self.assertTrue(paths.support_pending.exists())
+                    self.assertEqual(
+                        tuple(identity_tree_snapshot(path) for path in (
+                            paths.versions, paths.receipts, paths.current,
+                            paths.update_cache,
+                        )), app_before,
+                    )
+                    if wedge == "generation":
+                        self.assertEqual(
+                            (target_path.lstat().st_dev, target_path.lstat().st_ino),
+                            foreign_identity[0],
+                        )
+                    elif wedge == "current":
+                        self.assertEqual(
+                            (paths.support_current.lstat().st_dev,
+                             paths.support_current.lstat().st_ino),
+                            foreign_identity[0],
+                        )
+
+    def test_review_high2_active_import_retains_bytes_and_checks_current_identity(self) -> None:
+        import importlib
+
+        bootstrap = importlib.import_module("scripts.support_bootstrap")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            versions = root / "support/versions"
+            versions.mkdir(parents=True)
+            payloads = {
+                "desktop_user_cli.py": b"def installed_main(argv=None):\n    return 19\n",
+                "verify-app-archive.py": b"# verifier\n",
+            }
+            manifest_bytes = cli.build_support_manifest_bytes("1.0.0", "v1.0.0", payloads)
+            generation_id = json.loads(manifest_bytes)["generation_id"]
+            generation_path = versions / generation_id
+            generation_path.mkdir(mode=0o700)
+            (generation_path / "support-manifest.json").write_bytes(manifest_bytes)
+            for name, payload in payloads.items():
+                (generation_path / name).write_bytes(payload)
+            for child in generation_path.iterdir():
+                child.chmod(0o600)
+            paths = dataclasses.replace(
+                bootstrap._paths(root), support=root / "support", versions=versions,
+            )
+            generation = bootstrap._validate_generation(paths, generation_id)
+            marker = root / "IMPORT-RACE-MARKER"
+            payload_path = generation_path / "desktop_user_cli.py"
+            payload_path.write_text(
+                "from pathlib import Path\n"
+                f"Path({os.fspath(marker)!r}).write_text('executed')\n"
+                "def installed_main(argv=None): return 91\n",
+                encoding="utf-8",
+            )
+            payload_path.chmod(0o600)
+            self.assertEqual(bootstrap._load_and_run(generation, ["version"]), 19)
+            self.assertFalse(marker.exists())
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            home.mkdir()
+            archive, manifest = write_artifacts(root)
+            cli.install(
+                archive, manifest, home=home, platform=FakePlatform(), effective_uid=501,
+            )
+            paths = cli._paths(home)
+            source = os.readlink(paths.support_current)
+            real_revalidate = bootstrap._revalidate_generation
+            imported: list[bool] = []
+
+            def race_after_validation(*args: object) -> object:
+                generation = real_revalidate(*args)
+                paths.support_current.unlink()
+                paths.support_current.symlink_to(source)
+                return generation
+
+            with mock.patch.object(
+                    bootstrap, "_revalidate_generation", side_effect=race_after_validation):
+                with self.assertRaises(bootstrap.BootstrapError):
+                    bootstrap.run_launcher(
+                        ["version"], home=home,
+                        installed_runner=lambda *_: imported.append(True) or 0,
+                    )
+            self.assertEqual(imported, [])
+
+    def test_review_high3_rollback_pointer_crash_replays_authenticated_source(self) -> None:
+        import importlib
+
+        bootstrap = importlib.import_module("scripts.support_bootstrap")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            home.mkdir()
+            archive, manifest = write_artifacts(root)
+            cli.install(archive, manifest, home=home,
+                        platform=FakePlatform(), effective_uid=501)
+            paths = cli._paths(home)
+            source = os.readlink(paths.support_current).removeprefix("versions/")
+            source_pointer_identity = (
+                paths.support_current.lstat().st_dev, paths.support_current.lstat().st_ino,
+            )
+            fixture = root / "fixture"
+            fixture.mkdir()
+            module = fixture / "desktop_user_cli.py"
+            verifier = fixture / "verify-app-archive.py"
+            module.write_bytes(Path(cli.__file__).read_bytes() + b"\n# fail target\n")
+            verifier.write_bytes(
+                (Path(cli.__file__).parent / "verify-app-archive.py").read_bytes()
+                + b"\n# fail target\n"
+            )
+            module.chmod(0o600)
+            verifier.chmod(0o600)
+            target = cli.stage_local_support_update(
+                module, verifier, support_version="0.1.6", release_tag="v0.1.6",
+                argv=[os.fspath(paths.launcher), "version"], home=home,
+                exec_launcher=lambda *_: None,
+            )
+            bootstrap._FAILPOINT = "rollback-pointer-replaced"
+            try:
+                with self.assertRaises(bootstrap.InjectedCrash):
+                    bootstrap.process_pending(
+                        home=home,
+                        self_test_runner=lambda _: (_ for _ in ()).throw(
+                            bootstrap.BootstrapError("candidate failed")
+                        ),
+                    )
+            finally:
+                bootstrap._FAILPOINT = None
+            recovered = bootstrap.process_pending(
+                home=home,
+                self_test_runner=lambda _: (_ for _ in ()).throw(
+                    AssertionError("failed target retried")
+                ),
+            )
+            self.assertEqual(recovered.generation_id, source)
+            self.assertFalse(paths.support_pending.exists())
+            self.assertEqual(
+                (paths.support_current.lstat().st_dev, paths.support_current.lstat().st_ino),
+                source_pointer_identity,
+            )
+            state = cli.parse_support_state(paths.support_state.read_bytes())
+            self.assertIn(target, [item.generation_id for item in state.failed_generations])
+            self.assertEqual(state.high_water_version, "0.1.5")
+
+    def test_review_high3_every_rollback_durable_boundary_recovers_once(self) -> None:
+        import importlib
+
+        bootstrap = importlib.import_module("scripts.support_bootstrap")
+        for boundary in (
+                "rollback-state-published", "rollback-temporary",
+                "rollback-pointer-replaced", "pending-removed"):
+            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                home = root / "home"
+                home.mkdir()
+                archive, manifest = write_artifacts(root)
+                cli.install(
+                    archive, manifest, home=home, platform=FakePlatform(),
+                    effective_uid=501,
+                )
+                paths = cli._paths(home)
+                source = os.readlink(paths.support_current).removeprefix("versions/")
+                source_identity = (
+                    paths.support_current.lstat().st_dev,
+                    paths.support_current.lstat().st_ino,
+                )
+                app_before = tuple(identity_tree_snapshot(path) for path in (
+                    paths.versions, paths.receipts, paths.current, paths.update_cache,
+                ))
+                fixture = root / "fixture"
+                fixture.mkdir()
+                module = fixture / "desktop_user_cli.py"
+                verifier = fixture / "verify-app-archive.py"
+                module.write_bytes(Path(cli.__file__).read_bytes() + b"\n# rollback replay\n")
+                verifier.write_bytes(
+                    (Path(cli.__file__).parent / "verify-app-archive.py").read_bytes()
+                    + b"\n# rollback replay\n"
+                )
+                module.chmod(0o600)
+                verifier.chmod(0o600)
+                target = cli.stage_local_support_update(
+                    module, verifier, support_version="0.1.6", release_tag="v0.1.6",
+                    argv=[os.fspath(paths.launcher), "version"], home=home,
+                    exec_launcher=lambda *_: None,
+                )
+                bootstrap._FAILPOINT = boundary
+                try:
+                    with self.assertRaises(bootstrap.InjectedCrash):
+                        bootstrap.process_pending(
+                            home=home,
+                            self_test_runner=lambda _: (_ for _ in ()).throw(
+                                bootstrap.BootstrapError("candidate rejected")
+                            ),
+                        )
+                finally:
+                    bootstrap._FAILPOINT = None
+                delegated: list[tuple[Path, list[str]]] = []
+                exit_code = bootstrap.run_launcher(
+                    ["version"], home=home,
+                    self_test_runner=lambda _: (_ for _ in ()).throw(
+                        AssertionError("failed target was retried")
+                    ),
+                    installed_runner=lambda module_path, arguments: (
+                        delegated.append((module_path, list(arguments))) or 23
+                    ),
+                )
+                self.assertEqual(exit_code, 23)
+                self.assertEqual(delegated, [(
+                    paths.support_versions / source / "desktop_user_cli.py", ["version"],
+                )])
+                self.assertFalse(paths.support_pending.exists())
+                self.assertEqual(os.readlink(paths.support_current), f"versions/{source}")
+                self.assertEqual(
+                    (paths.support_current.lstat().st_dev,
+                     paths.support_current.lstat().st_ino), source_identity,
+                )
+                state = cli.parse_support_state(paths.support_state.read_bytes())
+                self.assertEqual(state.last_good_generation, source)
+                self.assertEqual(state.high_water_version, "0.1.5")
+                self.assertEqual(state.high_water_manifest_sha256,
+                                 cli.parse_support_manifest(
+                                     (paths.support_versions / source /
+                                      "support-manifest.json").read_bytes()
+                                 ).manifest_sha256)
+                self.assertIn(target, [item.generation_id for item in state.failed_generations])
+                self.assertEqual(
+                    tuple(identity_tree_snapshot(path) for path in (
+                        paths.versions, paths.receipts, paths.current, paths.update_cache,
+                    )),
+                    app_before,
+                )
+
+    def test_review_high3_rejects_and_preserves_foreign_rollback_backup(self) -> None:
+        import importlib
+
+        bootstrap = importlib.import_module("scripts.support_bootstrap")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            home.mkdir()
+            archive, manifest = write_artifacts(root)
+            cli.install(
+                archive, manifest, home=home, platform=FakePlatform(), effective_uid=501,
+            )
+            paths = cli._paths(home)
+            fixture = root / "fixture"
+            fixture.mkdir()
+            module = fixture / "desktop_user_cli.py"
+            verifier = fixture / "verify-app-archive.py"
+            module.write_bytes(Path(cli.__file__).read_bytes() + b"\n# backup race\n")
+            verifier.write_bytes(
+                (Path(cli.__file__).parent / "verify-app-archive.py").read_bytes()
+                + b"\n# backup race\n"
+            )
+            module.chmod(0o600)
+            verifier.chmod(0o600)
+            cli.stage_local_support_update(
+                module, verifier, support_version="0.1.6", release_tag="v0.1.6",
+                argv=[os.fspath(paths.launcher), "version"], home=home,
+                exec_launcher=lambda *_: None,
+            )
+            pending = cli.parse_support_pending(paths.support_pending.read_bytes())
+            foreign = paths.support / pending.rollback_pointer_name
+            foreign.symlink_to(f"versions/{pending.to_generation}")
+            identity = (foreign.lstat().st_dev, foreign.lstat().st_ino)
+            before = paths.support_state.read_bytes()
+            with self.assertRaises(bootstrap.BootstrapError):
+                bootstrap.process_pending(home=home, self_test_runner=lambda _: None)
+            self.assertEqual((foreign.lstat().st_dev, foreign.lstat().st_ino), identity)
+            self.assertEqual(paths.support_state.read_bytes(), before)
+            self.assertTrue(paths.support_pending.exists())
+
+    def test_review_high4_production_self_test_enforces_no_mutation_or_escape(self) -> None:
+        import importlib
+
+        bootstrap = importlib.import_module("scripts.support_bootstrap")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            home.mkdir()
+            cwd = root / "candidate-cwd"
+            cwd.mkdir()
+            archive, manifest = write_artifacts(root)
+            cli.install(archive, manifest, home=home,
+                        platform=FakePlatform(), effective_uid=501)
+            paths = cli._paths(home)
+            source = os.readlink(paths.support_current).removeprefix("versions/")
+            markers = {
+                "app": paths.receipts / "SELFTEST-APP-MUTATION",
+                "support": paths.support / "SELFTEST-SUPPORT-MUTATION",
+                "home": home / "SELFTEST-HOME-MUTATION",
+                "cwd": cwd / "SELFTEST-CWD-MUTATION",
+                "process": root / "SELFTEST-PROCESS-MUTATION",
+                "exec": root / "SELFTEST-EXEC-MUTATION",
+            }
+            fixture = root / "fixture"
+            fixture.mkdir()
+            module = fixture / "desktop_user_cli.py"
+            verifier = fixture / "verify-app-archive.py"
+            attempt_code = "\n".join([
+                "",
+                "def _review_attempt(action):",
+                "    try:",
+                "        action()",
+                "    except BaseException:",
+                "        pass",
+                f"_review_attempt(lambda: Path({os.fspath(markers['app'])!r}).write_text('bad'))",
+                f"_review_attempt(lambda: Path({os.fspath(markers['support'])!r}).write_text('bad'))",
+                f"_review_attempt(lambda: Path({os.fspath(markers['home'])!r}).write_text('bad'))",
+                f"_review_attempt(lambda: Path({os.fspath(markers['cwd'])!r}).write_text('bad'))",
+                "import subprocess as _review_subprocess",
+                f"_review_attempt(lambda: _review_subprocess.run(['/usr/bin/touch', {os.fspath(markers['process'])!r}], check=False))",
+                "import os as _review_os",
+                f"_review_attempt(lambda: _review_os.execv('/usr/bin/touch', ['touch', {os.fspath(markers['exec'])!r}]))",
+                "import socket as _review_socket",
+                "import sys as _review_sys",
+                "_review_attempt(lambda: _review_socket.socket().connect(('127.0.0.1', 9)))",
+                "_review_attempt(lambda: _review_sys.audit('socket.connect', object(), ('mocked.invalid', 443)))",
+                "import ctypes as _review_ctypes",
+                "_review_attempt(lambda: _review_ctypes.CDLL(None))",
+                "",
+            ]).encode()
+            module.write_bytes(Path(cli.__file__).read_bytes() + attempt_code)
+            verifier.write_bytes(
+                (Path(cli.__file__).parent / "verify-app-archive.py").read_bytes()
+                + b"\n# isolation target\n"
+            )
+            module.chmod(0o600)
+            verifier.chmod(0o600)
+            target = cli.stage_local_support_update(
+                module, verifier, support_version="0.1.6", release_tag="v0.1.6",
+                argv=[os.fspath(paths.launcher), "version"], home=home,
+                exec_launcher=lambda *_: None,
+            )
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(cwd)
+                selected = bootstrap.process_pending(home=home)
+            finally:
+                os.chdir(old_cwd)
+            self.assertEqual(selected.generation_id, source)
+            self.assertTrue(all(not path.exists() for path in markers.values()))
+            state = cli.parse_support_state(paths.support_state.read_bytes())
+            self.assertIn(target, [item.generation_id for item in state.failed_generations])
+
+    def test_review_high4_self_test_body_attempts_are_denied_and_rolled_back(self) -> None:
+        import importlib
+
+        bootstrap = importlib.import_module("scripts.support_bootstrap")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            home.mkdir()
+            cwd = root / "caller-cwd"
+            cwd.mkdir()
+            archive, manifest = write_artifacts(root)
+            cli.install(
+                archive, manifest, home=home, platform=FakePlatform(), effective_uid=501,
+            )
+            paths = cli._paths(home)
+            source = os.readlink(paths.support_current).removeprefix("versions/")
+            app_before = tuple(identity_tree_snapshot(path) for path in (
+                paths.versions, paths.receipts, paths.current, paths.update_cache,
+            ))
+            markers = {
+                "app": paths.receipts / "BODY-APP-MUTATION",
+                "support": paths.support / "BODY-SUPPORT-MUTATION",
+                "home": home / "BODY-HOME-MUTATION",
+                "cwd": cwd / "BODY-CWD-MUTATION",
+                "process": root / "BODY-PROCESS-MUTATION",
+                "exec": root / "BODY-EXEC-MUTATION",
+            }
+            fixture = root / "fixture"
+            fixture.mkdir()
+            module = fixture / "desktop_user_cli.py"
+            verifier = fixture / "verify-app-archive.py"
+            body_code = "\n".join([
+                "",
+                "_review_original_self_test = support_self_test",
+                "def support_self_test():",
+                "    import subprocess as _review_subprocess",
+                "    import socket as _review_socket",
+                "    import ctypes as _review_ctypes",
+                "    import os as _review_os",
+                "    import sys as _review_sys",
+                "    def attempt(action):",
+                "        try:",
+                "            action()",
+                "        except BaseException:",
+                "            pass",
+                f"    attempt(lambda: Path({os.fspath(markers['app'])!r}).write_text('bad'))",
+                f"    attempt(lambda: Path({os.fspath(markers['support'])!r}).write_text('bad'))",
+                f"    attempt(lambda: Path({os.fspath(markers['home'])!r}).write_text('bad'))",
+                f"    attempt(lambda: Path({os.fspath(markers['cwd'])!r}).write_text('bad'))",
+                f"    attempt(lambda: _review_subprocess.run(['/usr/bin/touch', {os.fspath(markers['process'])!r}], check=False))",
+                f"    attempt(lambda: _review_os.execv('/usr/bin/touch', ['touch', {os.fspath(markers['exec'])!r}]))",
+                "    attempt(lambda: _review_socket.socket().connect(('127.0.0.1', 9)))",
+                "    attempt(lambda: _review_sys.audit('socket.connect', object(), ('mocked.invalid', 443)))",
+                "    attempt(lambda: _review_ctypes.CDLL(None))",
+                "    return _review_original_self_test()",
+                "",
+            ]).encode()
+            module.write_bytes(Path(cli.__file__).read_bytes() + body_code)
+            verifier.write_bytes(
+                (Path(cli.__file__).parent / "verify-app-archive.py").read_bytes()
+                + b"\n# body isolation target\n"
+            )
+            module.chmod(0o600)
+            verifier.chmod(0o600)
+            target = cli.stage_local_support_update(
+                module, verifier, support_version="0.1.6", release_tag="v0.1.6",
+                argv=[os.fspath(paths.launcher), "version"], home=home,
+                exec_launcher=lambda *_: None,
+            )
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(cwd)
+                selected = bootstrap.process_pending(home=home)
+            finally:
+                os.chdir(old_cwd)
+            self.assertEqual(selected.generation_id, source)
+            self.assertTrue(all(not marker.exists() for marker in markers.values()))
+            self.assertEqual(
+                tuple(identity_tree_snapshot(path) for path in (
+                    paths.versions, paths.receipts, paths.current, paths.update_cache,
+                )), app_before,
+            )
+            state = cli.parse_support_state(paths.support_state.read_bytes())
+            self.assertIn(target, [item.generation_id for item in state.failed_generations])
+            self.assertFalse(paths.support_pending.exists())
+            delegated: list[Path] = []
+            self.assertEqual(bootstrap.run_launcher(
+                ["version"], home=home,
+                installed_runner=lambda module_path, _arguments: (
+                    delegated.append(module_path) or 29
+                ),
+            ), 29)
+            self.assertEqual(
+                delegated,
+                [paths.support_versions / source / "desktop_user_cli.py"],
+            )
+
+    def test_review_high4_timeout_exception_nontrue_wrong_path_and_minimal_env(self) -> None:
+        import importlib
+
+        bootstrap = importlib.import_module("scripts.support_bootstrap")
+
+        def generation(root: Path, source: bytes) -> object:
+            return bootstrap.Generation(
+                root / "1.0.0-000000000000", "1.0.0", "1.0.0-000000000000",
+                "0" * 64, (1, 1), (), b"manifest", (
+                    ("desktop_user_cli.py", source),
+                    ("verify-app-archive.py", b"# verifier\n"),
+                ),
+            )
+
+        fixtures = {
+            "exception": b"def support_self_test():\n    raise RuntimeError('no')\n",
+            "non-true": b"def support_self_test():\n    return 1\n",
+            "wrong-path": b"def support_self_test():\n    return __file__ == '/wrong/path.py'\n",
+        }
+        for label, source in fixtures.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                with self.assertRaises(bootstrap.BootstrapError):
+                    bootstrap._production_self_test(generation(Path(temporary), source))
+        with tempfile.TemporaryDirectory() as temporary:
+            source = b"import time\ndef support_self_test():\n    time.sleep(2)\n    return True\n"
+            with mock.patch.object(bootstrap, "SUPPORT_SELF_TEST_TIMEOUT", 0.05):
+                with self.assertRaisesRegex(bootstrap.BootstrapError, "timed out"):
+                    bootstrap._production_self_test(generation(Path(temporary), source))
+        with tempfile.TemporaryDirectory() as temporary:
+            source = (
+                b"import os\n"
+                b"def support_self_test():\n"
+                b"    return ('PARENT_SECRET' not in os.environ and "
+                b"os.path.realpath(os.getcwd()) == os.path.realpath(os.environ['HOME']) "
+                b"and os.environ['HOME'] == os.environ['TMPDIR'])\n"
+            )
+            with mock.patch.dict(os.environ, {"PARENT_SECRET": "must-not-leak"}, clear=False):
+                bootstrap._production_self_test(generation(Path(temporary), source))
+
+    def test_review_medium1_rejections_do_not_publish_and_explicit_retry_commits_once(self) -> None:
+        import importlib
+
+        bootstrap = importlib.import_module("scripts.support_bootstrap")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            home.mkdir()
+            archive, manifest = write_artifacts(root)
+            cli.install(archive, manifest, home=home,
+                        platform=FakePlatform(), effective_uid=501)
+            paths = cli._paths(home)
+            fixture = root / "fixture"
+            fixture.mkdir()
+            module = fixture / "desktop_user_cli.py"
+            verifier = fixture / "verify-app-archive.py"
+            base_module = Path(cli.__file__).read_bytes()
+            base_verifier = (Path(cli.__file__).parent / "verify-app-archive.py").read_bytes()
+
+            def write_candidate(suffix: bytes) -> None:
+                module.write_bytes(base_module + suffix)
+                verifier.write_bytes(base_verifier + suffix)
+                module.chmod(0o600)
+                verifier.chmod(0o600)
+
+            rejected = (
+                ("lower", "0.1.4", b"\n# lower\n", [os.fspath(paths.launcher)]),
+                ("same-substitution", "0.1.5", b"\n# same different\n", [os.fspath(paths.launcher)]),
+                ("malformed", "0.1.6", b"\nthis is not python !!!\n", [os.fspath(paths.launcher)]),
+                ("empty-argv", "0.1.6", b"\n# empty argv\n", []),
+            )
+            for label, version, suffix, argv in rejected:
+                with self.subTest(label=label):
+                    write_candidate(suffix)
+                    before = identity_tree_snapshot(paths.support)
+                    with self.assertRaises((cli.DesktopCLIError, SyntaxError)):
+                        cli.stage_local_support_update(
+                            module, verifier, support_version=version,
+                            release_tag=f"v{version}", argv=argv, home=home,
+                            exec_launcher=lambda *_: None,
+                        )
+                    self.assertEqual(identity_tree_snapshot(paths.support), before)
+
+            write_candidate(b"\n# exact retry target\n")
+            target = cli.stage_local_support_update(
+                module, verifier, support_version="0.1.6", release_tag="v0.1.6",
+                argv=[os.fspath(paths.launcher)], home=home,
+                exec_launcher=lambda *_: None,
+            )
+            bootstrap.process_pending(
+                home=home,
+                self_test_runner=lambda _: (_ for _ in ()).throw(
+                    bootstrap.BootstrapError("first attempt failed")
+                ),
+            )
+            failed_before = identity_tree_snapshot(paths.support)
+            with self.assertRaises(cli.DesktopCLIError):
+                cli.stage_local_support_update(
+                    module, verifier, support_version="0.1.6", release_tag="v0.1.6",
+                    argv=[os.fspath(paths.launcher)], home=home,
+                    exec_launcher=lambda *_: None,
+                )
+            self.assertEqual(identity_tree_snapshot(paths.support), failed_before)
+            retried = cli.stage_local_support_update(
+                module, verifier, support_version="0.1.6", release_tag="v0.1.6",
+                argv=[os.fspath(paths.launcher)], home=home, explicit_retry=True,
+                exec_launcher=lambda *_: None,
+            )
+            self.assertEqual(retried, target)
+            selected = bootstrap.process_pending(
+                home=home, self_test_runner=lambda _: None,
+            )
+            self.assertEqual(selected.generation_id, target)
+            self.assertFalse(paths.support_pending.exists())
+            self.assertNotIn(
+                target,
+                [item.generation_id for item in cli.parse_support_state(
+                    paths.support_state.read_bytes()
+                ).failed_generations],
+            )
+
+    def test_review_medium2_canonical_wrong_hash_state_fails_before_import_or_mutation(self) -> None:
+        import importlib
+
+        bootstrap = importlib.import_module("scripts.support_bootstrap")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            home.mkdir()
+            archive, manifest = write_artifacts(root)
+            cli.install(archive, manifest, home=home,
+                        platform=FakePlatform(), effective_uid=501)
+            paths = cli._paths(home)
+            state = cli.parse_support_state(paths.support_state.read_bytes())
+            paths.support_state.write_bytes(cli.support_state_bytes(dataclasses.replace(
+                state, high_water_manifest_sha256="0" * 64,
+            )))
+            paths.support_state.chmod(0o600)
+            before = identity_tree_snapshot(paths.support)
+            imported: list[bool] = []
+            with self.assertRaises(bootstrap.BootstrapError):
+                bootstrap.run_launcher(
+                    ["version"], home=home,
+                    installed_runner=lambda *_: imported.append(True) or 0,
+                )
+            self.assertEqual(imported, [])
+            self.assertEqual(identity_tree_snapshot(paths.support), before)
+
+    def test_review_medium2_state_relationship_matrix_and_authenticated_local_rollback(self) -> None:
+        import importlib
+
+        bootstrap = importlib.import_module("scripts.support_bootstrap")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            home.mkdir()
+            archive, manifest = write_artifacts(root)
+            cli.install(
+                archive, manifest, home=home, platform=FakePlatform(), effective_uid=501,
+            )
+            paths = cli._paths(home)
+            base = cli.parse_support_state(paths.support_state.read_bytes())
+            source_manifest = cli.parse_support_manifest(
+                (paths.support_versions / base.last_good_generation /
+                 "support-manifest.json").read_bytes()
+            )
+            fixture = root / "fixture"
+            fixture.mkdir()
+            module = fixture / "desktop_user_cli.py"
+            verifier = fixture / "verify-app-archive.py"
+            module.write_bytes(Path(cli.__file__).read_bytes() + b"\n# semantic target\n")
+            verifier.write_bytes(
+                (Path(cli.__file__).parent / "verify-app-archive.py").read_bytes()
+                + b"\n# semantic target\n"
+            )
+            module.chmod(0o600)
+            verifier.chmod(0o600)
+            target_id = cli.stage_local_support_update(
+                module, verifier, support_version="0.1.6", release_tag="v0.1.6",
+                argv=[os.fspath(paths.launcher), "version"], home=home,
+                exec_launcher=lambda *_: None,
+            )
+            paths.support_pending.unlink()
+            target_manifest = cli.parse_support_manifest(
+                (paths.support_versions / target_id / "support-manifest.json").read_bytes()
+            )
+            source_failed = cli.FailedSupportGeneration(
+                base.last_good_generation, source_manifest.manifest_sha256,
+            )
+            target_failed = cli.FailedSupportGeneration(
+                target_id, target_manifest.manifest_sha256,
+            )
+            impossible = {
+                "last-good-also-failed": dataclasses.replace(
+                    base, failed_generations=(source_failed,),
+                ),
+                "failed-wrong-hash": dataclasses.replace(
+                    base, failed_generations=(dataclasses.replace(
+                        target_failed, manifest_sha256="0" * 64,
+                    ),),
+                ),
+                "higher-without-failed-proof": dataclasses.replace(
+                    base, high_water_version="0.1.6",
+                    high_water_manifest_sha256=target_manifest.manifest_sha256,
+                ),
+                "higher-with-wrong-failed-proof": dataclasses.replace(
+                    base, high_water_version="0.1.6",
+                    high_water_manifest_sha256=target_manifest.manifest_sha256,
+                    failed_generations=(dataclasses.replace(
+                        target_failed, manifest_sha256="0" * 64,
+                    ),),
+                ),
+            }
+            for label, state in impossible.items():
+                with self.subTest(label=label):
+                    paths.support_state.write_bytes(cli.support_state_bytes(state))
+                    paths.support_state.chmod(0o600)
+                    before = identity_tree_snapshot(paths.support)
+                    imported: list[bool] = []
+                    with self.assertRaises((cli.DesktopCLIError, bootstrap.BootstrapError)):
+                        bootstrap.run_launcher(
+                            ["version"], home=home,
+                            installed_runner=lambda *_: imported.append(True) or 0,
+                        )
+                    self.assertEqual(imported, [])
+                    self.assertEqual(identity_tree_snapshot(paths.support), before)
+            authenticated = dataclasses.replace(
+                base, high_water_version="0.1.6",
+                high_water_manifest_sha256=target_manifest.manifest_sha256,
+                failed_generations=(target_failed,),
+            )
+            paths.support_state.write_bytes(cli.support_state_bytes(authenticated))
+            paths.support_state.chmod(0o600)
+            self.assertEqual(
+                bootstrap.process_pending(home=home).generation_id,
+                base.last_good_generation,
+            )
+            self.assertEqual(
+                cli._validate_owned_cli(paths).manifest.generation_id,
+                base.last_good_generation,
+            )
+
+            duplicate_value = cli._support_state_value(authenticated)
+            duplicate_value["failed_generations"] = [
+                duplicate_value["failed_generations"][0],
+                duplicate_value["failed_generations"][0],
+            ]
+            duplicate_bytes = (
+                json.dumps(duplicate_value, sort_keys=True, separators=(",", ":")) + "\n"
+            ).encode("ascii")
+            with self.assertRaises(cli.DesktopCLIError):
+                cli.parse_support_state(duplicate_bytes)
+            with self.assertRaises(bootstrap.BootstrapError):
+                bootstrap._parse_state(duplicate_bytes)
+
+    def test_review_medium3_app_only_uninstall_ignores_every_support_state(self) -> None:
+        for case in ("valid", "absent", "tampered", "symlink", "unknown"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                home = root / "home"
+                home.mkdir()
+                archive, manifest = write_artifacts(root)
+                cli.install(archive, manifest, home=home,
+                            platform=FakePlatform(), effective_uid=501)
+                paths = cli._paths(home)
+                outside: Path | None = None
+                if case == "absent":
+                    shutil.rmtree(paths.support)
+                elif case == "tampered":
+                    active = paths.support / os.readlink(paths.support_current)
+                    (active / "desktop_user_cli.py").write_text("tampered", encoding="utf-8")
+                    (active / "desktop_user_cli.py").chmod(0o600)
+                elif case == "symlink":
+                    outside = root / "outside-support"
+                    paths.support.rename(outside)
+                    paths.support.symlink_to(outside, target_is_directory=True)
+                elif case == "unknown":
+                    (paths.support / "KEEP").write_text("foreign", encoding="utf-8")
+                support_before = identity_tree_snapshot(paths.support)
+                outside_before = identity_tree_snapshot(outside) if outside is not None else ()
+                launcher_before = identity_tree_snapshot(paths.launcher)
+                cli.uninstall_version("0.1.5", home=home, effective_uid=501)
+                self.assertFalse((paths.versions / "0.1.5").exists())
+                self.assertEqual(identity_tree_snapshot(paths.support), support_before)
+                self.assertEqual(identity_tree_snapshot(paths.launcher), launcher_before)
+                if outside is not None:
+                    self.assertEqual(identity_tree_snapshot(outside), outside_before)
 
     def test_production_source_contains_no_quarantine_bypass(self) -> None:
         source = (Path(__file__).parents[1] / "scripts/desktop_user_cli.py").read_text()

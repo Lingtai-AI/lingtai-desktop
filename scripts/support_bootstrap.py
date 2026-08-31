@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
-import importlib.util
 import json
 import os
 import re
@@ -70,7 +69,12 @@ FAILED_KEYS = {"generation_id", "manifest_sha256"}
 PENDING_KEYS = {
     "schema", "from_generation", "to_generation", "to_manifest_sha256",
     "expected_current_dev", "expected_current_ino", "requested_argv_sha256",
+    "explicit_retry", "rollback_pointer_name",
 }
+ROLLBACK_POINTER_PATTERN = re.compile(r"\.rollback-[0-9a-f]{32}")
+MAX_PLANE_ENTRIES = 20_000
+MAX_PLANE_FILE_BYTES = 512 * 1024 * 1024
+MAX_PLANE_TOTAL_BYTES = 1024 * 1024 * 1024
 _FAILPOINT: str | None = None  # Tests inject process-death boundaries in-process.
 
 
@@ -106,6 +110,14 @@ class Generation:
     manifest_sha256: str
     directory_identity: tuple[int, int]
     file_identities: tuple[tuple[str, tuple[int, int]], ...]
+    manifest_bytes: bytes
+    payload_bytes: tuple[tuple[str, bytes], ...]
+
+    def payload(self, name: str) -> bytes:
+        for candidate, content in self.payload_bytes:
+            if candidate == name:
+                return content
+        raise BootstrapError("validated support payload is unavailable")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -116,6 +128,8 @@ class Pending:
     expected_current_dev: int
     expected_current_ino: int
     requested_argv_sha256: str
+    explicit_retry: bool
+    rollback_pointer_name: str
 
 
 @dataclasses.dataclass(frozen=True)
@@ -322,6 +336,7 @@ def _validate_generation(paths: SupportPaths, generation_id: str) -> Generation:
     identities: list[tuple[str, tuple[int, int]]] = [
         (SUPPORT_MANIFEST_NAME, manifest_identity),
     ]
+    payloads: list[tuple[str, bytes]] = []
     for item in value["files"]:  # type: ignore[assignment]
         name = item["name"]  # type: ignore[index]
         content, identity = _read_file(
@@ -331,10 +346,35 @@ def _validate_generation(paths: SupportPaths, generation_id: str) -> Generation:
         if _sha(content) != item["sha256"]:  # type: ignore[index]
             raise BootstrapError(f"support payload {name} SHA-256 does not match manifest")
         identities.append((name, identity))
+        payloads.append((name, content))
+    current_directory = _real_directory(path, "support generation", SUPPORT_GENERATION_MODE)
+    if (current_directory.st_dev, current_directory.st_ino) != (
+            directory.st_dev, directory.st_ino):
+        raise BootstrapError("support generation directory was replaced during validation")
     return Generation(
         path, value["support_version"], generation_id, _sha(manifest_bytes),  # type: ignore[arg-type]
         (directory.st_dev, directory.st_ino), tuple(identities),
+        manifest_bytes, tuple(payloads),
     )
+
+
+def _same_generation(first: Generation, second: Generation) -> bool:
+    return (
+        first.generation_id == second.generation_id
+        and first.support_version == second.support_version
+        and first.manifest_sha256 == second.manifest_sha256
+        and first.directory_identity == second.directory_identity
+        and first.file_identities == second.file_identities
+        and first.manifest_bytes == second.manifest_bytes
+        and first.payload_bytes == second.payload_bytes
+    )
+
+
+def _revalidate_generation(paths: SupportPaths, expected: Generation) -> Generation:
+    current = _validate_generation(paths, expected.generation_id)
+    if not _same_generation(current, expected):
+        raise BootstrapError("support generation changed after validation")
+    return current
 
 
 def _state_value(state: State) -> dict[str, object]:
@@ -397,8 +437,10 @@ def _pending_value(pending: Pending) -> dict[str, object]:
     return {
         "expected_current_dev": pending.expected_current_dev,
         "expected_current_ino": pending.expected_current_ino,
+        "explicit_retry": pending.explicit_retry,
         "from_generation": pending.from_generation,
         "requested_argv_sha256": pending.requested_argv_sha256,
+        "rollback_pointer_name": pending.rollback_pointer_name,
         "schema": SUPPORT_PENDING_SCHEMA,
         "to_generation": pending.to_generation,
         "to_manifest_sha256": pending.to_manifest_sha256,
@@ -416,12 +458,20 @@ def _parse_pending(raw: bytes) -> Pending:
     source, target = value.get("from_generation"), value.get("to_generation")
     digest, argv_digest = value.get("to_manifest_sha256"), value.get("requested_argv_sha256")
     dev, ino = value.get("expected_current_dev"), value.get("expected_current_ino")
+    explicit_retry = value.get("explicit_retry")
+    rollback_pointer_name = value.get("rollback_pointer_name")
     if (not _is_generation(source) or not _is_generation(target) or source == target
             or not isinstance(digest, str) or SHA_PATTERN.fullmatch(digest) is None
             or not isinstance(argv_digest, str) or SHA_PATTERN.fullmatch(argv_digest) is None
-            or type(dev) is not int or dev < 0 or type(ino) is not int or ino < 0):
+            or type(dev) is not int or dev < 0 or type(ino) is not int or ino < 0
+            or type(explicit_retry) is not bool
+            or not isinstance(rollback_pointer_name, str)
+            or ROLLBACK_POINTER_PATTERN.fullmatch(rollback_pointer_name) is None):
         raise BootstrapError("support pending journal identities are invalid")
-    pending = Pending(source, target, digest, dev, ino, argv_digest)
+    pending = Pending(
+        source, target, digest, dev, ino, argv_digest,
+        explicit_retry, rollback_pointer_name,
+    )
     if raw != _canonical(_pending_value(pending), MAX_SUPPORT_PENDING_BYTES, "support pending journal"):
         raise BootstrapError("support pending journal bytes are not canonical")
     return pending
@@ -442,8 +492,8 @@ def _current(paths: SupportPaths) -> tuple[str, tuple[int, int]]:
         facts = paths.current.lstat()
     except OSError as error:
         raise BootstrapError("support current pointer is missing") from error
-    if not stat.S_ISLNK(facts.st_mode) or facts.st_nlink != 1:
-        raise BootstrapError("support current pointer is not a single-link symlink")
+    if not stat.S_ISLNK(facts.st_mode) or facts.st_nlink not in {1, 2}:
+        raise BootstrapError("support current pointer is not a bounded managed symlink")
     try:
         target = os.readlink(paths.current)
     except OSError as error:
@@ -540,11 +590,11 @@ def _replace_current(paths: SupportPaths, generation: str,
     if not _matches(paths.current, observed_identity):
         raise BootstrapError("refusing to replace raced support current pointer")
     temporary = paths.support / f".current-{uuid.uuid4().hex}"
+    temporary_identity: tuple[int, int] | None = None
     try:
         os.symlink(f"versions/{generation}", temporary)
-        temporary_identity = (
-            temporary.lstat().st_dev, temporary.lstat().st_ino,
-        )
+        temporary_facts = temporary.lstat()
+        temporary_identity = (temporary_facts.st_dev, temporary_facts.st_ino)
         _fsync_directory(paths.support)
         _trip("pointer-temporary")
         if not _matches(paths.current, observed_identity):
@@ -560,8 +610,200 @@ def _replace_current(paths: SupportPaths, generation: str,
     except OSError as error:
         raise BootstrapError("could not switch support current pointer") from error
     finally:
-        if temporary.is_symlink():
+        if temporary_identity is not None and _matches(temporary, temporary_identity):
             temporary.unlink()
+
+
+def _validate_state_relationship(
+        paths: SupportPaths, state: State,
+        known: Mapping[str, Generation] | None = None) -> dict[str, Generation]:
+    generations = dict(known or {})
+
+    def generation(name: str) -> Generation:
+        if name not in generations:
+            generations[name] = _validate_generation(paths, name)
+        return generations[name]
+
+    last_good = generation(state.last_good_generation)
+    last_good_version = _version_tuple(last_good.support_version)
+    high_water_version = _version_tuple(state.high_water_version)
+    if last_good_version > high_water_version:
+        raise BootstrapError("support last-good version exceeds the high-water mark")
+    if (last_good_version == high_water_version
+            and last_good.manifest_sha256 != state.high_water_manifest_sha256):
+        raise BootstrapError("support high-water hash does not bind the last-good generation")
+    failed_by_generation: dict[str, Generation] = {}
+    for failed in state.failed_generations:
+        if failed.generation_id == state.last_good_generation:
+            raise BootstrapError("support last-good generation cannot also be failed")
+        failed_generation = generation(failed.generation_id)
+        if failed_generation.manifest_sha256 != failed.manifest_sha256:
+            raise BootstrapError("support failed-generation hash does not bind its generation")
+        failed_by_generation[failed.generation_id] = failed_generation
+    if last_good_version < high_water_version:
+        authenticated = any(
+            _version_tuple(item.support_version) == high_water_version
+            and item.manifest_sha256 == state.high_water_manifest_sha256
+            for item in failed_by_generation.values()
+        )
+        if not authenticated:
+            raise BootstrapError(
+                "support local rollback lacks an exact failed high-water generation"
+            )
+    return generations
+
+
+def _plane_snapshot(paths: SupportPaths) -> tuple[tuple[object, ...], ...]:
+    roots = (
+        ("app-versions", paths.root / "versions"),
+        ("app-receipts", paths.root / "receipts"),
+        ("app-current", paths.root / "current"),
+        ("app-cache", paths.root / "update-check.json"),
+        ("support", paths.support),
+    )
+    result: list[tuple[object, ...]] = []
+    entries = 0
+    total_bytes = 0
+
+    def visit(label: str, path: Path, relative: str) -> None:
+        nonlocal entries, total_bytes
+        try:
+            facts = path.lstat()
+        except FileNotFoundError:
+            result.append((label, relative, "absent"))
+            return
+        except OSError as error:
+            raise BootstrapError("managed plane could not be snapshotted") from error
+        entries += 1
+        if entries > MAX_PLANE_ENTRIES:
+            raise BootstrapError("managed plane contains too many entries")
+        identity = (facts.st_dev, facts.st_ino)
+        mode = stat.S_IMODE(facts.st_mode)
+        if stat.S_ISLNK(facts.st_mode):
+            try:
+                target = os.readlink(path)
+            except OSError as error:
+                raise BootstrapError("managed plane symlink changed during snapshot") from error
+            result.append((label, relative, "symlink", mode, identity, facts.st_nlink, target))
+            return
+        if stat.S_ISDIR(facts.st_mode):
+            result.append((label, relative, "directory", mode, identity, facts.st_nlink))
+            try:
+                children = sorted(os.scandir(path), key=lambda item: item.name)
+            except OSError as error:
+                raise BootstrapError("managed plane directory changed during snapshot") from error
+            for child in children:
+                child_relative = child.name if relative == "." else f"{relative}/{child.name}"
+                visit(label, Path(child.path), child_relative)
+            return
+        if not stat.S_ISREG(facts.st_mode) or facts.st_nlink < 1:
+            raise BootstrapError("managed plane contains an unsupported filesystem object")
+        if facts.st_size < 0 or facts.st_size > MAX_PLANE_FILE_BYTES:
+            raise BootstrapError("managed plane file is too large to revalidate")
+        total_bytes += facts.st_size
+        if total_bytes > MAX_PLANE_TOTAL_BYTES:
+            raise BootstrapError("managed planes exceed the revalidation bound")
+        descriptor: int | None = None
+        try:
+            descriptor = os.open(
+                path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_NONBLOCK", 0),
+            )
+            opened = os.fstat(descriptor)
+            if ((opened.st_dev, opened.st_ino) != identity
+                    or not stat.S_ISREG(opened.st_mode)
+                    or opened.st_size != facts.st_size):
+                raise BootstrapError("managed plane file changed during snapshot")
+            digest = hashlib.sha256()
+            while True:
+                block = os.read(descriptor, min(1024 * 1024, facts.st_size + 1))
+                if not block:
+                    break
+                digest.update(block)
+            after = os.fstat(descriptor)
+            if ((after.st_dev, after.st_ino) != identity
+                    or after.st_size != facts.st_size):
+                raise BootstrapError("managed plane file changed during snapshot")
+        except BootstrapError:
+            raise
+        except OSError as error:
+            raise BootstrapError("managed plane file could not be snapshotted") from error
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+        result.append((
+            label, relative, "file", mode, identity, facts.st_nlink,
+            facts.st_size, digest.hexdigest(),
+        ))
+
+    for label, path in roots:
+        visit(label, path, ".")
+    return tuple(result)
+
+
+def _rollback_path(paths: SupportPaths, pending: Pending) -> Path:
+    return paths.support / pending.rollback_pointer_name
+
+
+def _prepare_rollback_pointer(
+        paths: SupportPaths, pending: Pending,
+        current_identity: tuple[int, int]) -> None:
+    rollback = _rollback_path(paths, pending)
+    expected = (pending.expected_current_dev, pending.expected_current_ino)
+    if current_identity != expected or not _matches(paths.current, expected):
+        raise BootstrapError("support source pointer identity is not transaction-authentic")
+    if rollback.exists() or rollback.is_symlink():
+        if not _matches(rollback, expected):
+            raise BootstrapError("support rollback backup was replaced")
+        return
+    try:
+        os.link(paths.current, rollback, follow_symlinks=False)
+    except FileExistsError as error:
+        raise BootstrapError("support rollback backup name is occupied") from error
+    except OSError as error:
+        raise BootstrapError("could not retain support rollback pointer") from error
+    if not _matches(rollback, expected) or not _matches(paths.current, expected):
+        raise BootstrapError("support rollback backup publication was replaced")
+    _fsync_directory(paths.support)
+    _trip("rollback-backup-published")
+
+
+def _validate_rollback_pointer(paths: SupportPaths, pending: Pending) -> None:
+    rollback = _rollback_path(paths, pending)
+    expected = (pending.expected_current_dev, pending.expected_current_ino)
+    if not _matches(rollback, expected):
+        raise BootstrapError("support rollback backup identity is invalid")
+    try:
+        facts = rollback.lstat()
+        target = os.readlink(rollback)
+    except OSError as error:
+        raise BootstrapError("support rollback backup could not be read") from error
+    if (not stat.S_ISLNK(facts.st_mode)
+            or target != f"versions/{pending.from_generation}"):
+        raise BootstrapError("support rollback backup target is invalid")
+
+
+def _restore_from_rollback(
+        paths: SupportPaths, pending: Pending,
+        current_generation: str, current_identity: tuple[int, int]) -> tuple[int, int]:
+    if current_generation != pending.to_generation:
+        raise BootstrapError("support rollback observed an unrelated selected generation")
+    if not _matches(paths.current, current_identity):
+        raise BootstrapError("support target pointer changed before rollback")
+    _validate_rollback_pointer(paths, pending)
+    rollback = _rollback_path(paths, pending)
+    _fsync_directory(paths.support)
+    _trip("rollback-temporary")
+    try:
+        os.replace(rollback, paths.current)
+    except OSError as error:
+        raise BootstrapError("could not restore authenticated support pointer") from error
+    expected = (pending.expected_current_dev, pending.expected_current_ino)
+    if not _matches(paths.current, expected):
+        raise BootstrapError("restored support pointer identity is invalid")
+    _fsync_directory(paths.support)
+    _trip("rollback-pointer-replaced")
+    return expected
 
 
 def _candidate_policy(candidate: Generation, state: State, *, explicit_retry: bool = False) -> None:
@@ -579,32 +821,92 @@ def _candidate_policy(candidate: Generation, state: State, *, explicit_retry: bo
 
 
 def _production_self_test(generation: Generation) -> None:
-    code = (
-        "import importlib.util,sys;"
-        "p=sys.argv[1];"
-        "s=importlib.util.spec_from_file_location('lingtai_support_self_test',p);"
-        "m=importlib.util.module_from_spec(s);"
-        "sys.modules[s.name]=m;"
-        "s.loader.exec_module(m);"
-        "r=m.support_self_test();"
-        "raise SystemExit(0 if r is True else 1)"
-    )
-    environment = dict(os.environ)
-    environment.pop(SUPPORT_REEXEC_MARKER, None)
-    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    # The audit hook is installed before candidate compilation. A denied attempt is
+    # remembered even if candidate code catches PermissionError, so an attempted
+    # escape always fails the transaction. No filesystem mutation is needed by the
+    # v1 self-test, therefore the strongest portable policy is no writes anywhere.
+    code = r'''
+import ctypes  # Preload the candidate's required stdlib wrapper before policy.
+import os
+import sys
+import types
+
+violations = []
+mutation_events = {
+    "os.chdir", "os.chflags", "os.chmod", "os.chown", "os.exec",
+    "os.fork", "os.forkpty", "os.kill", "os.link", "os.mkdir",
+    "os.mkfifo", "os.mknod", "os.posix_spawn", "os.remove",
+    "os.removexattr", "os.rename", "os.rmdir", "os.setuid", "os.setxattr",
+    "os.spawn", "os.symlink", "os.system", "os.truncate", "os.unlink",
+    "os.utime",
+    "shutil.copyfile", "shutil.copymode", "shutil.copystat", "shutil.move",
+    "subprocess.Popen",
+}
+danger_prefixes = ("socket.", "ctypes.dlopen", "ctypes.dlsym")
+write_flags = (
+    getattr(os, "O_WRONLY", 1) | getattr(os, "O_RDWR", 2)
+    | getattr(os, "O_APPEND", 0) | getattr(os, "O_CREAT", 0)
+    | getattr(os, "O_TRUNC", 0)
+)
+
+def deny(event, args):
+    denied = event in mutation_events or event.startswith(danger_prefixes)
+    if event == "open":
+        mode = args[1] if len(args) > 1 else None
+        flags = args[2] if len(args) > 2 else 0
+        denied = (
+            isinstance(mode, str) and any(token in mode for token in "wax+")
+        ) or (isinstance(flags, int) and bool(flags & write_flags))
+    if denied:
+        violations.append(event)
+        raise PermissionError("support self-test policy denied mutation or escape")
+
+sys.addaudithook(deny)
+source = sys.stdin.buffer.read(2 * 1024 * 1024 + 1)
+if not source or len(source) > 2 * 1024 * 1024:
+    raise SystemExit(2)
+expected_path = sys.argv[1]
+name = "lingtai_support_self_test"
+module = types.ModuleType(name)
+module.__file__ = expected_path
+module.__package__ = ""
+module.__loader__ = None
+sys.modules[name] = module
+try:
+    exec(compile(source, expected_path, "exec", dont_inherit=True), module.__dict__)
+    result = module.support_self_test()
+except BaseException:
+    raise SystemExit(3)
+raise SystemExit(0 if result is True and not violations else 4)
+'''
     try:
-        result = subprocess.run(
-            [sys.executable, "-I", "-B", "-c", code,
-             os.fspath(generation.path / "desktop_user_cli.py")],
-            env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, timeout=SUPPORT_SELF_TEST_TIMEOUT, check=False,
-        )
+        with tempfile.TemporaryDirectory(prefix="lingtai-support-self-test-") as scratch_text:
+            scratch = Path(scratch_text)
+            environment = {
+                "HOME": scratch_text,
+                "TMPDIR": scratch_text,
+                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+                "LANG": "C",
+                "LC_ALL": "C",
+                "PYTHONDONTWRITEBYTECODE": "1",
+            }
+            result = subprocess.run(
+                [sys.executable, "-I", "-B", "-c", code,
+                 os.fspath(generation.path / "desktop_user_cli.py")],
+                input=generation.payload("desktop_user_cli.py"),
+                env=environment, cwd=scratch,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=SUPPORT_SELF_TEST_TIMEOUT, check=False,
+                close_fds=True,
+            )
     except subprocess.TimeoutExpired as error:
         raise BootstrapError("support self-test timed out") from error
     except OSError as error:
         raise BootstrapError("support self-test could not start") from error
     if result.returncode:
-        raise BootstrapError("support import or self-test failed")
+        raise BootstrapError(
+            f"support import or self-test failed (isolated exit {result.returncode})"
+        )
 
 
 def _unlink_pending(paths: SupportPaths, identity: tuple[int, int]) -> None:
@@ -618,8 +920,24 @@ def _unlink_pending(paths: SupportPaths, identity: tuple[int, int]) -> None:
     _trip("pending-removed")
 
 
+def _discard_rollback_pointer(paths: SupportPaths, pending: Pending) -> None:
+    rollback = _rollback_path(paths, pending)
+    if not rollback.exists() and not rollback.is_symlink():
+        return
+    _validate_rollback_pointer(paths, pending)
+    expected = (pending.expected_current_dev, pending.expected_current_ino)
+    if not _matches(rollback, expected):
+        raise BootstrapError("refusing to remove a replaced rollback backup")
+    try:
+        rollback.unlink()
+    except OSError as error:
+        raise BootstrapError("could not remove support rollback backup") from error
+    _fsync_directory(paths.support)
+
+
 def _commit_target(paths: SupportPaths, state: State, state_identity: tuple[int, int],
-                   target: Generation, pending_identity: tuple[int, int]) -> None:
+                   target: Generation, pending: Pending,
+                   pending_identity: tuple[int, int]) -> None:
     high_water_version = state.high_water_version
     high_water_digest = state.high_water_manifest_sha256
     if _version_tuple(target.support_version) >= _version_tuple(high_water_version):
@@ -635,37 +953,41 @@ def _commit_target(paths: SupportPaths, state: State, state_identity: tuple[int,
         state_identity, "support state",
     )
     _trip("state-published")
+    _discard_rollback_pointer(paths, pending)
     _unlink_pending(paths, pending_identity)
 
 
 def _rollback_target(paths: SupportPaths, state: State, state_identity: tuple[int, int],
-                     source: Generation, target: Generation,
+                     source: Generation, target: Generation, pending: Pending,
                      current_generation: str, current_identity: tuple[int, int],
                      pending_identity: tuple[int, int]) -> None:
-    if current_generation == target.generation_id:
-        _replace_current(paths, source.generation_id, current_identity)
-        _trip("rollback-pointer-replaced")
-    elif current_generation != source.generation_id:
-        raise BootstrapError("support rollback observed an unrelated current pointer")
-    failed = list(state.failed_generations)
-    replacement = FailedGeneration(target.generation_id, target.manifest_sha256)
-    failed = [item for item in failed if item.generation_id != target.generation_id]
-    failed.append(replacement)
-    failed = failed[-MAX_FAILED_SUPPORT_GENERATIONS:]
-    rolled_back = State(
-        state.high_water_version, state.high_water_manifest_sha256,
-        source.generation_id, tuple(failed),
-    )
-    # If a pointer replacement occurred, reload state identity only; state itself
-    # remains the already-validated high-water source of truth.
+    if current_generation != target.generation_id:
+        raise BootstrapError("support rollback refuses an unrelated current pointer")
+    _revalidate_generation(paths, source)
+    _revalidate_generation(paths, target)
+    _validate_rollback_pointer(paths, pending)
+    if not _matches(paths.current, current_identity):
+        raise BootstrapError("support target pointer changed before rollback")
     if not _matches(paths.state, state_identity):
         raise BootstrapError("refusing to replace raced support state")
+    if not _matches(paths.pending, pending_identity):
+        raise BootstrapError("refusing rollback through replaced pending journal")
+    failed = [
+        item for item in state.failed_generations
+        if item.generation_id != target.generation_id
+    ]
+    failed.append(FailedGeneration(target.generation_id, target.manifest_sha256))
+    rolled_back = State(
+        state.high_water_version, state.high_water_manifest_sha256,
+        source.generation_id, tuple(failed[-MAX_FAILED_SUPPORT_GENERATIONS:]),
+    )
     _atomic_write(
         paths.state,
         _canonical(_state_value(rolled_back), MAX_SUPPORT_STATE_BYTES, "support state"),
         state_identity, "support state",
     )
     _trip("rollback-state-published")
+    _restore_from_rollback(paths, pending, current_generation, current_identity)
     _unlink_pending(paths, pending_identity)
 
 
@@ -677,7 +999,14 @@ def process_pending(*, home: Path | None = None,
     current_generation, current_identity = _current(paths)
     pending_loaded = _load_pending(paths)
     if pending_loaded is None:
+        try:
+            current_facts = paths.current.lstat()
+        except OSError as error:
+            raise BootstrapError("support current pointer is missing") from error
+        if current_facts.st_nlink != 1:
+            raise BootstrapError("support current pointer has an unexpected retained link")
         active = _validate_generation(paths, current_generation)
+        _validate_state_relationship(paths, state, {active.generation_id: active})
         if state.last_good_generation != active.generation_id:
             raise BootstrapError("support current and last-good state disagree without a transaction")
         return active
@@ -689,29 +1018,60 @@ def process_pending(*, home: Path | None = None,
     target = _validate_generation(paths, pending.to_generation)
     if target.manifest_sha256 != pending.to_manifest_sha256:
         raise BootstrapError("support pending target manifest digest is invalid")
+    _validate_state_relationship(
+        paths, state, {source.generation_id: source, target.generation_id: target},
+    )
     committed_recovery = (
         state.last_good_generation == target.generation_id
         and state.high_water_version == target.support_version
         and state.high_water_manifest_sha256 == target.manifest_sha256
     )
-    if not committed_recovery and state.last_good_generation != source.generation_id:
+    if committed_recovery:
+        if current_generation != target.generation_id:
+            raise BootstrapError("committed support target is not selected")
+        _revalidate_generation(paths, target)
+        _discard_rollback_pointer(paths, pending)
+        _unlink_pending(paths, pending_identity)
+        return target
+    if state.last_good_generation != source.generation_id:
         raise BootstrapError("support pending source is not the recorded last-good generation")
     recorded_failed = any(
         item.generation_id == target.generation_id
         and item.manifest_sha256 == target.manifest_sha256
         for item in state.failed_generations
     )
-    if recorded_failed:
-        if current_generation != source.generation_id:
-            raise BootstrapError("failed support target remains selected")
+    expected_source_identity = (
+        pending.expected_current_dev, pending.expected_current_ino,
+    )
+    retry_start = (
+        pending.explicit_retry
+        and current_generation == source.generation_id
+        and current_identity == expected_source_identity
+        and not _rollback_path(paths, pending).exists()
+        and not _rollback_path(paths, pending).is_symlink()
+    )
+    if recorded_failed and not retry_start:
+        if current_generation == target.generation_id:
+            _restore_from_rollback(paths, pending, current_generation, current_identity)
+        elif (current_generation != source.generation_id
+              or current_identity != expected_source_identity):
+            raise BootstrapError("failed support rollback pointer is not authenticated")
+        elif (_rollback_path(paths, pending).exists()
+              or _rollback_path(paths, pending).is_symlink()):
+            raise BootstrapError("completed rollback retained an unexpected backup")
         _unlink_pending(paths, pending_identity)
-        return source
-    _candidate_policy(target, state)
+        return _revalidate_generation(paths, source)
+
+    _candidate_policy(target, state, explicit_retry=pending.explicit_retry)
     if current_generation == source.generation_id:
-        if current_identity != (pending.expected_current_dev, pending.expected_current_ino):
+        if current_identity != expected_source_identity:
             raise BootstrapError("support pending current-pointer identity was replaced")
+        _prepare_rollback_pointer(paths, pending, current_identity)
         current_identity = _replace_current(paths, target.generation_id, current_identity)
         current_generation = target.generation_id
+    else:
+        _validate_rollback_pointer(paths, pending)
+    before_planes = _plane_snapshot(paths)
     runner = self_test_runner or _production_self_test
     try:
         _trip("before-self-test")
@@ -719,12 +1079,30 @@ def process_pending(*, home: Path | None = None,
         _trip("after-self-test")
     except Exception:
         _rollback_target(
-            paths, state, state_identity, source, target,
+            paths, state, state_identity, source, target, pending,
             current_generation, current_identity, pending_identity,
         )
-        return _validate_generation(paths, source.generation_id)
-    _commit_target(paths, state, state_identity, target, pending_identity)
-    return _validate_generation(paths, target.generation_id)
+        return _revalidate_generation(paths, source)
+
+    # Candidate success is not authority: revalidate exact bytes/identities, both
+    # managed planes, journal/state, and the exact selected pointer before commit.
+    _revalidate_generation(paths, source)
+    target = _revalidate_generation(paths, target)
+    observed_generation, observed_identity = _current(paths)
+    if (observed_generation != target.generation_id
+            or observed_identity != current_identity):
+        raise BootstrapError("support current changed after self-test")
+    reloaded_state, reloaded_state_identity = _load_state(paths)
+    if reloaded_state != state or reloaded_state_identity != state_identity:
+        raise BootstrapError("support state changed during self-test")
+    reloaded_pending = _load_pending(paths)
+    if (reloaded_pending is None or reloaded_pending[0] != pending
+            or reloaded_pending[1] != pending_identity):
+        raise BootstrapError("support pending journal changed during self-test")
+    if _plane_snapshot(paths) != before_planes:
+        raise BootstrapError("managed App/support plane changed during self-test")
+    _commit_target(paths, state, state_identity, target, pending, pending_identity)
+    return _revalidate_generation(paths, target)
 
 
 def _validate_arguments(arguments: Sequence[str]) -> None:
@@ -772,12 +1150,16 @@ def _load_and_run(generation: Generation, arguments: Sequence[str]) -> int:
     module_path = generation.path / "desktop_user_cli.py"
     name = f"lingtai_desktop_active_{generation.generation_id.replace('-', '_')}"
     try:
-        specification = importlib.util.spec_from_file_location(name, module_path)
-        if specification is None or specification.loader is None:
-            raise BootstrapError("active support CLI import specification is invalid")
-        module = importlib.util.module_from_spec(specification)
+        module = type(sys)(name)
+        module.__file__ = os.fspath(module_path)
+        module.__package__ = ""
+        module.__loader__ = None
         sys.modules[name] = module
-        specification.loader.exec_module(module)
+        code = compile(
+            generation.payload("desktop_user_cli.py"), os.fspath(module_path),
+            "exec", dont_inherit=True,
+        )
+        exec(code, module.__dict__)
         entry = getattr(module, "installed_main")
     except BootstrapError:
         raise
@@ -795,8 +1177,17 @@ def run_launcher(arguments: Sequence[str], *, home: Path | None = None,
     _validate_arguments(arguments)
     os.environ.pop(SUPPORT_REEXEC_MARKER, None)
     active = process_pending(home=home, self_test_runner=self_test_runner)
-    # Revalidate immediately before import; never search an arbitrary generation.
-    active = _validate_generation(_paths(home), active.generation_id)
+    # Revalidate immediately before import and bind that exact validation to one
+    # unchanged current-pointer inode; never search an arbitrary generation.
+    paths = _paths(home)
+    current_generation, current_identity = _current(paths)
+    if current_generation != active.generation_id:
+        raise BootstrapError("support current changed before active import")
+    active = _revalidate_generation(paths, active)
+    confirmed_generation, confirmed_identity = _current(paths)
+    if (confirmed_generation != active.generation_id
+            or confirmed_identity != current_identity):
+        raise BootstrapError("support current changed during active validation")
     if installed_runner is not None:
         return int(installed_runner(active.path / "desktop_user_cli.py", list(arguments)))
     return _load_and_run(active, arguments)

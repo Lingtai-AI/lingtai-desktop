@@ -41,7 +41,7 @@ GIT_SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 RECEIPT_SCHEMA = 2
 LAUNCHER_MARKER = "# lingtai-desktop-support-bootstrap-v1"
 SUPPORT_REEXEC_MARKER = "LINGTAI_DESKTOP_SUPPORT_REEXEC"
-STABLE_BOOTSTRAP_SHA256 = "6bf84c8677134e2f6873a676483f44ef0843622c8a70645085f8d412f6840150"
+STABLE_BOOTSTRAP_SHA256 = "e06b3108510112428e65634bba89f8bc5ce1060c8f008cc79c589e2c57ad2b4d"
 ARTIFACT_KIND = "lingtai-portable-app-archive"
 MANIFEST_SCHEMA = 1
 EXECUTABLE_RELATIVE = "Contents/MacOS/LingTai"
@@ -121,11 +121,29 @@ SUPPORT_FAILED_KEYS = {"generation_id", "manifest_sha256"}
 SUPPORT_PENDING_KEYS = {
     "schema", "from_generation", "to_generation", "to_manifest_sha256",
     "expected_current_dev", "expected_current_ino", "requested_argv_sha256",
+    "explicit_retry", "rollback_pointer_name",
+}
+SUPPORT_ROLLBACK_POINTER_PATTERN = re.compile(r"\.rollback-[0-9a-f]{32}")
+INITIAL_INSTALL_SCHEMA = "lingtai.desktop.initial-install/v1"
+INITIAL_INSTALL_NAME = "initial-install.json"
+MAX_INITIAL_INSTALL_BYTES = 2048
+INITIAL_INSTALL_KEYS = {
+    "schema", "nonce", "app_version", "app_manifest_sha256",
+    "support_generation", "support_manifest_sha256",
 }
 
 
 class DesktopCLIError(RuntimeError):
     """A bounded installer/launcher failure safe to print to a terminal."""
+
+
+class InjectedInitialInstallCrash(BaseException):
+    """Test-only process-death analogue that deliberately bypasses rollback."""
+
+
+def _trip_initial(boundary: str) -> None:
+    if _FAILPOINT == f"crash:{boundary}":
+        raise InjectedInitialInstallCrash(boundary)
 
 
 def _is_safe_version(value: object) -> bool:
@@ -210,6 +228,17 @@ class SupportPending:
     expected_current_dev: int
     expected_current_ino: int
     requested_argv_sha256: str
+    explicit_retry: bool
+    rollback_pointer_name: str
+
+
+@dataclasses.dataclass(frozen=True)
+class InitialInstallJournal:
+    nonce: str
+    app_version: str
+    app_manifest_sha256: str
+    support_generation: str
+    support_manifest_sha256: str
 
 
 @dataclasses.dataclass(frozen=True)
@@ -236,7 +265,20 @@ class ManagedPaths:
     receipts: Path
     current: Path
     update_cache: Path
+    initial_install: Path
     launcher: Path
+
+
+@dataclasses.dataclass(frozen=True)
+class InitialSupportPublication:
+    generation: ValidatedSupportGeneration
+    state_identity: tuple[int, int]
+    current_identity: tuple[int, int]
+    launcher_identity: tuple[int, int]
+    generation_created: bool
+    state_created: bool
+    current_created: bool
+    launcher_created: bool
 
 
 @dataclasses.dataclass(frozen=True)
@@ -267,6 +309,8 @@ class SupportUninstallPlan:
     current_identity: tuple[int, int]
     state_identity: tuple[int, int]
     pending_identity: tuple[int, int] | None
+    rollback_pointer_name: str | None
+    rollback_pointer_identity: tuple[int, int] | None
     update_cache_identity: tuple[int, int] | None
     launcher_identity: tuple[int, int]
 
@@ -999,8 +1043,10 @@ def _support_pending_value(pending: SupportPending) -> dict[str, object]:
     return {
         "expected_current_dev": pending.expected_current_dev,
         "expected_current_ino": pending.expected_current_ino,
+        "explicit_retry": pending.explicit_retry,
         "from_generation": pending.from_generation,
         "requested_argv_sha256": pending.requested_argv_sha256,
+        "rollback_pointer_name": pending.rollback_pointer_name,
         "schema": SUPPORT_PENDING_SCHEMA,
         "to_generation": pending.to_generation,
         "to_manifest_sha256": pending.to_manifest_sha256,
@@ -1030,15 +1076,21 @@ def parse_support_pending(raw: bytes, *, require_canonical: bool = True) -> Supp
     digest = value.get("to_manifest_sha256")
     argv_digest = value.get("requested_argv_sha256")
     dev, ino = value.get("expected_current_dev"), value.get("expected_current_ino")
+    explicit_retry = value.get("explicit_retry")
+    rollback_pointer_name = value.get("rollback_pointer_name")
     if (not _is_safe_support_generation(from_generation)
             or not _is_safe_support_generation(to_generation)
             or from_generation == to_generation
             or not isinstance(digest, str) or SHA_PATTERN.fullmatch(digest) is None
             or not isinstance(argv_digest, str) or SHA_PATTERN.fullmatch(argv_digest) is None
-            or type(dev) is not int or dev < 0 or type(ino) is not int or ino < 0):
+            or type(dev) is not int or dev < 0 or type(ino) is not int or ino < 0
+            or type(explicit_retry) is not bool
+            or not isinstance(rollback_pointer_name, str)
+            or SUPPORT_ROLLBACK_POINTER_PATTERN.fullmatch(rollback_pointer_name) is None):
         raise DesktopCLIError("support pending journal identities are invalid")
     pending = SupportPending(
         from_generation, to_generation, digest, dev, ino, argv_digest,
+        explicit_retry, rollback_pointer_name,
     )
     canonical = _canonical_json_bytes(
         _support_pending_value(pending), MAX_SUPPORT_PENDING_BYTES,
@@ -1146,7 +1198,7 @@ def _paths(home: Path | None) -> ManagedPaths:
         raw, local, local / "bin", root, support, support / "versions",
         support / "current", support / "pending.json", support / "state.json",
         support / "update-check.json", root / "versions", root / "receipts",
-        root / "current", root / "update-check.json",
+        root / "current", root / "update-check.json", root / INITIAL_INSTALL_NAME,
         local / "bin/lingtai-desktop",
     )
 
@@ -1157,7 +1209,10 @@ def _require_nonroot(effective_uid: int | None) -> None:
         raise DesktopCLIError("mutating commands refuse effective uid 0")
 
 
-def _ensure_directory(path: Path, mode: int, *, preserve_existing_mode: bool = False) -> None:
+def _ensure_directory(
+        path: Path, mode: int, *, preserve_existing_mode: bool = False,
+        created_directories: list[tuple[Path, tuple[int, int]]] | None = None,
+) -> None:
     created = False
     if path.exists() or path.is_symlink():
         facts = path.lstat()
@@ -1166,6 +1221,9 @@ def _ensure_directory(path: Path, mode: int, *, preserve_existing_mode: bool = F
     else:
         path.mkdir(mode=mode)
         created = True
+        facts = path.lstat()
+        if created_directories is not None:
+            created_directories.append((path, (facts.st_dev, facts.st_ino)))
     if created or not preserve_existing_mode:
         os.chmod(path, mode, follow_symlinks=False)
 
@@ -1179,15 +1237,28 @@ def _require_real_directory(path: Path, label: str) -> None:
         raise DesktopCLIError(f"{label} is not a real directory (symlink refused)")
 
 
-def _prepare_layout(paths: ManagedPaths) -> None:
-    _ensure_directory(paths.local, 0o700, preserve_existing_mode=True)
-    _ensure_directory(paths.bin, 0o700, preserve_existing_mode=True)
-    _ensure_directory(paths.local / "share", 0o700, preserve_existing_mode=True)
-    _ensure_directory(paths.root, 0o700)
-    _ensure_directory(paths.support, 0o700)
-    _ensure_directory(paths.support_versions, 0o700)
-    _ensure_directory(paths.versions, 0o700)
-    _ensure_directory(paths.receipts, 0o700)
+def _prepare_layout(
+        paths: ManagedPaths,
+        created_directories: list[tuple[Path, tuple[int, int]]] | None = None,
+) -> None:
+    _ensure_directory(
+        paths.local, 0o700, preserve_existing_mode=True,
+        created_directories=created_directories,
+    )
+    _ensure_directory(
+        paths.bin, 0o700, preserve_existing_mode=True,
+        created_directories=created_directories,
+    )
+    _ensure_directory(
+        paths.local / "share", 0o700, preserve_existing_mode=True,
+        created_directories=created_directories,
+    )
+    for directory in (
+            paths.root, paths.support, paths.support_versions,
+            paths.versions, paths.receipts):
+        _ensure_directory(
+            directory, 0o700, created_directories=created_directories,
+        )
 
 
 def _inspect_app(app: Path, version: str) -> Path:
@@ -1304,6 +1375,8 @@ def _matches_identity(path: Path, expected: tuple[int, int]) -> bool:
 
 
 def _publish_file_exclusive(source: Path, destination: Path, mode: int) -> tuple[int, int]:
+    identity: tuple[int, int] | None = None
+    visible = False
     try:
         os.chmod(source, mode, follow_symlinks=False)
         facts = _regular_nofollow(source, f"staged {destination.name}")
@@ -1311,13 +1384,24 @@ def _publish_file_exclusive(source: Path, destination: Path, mode: int) -> tuple
             raise DesktopCLIError(f"staged {destination.name} has an incorrect mode")
         identity = (facts.st_dev, facts.st_ino)
         os.link(source, destination, follow_symlinks=False)
+        visible = True
+        published = destination.lstat()
+        if ((published.st_dev, published.st_ino) != identity
+                or not stat.S_ISREG(published.st_mode)
+                or stat.S_IMODE(published.st_mode) != mode):
+            raise DesktopCLIError(f"{destination.name} publication was replaced")
+        _fsync_directory(destination.parent)
+        return identity
     except FileExistsError as error:
         raise DesktopCLIError(f"refusing to overwrite existing {destination.name}") from error
     except DesktopCLIError:
+        if visible:
+            _unlink_if_identity(destination, identity)
         raise
     except OSError as error:
+        if visible:
+            _unlink_if_identity(destination, identity)
         raise DesktopCLIError(f"could not publish {destination.name}") from error
-    return identity
 
 
 def _unlink_if_identity(path: Path, expected: tuple[int, int] | None) -> None:
@@ -1404,6 +1488,50 @@ def _read_support_pending(
     return parse_support_pending(payload), identity
 
 
+def _validate_support_state_relationship(
+        paths: ManagedPaths, state: SupportState,
+        known: Mapping[str, ValidatedSupportGeneration] | None = None,
+) -> dict[str, ValidatedSupportGeneration]:
+    generations = dict(known or {})
+
+    def generation(name: str) -> ValidatedSupportGeneration:
+        if name not in generations:
+            generations[name] = validate_support_generation(
+                paths.support_versions / name
+            )
+        return generations[name]
+
+    last_good = generation(state.last_good_generation)
+    last_good_version = _version_tuple(last_good.manifest.support_version)
+    high_water_version = _version_tuple(state.high_water_version)
+    if last_good_version > high_water_version:
+        raise DesktopCLIError("support last-good version exceeds high-water")
+    if (last_good_version == high_water_version
+            and last_good.manifest.manifest_sha256
+            != state.high_water_manifest_sha256):
+        raise DesktopCLIError(
+            "support high-water hash does not bind last-good generation"
+        )
+    failed_generations: list[ValidatedSupportGeneration] = []
+    for failed in state.failed_generations:
+        if failed.generation_id == state.last_good_generation:
+            raise DesktopCLIError("support last-good generation cannot also be failed")
+        candidate = generation(failed.generation_id)
+        if candidate.manifest.manifest_sha256 != failed.manifest_sha256:
+            raise DesktopCLIError(
+                "support failed-generation hash does not bind its generation"
+            )
+        failed_generations.append(candidate)
+    if last_good_version < high_water_version and not any(
+            _version_tuple(item.manifest.support_version) == high_water_version
+            and item.manifest.manifest_sha256 == state.high_water_manifest_sha256
+            for item in failed_generations):
+        raise DesktopCLIError(
+            "support local rollback lacks an exact failed high-water generation"
+        )
+    return generations
+
+
 def _validate_owned_cli(paths: ManagedPaths) -> ValidatedSupportGeneration:
     for directory, label in (
         (paths.support, "managed support"),
@@ -1418,6 +1546,9 @@ def _validate_owned_cli(paths: ManagedPaths) -> ValidatedSupportGeneration:
     active = validate_support_generation(paths.support_versions / current)
     pending_loaded = _read_support_pending(paths)
     if pending_loaded is None:
+        _validate_support_state_relationship(
+            paths, state, {active.manifest.generation_id: active},
+        )
         if state.last_good_generation != current:
             raise DesktopCLIError("support current and last-good state disagree")
         return active
@@ -1428,6 +1559,10 @@ def _validate_owned_cli(paths: ManagedPaths) -> ValidatedSupportGeneration:
     target = validate_support_generation(paths.support_versions / pending.to_generation)
     if target.manifest.manifest_sha256 != pending.to_manifest_sha256:
         raise DesktopCLIError("support pending target manifest digest is invalid")
+    _validate_support_state_relationship(paths, state, {
+        source.manifest.generation_id: source,
+        target.manifest.generation_id: target,
+    })
     committed_recovery = (
         state.last_good_generation == target.manifest.generation_id
         and state.high_water_version == target.manifest.support_version
@@ -1536,7 +1671,7 @@ def _preflight_uninstall(paths: ManagedPaths) -> UninstallPlan:
     elif paths.current.exists():
         raise DesktopCLIError("managed current is not a symlink")
 
-    allowed_root = {"support", "versions", "receipts"}
+    allowed_root = {"versions", "receipts"}
     if current_target is not None:
         allowed_root.add("current")
     update_cache_identity: tuple[int, int] | None = None
@@ -1545,8 +1680,11 @@ def _preflight_uninstall(paths: ManagedPaths) -> UninstallPlan:
         update_cache_identity = _identity(paths.update_cache)
         allowed_root.add(paths.update_cache.name)
     actual_root = {path.name for path in paths.root.iterdir()}
+    # support is foreign to this App-only proof: presence, absence, type, and
+    # contents must neither authorize nor gate --version.
+    actual_root.discard("support")
     if actual_root != allowed_root:
-        raise DesktopCLIError("managed root contains unknown or missing files")
+        raise DesktopCLIError("managed App root contains unknown or missing files")
 
     receipt_by_version: dict[str, Path] = {}
     for receipt_path in sorted(paths.receipts.iterdir(), key=lambda path: path.name):
@@ -1619,9 +1757,26 @@ def _preflight_support_uninstall(paths: ManagedPaths) -> SupportUninstallPlan:
     pending_loaded = _read_support_pending(paths)
     allowed = {"versions", "current", "state.json"}
     pending_identity: tuple[int, int] | None = None
+    rollback_pointer_name: str | None = None
+    rollback_pointer_identity: tuple[int, int] | None = None
     if pending_loaded is not None:
-        _, pending_identity = pending_loaded
+        pending, pending_identity = pending_loaded
         allowed.add("pending.json")
+        rollback = paths.support / pending.rollback_pointer_name
+        if rollback.exists() or rollback.is_symlink():
+            expected = (pending.expected_current_dev, pending.expected_current_ino)
+            try:
+                facts = rollback.lstat()
+                target = os.readlink(rollback)
+            except OSError as error:
+                raise DesktopCLIError("support rollback backup is invalid") from error
+            if (not stat.S_ISLNK(facts.st_mode)
+                    or (facts.st_dev, facts.st_ino) != expected
+                    or target != f"versions/{pending.from_generation}"):
+                raise DesktopCLIError("support rollback backup is invalid")
+            rollback_pointer_name = pending.rollback_pointer_name
+            rollback_pointer_identity = expected
+            allowed.add(pending.rollback_pointer_name)
     cache_identity = _read_support_update_cache(paths)
     if cache_identity is not None:
         allowed.add("update-check.json")
@@ -1643,7 +1798,8 @@ def _preflight_support_uninstall(paths: ManagedPaths) -> SupportUninstallPlan:
     return SupportUninstallPlan(
         _identity(paths.support), _identity(paths.support_versions),
         tuple(generations), f"versions/{current}", current_identity,
-        state_identity, pending_identity, cache_identity,
+        state_identity, pending_identity,
+        rollback_pointer_name, rollback_pointer_identity, cache_identity,
         _validate_stable_launcher(paths),
     )
 
@@ -1812,12 +1968,14 @@ def _write_private_staged(path: Path, payload: bytes, label: str) -> tuple[int, 
 def _publish_private_file_exclusive(path: Path, payload: bytes, label: str) -> tuple[int, int]:
     temporary = path.parent / f".{path.name}-{uuid.uuid4().hex}"
     temporary_identity: tuple[int, int] | None = None
+    visible = False
     try:
         temporary_identity = _write_private_staged(temporary, payload, label)
         try:
             os.link(temporary, path, follow_symlinks=False)
         except FileExistsError as error:
             raise DesktopCLIError(f"refusing to replace existing {label}") from error
+        visible = True
         temporary.unlink()
         published, identity = _read_managed_support_file(
             path, label, max(len(payload), 1), expected_size=len(payload),
@@ -1826,6 +1984,10 @@ def _publish_private_file_exclusive(path: Path, payload: bytes, label: str) -> t
             raise DesktopCLIError(f"{label} publication was replaced")
         _fsync_directory(path.parent)
         return identity
+    except Exception:
+        if visible:
+            _unlink_if_identity(path, temporary_identity)
+        raise
     finally:
         _unlink_if_identity(temporary, temporary_identity)
 
@@ -1847,12 +2009,13 @@ def _publish_support_generation(
     scratch_identity = _identity(scratch)
     os.chmod(scratch, SUPPORT_GENERATION_MODE, follow_symlinks=False)
     published_identity: tuple[int, int] | None = None
+    staged_files: dict[str, tuple[int, int]] = {}
     try:
-        _write_private_staged(
+        staged_files[SUPPORT_MANIFEST_NAME] = _write_private_staged(
             scratch / SUPPORT_MANIFEST_NAME, manifest_bytes, "support manifest",
         )
         for name in SUPPORT_PAYLOAD_NAMES:
-            _write_private_staged(
+            staged_files[name] = _write_private_staged(
                 scratch / name, payloads[name], f"support payload {name}",
             )
         _fsync_directory(scratch)
@@ -1866,6 +2029,21 @@ def _publish_support_generation(
         if validated.directory_identity != published_identity:
             raise DesktopCLIError("support generation publication was replaced")
         return validated
+    except Exception:
+        if (published_identity is not None
+                and _matches_identity(final, published_identity)):
+            try:
+                actual = {entry.name for entry in os.scandir(final)}
+                exact = actual == set(staged_files) and all(
+                    _matches_identity(final / name, identity)
+                    for name, identity in staged_files.items()
+                )
+            except OSError:
+                exact = False
+            if exact:
+                shutil.rmtree(final)
+                _fsync_directory(paths.support_versions)
+        raise
     finally:
         if (_matches_identity(scratch, scratch_identity)
                 and not scratch.is_symlink() and scratch.is_dir()):
@@ -1895,33 +2073,121 @@ def _initial_support_state(generation: ValidatedSupportGeneration) -> SupportSta
 def _publish_initial_support(
         paths: ManagedPaths, module_bytes: bytes, verifier_bytes: bytes,
         launcher_bytes: bytes, *, support_version: str,
-        release_tag: str, scratch: Path) -> tuple[
-            ValidatedSupportGeneration, tuple[int, int], tuple[int, int], tuple[int, int]
-        ]:
-    generation = _publish_support_generation(
-        paths,
-        {SUPPORT_PAYLOAD_NAMES[0]: module_bytes, SUPPORT_PAYLOAD_NAMES[1]: verifier_bytes},
-        support_version=support_version, release_tag=release_tag,
+        release_tag: str, scratch: Path) -> InitialSupportPublication:
+    payloads = {
+        SUPPORT_PAYLOAD_NAMES[0]: module_bytes,
+        SUPPORT_PAYLOAD_NAMES[1]: verifier_bytes,
+    }
+    manifest_bytes = build_support_manifest_bytes(
+        support_version, release_tag, payloads,
     )
-    state_identity = _publish_private_file_exclusive(
-        paths.support_state, support_state_bytes(_initial_support_state(generation)),
-        "support state",
+    generation_id = json.loads(manifest_bytes)["generation_id"]
+    generation_path = paths.support_versions / generation_id
+    generation_created = not (
+        generation_path.exists() or generation_path.is_symlink()
     )
+    state_created = False
+    current_created = False
+    launcher_created = False
+    generation: ValidatedSupportGeneration | None = None
+    state_identity: tuple[int, int] | None = None
+    current_identity: tuple[int, int] | None = None
+    launcher_identity: tuple[int, int] | None = None
     try:
-        os.symlink(f"versions/{generation.manifest.generation_id}", paths.support_current)
-    except FileExistsError as error:
-        raise DesktopCLIError("refusing to replace existing support current pointer") from error
-    except OSError as error:
-        raise DesktopCLIError("could not publish initial support current pointer") from error
-    current_identity = _identity(paths.support_current)
-    _fsync_directory(paths.support)
-    staged_launcher = scratch / "lingtai-desktop"
-    staged_launcher.write_bytes(launcher_bytes)
-    launcher_identity = _publish_file_exclusive(staged_launcher, paths.launcher, 0o755)
-    staged_launcher.unlink()
-    _fsync_directory(paths.bin)
-    _validate_owned_cli(paths)
-    return generation, state_identity, current_identity, launcher_identity
+        generation = _publish_support_generation(
+            paths, payloads, support_version=support_version,
+            release_tag=release_tag,
+        )
+        _trip_initial("support-generation")
+        expected_state = support_state_bytes(_initial_support_state(generation))
+        if paths.support_state.exists() or paths.support_state.is_symlink():
+            existing_state, state_identity = _read_managed_support_file(
+                paths.support_state, "support state", MAX_SUPPORT_STATE_BYTES,
+                expected_size=len(expected_state),
+            )
+            if existing_state != expected_state:
+                raise DesktopCLIError("initial support state does not match recovery journal")
+        else:
+            state_identity = _publish_private_file_exclusive(
+                paths.support_state, expected_state, "support state",
+            )
+            state_created = True
+        if _FAILPOINT == "support-state-published":
+            raise DesktopCLIError("injected support state publication failure")
+        _trip_initial("support-state")
+
+        expected_target = f"versions/{generation.manifest.generation_id}"
+        if paths.support_current.exists() or paths.support_current.is_symlink():
+            current_name, current_identity = _support_current(paths)
+            if current_name != generation.manifest.generation_id:
+                raise DesktopCLIError(
+                    "initial support current does not match recovery journal"
+                )
+        else:
+            try:
+                os.symlink(expected_target, paths.support_current)
+            except FileExistsError as error:
+                raise DesktopCLIError(
+                    "refusing to replace existing support current pointer"
+                ) from error
+            except OSError as error:
+                raise DesktopCLIError(
+                    "could not publish initial support current pointer"
+                ) from error
+            current_identity = _identity(paths.support_current)
+            current_created = True
+            _fsync_directory(paths.support)
+        if os.readlink(paths.support_current) != expected_target:
+            raise DesktopCLIError("initial support current target is invalid")
+        if _FAILPOINT == "support-current-published":
+            raise DesktopCLIError("injected support current publication failure")
+        _trip_initial("support-current")
+
+        if paths.launcher.exists() or paths.launcher.is_symlink():
+            installed, launcher_identity = _read_managed_support_file(
+                paths.launcher, "stable support bootstrap", 256 * 1024,
+                expected_size=len(launcher_bytes), expected_mode=0o755,
+            )
+            if installed != launcher_bytes:
+                raise DesktopCLIError(
+                    "stable support bootstrap does not match recovery journal"
+                )
+        else:
+            staged_launcher = scratch / "lingtai-desktop"
+            staged_launcher.write_bytes(launcher_bytes)
+            try:
+                launcher_identity = _publish_file_exclusive(
+                    staged_launcher, paths.launcher, 0o755,
+                )
+                launcher_created = True
+            finally:
+                _unlink_if_identity(staged_launcher, _identity(staged_launcher)
+                                    if staged_launcher.exists() else None)
+        if _FAILPOINT == "launcher-post-visible":
+            raise DesktopCLIError("injected launcher post-publication failure")
+        _trip_initial("support-launcher")
+        _validate_owned_cli(paths)
+        if _FAILPOINT == "support-validation":
+            raise DesktopCLIError("injected initial support validation failure")
+        _trip_initial("support-validation")
+        assert generation is not None
+        assert state_identity is not None
+        assert current_identity is not None
+        assert launcher_identity is not None
+        return InitialSupportPublication(
+            generation, state_identity, current_identity, launcher_identity,
+            generation_created, state_created, current_created, launcher_created,
+        )
+    except Exception:
+        if launcher_created:
+            _unlink_if_identity(paths.launcher, launcher_identity)
+        if current_created:
+            _unlink_if_identity(paths.support_current, current_identity)
+        if state_created:
+            _unlink_if_identity(paths.support_state, state_identity)
+        if generation_created and generation is not None:
+            _remove_validated_support_generation(generation)
+        raise
 
 
 def _argv_sha256(argv: Sequence[str]) -> str:
@@ -1952,32 +2218,61 @@ def stage_local_support_update(
     current_name, current_identity = _support_current(paths)
     if current_name != current_generation.manifest.generation_id:
         raise DesktopCLIError("support current changed during staging")
+    live_argv = list(sys.argv if argv is None else argv)
+    if not live_argv:
+        raise DesktopCLIError("support re-exec argv must include the launcher")
+    _argv_sha256(live_argv)
     module_bytes, _ = _read_managed_support_file(
         Path(module_path), "local support CLI fixture", MAX_SUPPORT_PAYLOAD_BYTES,
     )
     verifier_bytes, _ = _read_managed_support_file(
         Path(verifier_path), "local support verifier fixture", MAX_SUPPORT_PAYLOAD_BYTES,
     )
-    target = _publish_support_generation(
-        paths,
-        {SUPPORT_PAYLOAD_NAMES[0]: module_bytes, SUPPORT_PAYLOAD_NAMES[1]: verifier_bytes},
-        support_version=support_version, release_tag=release_tag,
+    payloads = {
+        SUPPORT_PAYLOAD_NAMES[0]: module_bytes,
+        SUPPORT_PAYLOAD_NAMES[1]: verifier_bytes,
+    }
+    manifest_bytes = build_support_manifest_bytes(
+        support_version, release_tag, payloads,
     )
-    if target.manifest.generation_id == current_name:
+    candidate = parse_support_manifest(manifest_bytes)
+    try:
+        compile(module_bytes, "desktop_user_cli.py", "exec", dont_inherit=True)
+        compile(verifier_bytes, "verify-app-archive.py", "exec", dont_inherit=True)
+    except (SyntaxError, ValueError, TypeError) as error:
+        raise DesktopCLIError("local support payload is not valid Python") from error
+    if candidate.generation_id == current_name:
         raise DesktopCLIError("local support fixture is already active")
-    validate_support_candidate(target.manifest, state, explicit_retry=explicit_retry)
-    live_argv = list(sys.argv if argv is None else argv)
-    if not live_argv:
-        raise DesktopCLIError("support re-exec argv must include the launcher")
+    validate_support_candidate(candidate, state, explicit_retry=explicit_retry)
+    confirmed_name, confirmed_identity = _support_current(paths)
+    if confirmed_name != current_name or confirmed_identity != current_identity:
+        raise DesktopCLIError("support current changed during candidate validation")
+
+    final = paths.support_versions / candidate.generation_id
+    generation_preexisting = final.exists() or final.is_symlink()
+    target = _publish_support_generation(
+        paths, payloads, support_version=support_version, release_tag=release_tag,
+    )
+    if (target.manifest != candidate
+            or target.manifest.manifest_sha256 != _sha256_bytes(manifest_bytes)):
+        if not generation_preexisting:
+            _remove_validated_support_generation(target)
+        raise DesktopCLIError("published support generation differs from validated candidate")
     pending = SupportPending(
         current_name, target.manifest.generation_id,
         target.manifest.manifest_sha256,
         current_identity[0], current_identity[1], _argv_sha256(live_argv),
+        explicit_retry, f".rollback-{uuid.uuid4().hex}",
     )
-    _publish_private_file_exclusive(
-        paths.support_pending, support_pending_bytes(pending),
-        "support pending journal",
-    )
+    try:
+        _publish_private_file_exclusive(
+            paths.support_pending, support_pending_bytes(pending),
+            "support pending journal",
+        )
+    except Exception:
+        if not generation_preexisting:
+            _remove_validated_support_generation(target)
+        raise
     if _FAILPOINT == "support-pending-published":
         raise DesktopCLIError("injected support pending publication failure")
     live_environment = dict(os.environ if environment is None else environment)
@@ -2007,6 +2302,102 @@ def support_self_test() -> bool:
     return True
 
 
+def _initial_install_value(journal: InitialInstallJournal) -> dict[str, object]:
+    return {
+        "app_manifest_sha256": journal.app_manifest_sha256,
+        "app_version": journal.app_version,
+        "nonce": journal.nonce,
+        "schema": INITIAL_INSTALL_SCHEMA,
+        "support_generation": journal.support_generation,
+        "support_manifest_sha256": journal.support_manifest_sha256,
+    }
+
+
+def _initial_install_bytes(journal: InitialInstallJournal) -> bytes:
+    return _canonical_json_bytes(
+        _initial_install_value(journal), MAX_INITIAL_INSTALL_BYTES,
+        "initial-install journal",
+    )
+
+
+def _parse_initial_install(raw: bytes) -> InitialInstallJournal:
+    if not isinstance(raw, bytes) or len(raw) > MAX_INITIAL_INSTALL_BYTES:
+        raise DesktopCLIError("initial-install journal is too large")
+    try:
+        value = json.loads(raw, object_pairs_hook=_exact_json_object)
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError) as error:
+        raise DesktopCLIError("initial-install journal is not bounded valid JSON") from error
+    if (not isinstance(value, dict) or set(value) != INITIAL_INSTALL_KEYS
+            or value.get("schema") != INITIAL_INSTALL_SCHEMA):
+        raise DesktopCLIError("initial-install journal does not match exact schema")
+    nonce = value.get("nonce")
+    version = value.get("app_version")
+    app_digest = value.get("app_manifest_sha256")
+    generation = value.get("support_generation")
+    support_digest = value.get("support_manifest_sha256")
+    if (not isinstance(nonce, str) or re.fullmatch(r"[0-9a-f]{32}", nonce) is None
+            or not _is_safe_version(version)
+            or not isinstance(app_digest, str) or SHA_PATTERN.fullmatch(app_digest) is None
+            or not _is_safe_support_generation(generation)
+            or not isinstance(support_digest, str)
+            or SHA_PATTERN.fullmatch(support_digest) is None):
+        raise DesktopCLIError("initial-install journal identities are invalid")
+    journal = InitialInstallJournal(
+        nonce, version, app_digest, generation, support_digest,
+    )
+    if raw != _initial_install_bytes(journal):
+        raise DesktopCLIError("initial-install journal bytes are not canonical")
+    return journal
+
+
+def _read_initial_install(
+        paths: ManagedPaths,
+) -> tuple[InitialInstallJournal, tuple[int, int]] | None:
+    if not paths.initial_install.exists() and not paths.initial_install.is_symlink():
+        return None
+    raw, identity = _read_managed_support_file(
+        paths.initial_install, "initial-install journal", MAX_INITIAL_INSTALL_BYTES,
+    )
+    return _parse_initial_install(raw), identity
+
+
+def _remove_created_directories(
+        created: Sequence[tuple[Path, tuple[int, int]]],
+) -> None:
+    for directory, identity in reversed(tuple(created)):
+        if not _matches_identity(directory, identity):
+            continue
+        try:
+            directory.rmdir()
+        except OSError:
+            # A non-empty directory or raced replacement is outside this cleanup
+            # authority and must be preserved.
+            continue
+
+
+def _empty_initial_skeleton(paths: ManagedPaths) -> bool:
+    try:
+        if paths.launcher.exists() or paths.launcher.is_symlink():
+            return False
+        if not paths.root.is_dir() or paths.root.is_symlink():
+            return False
+        if {item.name for item in paths.root.iterdir()} != {
+                "support", "versions", "receipts"}:
+            return False
+        if {item.name for item in paths.support.iterdir()} != {"versions"}:
+            return False
+        return all(
+            directory.is_dir() and not directory.is_symlink()
+            and stat.S_IMODE(directory.stat().st_mode) == 0o700
+            and not any(directory.iterdir())
+            for directory in (
+                paths.support_versions, paths.versions, paths.receipts,
+            )
+        )
+    except OSError:
+        return False
+
+
 def install(archive: Path, manifest_path: Path, *, home: Path | None = None,
             platform: Platform | None = None,
             effective_uid: int | None = None, update: bool = False,
@@ -2024,15 +2415,63 @@ def install(archive: Path, manifest_path: Path, *, home: Path | None = None,
     if paths.root.exists() or paths.root.is_symlink():
         if paths.root.is_symlink() or not paths.root.is_dir():
             raise DesktopCLIError("managed root is a symlink or not a directory")
+
+    loaded_journal = _read_initial_install(paths) if paths.root.exists() else None
+    resume_initial = loaded_journal is not None
+    skeleton_resume = (
+        not resume_initial and paths.support.exists()
+        and _empty_initial_skeleton(paths)
+    )
     support_preexisting = paths.support.exists() or paths.support.is_symlink()
-    if support_preexisting:
+    needs_initial_support = (
+        not support_preexisting or resume_initial or skeleton_resume
+    )
+    module_bytes = b""
+    verifier_bytes = b""
+    launcher_bytes = b""
+    expected_journal: InitialInstallJournal | None = None
+    journal_identity: tuple[int, int] | None = None
+    if needs_initial_support:
+        verifier_source = (
+            repository_root / "scripts/verify-app-archive.py"
+            if (repository_root / "scripts/verify-app-archive.py").is_file()
+            else repository_root / "verify-app-archive.py"
+        )
+        module_bytes = Path(__file__).read_bytes()
+        verifier_bytes = _read_bytes_nofollow(
+            verifier_source, "independent package verifier",
+            MAX_SUPPORT_PAYLOAD_BYTES,
+        )
+        launcher_bytes = _launcher_bytes(repository_root)
+        support_manifest_bytes = build_support_manifest_bytes(
+            manifest.version, f"v{manifest.version}", {
+                SUPPORT_PAYLOAD_NAMES[0]: module_bytes,
+                SUPPORT_PAYLOAD_NAMES[1]: verifier_bytes,
+            },
+        )
+        support_manifest_value = json.loads(support_manifest_bytes)
+        expected_journal = InitialInstallJournal(
+            uuid.uuid4().hex, manifest.version, manifest.manifest_sha256,
+            support_manifest_value["generation_id"],
+            _sha256_bytes(support_manifest_bytes),
+        )
+        if loaded_journal is not None:
+            journal, journal_identity = loaded_journal
+            if dataclasses.replace(expected_journal, nonce=journal.nonce) != journal:
+                raise DesktopCLIError(
+                    "initial-install journal does not authorize these exact artifacts"
+                )
+            expected_journal = journal
+    if support_preexisting and not resume_initial and not skeleton_resume:
         _validate_owned_cli(paths)
+
     current_version: str | None = None
     current_receipt: dict[str, object] | None = None
-    if paths.current.exists() or paths.current.is_symlink():
+    if not resume_initial and not skeleton_resume and (
+            paths.current.exists() or paths.current.is_symlink()):
         current_version, _, current_receipt = _active(paths)
     if update:
-        if current_version is None:
+        if resume_initial or skeleton_resume or current_version is None:
             raise DesktopCLIError("update requires an installed current version")
         _validate_owned_cli(paths)
         if _version_tuple(manifest.version) < _version_tuple(current_version):
@@ -2040,28 +2479,52 @@ def install(archive: Path, manifest_path: Path, *, home: Path | None = None,
         if manifest.version == current_version:
             assert current_receipt is not None
             if current_receipt != _receipt(manifest, manifest.bundle_tree_sha256):
-                raise DesktopCLIError("same-version update requires an identical artifact and receipt")
+                raise DesktopCLIError(
+                    "same-version update requires an identical artifact and receipt"
+                )
             platform.verify_archive(repository_root, Path(archive), Path(manifest_path))
             return manifest.version
     elif current_version is not None:
         raise DesktopCLIError("an installation already exists; use update")
+
+    # Archive and all support inputs are parsed/verified before the first mutation.
     platform.verify_archive(repository_root, Path(archive), Path(manifest_path))
-    _prepare_layout(paths)
-    final_version = paths.versions / manifest.version
-    final_receipt = paths.receipts / f"{manifest.version}.json"
-    if final_version.exists() or final_version.is_symlink() or final_receipt.exists() or final_receipt.is_symlink():
-        raise DesktopCLIError("version collision: managed version already exists")
-    managed_root_identity = _identity(paths.root)
-    scratch = Path(tempfile.mkdtemp(prefix=".staging-", dir=paths.root))
-    scratch_identity = _identity(scratch)
+    created_directories: list[tuple[Path, tuple[int, int]]] = []
     receipt_identity: tuple[int, int] | None = None
     version_identity: tuple[int, int] | None = None
-    support_generation: ValidatedSupportGeneration | None = None
-    support_state_identity: tuple[int, int] | None = None
-    support_current_identity: tuple[int, int] | None = None
-    launcher_identity: tuple[int, int] | None = None
+    receipt_created = False
+    version_created = False
+    app_current_identity: tuple[int, int] | None = None
+    app_current_created = False
+    support_publication: InitialSupportPublication | None = None
+    journal_created = False
+    managed_root_identity: tuple[int, int] | None = None
+    scratch: Path | None = None
+    scratch_identity: tuple[int, int] | None = None
     digest = ""
     try:
+        _prepare_layout(paths, created_directories)
+        managed_root_identity = _identity(paths.root)
+        if not support_preexisting or resume_initial or skeleton_resume:
+            if loaded_journal is None:
+                assert expected_journal is not None
+                journal_identity = _publish_private_file_exclusive(
+                    paths.initial_install, _initial_install_bytes(expected_journal),
+                    "initial-install journal",
+                )
+                journal_created = True
+            _trip_initial("journal")
+
+        final_version = paths.versions / manifest.version
+        final_receipt = paths.receipts / f"{manifest.version}.json"
+        if (not resume_initial and not skeleton_resume
+                and (final_version.exists() or final_version.is_symlink()
+                     or final_receipt.exists() or final_receipt.is_symlink())):
+            raise DesktopCLIError("version collision: managed version already exists")
+
+        scratch = Path(tempfile.mkdtemp(prefix="lingtai-desktop-initial-"))
+        scratch.chmod(0o700)
+        scratch_identity = _identity(scratch)
         staged_version = scratch / "version"
         staged_app = platform.verify_and_extract_archive(
             repository_root, Path(archive), Path(manifest_path), staged_version
@@ -2069,7 +2532,8 @@ def install(archive: Path, manifest_path: Path, *, home: Path | None = None,
         executable = _inspect_app(staged_app, manifest.version)
         executable_facts = _regular_nofollow(executable, "App executable")
         if (executable_facts.st_size != manifest.executable_size_bytes
-                or _sha256_file(executable, "App executable") != manifest.executable_sha256):
+                or _sha256_file(executable, "App executable")
+                != manifest.executable_sha256):
             raise DesktopCLIError("extracted executable facts do not match manifest")
         fake_home, fake_tmp = scratch / "smoke-home", scratch / "smoke-tmp"
         fake_home.mkdir(mode=0o700)
@@ -2077,69 +2541,158 @@ def install(archive: Path, manifest_path: Path, *, home: Path | None = None,
         platform.smoke(executable, fake_home, fake_tmp)
         digest = bundle_tree_digest(staged_app)
         if digest != manifest.bundle_tree_sha256:
-            raise DesktopCLIError("extracted recursive bundle digest does not match manifest")
-        receipt_bytes = (json.dumps(_receipt(manifest, digest), indent=2, sort_keys=True) + "\n").encode()
+            raise DesktopCLIError(
+                "extracted recursive bundle digest does not match manifest"
+            )
+        if _FAILPOINT == "extraction":
+            raise DesktopCLIError("injected extraction validation failure")
+        _trip_initial("extraction")
+
+        receipt_bytes = (
+            json.dumps(_receipt(manifest, digest), indent=2, sort_keys=True) + "\n"
+        ).encode()
         staged_receipt = scratch / "receipt.json"
         staged_receipt.write_bytes(receipt_bytes)
         staged_receipt.chmod(0o600)
         if _FAILPOINT == "receipt":
             raise DesktopCLIError("injected receipt publication failure")
-        receipt_identity = _publish_file_exclusive(staged_receipt, final_receipt, 0o600)
-        staged_version_identity = _identity(staged_version)
-        _rename_exclusive(staged_version, final_version)
-        version_identity = staged_version_identity
-        if not support_preexisting:
-            module_bytes = Path(__file__).read_bytes()
-            verifier_source = (
-                repository_root / "scripts/verify-app-archive.py"
-                if (repository_root / "scripts/verify-app-archive.py").is_file()
-                else repository_root / "verify-app-archive.py"
+        if final_receipt.exists() or final_receipt.is_symlink():
+            if not (resume_initial or skeleton_resume):
+                raise DesktopCLIError("version collision: managed receipt exists")
+            installed_receipt, receipt_identity = _read_managed_support_file(
+                final_receipt, "initial App receipt", max(len(receipt_bytes), 1),
+                expected_size=len(receipt_bytes),
             )
-            verifier_bytes = _read_bytes_nofollow(
-                verifier_source, "independent package verifier", MAX_SUPPORT_PAYLOAD_BYTES,
+            if installed_receipt != receipt_bytes:
+                raise DesktopCLIError(
+                    "initial App receipt does not match recovery journal"
+                )
+        else:
+            receipt_identity = _publish_file_exclusive(
+                staged_receipt, final_receipt, 0o600,
             )
-            launcher_bytes = _launcher_bytes(repository_root)
+            receipt_created = True
+        _trip_initial("receipt")
+
+        if final_version.exists() or final_version.is_symlink():
+            if not (resume_initial or skeleton_resume):
+                raise DesktopCLIError("version collision: managed version exists")
+            _require_real_directory(final_version, "initial managed version")
+            if ({item.name for item in final_version.iterdir()} != {APP_NAME}
+                    or bundle_tree_digest(final_version / APP_NAME) != digest):
+                raise DesktopCLIError(
+                    "initial managed version does not match recovery journal"
+                )
+            version_identity = _identity(final_version)
+        else:
+            staged_version_identity = _identity(staged_version)
+            _rename_exclusive(staged_version, final_version)
+            version_identity = staged_version_identity
+            version_created = True
+            _fsync_directory(paths.versions)
+        _trip_initial("version")
+
+        if not support_preexisting or resume_initial or skeleton_resume:
             if _owned_file_state(paths.launcher, launcher_bytes, 0o755, "launcher"):
-                raise DesktopCLIError("refusing incomplete pre-existing support bootstrap")
+                if not resume_initial:
+                    raise DesktopCLIError(
+                        "refusing incomplete pre-existing support bootstrap"
+                    )
             if _FAILPOINT == "launcher":
                 raise DesktopCLIError("injected launcher publication failure")
-            (support_generation, support_state_identity,
-             support_current_identity, launcher_identity) = _publish_initial_support(
+            support_publication = _publish_initial_support(
                 paths, module_bytes, verifier_bytes, launcher_bytes,
-                support_version=manifest.version, release_tag=f"v{manifest.version}",
-                scratch=scratch,
+                support_version=manifest.version,
+                release_tag=f"v{manifest.version}", scratch=scratch,
             )
+        _trip_initial("support")
+
         old_target = os.readlink(paths.current) if paths.current.is_symlink() else None
         if paths.current.exists() and not paths.current.is_symlink():
             raise DesktopCLIError("managed current is not a symlink")
-        temporary_current = paths.root / f".current-{uuid.uuid4().hex}"
-        os.symlink(f"versions/{manifest.version}", temporary_current)
-        try:
-            if _FAILPOINT == "current":
-                raise DesktopCLIError("injected current switch failure")
-            os.replace(temporary_current, paths.current)
-        finally:
-            if temporary_current.is_symlink():
-                temporary_current.unlink()
-        if old_target is not None and os.readlink(paths.current) == old_target:
+        expected_current = f"versions/{manifest.version}"
+        if resume_initial and old_target is not None:
+            if old_target != expected_current:
+                raise DesktopCLIError(
+                    "initial App current does not match recovery journal"
+                )
+            app_current_identity = _identity(paths.current)
+        else:
+            temporary_current = paths.root / f".current-{uuid.uuid4().hex}"
+            temporary_identity: tuple[int, int] | None = None
+            try:
+                os.symlink(expected_current, temporary_current)
+                temporary_identity = _identity(temporary_current)
+                if _FAILPOINT == "current":
+                    raise DesktopCLIError("injected current switch failure")
+                os.replace(temporary_current, paths.current)
+                if not _matches_identity(paths.current, temporary_identity):
+                    raise DesktopCLIError("managed current publication was replaced")
+                app_current_identity = temporary_identity
+                app_current_created = old_target is None
+                _fsync_directory(paths.root)
+            finally:
+                _unlink_if_identity(temporary_current, temporary_identity)
+        if os.readlink(paths.current) != expected_current:
             raise DesktopCLIError("current switch did not take effect")
+        if _FAILPOINT == "app-current-post-visible":
+            raise DesktopCLIError("injected App current post-publication failure")
+        _trip_initial("app-current")
+
+        # A journal is removed only after both independent planes fully validate.
+        _active(paths)
+        _validate_owned_cli(paths)
+        if journal_identity is not None:
+            if not _matches_identity(paths.initial_install, journal_identity):
+                raise DesktopCLIError("initial-install journal was replaced")
+            paths.initial_install.unlink()
+            _fsync_directory(paths.root)
+        _trip_initial("journal-removed")
+        return manifest.version
+    except InjectedInitialInstallCrash:
+        raise
     except BaseException:
-        _unlink_if_identity(paths.launcher, launcher_identity)
-        if _matches_identity(paths.root, managed_root_identity):
-            _unlink_if_identity(paths.support_current, support_current_identity)
-            _unlink_if_identity(paths.support_state, support_state_identity)
-            if support_generation is not None:
-                _remove_validated_support_generation(support_generation)
-            if version_identity is not None and _matches_identity(final_version, version_identity):
-                _remove_owned_version(final_version, digest, version_identity)
-            _unlink_if_identity(final_receipt, receipt_identity)
+        if support_publication is not None:
+            if support_publication.launcher_created:
+                _unlink_if_identity(
+                    paths.launcher, support_publication.launcher_identity,
+                )
+            if managed_root_identity is not None and _matches_identity(
+                    paths.root, managed_root_identity):
+                if support_publication.current_created:
+                    _unlink_if_identity(
+                        paths.support_current, support_publication.current_identity,
+                    )
+                if support_publication.state_created:
+                    _unlink_if_identity(
+                        paths.support_state, support_publication.state_identity,
+                    )
+                if support_publication.generation_created:
+                    _remove_validated_support_generation(
+                        support_publication.generation
+                    )
+        if (app_current_created and app_current_identity is not None
+                and managed_root_identity is not None
+                and _matches_identity(paths.root, managed_root_identity)):
+            _unlink_if_identity(paths.current, app_current_identity)
+        if (version_created and version_identity is not None
+                and _matches_identity(paths.versions / manifest.version, version_identity)):
+            _remove_owned_version(
+                paths.versions / manifest.version, digest, version_identity,
+            )
+        if receipt_created:
+            _unlink_if_identity(
+                paths.receipts / f"{manifest.version}.json", receipt_identity,
+            )
+        if journal_created:
+            _unlink_if_identity(paths.initial_install, journal_identity)
+        _remove_created_directories(created_directories)
         raise
     finally:
-        if (_matches_identity(paths.root, managed_root_identity)
+        if (scratch is not None and scratch_identity is not None
                 and _matches_identity(scratch, scratch_identity)
-                and not scratch.is_symlink()):
+                and not scratch.is_symlink() and scratch.is_dir()):
             shutil.rmtree(scratch)
-    return manifest.version
 
 
 def install_official(version: str | None = None, *, home: Path | None = None,
@@ -2445,6 +2998,11 @@ def uninstall_all(*, home: Path | None = None, effective_uid: int | None = None)
     _revalidate_support_uninstall(paths, support_plan)
     _unlink_if_identity(paths.support_current, support_plan.current_identity)
     _unlink_if_identity(paths.support_pending, support_plan.pending_identity)
+    if support_plan.rollback_pointer_name is not None:
+        _unlink_if_identity(
+            paths.support / support_plan.rollback_pointer_name,
+            support_plan.rollback_pointer_identity,
+        )
     _unlink_if_identity(paths.support_update_cache, support_plan.update_cache_identity)
     _unlink_if_identity(paths.support_state, support_plan.state_identity)
     for generation in support_plan.generations:
