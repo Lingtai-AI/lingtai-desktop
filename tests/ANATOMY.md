@@ -33,10 +33,11 @@ test proves. This file descends into `tests/` itself.
   general repository-shape suite.
 - `tests/test_app_archive.py` — the offline owner of the primary portable-App
   archive boundary: exact manifest/App-tree binding, safe private extraction,
-  executable modes, internal symlink/hardlink preservation, incremental hostile
-  member/resource rejection, streaming file digests, malformed/truncated input
-  cleanup, and inode-bound pair publication races. It invokes no network, Apple
-  service, App, or DMG tool.
+  archive-declared regular/directory/symlink modes independent of caller umask,
+  fail-closed mode restoration, internal symlink/hardlink preservation,
+  incremental hostile member/resource rejection, streaming file digests,
+  malformed/truncated input cleanup, and inode-bound pair publication races. It
+  invokes no network, Apple service, App, or DMG tool.
 - `tests/test_macos_packaging.py` — the offline owner of the optional DMG boundary's
   fail-closed diagnostic/release mode choice, credential-name presence rules,
   deterministic versioned names, unsafe destination/overwrite refusal, tool

@@ -177,9 +177,10 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   rollback for the optional DMG experiment.
 - `tests/test_app_archive.py` — manual `python3 -m unittest
   tests.test_app_archive`; the primary portable-App producer and independent
-  verifier contract, including exact App/manifest facts, executable modes,
-  internal links, streaming digests, incremental hostile-member/resource
-  rejection, bounded cleanup, and no-clobber publication races.
+  verifier contract, including exact App/manifest facts, archive-declared
+  regular/directory/symlink modes independent of caller umask, internal links,
+  streaming digests, fail-closed mode restoration, incremental hostile-member/
+  resource rejection, bounded cleanup, and no-clobber publication races.
 - `tests/test_desktop_user_cli.py` — manual `python3 -m unittest
   tests.test_desktop_user_cli`; the deterministic fake-HOME contract for fixed
   official GitHub App release discovery/download, cached confirmed offers, and

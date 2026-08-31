@@ -120,6 +120,73 @@ class AppArchiveContractTest(unittest.TestCase):
             self.assertEqual((first.stat().st_dev, first.stat().st_ino),
                              (second.stat().st_dev, second.stat().st_ino))
 
+    def test_symlink_mode_restoration_is_umask_independent_and_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            previous_umask = os.umask(0o022)
+            try:
+                archive, manifest, source_app = self._package(root)
+            finally:
+                os.umask(previous_umask)
+
+            relative_link = Path("Contents/Frameworks/Example.framework/Versions/Current")
+            expected_mode = os.lstat(source_app / relative_link).st_mode & 0o777
+            self.assertEqual(expected_mode, 0o755)
+            expected_digest = json.loads(manifest.read_text())["bundle_tree_sha256"]
+            extracted_digests: list[str] = []
+
+            for label, extraction_umask in (("ordinary", 0o022), ("restrictive", 0o077)):
+                with self.subTest(label=label):
+                    destination = root / f"verified-{label}"
+                    previous_umask = os.umask(extraction_umask)
+                    try:
+                        verify_app_archive.verify_pair(
+                            archive,
+                            manifest,
+                            extract_to=destination,
+                            architecture_reader=self._architectures,
+                        )
+                    finally:
+                        os.umask(previous_umask)
+                    extracted_app = destination / "LingTai.app"
+                    extracted_link = extracted_app / relative_link
+                    self.assertEqual(os.readlink(extracted_link), "A")
+                    self.assertEqual(os.lstat(extracted_link).st_mode & 0o777, expected_mode)
+                    digest = verify_app_archive._bundle_tree_digest(extracted_app)
+                    self.assertEqual(digest, expected_digest)
+                    extracted_digests.append(digest)
+
+            self.assertEqual(extracted_digests, [expected_digest, expected_digest])
+
+            real_chmod = verify_app_archive.os.chmod
+
+            def deny_descriptor_local_symlink_mode(
+                path: os.PathLike[str] | str,
+                mode: int,
+                *,
+                dir_fd: int | None = None,
+                follow_symlinks: bool = True,
+            ) -> None:
+                if dir_fd is not None and not follow_symlinks:
+                    raise OSError("injected symlink mode failure")
+                real_chmod(path, mode, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+
+            failed_destination = root / "must-not-survive"
+            with mock.patch.object(
+                verify_app_archive.os,
+                "chmod",
+                side_effect=deny_descriptor_local_symlink_mode,
+            ), self.assertRaisesRegex(
+                verify_app_archive.VerificationError, "symlink mode"
+            ):
+                verify_app_archive.verify_pair(
+                    archive,
+                    manifest,
+                    extract_to=failed_destination,
+                    architecture_reader=self._architectures,
+                )
+            self.assertFalse(failed_destination.exists())
+
     def test_manifest_and_exact_app_fact_mismatches_are_rejected(self) -> None:
         mutations = {
             "archive hash": lambda data: data.__setitem__("archive_sha256", "0" * 64),

@@ -252,6 +252,42 @@ def _preflight_members(members: Iterable[tarfile.TarInfo]) -> tuple[dict[str, ta
     return by_name, link_targets
 
 
+def _apply_symlink_mode(path: Path, member: tarfile.TarInfo) -> None:
+    parent_descriptor: int | None = None
+    try:
+        flags = (os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+                 | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0))
+        parent_descriptor = os.open(path.parent, flags)
+        before = os.stat(path.name, dir_fd=parent_descriptor, follow_symlinks=False)
+        if (not stat.S_ISLNK(before.st_mode)
+                or os.readlink(path.name, dir_fd=parent_descriptor) != member.linkname):
+            raise VerificationError("archive symlink identity changed before mode restoration")
+        identity = before.st_dev, before.st_ino
+        expected_mode = member.mode & 0o777
+        os.chmod(
+            path.name,
+            expected_mode,
+            dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+        after = os.stat(path.name, dir_fd=parent_descriptor, follow_symlinks=False)
+        if ((after.st_dev, after.st_ino) != identity
+                or not stat.S_ISLNK(after.st_mode)
+                or stat.S_IMODE(after.st_mode) != expected_mode
+                or os.readlink(path.name, dir_fd=parent_descriptor) != member.linkname):
+            raise VerificationError("archive symlink identity changed during mode restoration")
+    except VerificationError:
+        raise
+    except (OSError, NotImplementedError, ValueError) as error:
+        raise VerificationError("could not apply archive symlink mode") from error
+    finally:
+        if parent_descriptor is not None:
+            try:
+                os.close(parent_descriptor)
+            except OSError:
+                pass
+
+
 def _extract_members(archive: tarfile.TarFile, destination: Path,
                      by_name: dict[str, tarfile.TarInfo], link_targets: dict[str, str]) -> None:
     directories = sorted(
@@ -300,10 +336,12 @@ def _extract_members(archive: tarfile.TarFile, destination: Path,
         raise VerificationError("archive changed after member preflight")
     for name, member in sorted(by_name.items()):
         if member.issym():
+            path = destination / name
             try:
-                os.symlink(member.linkname, destination / name)
+                os.symlink(member.linkname, path)
             except OSError as error:
                 raise VerificationError("could not create archive symlink") from error
+            _apply_symlink_mode(path, member)
     for name, member in sorted(by_name.items()):
         if member.islnk():
             try:
