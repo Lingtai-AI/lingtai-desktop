@@ -828,22 +828,21 @@ def _candidate_policy(candidate: Generation, state: State, *, explicit_retry: bo
 
 def _production_self_test(generation: Generation) -> None:
     # The audit hook is installed before candidate compilation. A denied attempt
-    # hard-exits the isolated child, so candidate handlers cannot suppress it and
-    # the production parent authenticates failure by wait status. No filesystem
-    # mutation is needed by the
-    # v1 self-test, therefore the strongest portable policy is no writes anywhere.
+    # is reported into a parent-owned pipe before candidate handlers regain
+    # control, so the sticky audit decision cannot be cleared in candidate state.
+    # No filesystem mutation is needed by the v1 self-test, therefore the strongest
+    # portable policy is no writes anywhere.
     code = r'''
 import ctypes  # Preload the candidate's required stdlib wrapper before policy.
 import os
 import sys
 import types
 
-# A denied capability terminates this isolated child through the original
-# interpreter primitive.  There is deliberately no candidate-process ledger:
-# the production parent authenticates the sticky violation through the child's
-# nonzero wait status, and candidate code has no mutable audit record to clear.
-def install_policy():
-    hard_exit = os._exit
+# The audit decision is recorded in the production parent's pipe, never in
+# candidate-addressable child state. The final trusted marker also authenticates
+# that an exact True result reached the harness normally.
+def install_policy(audit_fd):
+    write_audit = os.write
     mutation_events = frozenset({
         "os.chdir", "os.chflags", "os.chmod", "os.chown", "os.exec",
         "os.fork", "os.forkpty", "os.kill", "os.link", "os.mkdir",
@@ -861,8 +860,15 @@ def install_policy():
         | getattr(os, "O_TRUNC", 0)
     )
 
+    def report_violation():
+        try:
+            write_audit(audit_fd, b"V")
+        except OSError as error:
+            raise SystemExit(75) from error
+        raise PermissionError("support self-test policy denied mutation or escape")
+
     def deny_process_exit(*args):
-        hard_exit(74)
+        report_violation()
 
     def deny(event, args):
         denied = event in mutation_events or event.startswith(danger_prefixes)
@@ -873,11 +879,13 @@ def install_policy():
                 isinstance(mode, str) and any(token in mode for token in "wax+")
             ) or (isinstance(flags, int) and bool(flags & write_flags))
         if denied:
-            hard_exit(74)
+            report_violation()
+
+    def finish(success):
+        write_audit(audit_fd, b"T" if success else b"F")
 
     # CPython 3.9 emits no audit event for _exit(). Replace both public aliases
-    # before candidate code so a candidate cannot turn early child exit 0 into a
-    # forged passing self-test.
+    # before candidate code so every early-exit attempt reaches the audit pipe.
     os._exit = deny_process_exit
     try:
         import posix as _posix
@@ -885,8 +893,9 @@ def install_policy():
     except ImportError:
         pass
     sys.addaudithook(deny)
+    return finish
 
-install_policy()
+finish_policy = install_policy(int(sys.argv[2]))
 del install_policy
 source = sys.stdin.buffer.read(2 * 1024 * 1024 + 1)
 if not source or len(source) > 2 * 1024 * 1024:
@@ -902,9 +911,15 @@ try:
     exec(compile(source, expected_path, "exec", dont_inherit=True), module.__dict__)
     result = module.support_self_test()
 except BaseException:
+    finish_policy(False)
     raise SystemExit(3)
+finish_policy(result is True)
 raise SystemExit(0 if result is True else 4)
 '''
+    audit_read: int | None = None
+    audit_write: int | None = None
+    process: subprocess.Popen[bytes] | None = None
+    audit_record = b""
     try:
         with tempfile.TemporaryDirectory(prefix="lingtai-support-self-test-") as scratch_text:
             scratch = Path(scratch_text)
@@ -916,22 +931,47 @@ raise SystemExit(0 if result is True else 4)
                 "LC_ALL": "C",
                 "PYTHONDONTWRITEBYTECODE": "1",
             }
-            result = subprocess.run(
+            audit_read, audit_write = os.pipe()
+            os.set_blocking(audit_write, False)
+            process = subprocess.Popen(
                 [sys.executable, "-I", "-B", "-c", code,
-                 os.fspath(generation.path / "desktop_user_cli.py")],
-                input=generation.payload("desktop_user_cli.py"),
+                 os.fspath(generation.path / "desktop_user_cli.py"),
+                 str(audit_write)],
+                stdin=subprocess.PIPE,
                 env=environment, cwd=scratch,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                timeout=SUPPORT_SELF_TEST_TIMEOUT, check=False,
-                close_fds=True,
+                close_fds=True, pass_fds=(audit_write,),
             )
-    except subprocess.TimeoutExpired as error:
-        raise BootstrapError("support self-test timed out") from error
+            os.close(audit_write)
+            audit_write = None
+            try:
+                process.communicate(
+                    input=generation.payload("desktop_user_cli.py"),
+                    timeout=SUPPORT_SELF_TEST_TIMEOUT,
+                )
+            except subprocess.TimeoutExpired as error:
+                process.kill()
+                process.communicate()
+                raise BootstrapError("support self-test timed out") from error
+            while True:
+                block = os.read(audit_read, 4096)
+                if not block:
+                    break
+                audit_record += block
+    except BootstrapError:
+        raise
     except OSError as error:
         raise BootstrapError("support self-test could not start") from error
-    if result.returncode:
+    finally:
+        if audit_write is not None:
+            os.close(audit_write)
+        if audit_read is not None:
+            os.close(audit_read)
+    assert process is not None
+    if process.returncode or audit_record != b"T":
+        authenticated_exit = process.returncode or 74
         raise BootstrapError(
-            f"support import or self-test failed (isolated exit {result.returncode})"
+            f"support import or self-test failed (isolated exit {authenticated_exit})"
         )
 
 

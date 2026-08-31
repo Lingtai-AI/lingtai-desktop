@@ -44,9 +44,11 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
   identity/hash and App/support-plane revalidation. Candidate code runs in an
   isolated, minimal-environment child with private HOME/cwd/TMPDIR, bounded
   stdio/time, and a pre-candidate audit boundary denying writes, network, process/
-  exec, native-loader escape, and early exit. A denied capability hard-exits the
-  child, leaving no candidate-mutable violation ledger; the production parent
-  authenticates that sticky failure by wait status. Rollback is failed-state-first,
+  exec, native-loader escape, and early exit. A denied capability records a sticky
+  marker in a production-parent-owned pipe before candidate handling resumes,
+  leaving no candidate-mutable violation ledger; the parent accepts only one
+  trusted clean marker plus an exact true result and zero wait status. Rollback is
+  failed-state-first,
   authenticates a retained source-pointer identity across every durable recovery
   boundary, and can abort an uncommitted mutated target without trusting its bytes.
   It never discovers releases or mutates the App plane. `scripts/install-macos-app.py`

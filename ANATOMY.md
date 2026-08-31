@@ -238,8 +238,10 @@ rollback name, publishes failed state before pointer rollback, and authenticates
 that inode during replay. An uncommitted target that fails final identity
 validation aborts back to that source without trusting target bytes. Candidate
 self-test runs in a private minimal-environment child under a no-write/network/
-process/native/early-exit audit policy; denied capability use hard-exits with a
-parent-observed nonzero status and has no candidate-mutable ledger. Post-test
+process/native/early-exit audit policy; denied capability use records into a
+production-parent-owned pipe before candidate handling resumes, and the parent
+requires one trusted clean marker plus exact true/zero-exit completion. There is
+no candidate-mutable ledger. Post-test
 generation, pointer, journal, state, and both managed planes are revalidated
 before commit. The active CLI can stage only an injected local generation
 in this phase; official network support discovery/cache publication is deferred.
