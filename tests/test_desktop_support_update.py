@@ -249,6 +249,61 @@ class DesktopSupportUpdatePhase3Test(unittest.TestCase):
             self.assertTrue(any("already recorded as failed" in line for line in output))
             self.assertIsNone(cli._read_support_pending(paths))
 
+    def test_support_cache_cannot_hide_downgrade_or_same_version_substitution(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive, manifest = write_artifacts(root, "0.1.5")
+            home = root / "home"
+            home.mkdir()
+            cli.install(archive, manifest, home=home, platform=FakePlatform(), effective_uid=501)
+            paths = cli._paths(home)
+
+            substituted_payloads = dict(self.payloads)
+            substituted_payloads[cli.SUPPORT_PAYLOAD_NAMES[1]] += b"\n# substituted\n"
+            substitution, _ = support_release_transport(
+                substituted_payloads, "0.1.5",
+            )
+            output: list[str] = []
+            self.assertFalse(cli._automatic_support_update_offer(
+                paths=paths, arguments=["version"], home=home,
+                transport=substitution, effective_uid=501, now=10,
+                interval=1, tty=lambda: False,
+                prompt=lambda _: self.fail("substitution prompted"),
+                output=output.append, exec_launcher=None,
+            ))
+            self.assertTrue(any("same-version" in line for line in output))
+            self.assertIsNone(cli._read_support_update_cache(paths))
+
+            downgrade, _ = support_release_transport(self.payloads, "0.1.4")
+            output.clear()
+            self.assertFalse(cli._automatic_support_update_offer(
+                paths=paths, arguments=["version"], home=home,
+                transport=downgrade, effective_uid=501, now=11,
+                interval=1, tty=lambda: False,
+                prompt=lambda _: self.fail("downgrade prompted"),
+                output=output.append, exec_launcher=None,
+            ))
+            self.assertTrue(any("below the active" in line for line in output))
+            self.assertIsNone(cli._read_support_update_cache(paths))
+
+            active = cli._validate_owned_cli(paths).manifest
+            forged = cli.SupportUpdateCheck(
+                20, active.support_version, active.release_tag,
+                active.generation_id, "f" * 64, False,
+            )
+            cli._write_support_update_cache(paths, forged)
+            prior = paths.support_update_cache.read_bytes()
+            output.clear()
+            self.assertFalse(cli._automatic_support_update_offer(
+                paths=paths, arguments=["version"], home=home,
+                transport=FakeReleaseTransport({}), effective_uid=501,
+                now=21, interval=100, tty=lambda: False,
+                prompt=lambda _: self.fail("forged no-change prompted"),
+                output=output.append, exec_launcher=None,
+            ))
+            self.assertTrue(any("does not bind the active" in line for line in output))
+            self.assertEqual(paths.support_update_cache.read_bytes(), prior)
+
     def test_support_update_cache_is_independent_exact_and_records_decline(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

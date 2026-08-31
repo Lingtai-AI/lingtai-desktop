@@ -3254,14 +3254,22 @@ def _automatic_support_update_offer(
         active = _validate_owned_cli(paths)
         state, _ = _read_support_state(paths)
         current_version = active.manifest.support_version
+        checked_version = _version_tuple(check.latest_support_version)
+        active_version = _version_tuple(current_version)
         if check.generation_id == active.manifest.generation_id:
+            if (check.latest_support_version != current_version
+                    or check.release_tag != active.manifest.release_tag
+                    or check.manifest_sha256 != active.manifest.manifest_sha256):
+                raise DesktopCLIError(
+                    "support no-change cache does not bind the active generation"
+                )
             if not fresh:
                 _record_support_update_cache(paths, check, output)
             return False
-        if _version_tuple(check.latest_support_version) <= _version_tuple(current_version):
-            if not fresh:
-                _record_support_update_cache(paths, check, output)
-            return False
+        if checked_version < active_version:
+            raise DesktopCLIError("support target is below the active version")
+        if checked_version == active_version:
+            raise DesktopCLIError("support target is a same-version substitution")
         # Fresh cache entries may decide whether discovery is due, but never
         # override rollback/substitution/failed-target policy.
         if _version_tuple(check.latest_support_version) < _version_tuple(state.high_water_version):
