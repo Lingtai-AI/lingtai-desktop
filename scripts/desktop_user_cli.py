@@ -85,6 +85,42 @@ RECEIPT_KEYS = {
 }
 _FAILPOINT: str | None = None  # Tests inject failures without production flags.
 
+SUPPORT_MANIFEST_SCHEMA = "lingtai.desktop.support/v1"
+SUPPORT_STATE_SCHEMA = "lingtai.desktop.support-state/v1"
+SUPPORT_PENDING_SCHEMA = "lingtai.desktop.support-pending/v1"
+SUPPORT_BOOTSTRAP_PROTOCOL = 1
+SUPPORT_REPOSITORY = OFFICIAL_REPOSITORY
+SUPPORT_MANIFEST_NAME = "support-manifest.json"
+SUPPORT_PAYLOAD_NAMES = ("desktop_user_cli.py", "verify-app-archive.py")
+SUPPORT_PAYLOAD_MODE = 0o600
+SUPPORT_GENERATION_MODE = 0o700
+SUPPORT_GENERATION_DIGEST_LENGTH = 12
+MAX_SUPPORT_MANIFEST_BYTES = 16 * 1024
+MAX_SUPPORT_STATE_BYTES = 16 * 1024
+MAX_SUPPORT_PENDING_BYTES = 4 * 1024
+MAX_SUPPORT_PAYLOAD_BYTES = 2 * 1024 * 1024
+MAX_FAILED_SUPPORT_GENERATIONS = 32
+SUPPORT_GENERATION_PATTERN = re.compile(
+    rf"([0-9]{{1,{MAX_VERSION_COMPONENT_DIGITS}}}\."
+    rf"[0-9]{{1,{MAX_VERSION_COMPONENT_DIGITS}}}\."
+    rf"[0-9]{{1,{MAX_VERSION_COMPONENT_DIGITS}}})-"
+    rf"([0-9a-f]{{{SUPPORT_GENERATION_DIGEST_LENGTH}}})"
+)
+SUPPORT_MANIFEST_KEYS = {
+    "schema", "support_version", "generation_id", "release_tag",
+    "repository", "bootstrap_protocol", "minimum_bootstrap_protocol", "files",
+}
+SUPPORT_FILE_KEYS = {"name", "size", "mode", "sha256"}
+SUPPORT_STATE_KEYS = {
+    "schema", "high_water_version", "high_water_manifest_sha256",
+    "last_good_generation", "failed_generations",
+}
+SUPPORT_FAILED_KEYS = {"generation_id", "manifest_sha256"}
+SUPPORT_PENDING_KEYS = {
+    "schema", "from_generation", "to_generation", "to_manifest_sha256",
+    "expected_current_dev", "expected_current_ino", "requested_argv_sha256",
+}
+
 
 class DesktopCLIError(RuntimeError):
     """A bounded installer/launcher failure safe to print to a terminal."""
@@ -128,6 +164,58 @@ class OfficialRelease:
 class UpdateCheck:
     checked_at: int
     latest_version: str
+
+
+@dataclasses.dataclass(frozen=True)
+class SupportPayload:
+    name: str
+    size: int
+    mode: int
+    sha256: str
+
+
+@dataclasses.dataclass(frozen=True)
+class SupportManifest:
+    support_version: str
+    generation_id: str
+    release_tag: str
+    repository: str
+    bootstrap_protocol: int
+    minimum_bootstrap_protocol: int
+    files: tuple[SupportPayload, ...]
+    manifest_sha256: str
+
+
+@dataclasses.dataclass(frozen=True)
+class FailedSupportGeneration:
+    generation_id: str
+    manifest_sha256: str
+
+
+@dataclasses.dataclass(frozen=True)
+class SupportState:
+    high_water_version: str
+    high_water_manifest_sha256: str
+    last_good_generation: str
+    failed_generations: tuple[FailedSupportGeneration, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class SupportPending:
+    from_generation: str
+    to_generation: str
+    to_manifest_sha256: str
+    expected_current_dev: int
+    expected_current_ino: int
+    requested_argv_sha256: str
+
+
+@dataclasses.dataclass(frozen=True)
+class ValidatedSupportGeneration:
+    path: Path
+    manifest: SupportManifest
+    directory_identity: tuple[int, int]
+    file_identities: tuple[tuple[str, tuple[int, int]], ...]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -578,6 +666,389 @@ def _sha256_file(path: Path, label: str, maximum_bytes: int | None = None) -> st
     except OSError as error:
         raise DesktopCLIError(f"could not hash {label}") from error
     return digest.hexdigest()
+
+
+def _canonical_json_bytes(value: object, maximum_bytes: int, label: str) -> bytes:
+    try:
+        payload = (json.dumps(
+            value, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+        ) + "\n").encode("ascii")
+    except (TypeError, ValueError, UnicodeError) as error:
+        raise DesktopCLIError(f"{label} is not canonical JSON") from error
+    if len(payload) > maximum_bytes:
+        raise DesktopCLIError(f"{label} is too large")
+    return payload
+
+
+def _support_file_values(files: Sequence[SupportPayload]) -> list[dict[str, object]]:
+    return [
+        {"mode": item.mode, "name": item.name, "sha256": item.sha256, "size": item.size}
+        for item in files
+    ]
+
+
+def _support_manifest_identity_value(
+        support_version: str, release_tag: str, repository: str,
+        bootstrap_protocol: int, minimum_bootstrap_protocol: int,
+        files: Sequence[SupportPayload]) -> dict[str, object]:
+    return {
+        "bootstrap_protocol": bootstrap_protocol,
+        "files": _support_file_values(files),
+        "minimum_bootstrap_protocol": minimum_bootstrap_protocol,
+        "release_tag": release_tag,
+        "repository": repository,
+        "schema": SUPPORT_MANIFEST_SCHEMA,
+        "support_version": support_version,
+    }
+
+
+def _support_generation_id(identity_value: dict[str, object]) -> str:
+    # Hash the canonical immutable manifest identity before adding its derived
+    # generation_id field; hashing the full object would be circular. The full
+    # canonical manifest receives its independent manifest_sha256 afterward.
+    version = identity_value.get("support_version")
+    if not _is_safe_version(version):
+        raise DesktopCLIError("support version is not a safe x.y.z value")
+    identity_bytes = _canonical_json_bytes(
+        identity_value, MAX_SUPPORT_MANIFEST_BYTES, "support manifest identity",
+    )
+    return f"{version}-{_sha256_bytes(identity_bytes)[:SUPPORT_GENERATION_DIGEST_LENGTH]}"
+
+
+def _is_safe_support_generation(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) <= MAX_VERSION_LENGTH + 1 + SUPPORT_GENERATION_DIGEST_LENGTH
+        and value.isascii()
+        and SUPPORT_GENERATION_PATTERN.fullmatch(value) is not None
+    )
+
+
+def _support_generation_version(generation_id: str) -> str:
+    if not _is_safe_support_generation(generation_id):
+        raise DesktopCLIError("support generation identity is malformed")
+    return generation_id.rsplit("-", 1)[0]
+
+
+def build_support_manifest_bytes(
+        support_version: str, release_tag: str,
+        payloads: Mapping[str, bytes], *,
+        bootstrap_protocol: int = SUPPORT_BOOTSTRAP_PROTOCOL,
+        minimum_bootstrap_protocol: int = SUPPORT_BOOTSTRAP_PROTOCOL) -> bytes:
+    if not _is_safe_version(support_version):
+        raise DesktopCLIError("support version is not a safe x.y.z value")
+    if (not isinstance(release_tag, str) or not release_tag.isascii()
+            or not release_tag.startswith("v")
+            or not _is_safe_version(release_tag[1:])):
+        raise DesktopCLIError("support release tag is invalid")
+    if set(payloads) != set(SUPPORT_PAYLOAD_NAMES):
+        raise DesktopCLIError("support payload set is not exact")
+    if (type(bootstrap_protocol) is not int
+            or bootstrap_protocol != SUPPORT_BOOTSTRAP_PROTOCOL
+            or type(minimum_bootstrap_protocol) is not int
+            or minimum_bootstrap_protocol < 1
+            or minimum_bootstrap_protocol > bootstrap_protocol):
+        raise DesktopCLIError("support bootstrap protocol declaration is invalid")
+    files: list[SupportPayload] = []
+    for name in SUPPORT_PAYLOAD_NAMES:
+        content = payloads[name]
+        if not isinstance(content, bytes) or not 0 < len(content) <= MAX_SUPPORT_PAYLOAD_BYTES:
+            raise DesktopCLIError(f"support payload {name} has an invalid size")
+        files.append(SupportPayload(
+            name, len(content), SUPPORT_PAYLOAD_MODE, _sha256_bytes(content),
+        ))
+    identity = _support_manifest_identity_value(
+        support_version, release_tag, SUPPORT_REPOSITORY,
+        bootstrap_protocol, minimum_bootstrap_protocol, files,
+    )
+    value = dict(identity)
+    value["generation_id"] = _support_generation_id(identity)
+    payload = _canonical_json_bytes(value, MAX_SUPPORT_MANIFEST_BYTES, "support manifest")
+    # Keep construction and parser policy one source of truth.
+    parse_support_manifest(payload)
+    return payload
+
+
+def parse_support_manifest(
+        raw: bytes, *, installed_bootstrap_protocol: int = SUPPORT_BOOTSTRAP_PROTOCOL,
+        require_canonical: bool = True) -> SupportManifest:
+    if not isinstance(raw, bytes) or len(raw) > MAX_SUPPORT_MANIFEST_BYTES:
+        raise DesktopCLIError("support manifest is too large")
+    try:
+        value = json.loads(raw, object_pairs_hook=_exact_json_object)
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError) as error:
+        raise DesktopCLIError("support manifest is not bounded valid JSON") from error
+    if not isinstance(value, dict) or set(value) != SUPPORT_MANIFEST_KEYS:
+        raise DesktopCLIError("support manifest does not match the exact schema")
+    if value.get("schema") != SUPPORT_MANIFEST_SCHEMA:
+        raise DesktopCLIError("support manifest schema is invalid")
+    support_version = value.get("support_version")
+    release_tag = value.get("release_tag")
+    repository = value.get("repository")
+    bootstrap_protocol = value.get("bootstrap_protocol")
+    minimum_protocol = value.get("minimum_bootstrap_protocol")
+    if not _is_safe_version(support_version):
+        raise DesktopCLIError("support version is not a safe x.y.z value")
+    if (not isinstance(release_tag, str) or not release_tag.isascii()
+            or not release_tag.startswith("v") or not _is_safe_version(release_tag[1:])):
+        raise DesktopCLIError("support release tag is invalid")
+    if repository != SUPPORT_REPOSITORY:
+        raise DesktopCLIError("support manifest repository identity is invalid")
+    if (type(installed_bootstrap_protocol) is not int
+            or installed_bootstrap_protocol < 1):
+        raise DesktopCLIError("installed bootstrap protocol is invalid")
+    if (type(bootstrap_protocol) is not int or bootstrap_protocol < 1
+            or type(minimum_protocol) is not int or minimum_protocol < 1
+            or minimum_protocol > bootstrap_protocol):
+        raise DesktopCLIError("support bootstrap protocol declaration is invalid")
+    if (minimum_protocol > installed_bootstrap_protocol
+            or bootstrap_protocol > SUPPORT_BOOTSTRAP_PROTOCOL):
+        raise DesktopCLIError("support generation requires a newer stable bootstrap protocol")
+    if bootstrap_protocol != SUPPORT_BOOTSTRAP_PROTOCOL:
+        raise DesktopCLIError("support bootstrap protocol is unsupported")
+    raw_files = value.get("files")
+    if not isinstance(raw_files, list) or len(raw_files) != len(SUPPORT_PAYLOAD_NAMES):
+        raise DesktopCLIError("support manifest payload set is not exact")
+    files: list[SupportPayload] = []
+    for expected_name, item in zip(SUPPORT_PAYLOAD_NAMES, raw_files):
+        if not isinstance(item, dict) or set(item) != SUPPORT_FILE_KEYS:
+            raise DesktopCLIError("support manifest payload entry does not match the exact schema")
+        name, size, mode, digest = (
+            item.get("name"), item.get("size"), item.get("mode"), item.get("sha256"),
+        )
+        if name != expected_name:
+            raise DesktopCLIError("support manifest payload names or order are not exact")
+        if (type(size) is not int or size <= 0 or size > MAX_SUPPORT_PAYLOAD_BYTES
+                or type(mode) is not int or mode != SUPPORT_PAYLOAD_MODE
+                or not isinstance(digest, str) or SHA_PATTERN.fullmatch(digest) is None):
+            raise DesktopCLIError("support manifest payload facts are invalid")
+        files.append(SupportPayload(name, size, mode, digest))
+    generation_id = value.get("generation_id")
+    identity = _support_manifest_identity_value(
+        support_version, release_tag, repository,
+        bootstrap_protocol, minimum_protocol, files,
+    )
+    if (not _is_safe_support_generation(generation_id)
+            or generation_id != _support_generation_id(identity)):
+        raise DesktopCLIError("support generation identity does not match canonical manifest content")
+    canonical = dict(identity)
+    canonical["generation_id"] = generation_id
+    canonical_bytes = _canonical_json_bytes(
+        canonical, MAX_SUPPORT_MANIFEST_BYTES, "support manifest",
+    )
+    if require_canonical and raw != canonical_bytes:
+        raise DesktopCLIError("support manifest bytes are not canonical")
+    return SupportManifest(
+        support_version, generation_id, release_tag, repository,
+        bootstrap_protocol, minimum_protocol, tuple(files), _sha256_bytes(canonical_bytes),
+    )
+
+
+def _read_managed_support_file(path: Path, label: str, maximum_bytes: int,
+                               expected_size: int | None = None,
+                               expected_mode: int = SUPPORT_PAYLOAD_MODE) -> tuple[bytes, tuple[int, int]]:
+    descriptor: int | None = None
+    try:
+        descriptor, facts = _open_regular_nofollow(path, label)
+        if (facts.st_nlink != 1 or stat.S_IMODE(facts.st_mode) != expected_mode
+                or facts.st_size <= 0 or facts.st_size > maximum_bytes
+                or (expected_size is not None and facts.st_size != expected_size)):
+            raise DesktopCLIError(f"{label} ownership, mode, or size is invalid")
+        identity = (facts.st_dev, facts.st_ino)
+        with os.fdopen(descriptor, "rb") as stream:
+            descriptor = None
+            content = stream.read(maximum_bytes + 1)
+    except DesktopCLIError:
+        raise
+    except OSError as error:
+        raise DesktopCLIError(f"could not read {label}") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    if len(content) > maximum_bytes or (expected_size is not None and len(content) != expected_size):
+        raise DesktopCLIError(f"{label} size changed while reading")
+    return content, identity
+
+
+def validate_support_generation(
+        generation: Path, *,
+        installed_bootstrap_protocol: int = SUPPORT_BOOTSTRAP_PROTOCOL) -> ValidatedSupportGeneration:
+    generation = Path(generation)
+    try:
+        directory_facts = generation.lstat()
+    except OSError as error:
+        raise DesktopCLIError("support generation is missing") from error
+    if (stat.S_ISLNK(directory_facts.st_mode) or not stat.S_ISDIR(directory_facts.st_mode)
+            or stat.S_IMODE(directory_facts.st_mode) != SUPPORT_GENERATION_MODE
+            or not _is_safe_support_generation(generation.name)):
+        raise DesktopCLIError("support generation directory identity or mode is invalid")
+    try:
+        actual_names = {entry.name for entry in os.scandir(generation)}
+    except OSError as error:
+        raise DesktopCLIError("support generation could not be enumerated") from error
+    expected_names = {SUPPORT_MANIFEST_NAME, *SUPPORT_PAYLOAD_NAMES}
+    if actual_names != expected_names:
+        raise DesktopCLIError("support generation file set is not exact")
+    manifest_bytes, manifest_identity = _read_managed_support_file(
+        generation / SUPPORT_MANIFEST_NAME, "support manifest",
+        MAX_SUPPORT_MANIFEST_BYTES,
+    )
+    manifest = parse_support_manifest(
+        manifest_bytes, installed_bootstrap_protocol=installed_bootstrap_protocol,
+    )
+    if manifest.generation_id != generation.name:
+        raise DesktopCLIError("support generation directory does not match its manifest")
+    identities: list[tuple[str, tuple[int, int]]] = [
+        (SUPPORT_MANIFEST_NAME, manifest_identity),
+    ]
+    for payload in manifest.files:
+        content, identity = _read_managed_support_file(
+            generation / payload.name, f"support payload {payload.name}",
+            MAX_SUPPORT_PAYLOAD_BYTES, payload.size, payload.mode,
+        )
+        if _sha256_bytes(content) != payload.sha256:
+            raise DesktopCLIError(f"support payload {payload.name} SHA-256 does not match manifest")
+        identities.append((payload.name, identity))
+    return ValidatedSupportGeneration(
+        generation, manifest, (directory_facts.st_dev, directory_facts.st_ino),
+        tuple(identities),
+    )
+
+
+def _support_state_value(state: SupportState) -> dict[str, object]:
+    return {
+        "failed_generations": [
+            {"generation_id": item.generation_id, "manifest_sha256": item.manifest_sha256}
+            for item in state.failed_generations
+        ],
+        "high_water_manifest_sha256": state.high_water_manifest_sha256,
+        "high_water_version": state.high_water_version,
+        "last_good_generation": state.last_good_generation,
+        "schema": SUPPORT_STATE_SCHEMA,
+    }
+
+
+def support_state_bytes(state: SupportState) -> bytes:
+    payload = _canonical_json_bytes(
+        _support_state_value(state), MAX_SUPPORT_STATE_BYTES, "support state",
+    )
+    parse_support_state(payload)
+    return payload
+
+
+def parse_support_state(raw: bytes, *, require_canonical: bool = True) -> SupportState:
+    if not isinstance(raw, bytes) or len(raw) > MAX_SUPPORT_STATE_BYTES:
+        raise DesktopCLIError("support state is too large")
+    try:
+        value = json.loads(raw, object_pairs_hook=_exact_json_object)
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError) as error:
+        raise DesktopCLIError("support state is not bounded valid JSON") from error
+    if (not isinstance(value, dict) or set(value) != SUPPORT_STATE_KEYS
+            or value.get("schema") != SUPPORT_STATE_SCHEMA):
+        raise DesktopCLIError("support state does not match the exact schema")
+    version = value.get("high_water_version")
+    digest = value.get("high_water_manifest_sha256")
+    last_good = value.get("last_good_generation")
+    if (not _is_safe_version(version)
+            or not isinstance(digest, str) or SHA_PATTERN.fullmatch(digest) is None
+            or not _is_safe_support_generation(last_good)
+            or _support_generation_version(last_good) != version):
+        raise DesktopCLIError("support state high-water or last-good identity is invalid")
+    raw_failed = value.get("failed_generations")
+    if (not isinstance(raw_failed, list)
+            or len(raw_failed) > MAX_FAILED_SUPPORT_GENERATIONS):
+        raise DesktopCLIError("support state failed-generation list is invalid")
+    failed: list[FailedSupportGeneration] = []
+    seen: set[str] = set()
+    for item in raw_failed:
+        if not isinstance(item, dict) or set(item) != SUPPORT_FAILED_KEYS:
+            raise DesktopCLIError("support failed-generation entry does not match the exact schema")
+        generation_id, manifest_sha = item.get("generation_id"), item.get("manifest_sha256")
+        if (not _is_safe_support_generation(generation_id)
+                or not isinstance(manifest_sha, str)
+                or SHA_PATTERN.fullmatch(manifest_sha) is None
+                or generation_id in seen):
+            raise DesktopCLIError("support failed-generation identity is invalid")
+        seen.add(generation_id)
+        failed.append(FailedSupportGeneration(generation_id, manifest_sha))
+    state = SupportState(version, digest, last_good, tuple(failed))
+    canonical = _canonical_json_bytes(
+        _support_state_value(state), MAX_SUPPORT_STATE_BYTES, "support state",
+    )
+    if require_canonical and raw != canonical:
+        raise DesktopCLIError("support state bytes are not canonical")
+    return state
+
+
+def _support_pending_value(pending: SupportPending) -> dict[str, object]:
+    return {
+        "expected_current_dev": pending.expected_current_dev,
+        "expected_current_ino": pending.expected_current_ino,
+        "from_generation": pending.from_generation,
+        "requested_argv_sha256": pending.requested_argv_sha256,
+        "schema": SUPPORT_PENDING_SCHEMA,
+        "to_generation": pending.to_generation,
+        "to_manifest_sha256": pending.to_manifest_sha256,
+    }
+
+
+def support_pending_bytes(pending: SupportPending) -> bytes:
+    payload = _canonical_json_bytes(
+        _support_pending_value(pending), MAX_SUPPORT_PENDING_BYTES, "support pending journal",
+    )
+    parse_support_pending(payload)
+    return payload
+
+
+def parse_support_pending(raw: bytes, *, require_canonical: bool = True) -> SupportPending:
+    if not isinstance(raw, bytes) or len(raw) > MAX_SUPPORT_PENDING_BYTES:
+        raise DesktopCLIError("support pending journal is too large")
+    try:
+        value = json.loads(raw, object_pairs_hook=_exact_json_object)
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError) as error:
+        raise DesktopCLIError("support pending journal is not bounded valid JSON") from error
+    if (not isinstance(value, dict) or set(value) != SUPPORT_PENDING_KEYS
+            or value.get("schema") != SUPPORT_PENDING_SCHEMA):
+        raise DesktopCLIError("support pending journal does not match the exact schema")
+    from_generation = value.get("from_generation")
+    to_generation = value.get("to_generation")
+    digest = value.get("to_manifest_sha256")
+    argv_digest = value.get("requested_argv_sha256")
+    dev, ino = value.get("expected_current_dev"), value.get("expected_current_ino")
+    if (not _is_safe_support_generation(from_generation)
+            or not _is_safe_support_generation(to_generation)
+            or from_generation == to_generation
+            or not isinstance(digest, str) or SHA_PATTERN.fullmatch(digest) is None
+            or not isinstance(argv_digest, str) or SHA_PATTERN.fullmatch(argv_digest) is None
+            or type(dev) is not int or dev < 0 or type(ino) is not int or ino < 0):
+        raise DesktopCLIError("support pending journal identities are invalid")
+    pending = SupportPending(
+        from_generation, to_generation, digest, dev, ino, argv_digest,
+    )
+    canonical = _canonical_json_bytes(
+        _support_pending_value(pending), MAX_SUPPORT_PENDING_BYTES,
+        "support pending journal",
+    )
+    if require_canonical and raw != canonical:
+        raise DesktopCLIError("support pending journal bytes are not canonical")
+    return pending
+
+
+def validate_support_candidate(
+        candidate: SupportManifest, state: SupportState, *,
+        explicit_retry: bool = False) -> None:
+    candidate_version = _version_tuple(candidate.support_version)
+    high_water_version = _version_tuple(state.high_water_version)
+    if candidate_version < high_water_version:
+        raise DesktopCLIError("support update refuses a version below the high-water mark")
+    if (candidate_version == high_water_version
+            and candidate.manifest_sha256 != state.high_water_manifest_sha256):
+        raise DesktopCLIError("support update refuses same-version manifest substitution")
+    if not explicit_retry and any(
+            item.generation_id == candidate.generation_id
+            and item.manifest_sha256 == candidate.manifest_sha256
+            for item in state.failed_generations):
+        raise DesktopCLIError("support update target was already recorded as failed")
 
 
 def load_manifest(archive: Path, manifest: Path) -> Manifest:

@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import io
 import json
 import os
 import plistlib
+import shutil
 import stat
 import tempfile
 import unittest
@@ -1434,6 +1436,173 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             cli.uninstall_all(home=home, effective_uid=501)
             self.assertFalse(home.joinpath(".local/bin/lingtai-desktop").exists())
             self.assertFalse(home.joinpath(".local/share/lingtai-desktop").exists())
+
+    def test_support_generation_models_are_canonical_fail_closed_and_anti_rollback(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            payloads = {
+                "desktop_user_cli.py": b"def installed_main(argv=None):\n    return 0\n",
+                "verify-app-archive.py": b"# independent verifier fixture\n",
+            }
+
+            def publish_fixture(parent: Path, version: str = "1.2.0",
+                                module_suffix: bytes = b"") -> Path:
+                candidate = dict(payloads)
+                candidate["desktop_user_cli.py"] += module_suffix
+                manifest_bytes = cli.build_support_manifest_bytes(
+                    version, f"v{version}", candidate,
+                )
+                manifest_value = json.loads(manifest_bytes)
+                generation = parent / manifest_value["generation_id"]
+                generation.mkdir(parents=True, mode=0o700)
+                generation.chmod(0o700)
+                (generation / "support-manifest.json").write_bytes(manifest_bytes)
+                for name, content in candidate.items():
+                    (generation / name).write_bytes(content)
+                for path in generation.iterdir():
+                    path.chmod(0o600)
+                return generation
+
+            generation = publish_fixture(root / "valid")
+            first_bytes = (generation / "support-manifest.json").read_bytes()
+            second_bytes = cli.build_support_manifest_bytes(
+                "1.2.0", "v1.2.0", payloads,
+            )
+            self.assertEqual(first_bytes, second_bytes)
+            self.assertTrue(first_bytes.endswith(b"\n"))
+            parsed = cli.parse_support_manifest(first_bytes)
+            validated = cli.validate_support_generation(generation)
+            self.assertEqual(parsed, validated.manifest)
+            self.assertEqual(parsed.generation_id, generation.name)
+            self.assertRegex(parsed.generation_id, r"^1\.2\.0-[0-9a-f]{12}$")
+            self.assertEqual(
+                [item.name for item in parsed.files],
+                ["desktop_user_cli.py", "verify-app-archive.py"],
+            )
+
+            manifest_value = json.loads(first_bytes)
+            malformed_manifests: list[dict[str, object]] = []
+            unknown = json.loads(first_bytes)
+            unknown["unknown"] = True
+            malformed_manifests.append(unknown)
+            traversal = json.loads(first_bytes)
+            traversal["files"][0]["name"] = "../desktop_user_cli.py"
+            malformed_manifests.append(traversal)
+            duplicate_payload = json.loads(first_bytes)
+            duplicate_payload["files"][1]["name"] = "desktop_user_cli.py"
+            malformed_manifests.append(duplicate_payload)
+            oversized = json.loads(first_bytes)
+            oversized["files"][0]["size"] = cli.MAX_SUPPORT_PAYLOAD_BYTES + 1
+            malformed_manifests.append(oversized)
+            incompatible = json.loads(first_bytes)
+            incompatible["minimum_bootstrap_protocol"] = cli.SUPPORT_BOOTSTRAP_PROTOCOL + 1
+            malformed_manifests.append(incompatible)
+            for index, value in enumerate(malformed_manifests):
+                with self.subTest(manifest_rejection=index), self.assertRaises(cli.DesktopCLIError):
+                    cli.parse_support_manifest(
+                        (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+                    )
+            duplicate_json = first_bytes.replace(
+                b'{"bootstrap_protocol":1,',
+                b'{"bootstrap_protocol":1,"bootstrap_protocol":1,',
+                1,
+            )
+            with self.assertRaises(cli.DesktopCLIError):
+                cli.parse_support_manifest(duplicate_json)
+
+            for mutation in (
+                "unknown-file", "mode", "hash", "size", "symlink",
+                "hardlink", "fifo", "directory", "manifest-mode",
+            ):
+                with self.subTest(filesystem_rejection=mutation):
+                    case_root = root / f"case-{mutation}"
+                    case = publish_fixture(case_root)
+                    target = case / "desktop_user_cli.py"
+                    if mutation == "unknown-file":
+                        (case / "unknown.py").write_text("foreign", encoding="utf-8")
+                        (case / "unknown.py").chmod(0o600)
+                    elif mutation == "mode":
+                        target.chmod(0o644)
+                    elif mutation == "hash":
+                        original = target.read_bytes()
+                        target.write_bytes(b"X" + original[1:])
+                        target.chmod(0o600)
+                    elif mutation == "size":
+                        target.write_bytes(target.read_bytes() + b"X")
+                        target.chmod(0o600)
+                    elif mutation == "symlink":
+                        target.unlink()
+                        target.symlink_to(root / "outside-support-payload")
+                    elif mutation == "hardlink":
+                        original = target.read_bytes()
+                        target.unlink()
+                        outside = root / "outside-support-payload"
+                        outside.write_bytes(original)
+                        outside.chmod(0o600)
+                        os.link(outside, target)
+                    elif mutation == "fifo":
+                        target.unlink()
+                        os.mkfifo(target, 0o600)
+                    elif mutation == "directory":
+                        target.unlink()
+                        target.mkdir(mode=0o700)
+                    else:
+                        (case / "support-manifest.json").chmod(0o644)
+                    before = tree_snapshot(case_root)
+                    with self.assertRaises(cli.DesktopCLIError):
+                        cli.validate_support_generation(case)
+                    self.assertEqual(tree_snapshot(case_root), before)
+
+            state = cli.SupportState(
+                high_water_version=parsed.support_version,
+                high_water_manifest_sha256=parsed.manifest_sha256,
+                last_good_generation=parsed.generation_id,
+                failed_generations=(),
+            )
+            state_bytes = cli.support_state_bytes(state)
+            self.assertEqual(cli.parse_support_state(state_bytes), state)
+            state_unknown = json.loads(state_bytes)
+            state_unknown["unknown"] = 1
+            with self.assertRaises(cli.DesktopCLIError):
+                cli.parse_support_state(
+                    (json.dumps(state_unknown, sort_keys=True, separators=(",", ":")) + "\n").encode()
+                )
+
+            lower = cli.validate_support_generation(publish_fixture(root / "lower", "1.1.9"))
+            same_substitution = cli.validate_support_generation(
+                publish_fixture(root / "same", "1.2.0", b"# substituted\n")
+            )
+            failed = cli.validate_support_generation(publish_fixture(root / "failed", "1.3.0"))
+            with self.assertRaises(cli.DesktopCLIError):
+                cli.validate_support_candidate(lower.manifest, state)
+            with self.assertRaises(cli.DesktopCLIError):
+                cli.validate_support_candidate(same_substitution.manifest, state)
+            failed_state = dataclasses.replace(
+                state,
+                failed_generations=(cli.FailedSupportGeneration(
+                    failed.manifest.generation_id,
+                    failed.manifest.manifest_sha256,
+                ),),
+            )
+            with self.assertRaises(cli.DesktopCLIError):
+                cli.validate_support_candidate(failed.manifest, failed_state)
+
+            pending = cli.SupportPending(
+                from_generation=parsed.generation_id,
+                to_generation=failed.manifest.generation_id,
+                to_manifest_sha256=failed.manifest.manifest_sha256,
+                expected_current_dev=1,
+                expected_current_ino=2,
+                requested_argv_sha256="a" * 64,
+            )
+            pending_bytes = cli.support_pending_bytes(pending)
+            self.assertEqual(cli.parse_support_pending(pending_bytes), pending)
+            pending_unknown = json.loads(pending_bytes)
+            pending_unknown["command"] = "must-not-be-stored"
+            with self.assertRaises(cli.DesktopCLIError):
+                cli.parse_support_pending(
+                    (json.dumps(pending_unknown, sort_keys=True, separators=(",", ":")) + "\n").encode()
+                )
 
     def test_production_source_contains_no_quarantine_bypass(self) -> None:
         source = (Path(__file__).parents[1] / "scripts/desktop_user_cli.py").read_text()
