@@ -2621,6 +2621,7 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                 f"    attempt(lambda: Path({os.fspath(markers['home'])!r}).write_text('bad'))",
                 f"    attempt(lambda: Path({os.fspath(markers['cwd'])!r}).write_text('bad'))",
                 f"    attempt(lambda: _review_subprocess.run(['/usr/bin/touch', {os.fspath(markers['process'])!r}], check=False))",
+                "    attempt(lambda: _review_os._exit(0))",
                 f"    attempt(lambda: _review_os.execv('/usr/bin/touch', ['touch', {os.fspath(markers['exec'])!r}]))",
                 "    attempt(lambda: _review_socket.socket().connect(('127.0.0.1', 9)))",
                 "    attempt(lambda: _review_sys.audit('socket.connect', object(), ('mocked.invalid', 443)))",

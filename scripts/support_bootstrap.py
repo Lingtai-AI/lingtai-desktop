@@ -832,6 +832,21 @@ import sys
 import types
 
 violations = []
+
+def deny_process_exit(*args):
+    violations.append("os._exit")
+    raise PermissionError("support self-test policy denied process exit")
+
+# CPython 3.9 emits no audit event for _exit(). Replace both public aliases
+# before candidate code so a candidate cannot turn early child exit 0 into a
+# forged passing self-test.
+os._exit = deny_process_exit
+try:
+    import posix as _posix
+    _posix._exit = deny_process_exit
+except ImportError:
+    pass
+
 mutation_events = {
     "os.chdir", "os.chflags", "os.chmod", "os.chown", "os.exec",
     "os.fork", "os.forkpty", "os.kill", "os.link", "os.mkdir",
