@@ -3034,6 +3034,146 @@ class DesktopUserCLIContractTest(unittest.TestCase):
             with self.assertRaisesRegex(bootstrap.BootstrapError, "isolated exit"):
                 bootstrap._production_self_test(generation)
 
+    def test_review_fix_self_test_terminal_marker_is_wrapper_owned(self) -> None:
+        import importlib
+
+        bootstrap = importlib.import_module("scripts.support_bootstrap")
+
+        def generation(root: Path, source: bytes) -> object:
+            return bootstrap.Generation(
+                root / "1.0.0-000000000000", "1.0.0", "1.0.0-000000000000",
+                "0" * 64, (1, 1), (), b"manifest", (
+                    ("desktop_user_cli.py", source),
+                    ("verify-app-archive.py", b"# verifier\n"),
+                ),
+            )
+
+        inherited_fd = (
+            b"def inherited_fd():\n"
+            b"    for fd in range(3, 64):\n"
+            b"        try:\n"
+            b"            os.fstat(fd)\n"
+            b"        except OSError:\n"
+            b"            continue\n"
+            b"        return fd\n"
+            b"    raise RuntimeError('inherited audit fd not found')\n"
+            b"audit_fd = inherited_fd()\n"
+        )
+        replace_main_finalizers = (
+            b"for name in ('finish_policy', 'install_policy', 'run_candidate', 'violations'):\n"
+            b"    setattr(__main__, name, lambda *_: None)\n"
+            b"def support_self_test():\n"
+            b"    return True\n"
+        )
+        rejected = {
+            "exact-review-forgery": (
+                b"import os, sys, __main__\n"
+                b"os.write(int(sys.argv[2]), b'T')\n"
+                b"__main__.finish_policy = lambda *_: None\n"
+                b"def support_self_test():\n"
+                b"    return True\n"
+            ),
+            "inherited-os-write": (
+                b"import os, __main__\n" + inherited_fd
+                + b"try:\n    os.write(audit_fd, b'T')\nexcept PermissionError:\n    pass\n"
+                + replace_main_finalizers
+            ),
+            "inherited-posix-write": (
+                b"import os, posix, __main__\n" + inherited_fd
+                + b"try:\n    posix.write(audit_fd, b'T')\nexcept PermissionError:\n    pass\n"
+                + replace_main_finalizers
+            ),
+            "partial-marker": (
+                b"import os, __main__\n" + inherited_fd
+                + b"try:\n    os.write(audit_fd, b'')\nexcept PermissionError:\n    pass\n"
+                + replace_main_finalizers
+            ),
+            "extra-marker": (
+                b"import os, __main__\n" + inherited_fd
+                + b"try:\n    os.write(audit_fd, b'TT')\nexcept PermissionError:\n    pass\n"
+                + replace_main_finalizers
+            ),
+            "forged-marker-then-close": (
+                b"import os, __main__\n" + inherited_fd
+                + b"try:\n    os.write(audit_fd, b'T')\nexcept PermissionError:\n    pass\n"
+                + b"os.close(audit_fd)\n" + replace_main_finalizers
+            ),
+        }
+        for label, source in rejected.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                with self.assertRaisesRegex(bootstrap.BootstrapError, "isolated exit"):
+                    bootstrap._production_self_test(generation(Path(temporary), source))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            bootstrap._production_self_test(generation(
+                Path(temporary), b"def support_self_test():\n    return True\n",
+            ))
+
+    def test_review_fix_forged_self_test_cannot_commit_pending_transaction(self) -> None:
+        import importlib
+
+        bootstrap = importlib.import_module("scripts.support_bootstrap")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home"
+            home.mkdir()
+            archive, manifest = write_artifacts(root)
+            cli.install(
+                archive, manifest, home=home, platform=FakePlatform(), effective_uid=501,
+            )
+            paths = cli._paths(home)
+            source = os.readlink(paths.support_current).removeprefix("versions/")
+            current_identity = cli._identity(paths.support_current)
+            state_before = cli.parse_support_state(paths.support_state.read_bytes())
+            app_before = tuple(identity_tree_snapshot(path) for path in (
+                paths.versions, paths.receipts, paths.current, paths.update_cache,
+            ))
+            fixture = root / "fixture"
+            fixture.mkdir()
+            module = fixture / "desktop_user_cli.py"
+            verifier = fixture / "verify-app-archive.py"
+            module.write_bytes(
+                Path(cli.__file__).read_bytes()
+                + b"\nimport os, sys, __main__\n"
+                + b"os.write(int(sys.argv[2]), b'T')\n"
+                + b"__main__.finish_policy = lambda *_: None\n"
+                + b"def support_self_test():\n    return True\n"
+            )
+            verifier.write_bytes(
+                (Path(cli.__file__).parent / "verify-app-archive.py").read_bytes()
+                + b"\n# forged self-test transaction\n"
+            )
+            module.chmod(0o600)
+            verifier.chmod(0o600)
+            target = cli.stage_local_support_update(
+                module, verifier, support_version="0.1.6", release_tag="v0.1.6",
+                argv=[os.fspath(paths.launcher), "version"], home=home,
+                exec_launcher=lambda *_: None,
+            )
+            self.assertTrue(paths.support_pending.exists())
+            selected = bootstrap.process_pending(
+                home=home,
+                invocation_argv=[os.fspath(paths.launcher), "version"],
+            )
+            self.assertEqual(selected.generation_id, source)
+            self.assertEqual(os.readlink(paths.support_current), f"versions/{source}")
+            self.assertEqual(cli._identity(paths.support_current), current_identity)
+            state_after = cli.parse_support_state(paths.support_state.read_bytes())
+            self.assertEqual(state_after.last_good_generation, state_before.last_good_generation)
+            self.assertEqual(state_after.high_water_version, state_before.high_water_version)
+            self.assertEqual(
+                state_after.high_water_manifest_sha256,
+                state_before.high_water_manifest_sha256,
+            )
+            self.assertIn(target, [item.generation_id for item in state_after.failed_generations])
+            self.assertFalse(paths.support_pending.exists())
+            self.assertEqual(
+                tuple(identity_tree_snapshot(path) for path in (
+                    paths.versions, paths.receipts, paths.current, paths.update_cache,
+                )),
+                app_before,
+            )
+
     def test_repair_pending_transaction_is_bound_to_exact_invocation_argv(self) -> None:
         import importlib
 
@@ -3089,6 +3229,119 @@ class DesktopUserCLIContractTest(unittest.TestCase):
                 paths.support_versions / target / "desktop_user_cli.py", ["version"],
             )])
             self.assertFalse(paths.support_pending.exists())
+
+    def test_review_fix_staging_canonicalizes_every_replayable_full_argv(self) -> None:
+        import importlib
+
+        bootstrap = importlib.import_module("scripts.support_bootstrap")
+        cases = (
+            ("bare-argv0", "bare", ["version"], False),
+            ("alternate-absolute-argv0", "absolute", ["version"], False),
+            ("default-argv", "default", ["version"], False),
+            ("explicit-retry", "bare", ["version"], True),
+            ("argv0-that-looks-like-an-argument", "argument-looking", [], False),
+        )
+        for label, representation, arguments, explicit_retry in cases:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                home = root / "home"
+                home.mkdir()
+                archive, manifest = write_artifacts(root)
+                cli.install(
+                    archive, manifest, home=home, platform=FakePlatform(),
+                    effective_uid=501,
+                )
+                paths = cli._paths(home)
+                source = os.readlink(paths.support_current).removeprefix("versions/")
+                source_identity = cli._identity(paths.support_current)
+                fixture = root / "fixture"
+                fixture.mkdir()
+                module = fixture / "desktop_user_cli.py"
+                verifier = fixture / "verify-app-archive.py"
+                suffix = f"\n# canonical argv target: {label}\n".encode("ascii")
+                module.write_bytes(Path(cli.__file__).read_bytes() + suffix)
+                verifier.write_bytes(
+                    (Path(cli.__file__).parent / "verify-app-archive.py").read_bytes()
+                    + suffix
+                )
+                module.chmod(0o600)
+                verifier.chmod(0o600)
+                if representation == "bare":
+                    supplied_argv = ["lingtai-desktop", *arguments]
+                elif representation == "absolute":
+                    supplied_argv = [os.fspath(root / "alternate-lingtai-desktop"), *arguments]
+                elif representation == "argument-looking":
+                    supplied_argv = ["version"]
+                else:
+                    supplied_argv = ["default-lingtai-desktop", *arguments]
+                expected_argv = [os.fspath(paths.launcher), *arguments]
+                executed: list[tuple[Path, list[str], dict[str, str]]] = []
+
+                def capture_exec(
+                        launcher: Path, argv: list[str], environment: dict[str, str],
+                ) -> None:
+                    executed.append((launcher, list(argv), dict(environment)))
+
+                stage_kwargs = dict(
+                    support_version="0.1.6", release_tag="v0.1.6", home=home,
+                    explicit_retry=explicit_retry, exec_launcher=capture_exec,
+                )
+                if representation == "default":
+                    with mock.patch.object(cli.sys, "argv", supplied_argv):
+                        target = cli.stage_local_support_update(
+                            module, verifier, argv=None, **stage_kwargs,
+                        )
+                else:
+                    target = cli.stage_local_support_update(
+                        module, verifier, argv=supplied_argv, **stage_kwargs,
+                    )
+                pending = cli.parse_support_pending(paths.support_pending.read_bytes())
+                self.assertEqual(pending.explicit_retry, explicit_retry)
+
+                with self.assertRaisesRegex(bootstrap.BootstrapError, "invocation"):
+                    bootstrap.run_launcher(
+                        ["doctor"], home=home,
+                        installed_runner=lambda *_: self.fail(
+                            "doctor substitution reached the installed runner"
+                        ),
+                    )
+                self.assertTrue(paths.support_pending.exists())
+                self.assertEqual(cli._identity(paths.support_current), source_identity)
+
+                delegated: list[tuple[Path, list[str]]] = []
+                self.assertEqual(
+                    bootstrap.run_launcher(
+                        arguments, home=home,
+                        installed_runner=lambda path, invocation: (
+                            delegated.append((path, list(invocation))) or 43
+                        ),
+                    ),
+                    43,
+                )
+                self.assertEqual(executed, [(
+                    paths.launcher,
+                    expected_argv,
+                    mock.ANY,
+                )])
+                self.assertEqual(
+                    executed[0][2][cli.SUPPORT_REEXEC_MARKER],
+                    "1",
+                )
+                self.assertEqual(
+                    pending.requested_argv_sha256,
+                    cli._argv_sha256(expected_argv),
+                )
+                self.assertEqual(delegated, [(
+                    paths.support_versions / target / "desktop_user_cli.py",
+                    arguments,
+                )])
+                self.assertFalse(paths.support_pending.exists())
+                self.assertEqual(
+                    os.readlink(paths.support_current), f"versions/{target}",
+                )
+                state = cli.parse_support_state(paths.support_state.read_bytes())
+                self.assertEqual(state.last_good_generation, target)
+                self.assertNotEqual(state.last_good_generation, source)
 
     def test_repair_app_post_current_failure_restores_exact_previous_pointer(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
