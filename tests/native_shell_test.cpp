@@ -2,6 +2,7 @@
 #include "agent_config_page.h"
 #include "agent_detail_view.h"
 #include "agent_presets_page.h"
+#include "composer_spellcheck.h"
 #include "preset_editor_page.h"
 #include "shell_host.h"
 #include "agent_projection.h"
@@ -18,6 +19,7 @@
 #include "ui/widgets/buttons.h"
 #include "ui/widgets/fields/input_field.h"
 #include "ui/widgets/labels.h"
+#include "ui/widgets/popup_menu.h"
 #include "ui/widgets/rp_window.h"
 #include "ui/widgets/shadow.h"
 
@@ -30,10 +32,12 @@
 #include <QtCore/QJsonObject>
 #include <QtCore/QMimeData>
 #include <QtCore/QRegularExpression>
+#include <QtCore/QSet>
 #include <QtCore/QString>
 #include <QtCore/QThread>
 #include <QtCore/QTimer>
 #include <QtGui/QColor>
+#include <QtGui/QContextMenuEvent>
 #include <QtGui/QDragEnterEvent>
 #include <QtGui/QDragMoveEvent>
 #include <QtGui/QDropEvent>
@@ -54,6 +58,7 @@
 #include <QtGui/QTextLayout>
 #include <QtGui/QWindow>
 #include <QtWidgets/QApplication>
+#include <QtGui/QAction>
 #include <QtWidgets/QCheckBox>
 #include <QtWidgets/QAbstractItemView>
 #include <QtWidgets/QComboBox>
@@ -62,6 +67,7 @@
 #include <QtWidgets/QLayout>
 #include <QtWidgets/QLineEdit>
 #include <QtWidgets/QListWidget>
+#include <QtWidgets/QMenu>
 #include <QtWidgets/QProgressBar>
 #include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QPushButton>
@@ -3105,6 +3111,205 @@ void verify_composer_send_behavior(
     std::error_code cleanup_error;
     fs::remove_all(sandbox, cleanup_error);
     require(!cleanup_error, "composer fixtures must be removed");
+}
+
+void verify_composer_context_menu(
+        lingtai::desktop::NativeShell &shell,
+        const fs::path &sandbox) {
+    class DeterministicSpellPlatform final
+        : public lingtai::desktop::ComposerSpellPlatform {
+    public:
+        lingtai::desktop::ComposerSpellDocumentTag open_document() override {
+            return 91;
+        }
+        void close_document(
+            lingtai::desktop::ComposerSpellDocumentTag) override {
+        }
+        bool checks_asynchronously() const noexcept override {
+            return false;
+        }
+        void check(
+                lingtai::desktop::ComposerSpellDocumentTag,
+                const QString &word,
+                lingtai::desktop::ComposerSpellCompletion completion) override {
+            completion(word == QStringLiteral("speling")
+                ? lingtai::desktop::ComposerSpellResult{
+                    .misspelled = true,
+                    .suggestions = {QStringLiteral("spelling")},
+                }
+                : lingtai::desktop::ComposerSpellResult{});
+        }
+        void learn(const QString &) override {
+        }
+        void unlearn(const QString &) override {
+        }
+        void ignore(
+            lingtai::desktop::ComposerSpellDocumentTag,
+            const QString &) override {
+        }
+    };
+
+    auto &window = shell.window();
+    const auto project = sandbox / "project";
+    write_file(project / ".lingtai/human/.agent.json",
+        R"({"agent_id":"20260101-000000-h001","agent_name":"Ted",)"
+        R"("address":"human","state":"active"})");
+    write_file(project / ".lingtai/spell-agent/.agent.json",
+        R"({"admin":{},"agent_id":"20260901-000000-s001",)"
+        R"("agent_name":"spell-agent","address":"spell-agent",)"
+        R"("state":"active"})");
+    static_cast<void>(shell.open_project(project, std::nullopt));
+    click_agent(shell, "spell-agent");
+
+    auto *input = required_ui_child<Ui::InputField>(
+        window, "lingtai_composer_input");
+    require(input->isEnabled(),
+        "the production selected-Agent composer must be enabled");
+    auto *detail = required_child<lingtai::desktop::AgentDetailView>(
+        window, "lingtai_agent_detail");
+    detail->set_composer_spell_service(
+        std::make_shared<lingtai::desktop::ComposerSpellService>(
+            std::make_shared<DeterministicSpellPlatform>()));
+    auto *editor = input->rawTextEdit().get();
+
+    struct StandardActionState {
+        QString text;
+        bool enabled = false;
+        QKeySequence shortcut;
+        bool operator==(const StandardActionState &) const = default;
+    };
+    const auto standard_states = [](const auto &actions) {
+        static const auto labels = QSet<QString>{
+            QStringLiteral("Undo"), QStringLiteral("Redo"),
+            QStringLiteral("Cut"), QStringLiteral("Copy"),
+            QStringLiteral("Copy Link Location"), QStringLiteral("Paste"),
+            QStringLiteral("Delete"), QStringLiteral("Select All"),
+        };
+        auto result = std::vector<StandardActionState>();
+        for (const auto action : actions) {
+            auto text = action->text();
+            text.remove('&');
+            if (labels.contains(text)) {
+                result.push_back({
+                    text, action->isEnabled(), action->shortcut()});
+            }
+        }
+        return result;
+    };
+    const auto request_menu = [&](int document_position) {
+        auto expected_menu = std::unique_ptr<QMenu>(
+            editor->createStandardContextMenu());
+        const auto expected = standard_states(expected_menu->actions());
+        auto point_cursor = input->textCursor();
+        point_cursor.setPosition(document_position);
+        const auto viewport_local = editor->cursorRect(point_cursor).center();
+        const auto editor_local = editor->viewport()->mapTo(
+            editor, viewport_local);
+        auto event = QContextMenuEvent(
+            QContextMenuEvent::Mouse,
+            editor_local,
+            editor->viewport()->mapToGlobal(viewport_local));
+        QApplication::sendEvent(editor, &event);
+        QCoreApplication::processEvents();
+
+        auto popups = std::vector<Ui::PopupMenu *>();
+        for (auto *widget : window.findChildren<QWidget *>()) {
+            if (auto *popup = dynamic_cast<Ui::PopupMenu *>(widget)) {
+                popups.push_back(popup);
+            }
+        }
+        require(popups.size() == 1,
+            "one context request must show exactly one styled Ui::PopupMenu");
+        require(standard_states(popups.front()->actions()) == expected,
+            "the production hook must preserve standard order, shortcuts, and Qt-derived enabled states including Paste");
+        return popups.front();
+    };
+
+    input->clear();
+    auto *popup = request_menu(0);
+    popup->hideMenu(true);
+
+    input->setText(QStringLiteral("plain text"));
+    popup = request_menu(2);
+    popup->hideMenu(true);
+
+    auto cursor = input->textCursor();
+    cursor.setPosition(0);
+    cursor.setPosition(5, QTextCursor::KeepAnchor);
+    input->setTextCursor(cursor);
+    popup = request_menu(2);
+    popup->hideMenu(true);
+
+    input->clear();
+    cursor = input->textCursor();
+    cursor.insertText(QStringLiteral("undoable"));
+    input->setTextCursor(cursor);
+    popup = request_menu(2);
+    popup->hideMenu(true);
+
+    input->setText(QStringLiteral("speling"));
+    cursor = input->textCursor();
+    cursor.setPosition(3);
+    input->setTextCursor(cursor);
+    popup = request_menu(3);
+    const auto actions = popup->actions();
+    auto standard_texts = QStringList();
+    for (const auto action : actions) {
+        if (!action->isSeparator()) {
+            auto text = action->text();
+            text.remove('&');
+            standard_texts.push_back(text);
+        }
+    }
+    require(standard_texts.contains(QStringLiteral("Undo"))
+            && standard_texts.contains(QStringLiteral("Redo"))
+            && standard_texts.contains(QStringLiteral("Cut"))
+            && standard_texts.contains(QStringLiteral("Copy"))
+            && standard_texts.contains(QStringLiteral("Paste"))
+            && standard_texts.contains(QStringLiteral("Delete"))
+            && standard_texts.contains(QStringLiteral("Select All")),
+        "the production context menu must preserve Qt's standard edit actions");
+    require(window.findChild<QAction *>(
+                "lingtai_spell_suggestion_0") != nullptr,
+        "a deterministic misspelling must expose a suggestion action");
+    require(!standard_texts.contains(QStringLiteral("Formatting"))
+            && !standard_texts.contains(QStringLiteral("Bold"))
+            && !standard_texts.contains(QStringLiteral("Italic"))
+            && !standard_texts.contains(QStringLiteral("Spoiler")),
+        "the plain-text composer menu must not gain rich-message formatting actions");
+
+    // PR1 non-regression only: a directly delivered synthetic click does not
+    // exercise the physical same-App routing defect reserved for PR2. Retain
+    // the accepted behavior without adding dismissal/focus/grab wiring here.
+    auto *status = required_child<QLabel>(
+        window, "lingtai_composer_status");
+    const auto status_local = QPointF(status->rect().center());
+    const auto status_global = QPointF(
+        status->mapToGlobal(status->rect().center()));
+    auto press = QMouseEvent(
+        QEvent::MouseButtonPress,
+        status_local,
+        status_global,
+        Qt::LeftButton,
+        Qt::LeftButton,
+        Qt::NoModifier);
+    auto release = QMouseEvent(
+        QEvent::MouseButtonRelease,
+        status_local,
+        status_global,
+        Qt::LeftButton,
+        Qt::NoButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(status, &press);
+    QApplication::sendEvent(status, &release);
+    QCoreApplication::processEvents();
+    require(popup->isVisible(),
+        "PR1 must retain the accepted synthetic same-window outside-click behavior for the separate PR2 fix");
+
+    popup->hideMenu(true);
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "context-menu fixtures must be removed");
 }
 
 // The text-paste contract carries source representations through a real Qt
@@ -8098,6 +8303,13 @@ void run_native_shell_journey(
         });
         return;
     }
+    if (journey == "menu") {
+        with_offscreen_shell([&](NativeShell &shell) {
+            verify_composer_context_menu(
+                shell, project_root / "composer-menu-fixture");
+        });
+        return;
+    }
     if (journey == "outgoing") {
         with_offscreen_shell([&](NativeShell &shell) {
             verify_outgoing_message_immediate_presentation(
@@ -8171,6 +8383,7 @@ void run_native_shell_journey(
             "layout",
             "theme",
             "composer",
+            "menu",
             "outgoing",
             "kanban",
         };
@@ -8242,7 +8455,7 @@ int main(int argc, char **argv) {
                      "--project-setup-only|--setup-rerun-only|--kanban-only|"
                      "--new-window-bootstrap-only]\n"
                      "  journeys: semantics bootstrap roster conversation "
-                     "setup lifecycle layout theme composer paste outgoing kanban all\n";
+                     "setup lifecycle layout theme composer paste menu outgoing kanban all\n";
         return 2;
     }
     try {

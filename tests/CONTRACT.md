@@ -159,6 +159,12 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   paste journey delivers logical text through a real MIME-carrying Qt event,
   then proves exact Unicode editor state, emoji input-method formatting,
   ordinary Send, and two-shell runtime sharing without accessing `QClipboard`.
+- `tests/composer_spellcheck_test.cpp` — `composer_spellcheck`; deterministic
+  platform/session fake plus the real Qt input/menu hook. It must not use the
+  user's dictionary, network, or clipboard, and must prove the platform tag is
+  closed once even when the field or pending menu disappears. The paired
+  production-composer proof is `native_shell_menu`; neither test authorizes a
+  popup dismissal/focus/grab implementation.
 - `tests/conversation_surface_typography_test.cpp` —
   `conversation_surface_typography` (the dedicated widget/document typography
   contract on the real `ConversationSurface`).

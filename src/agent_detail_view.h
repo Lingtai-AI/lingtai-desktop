@@ -17,6 +17,7 @@
 #include <QtWidgets/QScrollArea>
 
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -40,6 +41,7 @@ namespace lingtai::desktop {
 enum class ComposerNoticeKind { success, warning, error };
 
 class ConversationSurface;
+class ComposerSpellService;
 class KanbanPage;
 
 // Resize-fit for the selected-Agent chat top bar: keep the Sidebar-matching
@@ -112,6 +114,11 @@ public:
         const QString &message, ComposerNoticeKind kind);
     void clear_composer_notice();
 
+    // Narrow injection seam used by deterministic platform-adapter tests.
+    // The production composer registers one hook and reads the current service.
+    void set_composer_spell_service(
+        std::shared_ptr<ComposerSpellService> service);
+
     // Preset summary UI (read-only preset catalog + state line).
     void render_preset_summary(
         const std::optional<AgentPresetSummary> &summary);
@@ -160,6 +167,7 @@ private:
     Ui::RpWidget *composer_ = nullptr;
     Ui::InputField *composer_input_ = nullptr;
     Ui::RoundButton *composer_send_button_ = nullptr;
+    std::shared_ptr<ComposerSpellService> composer_spell_service_;
     QPushButton *composer_attachment_button_ = nullptr;
     QWidget *composer_attachment_tray_ = nullptr;
     QGridLayout *composer_attachment_layout_ = nullptr;

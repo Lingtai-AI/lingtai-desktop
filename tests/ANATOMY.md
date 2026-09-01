@@ -192,9 +192,19 @@ touches a real Agent or project, and none depends on a network or provider.
 
 ### 3. Real-Qt widget/shell contracts
 
+- `tests/composer_spellcheck_test.cpp` — `composer_spellcheck` ctest. It owns
+  the narrow deterministic fake platform/session and real `InputField` menu
+  fixture: Unicode/adjacent word ranges, suggestions/no suggestions, exact
+  replacement and cursor/selection mapping, distinct Learn/Ignore/Unlearn
+  effects, tag cleanup, no-word behavior, standard-action passthrough, pending
+  field/menu destruction, and content-log exclusion
+  (`composer_spellcheck_test.cpp:270`,
+  `composer_spellcheck_test.cpp:502`). On macOS it uses Cocoa because the
+  pinned `Ui::PopupMenu` uses native Cocoa window glue; it never changes the
+  host clipboard or queries a real dictionary.
 - `tests/native_shell_test.cpp` — the split `native_shell_<journey>` ctests.
   The real-Qt shell contract links `lingtai_desktop_native_shell` +
-  `desktop-app::lib_ui` + `src/crl_integration.cpp` (`CMakeLists.txt:837-849`),
+  `desktop-app::lib_ui` + `src/crl_integration.cpp` (`CMakeLists.txt:900-912`),
   constructs a real `QApplication`, shows the real `NativeShell`
   off-screen (`shell.show_offscreen()`), and drives the real widgets to
   prove shell semantics, named regions, geometry, the composer send flow,
@@ -202,9 +212,9 @@ touches a real Agent or project, and none depends on a network or provider.
   sleep, Start Agent, layout modes, live
   light→dark→light and dark→light→dark stored-control palette refresh, and
   the no-write rule. On macOS it runs with `QT_QPA_PLATFORM=cocoa`, elsewhere
-  with `offscreen` (`CMakeLists.txt:873-879`). CMake creates and passes one
+  with `offscreen` (`CMakeLists.txt:959-965`). CMake creates and passes one
   `native-shell-<journey>-fixture` working root per split journey
-  (`CMakeLists.txt:853-872`). `project_tree` snapshots
+  (`CMakeLists.txt:938-966`). `project_tree` snapshots
   surround the specific read-only, no-escape, and no-write cases — and any
   explicit outside symlink target the test names — proving those fixtures
   remain unchanged through those operations; the write journeys (composer
@@ -249,7 +259,14 @@ touches a real Agent or project, and none depends on a network or provider.
   two simultaneous shells. On macOS it uses Cocoa without ever accessing
   `QClipboard`; literal system paste remains outside automation because the
   full shell cannot run on the offscreen/minimal Qt plugins
-  (`tests/native_shell_test.cpp:2557`, `CMakeLists.txt:863-879`).
+  (`tests/native_shell_test.cpp:3320`, `CMakeLists.txt:959-965`).
+- Its focused `native_shell_menu` journey injects the deterministic spell
+  service into the production `AgentDetailView`, compares the resulting
+  standard action order/shortcuts/enabled states with Qt's unhooked menu for
+  empty, text, selection, Paste, and undo states, and proves one styled
+  `Ui::PopupMenu` plus a suggestion. Its synthetic same-window click freezes
+  accepted PR1 behavior only; physical outside-click dismissal remains PR2
+  (`native_shell_test.cpp:3116`).
 - The same conversation journey injects the history attachment external-action
   seam and proves exact Open/Reveal invocation after refresh, no invocation on
   a missing file, transient notices, and preservation of history text, scroll,

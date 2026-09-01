@@ -335,6 +335,27 @@ its code.
   adds no HTML/formatting semantics. Inserted content replaces the active
   selection, leaves an editable caret after it, and `getLastText()` reconstructs
   the exact Unicode rather than exposing internal object-replacement markers.
+- A composer context request retains Qt's standard Undo, Redo, Cut, Copy,
+  optional Copy Link Location, Paste, Delete, and Select All actions in their
+  Qt order, with their original shortcuts and enabled state. Desktop adds
+  spell actions to that same `QMenu`; pinned lib_ui still constructs the one
+  styled `Ui::PopupMenu`. No Formatting/rich-message rows are added.
+- At the real global context point, Desktop resolves the word at or immediately
+  adjacent to the matching UTF-16 Qt document position
+  (`composer_spellcheck.cpp:203`). On macOS one asynchronous local
+  `NSSpellChecker` request supplies bounded, de-duplicated suggestions. A
+  suggestion replaces only the still-matching captured range and maps the
+  existing cursor/selection across the length change
+  (`composer_spellcheck.cpp:231`). No word or no platform result adds no fake
+  row.
+- `Learn Spelling` calls macOS global learning; `Ignore Spelling` uses the
+  composer's unique spell-document tag. A truthfully learned word exposes
+  `Unlearn Spelling`. The APPLE adapter allocates and closes that tag at the
+  service boundary (`composer_spellcheck_mac.mm:21`,
+  `composer_spellcheck_mac.mm:29`). Composer text, candidate words,
+  suggestions, clipboard bytes, and dictionary contents are neither logged
+  nor persisted. Non-mac builds return no spell service and keep the standard
+  menu.
 - The paperclip asks `NativeShell` for the normal native multi-file dialog;
   tests replace that one picker seam. Each selection re-preflights existing
   canonical sources plus new picker paths once, preserving accepted order and
