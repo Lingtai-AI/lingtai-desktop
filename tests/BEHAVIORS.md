@@ -255,6 +255,25 @@ Qt plugin path set and an 8 s watchdog.
   commit, exact ordinary Send envelope/rendered row/draft clear, and two
   simultaneous shells sharing exactly one application-owned emoji runtime.
   It runs on Cocoa but never obtains or changes `QClipboard`.
+- The focused `native_shell_menu` journey injects a synchronous deterministic
+  spell platform into the production composer, then compares every recognized
+  Qt standard action's order, shortcut, and enabled state against a fresh
+  unhooked standard menu across empty, text, selection, Paste-derived, and
+  undoable states. It asserts one `Ui::PopupMenu`, one deterministic
+  suggestion, no rich-format actions, and the unchanged synthetic
+  same-window-click behavior reserved for PR2
+  (`native_shell_test.cpp:3116`).
+- `composer_spellcheck` supplies the exhaustive service seam: word/adjacent
+  range selection across punctuation, Unicode/non-BMP, and paragraphs;
+  suggestions and no-suggestion misspellings; bounded exact replacement with
+  stale-range rejection and coherent selection/cursor mapping; distinct
+  Learn, Ignore, and Unlearn calls; document-tag reuse/one-close cleanup;
+  no-word no-query behavior; async field and menu destruction; and no
+  candidate/suggestion Qt logging (`composer_spellcheck_test.cpp:270`,
+  `composer_spellcheck_test.cpp:432`,
+  `composer_spellcheck_test.cpp:502`). It uses a fake service only; the APPLE
+  production adapter is compiled and linked but no automated assertion depends
+  on the user's current dictionary.
 - `verify_existing_agent_setup` proves the selected-Agent `/setup` route on a
   synthetic project and hermetic `LINGTAI_TUI_DIR`: full saved/template catalog
   visibility/order, normalized real-row preselection without fallback, shared

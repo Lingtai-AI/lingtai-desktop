@@ -231,6 +231,12 @@ coalescing, and stale-while-revalidate presentation.
    `parse_slash_command` on raw text: every parsed command terminates locally
    before `send_direct_mail`. `/sleep`, `/suspend`, `/cpr`, `/clear`, and
    `/refresh` dispatch only through the owned `AgentLifecycleController`.
+   The selected-Agent composer registers exactly one Desktop spell-menu hook
+   (`agent_detail_view.cpp:1112`). The hook augments Qt's provided standard
+   `QMenu` before the existing `Ui::PopupMenu` owns presentation; it never
+   replaces Qt actions, derives their enabled state, invokes `QMenu::exec()`,
+   or creates an `NSMenu`. An async platform check uses lib_ui's existing
+   `awaitAsyncWork` barrier and weak widget/menu ownership.
 5. **UI widgets do not absorb domain/business behavior.** `AgentRoster`
    renders rows and reports clicks; `ConversationSurface` renders rows and
    paints bubbles; `AgentDetailView` owns only the composer draft,

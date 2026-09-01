@@ -80,6 +80,14 @@ Entry point and composition root:
   composer holds the ordered pending `AcceptedAttachment` draft, wrapping
   cards/removal, semantic notice timer, and per-card send errors; it emits a
   picker request but never opens a dialog, resolves a route, or publishes.
+- `composer_spellcheck.{h,cpp}` — Desktop-owned composer context-menu seam:
+  finds the word at the real Qt document point, guards exact bounded
+  replacement, preserves the standard `QMenu`, and installs one
+  `Ui::InputField::addContextMenuHook` (`composer_spellcheck.cpp:261`).
+  `composer_spellcheck_mac.mm` is the APPLE-only asynchronous
+  `NSSpellChecker` adapter (`composer_spellcheck_mac.mm:45`);
+  `composer_spellcheck_stub.cpp` is the deterministic non-mac/no-service
+  factory. No spell implementation lives in pinned lib_ui.
 - `attachment_thumbnail.{h,cpp}` — Qt image-preview helper for composer and
   history cards: reopens the observed regular file without following links,
   revalidates identity and size, rejects implausible decode dimensions or
