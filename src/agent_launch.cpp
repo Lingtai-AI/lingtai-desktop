@@ -2,12 +2,14 @@
 #include "posix_descriptor_primitives.h"
 
 #include <QtCore/QByteArray>
+#include <QtCore/QDir>
 #include <QtCore/QIODeviceBase>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QJsonParseError>
 #include <QtCore/QLatin1StringView>
 #include <QtCore/QProcess>
+#include <QtCore/QProcessEnvironment>
 #include <QtCore/QString>
 #include <QtCore/QStringList>
 
@@ -102,6 +104,22 @@ QString path_text(const fs::path &path) {
         static_cast<qsizetype>(bytes.size()));
 }
 
+QProcessEnvironment child_environment() {
+    auto environment = QProcessEnvironment::systemEnvironment();
+    const auto separator = QDir::listSeparator();
+    auto path_entries = environment.value(QStringLiteral("PATH"))
+        .split(separator, Qt::KeepEmptyParts);
+    const auto additions = QStringList{
+        QStringLiteral("/usr/local/bin"),
+        QDir::homePath() + QStringLiteral("/.local/bin"),
+    };
+    for (const auto &addition : additions) {
+        if (!path_entries.contains(addition)) path_entries.push_back(addition);
+    }
+    environment.insert(QStringLiteral("PATH"), path_entries.join(separator));
+    return environment;
+}
+
 } // namespace
 
 AgentLaunchOutcome launch_agent(
@@ -148,6 +166,7 @@ AgentLaunchOutcome launch_agent(
         process.setArguments(QStringList{
             QStringLiteral("-m"), QStringLiteral("lingtai"),
             QStringLiteral("run"), path_text(target.path)});
+        process.setProcessEnvironment(child_environment());
         // Inherit this descriptor-relative O_NOFOLLOW append descriptor.
         // Reopening its pathname in QProcess would create a symlink swap race
         // after validation; dup2 keeps the already-verified inode instead.
