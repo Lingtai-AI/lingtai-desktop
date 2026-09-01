@@ -1,8 +1,7 @@
 # LingTai Desktop Repository Anatomy
 
 LingTai Desktop is the Qt 6.11.1 native-desktop adaptation of the LingTai
-product. It is **not** a Telegram Desktop fork and imports no Telegram product
-code: it builds the complete pinned `desktop-app::lib_ui` toolkit target from
+product. It builds the complete pinned `desktop-app::lib_ui` toolkit target from
 source and adapts Qt's widget stack to LingTai's on-disk project model. This
 file is the root navigation map; it routes into the real owners below and into
 the child docs that map them (`src/`, `src/ui/`, `tests/`). Code is the
@@ -161,8 +160,8 @@ kernel interpreter.
   rows, including ordered bounded thumbnails/file cards and semantic
   Open/Reveal anchors inside each owning message frame.
 
-Both are owned LingTai widgets, not Telegram screens. Route into
-`src/ui/ANATOMY.md` for composition details.
+Both are owned LingTai widgets. Route into `src/ui/ANATOMY.md` for composition
+details.
 
 ## Owned tests (`tests/`)
 
@@ -319,5 +318,5 @@ Persistent Desktop state is deliberately minimal: the one composer outbox
 leaf, fixed lifecycle markers, an authorized refresh's atomic active-preset
 update, the started Agent's own `logs/` directory, and an explicit setup
 transaction's bounded existing-Agent configuration leaves;
-the shell performs no implicit project, registry, or settings writes. No Telegram
+the shell performs no implicit project, registry, or settings writes. No imported
 account, protocol, chat, message, media, contact, or cache state exists here.

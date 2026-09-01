@@ -93,20 +93,12 @@ Run the repository preflight for a CI-parity check:
   update, support-bootstrap, and optional DMG engineering details
 
 LingTai Desktop is a native Qt app built on a pinned
-`desktop-app::lib_ui` toolkit slice. It is **not** a Telegram Desktop fork: it
-contains no Telegram protocol, account, chat, or product-screen code. Owned
-product code lives in `src/`; toolkit sources are fetched into ignored `.deps/`
-at build time.
+`desktop-app::lib_ui` toolkit slice. Owned product code lives in `src/`;
+toolkit sources are fetched into ignored `.deps/` at build time.
 
 ## License
 
 Copyright 2026 LingTai contributors.
 
 LingTai Desktop is licensed under GNU GPL version 3 with the OpenSSL exception
-in [LICENSE](LICENSE), the same licensing model as
-[Telegram Desktop](https://github.com/telegramdesktop/tdesktop/tree/f0ee75edef45fc1d6f3828e56a5d7600643136a2).
-The 14-line exception is adapted from
-[Telegram Desktop's LICENSE](https://github.com/telegramdesktop/tdesktop/blob/f0ee75edef45fc1d6f3828e56a5d7600643136a2/LICENSE);
-only its project-identifying first line was changed. This license attribution
-does not change the relationship between the projects: LingTai Desktop is not a
-Telegram Desktop fork.
+in [LICENSE](LICENSE).
