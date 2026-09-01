@@ -231,12 +231,9 @@ coalescing, and stale-while-revalidate presentation.
    `parse_slash_command` on raw text: every parsed command terminates locally
    before `send_direct_mail`. `/sleep`, `/suspend`, `/cpr`, `/clear`, and
    `/refresh` dispatch only through the owned `AgentLifecycleController`.
-   The selected-Agent composer registers exactly one Desktop spell-menu hook
-   (`agent_detail_view.cpp:1112`). The hook augments Qt's provided standard
-   `QMenu` before the existing `Ui::PopupMenu` owns presentation; it never
-   replaces Qt actions, derives their enabled state, invokes `QMenu::exec()`,
-   or creates an `NSMenu`. An async platform check uses lib_ui's existing
-   `awaitAsyncWork` barrier and weak widget/menu ownership.
+   The selected-Agent composer leaves the pinned `Ui::InputField` context menu
+   unhooked: lib_ui presents Qt's standard edit actions immediately, with no
+   Desktop action rows, asynchronous menu deferral, or platform callback.
    On macOS the Desktop-supplied `Ui::Integration` additionally owns one
    application-lifetime native event filter and one force-hide producer.
    Qualifying native mouse-downs are classified solely by recipient

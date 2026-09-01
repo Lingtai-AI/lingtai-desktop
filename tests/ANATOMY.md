@@ -192,16 +192,6 @@ touches a real Agent or project, and none depends on a network or provider.
 
 ### 3. Real-Qt widget/shell contracts
 
-- `tests/composer_spellcheck_test.cpp` — `composer_spellcheck` ctest. It owns
-  the narrow deterministic fake platform/session and real `InputField` menu
-  fixture: Unicode/adjacent word ranges, suggestions/no suggestions, exact
-  replacement and cursor/selection mapping, distinct Learn/Ignore/Unlearn
-  effects, tag cleanup, no-word behavior, standard-action passthrough, pending
-  field/menu destruction, and content-log exclusion
-  (`composer_spellcheck_test.cpp:270`,
-  `composer_spellcheck_test.cpp:502`). On macOS it uses Cocoa because the
-  pinned `Ui::PopupMenu` uses native Cocoa window glue; it never changes the
-  host clipboard or queries a real dictionary.
 - `tests/mac_popup_dismissal_bridge_test.mm` — the macOS-only
   `mac_popup_dismissal` ctest. It links the production shell and `lib_ui`,
   constructs a Cocoa-hosted shell, and owns the native event-filter boundary:
@@ -268,12 +258,13 @@ touches a real Agent or project, and none depends on a network or provider.
   `QClipboard`; literal system paste remains outside automation because the
   full shell cannot run on the offscreen/minimal Qt plugins
   (`tests/native_shell_test.cpp:3320`, `CMakeLists.txt:959-965`).
-- Its focused `native_shell_menu` journey injects the deterministic spell
-  service into the production `AgentDetailView`, compares the resulting
+- Its focused `native_shell_menu` journey compares the production composer's
   standard action order/shortcuts/enabled states with Qt's unhooked menu for
-  empty, text, selection, Paste, and undo states, and proves one styled
-  `Ui::PopupMenu` plus a suggestion. Its synthetic same-window click freezes
-  accepted PR1 behavior only; physical outside-click dismissal remains PR2
+  empty, text, selection, Paste, and undo states; triggers Undo, Delete,
+  and Select All against the real field; and proves one immediately visible
+  styled `Ui::PopupMenu` with no spelling/Search or rich-format actions. Its
+  synthetic same-window click remains a direct-Qt boundary guard; physical
+  outside-click dismissal remains owned by `mac_popup_dismissal`
   (`native_shell_test.cpp:3116`).
 - The same conversation journey injects the history attachment external-action
   seam and proves exact Open/Reveal invocation after refresh, no invocation on

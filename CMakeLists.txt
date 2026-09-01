@@ -208,7 +208,6 @@ target_link_libraries(lingtai_desktop_preset_catalog PRIVATE Qt6::Core)
 
 add_library(lingtai_desktop_native_shell STATIC
     src/attachment_thumbnail.cpp
-    src/composer_spellcheck.cpp
     src/mac_popup_dismissal_bridge.h
     src/mac_popup_dismissal_bridge.mm
     src/native_shell.cpp
@@ -231,13 +230,6 @@ add_library(lingtai_desktop_native_shell STATIC
     src/ui/agent_roster.cpp
     src/ui/conversation_surface.cpp
     src/ui/slash_command_card.cpp)
-if(APPLE)
-    target_sources(lingtai_desktop_native_shell PRIVATE
-        src/composer_spellcheck_mac.mm)
-else()
-    target_sources(lingtai_desktop_native_shell PRIVATE
-        src/composer_spellcheck_stub.cpp)
-endif()
 init_target(lingtai_desktop_native_shell)
 qt_add_resources(lingtai_desktop_native_shell "lingtai_startup_assets"
     PREFIX "/lingtai/startup"
@@ -914,28 +906,6 @@ target_link_libraries(lingtai_native_shell_test PRIVATE
     lingtai_desktop_native_shell
     desktop-app::lib_ui)
 
-add_executable(lingtai_composer_spellcheck_test
-    tests/composer_spellcheck_test.cpp
-    src/crl_integration.cpp)
-init_target(lingtai_composer_spellcheck_test)
-target_compile_options(lingtai_composer_spellcheck_test PRIVATE
-    -Wall -Wextra -Werror -pedantic
-    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-unused-parameter>
-    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-deprecated-this-capture>
-    $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-unused-parameter>)
-target_link_libraries(lingtai_composer_spellcheck_test PRIVATE
-    lingtai_ui_test_support
-    lingtai_desktop_native_shell
-    desktop-app::lib_ui)
-add_test(NAME composer_spellcheck COMMAND lingtai_composer_spellcheck_test)
-if(APPLE)
-    set_tests_properties(composer_spellcheck PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
-else()
-    set_tests_properties(composer_spellcheck PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-endif()
-
 if(APPLE)
     add_executable(lingtai_mac_popup_dismissal_test
         tests/mac_popup_dismissal_bridge_test.mm
@@ -1129,7 +1099,6 @@ foreach(test_name IN LISTS LINGTAI_UNIT_TESTS)
 endforeach()
 
 set(LINGTAI_UI_TESTS
-    composer_spellcheck
     native_shell
     native_shell_semantics
     native_shell_bootstrap

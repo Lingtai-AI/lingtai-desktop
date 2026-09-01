@@ -15,5 +15,5 @@ cmake --build "$BUILD_DIR" --target \
   lingtai_direct_mail_publisher_test \
   lingtai_posix_descriptor_primitives_test \
   lingtai_workspace_selection_test lingtai_project_attachment_test \
-  lingtai_native_shell_test lingtai_composer_spellcheck_test \
+  lingtai_native_shell_test \
   --parallel "${BUILD_JOBS:-8}"

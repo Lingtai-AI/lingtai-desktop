@@ -1,6 +1,5 @@
 #include "agent_detail_view.h"
 #include "attachment_thumbnail.h"
-#include "composer_spellcheck.h"
 
 #include "conversation_session.h"
 #include "kanban_page.h"
@@ -1108,10 +1107,6 @@ AgentDetailView::AgentDetailView(
     composer_input->setMinHeight(kComposerOneLineHeight);
     composer_input->setMaxHeight(kComposerOneLineHeight);
     composer_input->setEnabled(false);
-    composer_spell_service_ = make_platform_composer_spell_service();
-    add_composer_spell_context_menu_hook(composer_input, [this] {
-        return composer_spell_service_;
-    });
     apply_composer_scrollbar_style(composer_input->rawTextEdit());
     sync_composer_multiline_geometry(*composer_input);
 
@@ -1910,11 +1905,6 @@ void AgentDetailView::clear_composer_notice() {
     composer_status_->clear();
     composer_status_->setAccessibleDescription(QString());
     composer_status_->setProperty("lingtai_notice_kind", QVariant());
-}
-
-void AgentDetailView::set_composer_spell_service(
-        std::shared_ptr<ComposerSpellService> service) {
-    composer_spell_service_ = std::move(service);
 }
 
 void AgentDetailView::rebuild_attachment_cards() {

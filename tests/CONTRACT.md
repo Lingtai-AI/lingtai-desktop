@@ -163,12 +163,10 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   paste journey delivers logical text through a real MIME-carrying Qt event,
   then proves exact Unicode editor state, emoji input-method formatting,
   ordinary Send, and two-shell runtime sharing without accessing `QClipboard`.
-- `tests/composer_spellcheck_test.cpp` — `composer_spellcheck`; deterministic
-  platform/session fake plus the real Qt input/menu hook. It must not use the
-  user's dictionary, network, or clipboard, and must prove the platform tag is
-  closed once even when the field or pending menu disappears. The paired
-  production-composer proof is `native_shell_menu`; neither test authorizes a
-  popup dismissal/focus/grab implementation.
+- The `native_shell_menu` journey owns the production composer context-menu
+  proof. It must preserve the immediate standard menu and functional edit
+  actions without spelling/Search rows, async deferral, platform callbacks, or
+  new popup dismissal/focus/grab behavior.
 - `tests/mac_popup_dismissal_bridge_test.mm` — `mac_popup_dismissal`; the
   macOS-only semantic owner for native recipient-window classification,
   synchronous force-hide/click-through ordering, non-consumption, event-type
