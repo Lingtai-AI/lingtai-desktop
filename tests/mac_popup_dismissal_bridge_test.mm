@@ -138,6 +138,24 @@ struct ShellContext final {
             shell.window(), "lingtai_composer_input");
     }
 
+    bool activate() {
+        auto &window = shell.window();
+        require(window.internalWinId() != 0,
+            "shell must already own a Cocoa view");
+        auto *view = reinterpret_cast<NSView *>(window.internalWinId());
+        auto *native = view.window;
+        require(native != nil, "shell must have a Cocoa NSWindow");
+
+        [NSApp activateIgnoringOtherApps:YES];
+        [native makeKeyAndOrderFront:nil];
+        window.activateWindow();
+        return wait_until([&] {
+            return NSApp.isActive
+                && native.isKeyWindow
+                && window.isActiveWindow();
+        });
+    }
+
     lingtai::desktop::NativeShell shell;
     Ui::InputField *composer = nullptr;
 };
@@ -161,8 +179,17 @@ std::unique_ptr<TestPopupMenu> show_popup(
     auto result = std::make_unique<TestPopupMenu>(context.composer);
     result->deleteOnHide(false);
     result->addAction(QStringLiteral("Composer action"), std::move(action));
-    result->popup(context.composer->mapToGlobal(QPoint(8, 8)));
-    QCoreApplication::processEvents();
+    constexpr auto kSetupAttempts = 3;
+    for (auto attempt = 0; attempt != kSetupAttempts; ++attempt) {
+        if (!context.activate()) {
+            continue;
+        }
+        result->popup(context.composer->mapToGlobal(QPoint(8, 8)));
+        QCoreApplication::processEvents();
+        if (result->isVisible()) {
+            break;
+        }
+    }
     require(result->isVisible(), "composer popup must be visible");
     require(result->internalWinId() != 0,
         "composer popup must already own a Cocoa view");
