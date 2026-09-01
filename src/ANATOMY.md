@@ -21,6 +21,11 @@ Entry point and composition root:
   `--offscreen` paths.
 - `shell_host.{h,cpp}` — owns all native windows, directory-picker routing,
   and the fallback kernel interpreter.
+- `mac_popup_dismissal_bridge.{h,mm}` — the macOS application-wide native
+  event observer. It classifies mouse-down recipients by `NSWindow` identity
+  against every visible top-level `Qt::Popup`, then invokes one synchronous
+  callback without consuming or replaying the event. It retains no window,
+  widget, popup, submenu, or event pointer.
 - `native_shell.{h,cpp}` — the C5 composition owner: owns one `Ui::RpWindow`,
   the roster column, the content pane, native dialog orchestration, the
   composer's local slash-command/publisher dispatch, the one-second refresh
@@ -266,6 +271,7 @@ Owned library targets (`CMakeLists.txt`) and their source membership:
   `agent_process.cpp`.
 - `lingtai_desktop_kanban` — `kanban_model.cpp`.
 - `lingtai_desktop_native_shell` — `native_shell.cpp`,
+  `mac_popup_dismissal_bridge.mm`,
   `agent_detail_view.cpp`, `attachment_thumbnail.cpp`,
   `ui/agent_roster.cpp`,
   `ui/conversation_surface.cpp`.
@@ -286,6 +292,11 @@ they are the shell's presentation layer and own no domain reads or writes.
   two click-armed pending observations (`SleepObservation` at most 3 s,
   `StartObservation` at most 10 s). All are discarded on project open
   or selection change and are never persisted.
+- `DesktopUiIntegration` owns the single process-lifetime
+  `forcePopupMenuHideRequests()` event stream. When Desktop installs that
+  Integration, its application-owned `MacPopupDismissalBridge` is installed
+  once and every simultaneous or later shell shares it. A host-provided
+  foreign `Ui::Integration` prevents Desktop from installing either object.
 - `AgentDetailView` holds the session-only attachment draft and errors for the
   currently selected target. Project/Agent changes and route loss clear it;
   it is never persisted or shared across targets.
@@ -318,3 +329,8 @@ they are the shell's presentation layer and own no domain reads or writes.
   pinned toolkit, not composer business logic
   (`native_shell.cpp:1041-1067`, `native_shell.cpp:1153-1188`;
   stack construction order at `main.cpp:17-33`).
+- On macOS, Desktop's installed `Ui::Integration` also creates exactly one
+  `MacPopupDismissalBridge` parented to the current application. The bridge
+  enumerates existing native popup windows only while handling a qualifying
+  native mouse-down; `lib_ui` remains the sole owner of popup-tree closure and
+  deferred deletion.

@@ -20,6 +20,19 @@ its code.
   simultaneous or later `NativeShell` under that `QApplication` reuses it;
   the application-owned guard clears emoji state only during `QApplication`
   teardown, after stack-owned `ShellHost`/`NativeShell` widgets are destroyed.
+- On macOS, when Desktop supplies `Ui::Integration`, application composition
+  also installs one native event filter shared by every shell. For left,
+  right, or other mouse-down, the filter collects existing visible top-level
+  `Qt::Popup` Cocoa windows without creating native resources. A recipient in
+  that set is inside and remains entirely under existing popup behavior; any
+  other recipient, including no recipient window, synchronously publishes one
+  force-hide request. The filter always returns `false`, so the original
+  Cocoa/Qt target receives the unchanged event once after popup subscribers
+  have hidden their trees. With no visible popup it publishes nothing.
+- All visible top-level `Qt::Popup` windows are conservatively classified as
+  inside. Re-audit this policy if Desktop or the pinned toolkit introduces a
+  non-menu top-level `Qt::Popup`; there is intentionally no speculative
+  coordinate fallback.
 - The window is named `lingtai_desktop_window`, body `lingtai_desktop_body`,
   with a persistent left sidebar and a right content pane separated by a
   one-pixel `Ui::PlainShadow` (`lingtai_roster_separator`).
@@ -456,4 +469,6 @@ the process-level smoke-order and persistence contract is
 `tests/test_native_shell.py` (`native_shell` ctest), and the shell semantics
 (no project writes, geometry, named regions) are `tests/native_shell_test.cpp`
 (`native_shell_behavior` ctest, `QT_QPA_PLATFORM=cocoa` on macOS else
-offscreen).
+offscreen). The macOS native recipient, synchronous hide/click-through, event
+matrix, submenu/deletion, and one-bridge behavior is anchored separately by
+`tests/mac_popup_dismissal_bridge_test.mm` (`mac_popup_dismissal` ctest).

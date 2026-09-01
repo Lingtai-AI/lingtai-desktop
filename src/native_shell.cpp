@@ -2,6 +2,7 @@
 
 #include "agent_detail_view.h"
 
+#include "mac_popup_dismissal_bridge.h"
 #include "native_window_background.h"
 #include "agent_preset_summary.h"
 #include "agent_prompt_actions.h"
@@ -47,6 +48,8 @@
 #include "ui/widgets/labels.h"
 #include "ui/widgets/rp_window.h"
 #include "ui/widgets/shadow.h"
+
+#include <rpl/event_stream.h>
 
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDebug>
@@ -1075,6 +1078,11 @@ class DesktopUiIntegration final : public Ui::Integration {
 public:
     DesktopUiIntegration() {
         Ui::Integration::Set(this);
+        auto *application = QCoreApplication::instance();
+        Q_ASSERT(application != nullptr);
+        new MacPopupDismissalBridge(application, [this] {
+            force_popup_menu_hide_requests_.fire({});
+        });
     }
 
     void postponeCall(FnMut<void()> &&callable) override {
@@ -1106,6 +1114,12 @@ public:
         return 0;
     }
 
+    [[nodiscard]] rpl::producer<> forcePopupMenuHideRequests() override {
+        return force_popup_menu_hide_requests_.events();
+    }
+
+private:
+    rpl::event_stream<> force_popup_menu_hide_requests_;
 };
 
 // Emoji formatting is a lib_ui application prerequisite, not window or
