@@ -3210,16 +3210,21 @@ void verify_composer_context_menu(
             editor_local,
             editor->viewport()->mapToGlobal(viewport_local));
         QApplication::sendEvent(editor, &event);
-        QCoreApplication::processEvents();
 
+        // sendEvent() completes the synchronous InputField request, including
+        // PopupMenu::show(). Do not drain Cocoa here: show_offscreen() marks
+        // the host WA_DontShowOnScreen, so the next native turn closes its
+        // transient popup independently of the production request lifecycle.
         auto popups = std::vector<Ui::PopupMenu *>();
-        for (auto *widget : window.findChildren<QWidget *>()) {
+        for (auto *widget : QApplication::allWidgets()) {
             if (auto *popup = dynamic_cast<Ui::PopupMenu *>(widget)) {
                 popups.push_back(popup);
             }
         }
         require(popups.size() == 1,
             "one context request must show exactly one styled Ui::PopupMenu");
+        require(popups.front()->isVisible() && input->menuShown(),
+            "the one styled Ui::PopupMenu must be synchronously shown by the production request");
         require(standard_states(popups.front()->actions()) == expected,
             "the production hook must preserve standard order, shortcuts, and Qt-derived enabled states including Paste");
         return popups.front();
@@ -3302,7 +3307,8 @@ void verify_composer_context_menu(
         Qt::NoModifier);
     QApplication::sendEvent(status, &press);
     QApplication::sendEvent(status, &release);
-    QCoreApplication::processEvents();
+    // The same offscreen Cocoa lifecycle rule applies here: this assertion is
+    // about the directly delivered synthetic click, not a later native turn.
     require(popup->isVisible(),
         "PR1 must retain the accepted synthetic same-window outside-click behavior for the separate PR2 fix");
 
