@@ -202,6 +202,14 @@ touches a real Agent or project, and none depends on a network or provider.
   `composer_spellcheck_test.cpp:502`). On macOS it uses Cocoa because the
   pinned `Ui::PopupMenu` uses native Cocoa window glue; it never changes the
   host clipboard or queries a real dictionary.
+- `tests/mac_popup_dismissal_bridge_test.mm` — the macOS-only
+  `mac_popup_dismissal` ctest. It links the production shell and `lib_ui`,
+  constructs a Cocoa-hosted shell, and owns the native event-filter boundary:
+  real traffic-light, Qt-content, second-window, and native-panel delivery;
+  root/submenu recipient identities; nil/no-popup/event-type tables; tree hide
+  and deferred deletion; direct-Qt non-traversal; and one bridge across shell
+  lifetimes. It uses harmless temporary native control target/actions and
+  restores them before releasing the controls.
 - `tests/native_shell_test.cpp` — the split `native_shell_<journey>` ctests.
   The real-Qt shell contract links `lingtai_desktop_native_shell` +
   `desktop-app::lib_ui` + `src/crl_integration.cpp` (`CMakeLists.txt:900-912`),
@@ -353,6 +361,7 @@ no fixture); the test itself creates and removes its sandbox within that root
 | `agent_lifecycle_test.cpp` | `lingtai_agent_lifecycle_test` | `agent_lifecycle` | `agent-lifecycle-fixture` |
 | `agent_lifecycle_real_smoke.cpp` | `lingtai_agent_lifecycle_real_smoke` | manual only | caller-owned isolated project root |
 | `kanban_model_test.cpp` | `lingtai_kanban_model_test` | `kanban_model` | `kanban-model-fixture` |
+| `mac_popup_dismissal_bridge_test.mm` | `lingtai_mac_popup_dismissal_test` | `mac_popup_dismissal` (macOS only) | — (temporary in-process Cocoa windows only) |
 | `native_shell_test.cpp` | `lingtai_native_shell_test` | split `native_shell_<journey>` tests, including `native_shell_lifecycle` | per-journey CMake fixture |
 | `native_shell_test.cpp` (paste journey) | `lingtai_native_shell_test` | `native_shell_paste` | `native-shell-paste-fixture` (CMake-created) |
 | `native_shell_destinations_test.cpp` | `lingtai_native_shell_destinations_test` | `native_shell_destinations` | — |

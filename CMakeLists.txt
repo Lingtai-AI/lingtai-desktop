@@ -209,6 +209,8 @@ target_link_libraries(lingtai_desktop_preset_catalog PRIVATE Qt6::Core)
 add_library(lingtai_desktop_native_shell STATIC
     src/attachment_thumbnail.cpp
     src/composer_spellcheck.cpp
+    src/mac_popup_dismissal_bridge.h
+    src/mac_popup_dismissal_bridge.mm
     src/native_shell.cpp
     src/shell_host.cpp
     src/agent_detail_view.cpp
@@ -253,6 +255,7 @@ target_include_directories(lingtai_desktop_native_shell PUBLIC
 target_compile_options(lingtai_desktop_native_shell PRIVATE
     -Wall -Wextra -Werror -pedantic
     $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-unused-parameter>
+    $<$<COMPILE_LANG_AND_ID:OBJCXX,AppleClang>:-Wno-unused-parameter>
     $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-deprecated-this-capture>
     $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-unused-parameter>)
 target_link_libraries(lingtai_desktop_native_shell
@@ -931,6 +934,25 @@ if(APPLE)
 else()
     set_tests_properties(composer_spellcheck PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
+if(APPLE)
+    add_executable(lingtai_mac_popup_dismissal_test
+        tests/mac_popup_dismissal_bridge_test.mm
+        src/crl_integration.cpp)
+    init_target(lingtai_mac_popup_dismissal_test)
+    target_compile_options(lingtai_mac_popup_dismissal_test PRIVATE
+        -Wall -Wextra -Werror -pedantic
+        -Wno-unused-parameter
+        $<$<COMPILE_LANG_AND_ID:OBJCXX,AppleClang>:-Wno-unused-parameter>
+        $<$<COMPILE_LANG_AND_ID:OBJCXX,AppleClang>:-Wno-deprecated-this-capture>)
+    target_link_libraries(lingtai_mac_popup_dismissal_test PRIVATE
+        lingtai_desktop_native_shell
+        desktop-app::lib_ui)
+    add_test(NAME mac_popup_dismissal
+        COMMAND lingtai_mac_popup_dismissal_test)
+    set_tests_properties(mac_popup_dismissal PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
 endif()
 
 file(MAKE_DIRECTORY

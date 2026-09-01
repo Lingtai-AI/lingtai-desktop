@@ -69,6 +69,10 @@ must never be confused:
    If a full shell cannot run with an offscreen platform clipboard, carry the
    MIME source deterministically and drive the real editor input-method path,
    then state literal system-paste acceptance as an unautomated gate.
+   A native-control test may construct only test-process windows and may
+   temporarily replace a test window control's target/action with a harmless
+   counter; it must restore the original target/action before teardown and
+   must never operate the installed LingTai App or another process.
 5. **No real Agent/project mutation.** A test must never start a real kernel,
    open a real Agent's mailbox, sleep a real Agent, or mutate a real
    registry/settings file. All reads and writes happen on fixture trees built
@@ -165,6 +169,12 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   closed once even when the field or pending menu disappears. The paired
   production-composer proof is `native_shell_menu`; neither test authorizes a
   popup dismissal/focus/grab implementation.
+- `tests/mac_popup_dismissal_bridge_test.mm` — `mac_popup_dismissal`; the
+  macOS-only semantic owner for native recipient-window classification,
+  synchronous force-hide/click-through ordering, non-consumption, event-type
+  boundaries, popup-tree lifetime, and one process bridge. Direct synthesized
+  Qt mouse events are retained only as a boundary guard proving they do not
+  traverse the native filter.
 - `tests/conversation_surface_typography_test.cpp` —
   `conversation_surface_typography` (the dedicated widget/document typography
   contract on the real `ConversationSurface`).

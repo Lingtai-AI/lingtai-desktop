@@ -237,6 +237,16 @@ coalescing, and stale-while-revalidate presentation.
    replaces Qt actions, derives their enabled state, invokes `QMenu::exec()`,
    or creates an `NSMenu`. An async platform check uses lib_ui's existing
    `awaitAsyncWork` barrier and weak widget/menu ownership.
+   On macOS the Desktop-supplied `Ui::Integration` additionally owns one
+   application-lifetime native event filter and one force-hide producer.
+   Qualifying native mouse-downs are classified solely by recipient
+   `NSWindow` identity against visible top-level `Qt::Popup` windows. An
+   outside classification fires the producer synchronously and the filter
+   always returns `false`; `lib_ui` subscribers alone own hiding, submenu
+   traversal, focus behavior, and deletion. Do not add a Qt event-filter,
+   coordinate fallback, per-window handler, Cocoa monitor, event replay, or
+   direct `PopupMenu::hideMenu()` call. A foreign `Ui::Integration` remains
+   authoritative and must not receive a competing Desktop bridge.
 5. **UI widgets do not absorb domain/business behavior.** `AgentRoster`
    renders rows and reports clicks; `ConversationSurface` renders rows and
    paints bubbles; `AgentDetailView` owns only the composer draft,
@@ -294,6 +304,9 @@ paths and names are in [`../ANATOMY.md`](../ANATOMY.md) and `CMakeLists.txt`:
 - `tests/attachment_selection_test.cpp` — `attachment_selection`.
 - `tests/native_shell_test.cpp` — `native_shell_behavior` (links the shell +
   `lib_ui` + `crl_integration.cpp`).
+- `tests/mac_popup_dismissal_bridge_test.mm` — `mac_popup_dismissal` on macOS;
+  the focused Cocoa recipient-identity and click-through contract for the
+  application-owned bridge and Desktop Integration stream.
 - `tests/test_native_shell.py` — `native_shell` (process persistence and
   smoke-order, via the smoke executable).
 

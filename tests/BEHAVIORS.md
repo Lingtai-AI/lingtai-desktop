@@ -34,6 +34,7 @@ ctest --test-dir build --output-on-failure -R '^kanban_model$'
 ctest --test-dir build --output-on-failure -R '^posix_descriptor_primitives$'
 ctest --test-dir build --output-on-failure -R '^workspace_selection$'
 ctest --test-dir build --output-on-failure -R '^native_shell(_behavior)?$'
+ctest --test-dir build --output-on-failure -R '^mac_popup_dismissal$'
 ./scripts/smoke.py
 ```
 
@@ -203,6 +204,17 @@ Qt plugin path set and an 8 s watchdog.
 
 ### Real-Qt widget/shell contracts
 
+- `mac_popup_dismissal` proves the macOS-only application-wide boundary with
+  a real `QApplication`, Cocoa-hosted Desktop shells, and constructed
+  `NSEvent`s. Its native traffic-light and panel controls receive their action
+  exactly once after the popup is already hidden; same-window Qt content and
+  a second shell receive one down/up pair without event consumption or focus
+  theft. Root/submenu recipient windows publish zero requests, while outside
+  and nil recipients publish one; left/right/other down qualify, but
+  drag/up/move, no-popup, release-after-hide, and late repeated delivery do
+  not. It also proves one bridge across two shells, exact tree hide counts,
+  deferred deletion safety, existing Escape/focus ownership without the force
+  stream, the pure identity table, and the direct-Qt native-boundary guard.
 - `native_shell_behavior` proves the composed shell on a real `QApplication`
   with the real widgets shown off-screen: dark palette inheritance and
   restoration, live light→dark→light and dark→light→dark scheme transitions
@@ -372,6 +384,12 @@ the real shell shown off-screen. None of them establish:
   representative palette tokens and states (dark palette inheritance, the
   live light/dark scheme transition, the theme-reset check); they do not
   prove complete visible Telegram parity or every painted pixel/token.
+- **Physical popup acceptance.** The focused Cocoa test authenticates native
+  dispatch in its own process but does not replace later human testing of the
+  packaged App: same-window background, a second window, native dialogs and
+  titlebar controls, root/submenu inside clicks, Escape/deactivation, trackpad,
+  a secondary display, and repeated fresh launch/open/click/quit cycles remain
+  physical acceptance gates.
 - **Real platform widgets' OS behavior beyond what the fixture exercises.**
   The real `Ui::RpWindow`/`Ui::RpWidget` composition is exercised, but not
   the OS window-server interaction a visible window would surface.
