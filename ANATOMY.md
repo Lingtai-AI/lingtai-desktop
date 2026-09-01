@@ -28,11 +28,12 @@ scripts/support_release.py              deterministic exact support asset produc
 scripts/support_bootstrap.py            stable pre-import support validator/switch/rollback launcher
 scripts/install-macos-app.py           thin Python 3 initial-bootstrap CLI
 cmake/macos/Info.plist.in              bundle metadata including the macOS floor
+docs/managed-delivery.md               managed archive/install/update/support/DMG engineering guide
 src/                                  owned Qt adaptation surface (see src/ANATOMY.md)
 src/ui/                               owned LingTai widgets (see src/ui/ANATOMY.md)
 tests/                                owned C++ contracts + Python gates (see tests/ANATOMY.md)
 AGENTS.md                             agent-facing build/validate checklist
-README.md                             public entry point (build, smoke, dependency boundary)
+README.md                             public user onboarding + contributor entry point
 ```
 
 ## Build graph (`CMakeLists.txt`)
