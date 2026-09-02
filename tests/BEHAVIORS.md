@@ -47,7 +47,7 @@ Qt plugin path set and an 8 s watchdog.
 ### Repository/build/static contracts
 
 - `test_repository_contract.py` proves the canonical product version is
-  v0.1.9, the lock file still pins Qt 6.11.1, the exact `tdesktop_commit`, and
+  v0.1.10, the lock file still pins Qt 6.11.1, the exact `tdesktop_commit`, and
   the seven exact toolkit commits, and that no dependency/build/validation
   artifact is tracked by git. It is the sole owner of pinned provenance
   (`test_repository_contract.py:2-8`).
