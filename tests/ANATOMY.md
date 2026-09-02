@@ -31,6 +31,12 @@ test proves. This file descends into `tests/` itself.
   a ctest: it is a repository contract, not a product behavior. Its one
   CMake-source assertion owns the canonical product version; it is not a
   general repository-shape suite.
+- `tests/test_desktop_status_item_contract.py` — the focused source/packaging
+  guard for foreground-App policy (`LSUIElement`/`LSBackgroundOnly` absent),
+  unchanged last-window quit policy, and the status-item owner's prohibition
+  on timers, threads, processes, networking, availability gating, and native
+  AppKit/Cocoa code. CMake also registers it as
+  `desktop_status_item_source_contract`.
 - `tests/test_app_archive.py` — the offline owner of the primary portable-App
   archive boundary: exact manifest/App-tree binding, safe private extraction,
   archive-declared regular/directory/symlink modes independent of caller umask,
@@ -220,6 +226,12 @@ touches a real Agent or project, and none depends on a network or provider.
   the exact intended in-fixture mutations on the synthetic
   `commit-N-...-fixture` trees the test itself creates. The working
   directory is an injected path, not an OS or process sandbox.
+- Its focused `native_shell_status_item` journey proves one host-owned item,
+  exact menu order, compiled 18/36-pixel transparent mask resources, one-shot
+  callbacks, deterministic fallback, most-recent activation, minimized restore,
+  stale-window removal, and no duplication across a second shell. The separate
+  `native_shell_status_item_quit` and `native_shell_final_window_quit` event-loop
+  journeys prove both quit paths terminate through Qt.
 - Its focused `native_shell_new_window_bootstrap` path commits literal `~`,
   `~/Documents`, `~/Documents/`, `~/Documents///`, and an absolute destination
   ending in `/` through real `Ui::InputField` editors, then activates the real
@@ -331,6 +343,7 @@ no fixture); the test itself creates and removes its sandbox within that root
 | Test file | Target / executable | ctest name | Fixture (build dir) |
 | --- | --- | --- | --- |
 | `test_repository_contract.py` | Python `unittest` (no target) | manual: `python3 -m unittest tests.test_repository_contract` | — |
+| `test_desktop_status_item_contract.py` | Python script (no target) | `desktop_status_item_source_contract` | — |
 | `test_project_creation_source_contract.py` | Python `unittest` (no target) | manual: `python3 -m unittest tests.test_project_creation_source_contract` | — |
 | `test_app_archive.py` | Python `unittest` (no target) | manual: `python3 -m unittest tests.test_app_archive` | temporary injected directories only |
 | `test_macos_packaging.py` | Python `unittest` (no target) | manual: `python3 -m unittest tests.test_macos_packaging` | temporary injected directories only |
@@ -353,7 +366,7 @@ no fixture); the test itself creates and removes its sandbox within that root
 | `agent_lifecycle_real_smoke.cpp` | `lingtai_agent_lifecycle_real_smoke` | manual only | caller-owned isolated project root |
 | `kanban_model_test.cpp` | `lingtai_kanban_model_test` | `kanban_model` | `kanban-model-fixture` |
 | `mac_popup_dismissal_bridge_test.mm` | `lingtai_mac_popup_dismissal_test` | `mac_popup_dismissal` (macOS only) | — (temporary in-process Cocoa windows only) |
-| `native_shell_test.cpp` | `lingtai_native_shell_test` | split `native_shell_<journey>` tests, including `native_shell_lifecycle` | per-journey CMake fixture |
+| `native_shell_test.cpp` | `lingtai_native_shell_test` | split `native_shell_<journey>` tests, including `native_shell_lifecycle`, `native_shell_status_item`, `native_shell_status_item_quit`, and `native_shell_final_window_quit` | per-journey CMake fixture |
 | `native_shell_test.cpp` (paste journey) | `lingtai_native_shell_test` | `native_shell_paste` | `native-shell-paste-fixture` (CMake-created) |
 | `native_shell_destinations_test.cpp` | `lingtai_native_shell_destinations_test` | `native_shell_destinations` | — |
 | `native_shell_presets_test.cpp` | `lingtai_native_shell_presets_test` | `native_shell_presets` | `native-shell-presets-fixture` (CMake-created) |

@@ -208,6 +208,7 @@ target_link_libraries(lingtai_desktop_preset_catalog PRIVATE Qt6::Core)
 
 add_library(lingtai_desktop_native_shell STATIC
     src/attachment_thumbnail.cpp
+    src/desktop_status_item.cpp
     src/mac_popup_dismissal_bridge.h
     src/mac_popup_dismissal_bridge.mm
     src/native_shell.cpp
@@ -241,7 +242,9 @@ qt_add_resources(lingtai_desktop_native_shell "lingtai_macos_assets"
     PREFIX "/lingtai/macos"
     BASE "${CMAKE_CURRENT_SOURCE_DIR}/resources/macos"
     FILES
-        resources/macos/AppIcon-1024.png)
+        resources/macos/AppIcon-1024.png
+        resources/macos/StatusItemTemplate.png
+        resources/macos/StatusItemTemplate@2x.png)
 target_include_directories(lingtai_desktop_native_shell PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_compile_options(lingtai_desktop_native_shell PRIVATE
@@ -887,6 +890,9 @@ target_link_libraries(lingtai_desktop_smoke PRIVATE
     desktop-app::lib_ui)
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
+add_test(NAME desktop_status_item_source_contract
+    COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_desktop_status_item_contract.py")
 add_test(NAME native_shell
     COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_native_shell.py"
@@ -968,6 +974,44 @@ if(APPLE)
         ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
 else()
     set_tests_properties(native_shell_new_window_bootstrap PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
+file(MAKE_DIRECTORY
+    "${CMAKE_CURRENT_BINARY_DIR}/native-shell-status-item-fixture")
+add_test(NAME native_shell_status_item
+    COMMAND lingtai_native_shell_test
+        "${CMAKE_CURRENT_BINARY_DIR}/native-shell-status-item-fixture"
+        --status-item-only)
+if(APPLE)
+    set_tests_properties(native_shell_status_item PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
+else()
+    set_tests_properties(native_shell_status_item PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
+add_test(NAME native_shell_status_item_quit
+    COMMAND lingtai_native_shell_test
+        "${CMAKE_CURRENT_BINARY_DIR}/native-shell-status-item-fixture"
+        --status-item-quit-only)
+if(APPLE)
+    set_tests_properties(native_shell_status_item_quit PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
+else()
+    set_tests_properties(native_shell_status_item_quit PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
+add_test(NAME native_shell_final_window_quit
+    COMMAND lingtai_native_shell_test
+        "${CMAKE_CURRENT_BINARY_DIR}/native-shell-status-item-fixture"
+        --final-window-quit-only)
+if(APPLE)
+    set_tests_properties(native_shell_final_window_quit PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
+else()
+    set_tests_properties(native_shell_final_window_quit PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 

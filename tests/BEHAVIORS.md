@@ -234,6 +234,14 @@ Qt plugin path set and an 8 s watchdog.
   assert the exact intended in-fixture mutations
   (`verify_composer_send_behavior`, `verify_request_sleep_action`,
   `verify_first_project_bootstrap`).
+- The focused `native_shell_status_item` journey directly triggers the owned
+  menu without Accessibility or global menu-bar interaction. It proves one
+  item across two shells, exact Show/separator/Quit order, single callback
+  delivery, deterministic and most-recent selection, minimized restore,
+  stale-selection removal, secondary-close preservation, a mask icon, and
+  exact transparent 18/36-pixel compiled resources. The separate status-item
+  Quit and final-window-close journeys each run a bounded Qt event loop and
+  prove exit code 0 before their failure watchdogs can fire.
 - The direct-conversation journey invokes the real ordinary one-second timer
   seam and observes actual `message.json` opens: an unchanged completed
   generation opens none; after an append the timer's UI thread opens none and

@@ -2,6 +2,7 @@
 #include "agent_config_page.h"
 #include "agent_detail_view.h"
 #include "agent_presets_page.h"
+#include "desktop_status_item.h"
 #include "preset_editor_page.h"
 #include "shell_host.h"
 #include "agent_projection.h"
@@ -30,6 +31,7 @@
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonObject>
 #include <QtCore/QMimeData>
+#include <QtCore/QPointer>
 #include <QtCore/QRegularExpression>
 #include <QtCore/QSet>
 #include <QtCore/QString>
@@ -75,6 +77,7 @@
 #include <QtWidgets/QSpacerItem>
 #include <QtWidgets/QSpinBox>
 #include <QtWidgets/QStackedWidget>
+#include <QtWidgets/QSystemTrayIcon>
 #include <QtWidgets/QTextEdit>
 #include <QtWidgets/QTreeWidget>
 #include <QtWidgets/QTreeWidgetItem>
@@ -1119,6 +1122,194 @@ void verify_open_project_in_another_window(const fs::path &sandbox) {
     std::error_code cleanup_error;
     fs::remove_all(sandbox, cleanup_error);
     require(!cleanup_error, "multi-window fixtures must be removed");
+}
+
+void verify_desktop_status_item(const fs::path &sandbox) {
+    using lingtai::desktop::RuntimeOptions;
+    using lingtai::desktop::ShellHost;
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error,
+        "the status-item fixture must start clean");
+    fs::create_directories(sandbox);
+
+    RuntimeOptions options;
+    options.offscreen_mode = true;
+    options.ui_test_mode = true;
+    ShellHost host(options);
+
+    const auto status_items = host.findChildren<QSystemTrayIcon *>();
+    require(status_items.size() == 1,
+        "ShellHost must own exactly one process status item");
+
+    auto *menu = status_items.front()->contextMenu();
+    require(menu != nullptr,
+        "the process status item must own a context menu");
+    const auto actions = menu->actions();
+    require(actions.size() == 3,
+        "the status menu must contain two actions and one separator");
+    require(actions[0]->text() == QStringLiteral("Show LingTai")
+            && !actions[0]->isSeparator()
+            && actions[1]->isSeparator()
+            && actions[2]->text() == QStringLiteral("Quit LingTai")
+            && !actions[2]->isSeparator(),
+        "the status menu must be exactly Show LingTai, separator, Quit LingTai");
+    require(!status_items.front()->icon().isNull()
+            && status_items.front()->icon().isMask(),
+        "the process status icon must be a loaded monochrome mask");
+    const QImage status_icon_1x(
+        QStringLiteral(":/lingtai/macos/StatusItemTemplate.png"));
+    const QImage status_icon_2x(
+        QStringLiteral(":/lingtai/macos/StatusItemTemplate@2x.png"));
+    const auto is_monochrome_brush = [](const QImage &image) {
+        auto has_ink = false;
+        for (auto y = 0; y != image.height(); ++y) {
+            for (auto x = 0; x != image.width(); ++x) {
+                const auto pixel = image.pixel(x, y);
+                if (qAlpha(pixel) == 0) {
+                    continue;
+                }
+                has_ink = true;
+                if (qRed(pixel) != 0 || qGreen(pixel) != 0
+                        || qBlue(pixel) != 0) {
+                    return false;
+                }
+            }
+        }
+        return has_ink;
+    };
+    require(status_icon_1x.size() == QSize(18, 18)
+            && status_icon_2x.size() == QSize(36, 36)
+            && status_icon_1x.hasAlphaChannel()
+            && status_icon_2x.hasAlphaChannel()
+            && qAlpha(status_icon_1x.pixel(0, 0)) == 0
+            && qAlpha(status_icon_2x.pixel(0, 0)) == 0
+            && is_monochrome_brush(status_icon_1x)
+            && is_monochrome_brush(status_icon_2x),
+        "the monochrome transparent resources must load at exact 1x/2x sizes");
+
+    auto &primary = host.primary();
+    require(primary.window().isHidden(),
+        "the fallback selection fixture must begin with no shown shell");
+    actions[0]->trigger();
+    QCoreApplication::processEvents();
+    require(primary.window().isVisible(),
+        "Show LingTai must deterministically fall back to the primary shell");
+
+    write_file(sandbox / "second/.lingtai/beta/.agent.json",
+        R"({"admin":{}})");
+    host.open_path_in_new_window(primary, sandbox / "second");
+    QCoreApplication::processEvents();
+    require(host.shell_count() == 2,
+        "the status-item fixture must own two independent shells");
+    require(host.findChildren<QSystemTrayIcon *>().size() == 1
+            && host.findChild<QSystemTrayIcon *>() == status_items.front(),
+        "spawning a second shell must preserve the one process status item");
+
+    auto &secondary = host.shell_at(1);
+    QEvent activate_primary(QEvent::WindowActivate);
+    QCoreApplication::sendEvent(&primary.window(), &activate_primary);
+    QEvent activate_secondary(QEvent::WindowActivate);
+    QCoreApplication::sendEvent(&secondary.window(), &activate_secondary);
+    primary.window().hide();
+    secondary.window().hide();
+    actions[0]->trigger();
+    QCoreApplication::processEvents();
+    require(primary.window().isHidden() && secondary.window().isVisible(),
+        "Show LingTai must select the most recently active owned shell");
+
+    secondary.window().showMinimized();
+    QCoreApplication::processEvents();
+    require(secondary.window().isMinimized(),
+        "the restore fixture must begin with a minimized recent shell");
+    actions[0]->trigger();
+    QCoreApplication::processEvents();
+    require(secondary.window().isVisible()
+            && !secondary.window().isMinimized(),
+        "Show LingTai must restore a minimized recent shell");
+
+    secondary.window().close();
+    require(wait_for_event_loop([&] {
+        return host.shell_count() == 1;
+    }, 1000),
+        "closing the secondary must retire only that shell");
+    require(host.findChildren<QSystemTrayIcon *>().size() == 1
+            && host.findChild<QSystemTrayIcon *>() == status_items.front(),
+        "closing the secondary must preserve the process status item");
+    primary.window().hide();
+    actions[0]->trigger();
+    QCoreApplication::processEvents();
+    require(primary.window().isVisible(),
+        "closing the recent shell must clear it before Show fallback");
+
+    auto show_calls = 0;
+    auto quit_calls = 0;
+    lingtai::desktop::DesktopStatusItem callbacks(
+        [&] { ++show_calls; },
+        [&] { ++quit_calls; });
+    auto *callback_tray = callbacks.findChild<QSystemTrayIcon *>();
+    require(callback_tray && callback_tray->contextMenu(),
+        "the callback test seam must expose the same menu owner");
+    const auto callback_actions = callback_tray->contextMenu()->actions();
+    callback_actions[0]->trigger();
+    callback_actions[2]->trigger();
+    require(show_calls == 1 && quit_calls == 1,
+        "each explicit status menu action must invoke its callback exactly once");
+
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error,
+        "the status-item fixture must be removed");
+}
+
+void verify_desktop_status_item_quit() {
+    using lingtai::desktop::RuntimeOptions;
+    using lingtai::desktop::ShellHost;
+
+    RuntimeOptions options;
+    options.offscreen_mode = true;
+    options.ui_test_mode = true;
+    ShellHost host(options);
+    auto *status_item = host.findChild<QSystemTrayIcon *>();
+    require(status_item && status_item->contextMenu(),
+        "the quit fixture requires the process status menu");
+    auto *quit_action = status_item->contextMenu()->actions().at(2);
+
+    QTimer::singleShot(0, quit_action, &QAction::trigger);
+    QTimer::singleShot(250, qApp, [] {
+        QCoreApplication::exit(91);
+    });
+    const auto exit_code = QCoreApplication::exec();
+    require(exit_code == 0,
+        "Quit LingTai must request the Qt application quit path");
+}
+
+void verify_desktop_final_window_quit() {
+    using lingtai::desktop::RuntimeOptions;
+    using lingtai::desktop::ShellHost;
+
+    QPointer<QSystemTrayIcon> status_item;
+    {
+        RuntimeOptions options;
+        options.offscreen_mode = true;
+        options.ui_test_mode = true;
+        ShellHost host(options);
+        status_item = host.findChild<QSystemTrayIcon *>();
+        require(!status_item.isNull(),
+            "the final-close fixture requires the process status item");
+        host.primary().show_offscreen();
+        QTimer::singleShot(0, &host.primary().window(), [&host] {
+            host.primary().window().close();
+        });
+        QTimer::singleShot(250, qApp, [] {
+            QCoreApplication::exit(92);
+        });
+        const auto exit_code = QCoreApplication::exec();
+        require(exit_code == 0 && host.shell_count() == 0,
+            "closing the final Desktop shell must request process quit");
+    }
+    require(status_item.isNull(),
+        "normal process-owner destruction must remove the status item");
 }
 
 // Regression for the missing composition: a ShellHost-created
@@ -8470,6 +8661,12 @@ int main(int argc, char **argv) {
         && std::string_view(argv[2]) == "--kanban-only";
     const auto new_window_bootstrap_only = argc == 3
         && std::string_view(argv[2]) == "--new-window-bootstrap-only";
+    const auto status_item_only = argc == 3
+        && std::string_view(argv[2]) == "--status-item-only";
+    const auto status_item_quit_only = argc == 3
+        && std::string_view(argv[2]) == "--status-item-quit-only";
+    const auto final_window_quit_only = argc == 3
+        && std::string_view(argv[2]) == "--final-window-quit-only";
     const auto journey_flag = argc == 3
         ? parse_journey_flag(argv[2]) : std::nullopt;
     const auto has_legacy_flag = responsive_sidebar_only
@@ -8477,7 +8674,8 @@ int main(int argc, char **argv) {
         || slash_interception_only || compact_header_only
         || two_surface_only || plain_underline_only
         || floating_composer_only || project_setup_only || setup_rerun_only
-        || kanban_only || new_window_bootstrap_only;
+        || kanban_only || new_window_bootstrap_only || status_item_only
+        || status_item_quit_only || final_window_quit_only;
     if (argc != 2 && !has_legacy_flag && !journey_flag) {
         std::cerr << "usage: native_shell_test PROJECT_ROOT "
                      "[--journey=NAME|--journey=all|"
@@ -8486,7 +8684,8 @@ int main(int argc, char **argv) {
                      "--compact-header-only|--two-surface-only|"
                      "--plain-underline-only|--floating-composer-only|"
                      "--project-setup-only|--setup-rerun-only|--kanban-only|"
-                     "--new-window-bootstrap-only]\n"
+                     "--new-window-bootstrap-only|--status-item-only|"
+                     "--status-item-quit-only|--final-window-quit-only]\n"
                      "  journeys: semantics bootstrap roster conversation "
                      "setup lifecycle layout theme composer paste menu outgoing kanban all\n";
         return 2;
@@ -8600,6 +8799,22 @@ int main(int argc, char **argv) {
         if (new_window_bootstrap_only) {
             verify_new_window_project_bootstrap(
                 project_root / "new-window-bootstrap-diagnostic-fixture");
+            std::cout << "native shell behavior: OK\n";
+            return 0;
+        }
+        if (status_item_only) {
+            verify_desktop_status_item(
+                project_root / "desktop-status-item-fixture");
+            std::cout << "native shell behavior: OK\n";
+            return 0;
+        }
+        if (status_item_quit_only) {
+            verify_desktop_status_item_quit();
+            std::cout << "native shell behavior: OK\n";
+            return 0;
+        }
+        if (final_window_quit_only) {
+            verify_desktop_final_window_quit();
             std::cout << "native shell behavior: OK\n";
             return 0;
         }

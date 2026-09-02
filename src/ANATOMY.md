@@ -19,8 +19,14 @@ Entry point and composition root:
 
 - `main.cpp` — `main()`: constructs `ShellHost` and runs the `--smoke` /
   `--offscreen` paths.
-- `shell_host.{h,cpp}` — owns all native windows, directory-picker routing,
-  and the fallback kernel interpreter.
+- `shell_host.{h,cpp}` — owns all native windows, the one process
+  `DesktopStatusItem`, most-recent-active-window selection, directory-picker
+  routing, and the fallback kernel interpreter. Final-window close still exits
+  the application; the status item does not make Desktop resident.
+- `desktop_status_item.{h,cpp}` — the narrow Qt adapter that owns one
+  `QSystemTrayIcon`, its exact Show/separator/Quit menu, and the compiled
+  18-point monochrome mask icon. Its two callbacks leave window selection and
+  process lifetime policy in `ShellHost`.
 - `mac_popup_dismissal_bridge.{h,mm}` — the macOS application-wide native
   event observer. It classifies mouse-down recipients by `NSWindow` identity
   against every visible top-level `Qt::Popup`, then invokes one synchronous

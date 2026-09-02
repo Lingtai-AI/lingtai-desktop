@@ -1,8 +1,11 @@
 #include "shell_host.h"
 
+#include "desktop_status_item.h"
+
 #include "base/event_filter.h"
 #include "ui/widgets/rp_window.h"
 
+#include <QtCore/QCoreApplication>
 #include <QtCore/QDir>
 #include <QtCore/QPoint>
 #include <QtCore/QTimer>
@@ -28,12 +31,18 @@ ShellHost::ShellHost(RuntimeOptions runtime_options, QObject *parent)
 , runtime_options_(std::move(runtime_options))
 , agent_start_fallback_python_(default_fallback_python()) {
     static_cast<void>(spawn_shell());
+    status_item_ = new DesktopStatusItem(
+        [this] { show_lingtai(); },
+        [] { QCoreApplication::quit(); },
+        this);
+    status_item_->show();
 }
 
 ShellHost::~ShellHost() {
     // Drop owned shells without scheduling remove_shell / quit callbacks
     // against a half-destroyed host.
     shutting_down_ = true;
+    most_recent_active_shell_ = nullptr;
     shells_.clear();
 }
 
@@ -75,6 +84,9 @@ void ShellHost::watch_shell(NativeShell *shell) {
         &shell->window(),
         &shell->window(),
         [this, shell](not_null<QEvent *> event) {
+            if (event->type() == QEvent::WindowActivate && !shutting_down_) {
+                most_recent_active_shell_ = shell;
+            }
             if (event->type() == QEvent::Close && !shutting_down_) {
                 QTimer::singleShot(0, this, [this, shell] {
                     remove_shell(shell);
@@ -82,6 +94,27 @@ void ShellHost::watch_shell(NativeShell *shell) {
             }
             return base::EventFilterResult::Continue;
         }));
+}
+
+void ShellHost::show_lingtai() {
+    if (shells_.empty()) {
+        return;
+    }
+    const auto recent = std::ranges::find_if(shells_, [this](const auto &owned) {
+        return owned.get() == most_recent_active_shell_;
+    });
+    auto *selected = recent != shells_.end()
+        ? recent->get()
+        : shells_.front().get();
+    auto &shell = *selected;
+    auto &window = shell.window();
+    if (window.isMinimized()) {
+        window.showNormal();
+    } else if (window.isHidden()) {
+        shell.show();
+    }
+    window.raise();
+    window.activateWindow();
 }
 
 void ShellHost::remove_shell(NativeShell *shell) {
@@ -92,6 +125,9 @@ void ShellHost::remove_shell(NativeShell *shell) {
         [shell](const auto &owned) { return owned.get() == shell; });
     if (found == shells_.end()) {
         return;
+    }
+    if (most_recent_active_shell_ == shell) {
+        most_recent_active_shell_ = nullptr;
     }
     shells_.erase(found);
     if (shells_.empty()) {

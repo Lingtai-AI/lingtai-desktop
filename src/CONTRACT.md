@@ -26,7 +26,10 @@ Obligations and prohibitions for agents working in `src/`:
    project files itself.
 4. Keep the shell's injectable seams narrow: application composition
    (`ShellHost`) is the only place that chooses the concrete fallback
-   interpreter, and it passes it through the dedicated setter.
+   interpreter, owns the one process status item, and chooses which still-owned
+   shell its Show action restores. `DesktopStatusItem` owns presentation only
+   and delegates Show/Quit through explicit callbacks; it must not introduce a
+   resident-process policy, polling, networking, or window ownership.
    `make_native_window()` is the application boundary
    for pinned toolkit prerequisites: it initializes process-global emoji state
    once after widget styles and keeps it alive until `QApplication` teardown.
@@ -300,7 +303,10 @@ paths and names are in [`../ANATOMY.md`](../ANATOMY.md) and `CMakeLists.txt`:
 - `tests/project_attachment_test.cpp` — `project_attachment`.
 - `tests/attachment_selection_test.cpp` — `attachment_selection`.
 - `tests/native_shell_test.cpp` — `native_shell_behavior` (links the shell +
-  `lib_ui` + `crl_integration.cpp`).
+  `lib_ui` + `crl_integration.cpp`), including the focused status-item,
+  status-item-Quit, and final-window-Quit journeys.
+- `tests/test_desktop_status_item_contract.py` — static status-item source,
+  packaging, and prohibited-behavior contract.
 - `tests/mac_popup_dismissal_bridge_test.mm` — `mac_popup_dismissal` on macOS;
   the focused Cocoa recipient-identity and click-through contract for the
   application-owned bridge and Desktop Integration stream.

@@ -12,6 +12,8 @@
 
 namespace lingtai::desktop {
 
+class DesktopStatusItem;
+
 // Owns every open NativeShell window for the process. Open Project still
 // rebinds the requesting shell; Open Project in Another Window spawns another
 // shell and opens the chosen directory only there.
@@ -44,6 +46,7 @@ private:
     [[nodiscard]] NativeShell *spawn_shell();
     void configure_shell(NativeShell &shell);
     void watch_shell(NativeShell *shell);
+    void show_lingtai();
     void remove_shell(NativeShell *shell);
     [[nodiscard]] std::optional<std::filesystem::path> pick_project_directory(
         QWidget *parent) const;
@@ -54,6 +57,8 @@ private:
     RuntimeOptions runtime_options_;
     std::filesystem::path agent_start_fallback_python_;
     std::vector<std::unique_ptr<NativeShell>> shells_;
+    NativeShell *most_recent_active_shell_ = nullptr;
+    DesktopStatusItem *status_item_ = nullptr;
     bool shutting_down_ = false;
 };
 

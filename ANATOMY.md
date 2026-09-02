@@ -73,8 +73,10 @@ emits `LINGTAI_NATIVE_SHELL_READY` and `LINGTAI_LIB_UI_FULL_TARGET_SMOKE_OK`
 before exiting (`src/main.cpp:55-83`). `src/crl_integration.cpp` supplies the
 bounded no-emission parent `crl` update producer the smoke needs.
 
-`src/shell_host.cpp` owns normal window composition, including the fallback
-kernel interpreter.
+`src/shell_host.cpp` owns normal window composition, including all native
+windows, the single process status item, most-recent-window selection, and the
+fallback kernel interpreter. `src/desktop_status_item.{h,cpp}` owns the narrow
+status-item menu and its compiled monochrome template icon.
 
 - `src/native_shell.{h,cpp}` — `NativeShell` (`src/native_shell.h:64`), the
   one C5-owned composition: `WorkspaceSelectionState` C1 truth, the 260px
@@ -172,10 +174,13 @@ Each C++ contract executable maps to one ctest name (declared in
 `agent_preset_summary`, `agent_setup_store`, `agent_signal`, `agent_sleep`,
 `agent_process`, `agent_launch`, `agent_lifecycle`,
 `posix_descriptor_primitives`,
-`workspace_selection`, `native_shell_behavior`, plus the Python gates
+`workspace_selection`, `native_shell_behavior`, the focused
+`native_shell_status_item`, `native_shell_status_item_quit`, and
+`native_shell_final_window_quit` journeys, plus the Python gates
 `native_shell` (process persistence + smoke-order, `tests/test_native_shell.py`),
 `test_repository_contract.py` (pinned toolkit provenance + tracked-artifact
-guard), `test_app_archive.py` (portable archive production, independent safe
+guard), `test_desktop_status_item_contract.py` (status-item source and
+packaging prohibitions), `test_app_archive.py` (portable archive production, independent safe
 extraction, exact manifest/App binding, and publication races), and
 `test_macos_packaging.py` (optional DMG mode, naming, path, and manifest
 contract), `test_desktop_user_cli.py` (App lifecycle and stable/local support

@@ -16,6 +16,7 @@ prove itself.
 must never be confused:
 
 - **Repository/static contracts** — `tests/test_repository_contract.py`,
+  `tests/test_desktop_status_item_contract.py`,
   `tests/test_app_archive.py`, `tests/test_macos_packaging.py`,
   `tests/test_desktop_user_cli.py`, `tests/test_desktop_support_update.py`, and
   the compile-time guards and `static_assert`s inside the unit tests. These
@@ -163,6 +164,9 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   paste journey delivers logical text through a real MIME-carrying Qt event,
   then proves exact Unicode editor state, emoji input-method formatting,
   ordinary Send, and two-shell runtime sharing without accessing `QClipboard`.
+  Its status-item journeys own the one-per-process/menu/icon/show/quit/final-
+  window-lifetime contract without requiring a real system-tray availability
+  check.
 - The `native_shell_menu` journey owns the production composer context-menu
   proof. It must preserve the immediate standard menu and functional edit
   actions without spelling/Search rows, async deferral, platform callbacks, or
