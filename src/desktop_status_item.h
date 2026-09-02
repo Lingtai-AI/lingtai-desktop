@@ -22,6 +22,7 @@ public:
     void show();
 
 private:
+    // Declaration order makes the tray release its context-menu pointer first.
     std::unique_ptr<QMenu> menu_;
     std::unique_ptr<QSystemTrayIcon> tray_icon_;
 };

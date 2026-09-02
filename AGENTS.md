@@ -52,6 +52,7 @@ ctest --test-dir build --output-on-failure -R '^kanban_model$'
 ctest --test-dir build --output-on-failure -R '^posix_descriptor_primitives$'
 ctest --test-dir build --output-on-failure -R '^workspace_selection$'
 ctest --test-dir build --output-on-failure -R '^native_shell(_behavior)?$'
+ctest --test-dir build --output-on-failure -R '^(desktop_status_item_source_contract|native_shell_status_item|native_shell_status_item_quit|native_shell_final_window_quit)$'
 ./scripts/smoke.py
 ```
 

@@ -1142,6 +1142,8 @@ void verify_desktop_status_item(const fs::path &sandbox) {
     const auto status_items = host.findChildren<QSystemTrayIcon *>();
     require(status_items.size() == 1,
         "ShellHost must own exactly one process status item");
+    require(!status_items.front()->isVisible(),
+        "offscreen ShellHost must not publish a real process status item");
 
     auto *menu = status_items.front()->contextMenu();
     require(menu != nullptr,
@@ -1194,8 +1196,9 @@ void verify_desktop_status_item(const fs::path &sandbox) {
         "the fallback selection fixture must begin with no shown shell");
     actions[0]->trigger();
     QCoreApplication::processEvents();
-    require(primary.window().isVisible(),
-        "Show LingTai must deterministically fall back to the primary shell");
+    require(primary.window().isVisible()
+            && primary.window().testAttribute(Qt::WA_DontShowOnScreen),
+        "offscreen Show must select the primary shell without mapping it");
 
     write_file(sandbox / "second/.lingtai/beta/.agent.json",
         R"({"admin":{}})");
@@ -1221,13 +1224,31 @@ void verify_desktop_status_item(const fs::path &sandbox) {
 
     secondary.window().showMinimized();
     QCoreApplication::processEvents();
-    require(secondary.window().isMinimized(),
-        "the restore fixture must begin with a minimized recent shell");
+    require(secondary.window().isMinimized()
+            && !secondary.window().isMaximized(),
+        "the plain restore fixture must begin with a minimized recent shell");
     actions[0]->trigger();
     QCoreApplication::processEvents();
     require(secondary.window().isVisible()
-            && !secondary.window().isMinimized(),
-        "Show LingTai must restore a minimized recent shell");
+            && !secondary.window().isMinimized()
+            && !secondary.window().isMaximized(),
+        "Show LingTai must restore a plain minimized recent shell");
+
+    secondary.window().showMaximized();
+    QCoreApplication::processEvents();
+    require(secondary.window().isMaximized(),
+        "the maximized restore fixture must begin maximized");
+    secondary.window().showMinimized();
+    QCoreApplication::processEvents();
+    require(secondary.window().isMinimized()
+            && secondary.window().windowState().testFlag(Qt::WindowMaximized),
+        "minimizing the maximized fixture must retain its maximized state");
+    actions[0]->trigger();
+    QCoreApplication::processEvents();
+    require(secondary.window().isVisible()
+            && !secondary.window().isMinimized()
+            && secondary.window().isMaximized(),
+        "Show LingTai must restore the maximized state after minimizing");
 
     secondary.window().close();
     require(wait_for_event_loop([&] {
@@ -1241,7 +1262,7 @@ void verify_desktop_status_item(const fs::path &sandbox) {
     actions[0]->trigger();
     QCoreApplication::processEvents();
     require(primary.window().isVisible(),
-        "closing the recent shell must clear it before Show fallback");
+        "closing the recent shell must safely fall back to an owned shell");
 
     auto show_calls = 0;
     auto quit_calls = 0;
@@ -8663,10 +8684,10 @@ int main(int argc, char **argv) {
         && std::string_view(argv[2]) == "--new-window-bootstrap-only";
     const auto status_item_only = argc == 3
         && std::string_view(argv[2]) == "--status-item-only";
-    const auto status_item_quit_only = argc == 3
-        && std::string_view(argv[2]) == "--status-item-quit-only";
-    const auto final_window_quit_only = argc == 3
-        && std::string_view(argv[2]) == "--final-window-quit-only";
+    const auto status_item_quit_only = argc == 2
+        && std::string_view(argv[1]) == "--status-item-quit-only";
+    const auto final_window_quit_only = argc == 2
+        && std::string_view(argv[1]) == "--final-window-quit-only";
     const auto journey_flag = argc == 3
         ? parse_journey_flag(argv[2]) : std::nullopt;
     const auto has_legacy_flag = responsive_sidebar_only
@@ -8684,15 +8705,19 @@ int main(int argc, char **argv) {
                      "--compact-header-only|--two-surface-only|"
                      "--plain-underline-only|--floating-composer-only|"
                      "--project-setup-only|--setup-rerun-only|--kanban-only|"
-                     "--new-window-bootstrap-only|--status-item-only|"
-                     "--status-item-quit-only|--final-window-quit-only]\n"
+                     "--new-window-bootstrap-only|--status-item-only]\n"
+                     "       native_shell_test "
+                     "--status-item-quit-only|--final-window-quit-only\n"
                      "  journeys: semantics bootstrap roster conversation "
                      "setup lifecycle layout theme composer paste menu outgoing kanban all\n";
         return 2;
     }
     try {
-        const auto project_root = std::filesystem::canonical(argv[1]);
-        std::filesystem::current_path(project_root);
+        auto project_root = std::filesystem::path();
+        if (!status_item_quit_only && !final_window_quit_only) {
+            project_root = std::filesystem::canonical(argv[1]);
+            std::filesystem::current_path(project_root);
+        }
         qputenv("QT_LOGGING_RULES",
             "qt.qpa.fonts.warning=false;qt.qpa.keymapper.warning=false");
         QApplication application(argc, argv);

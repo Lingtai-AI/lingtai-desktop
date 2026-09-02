@@ -10,7 +10,6 @@ ROOT = Path(__file__).resolve().parents[1]
 PLIST = ROOT / "cmake" / "macos" / "Info.plist.in"
 STATUS_HEADER = ROOT / "src" / "desktop_status_item.h"
 STATUS_SOURCE = ROOT / "src" / "desktop_status_item.cpp"
-SHELL_HOST_SOURCE = ROOT / "src" / "shell_host.cpp"
 
 
 class DesktopStatusItemContractTest(unittest.TestCase):
@@ -45,13 +44,6 @@ class DesktopStatusItemContractTest(unittest.TestCase):
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, status_item)
-
-    def test_show_path_restores_raises_and_activates_an_owned_shell(self) -> None:
-        shell_host = SHELL_HOST_SOURCE.read_text()
-        self.assertIn("window.showNormal()", shell_host)
-        self.assertIn("window.raise()", shell_host)
-        self.assertIn("window.activateWindow()", shell_host)
-
 
 if __name__ == "__main__":
     unittest.main()

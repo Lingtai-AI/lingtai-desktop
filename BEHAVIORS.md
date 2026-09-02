@@ -30,9 +30,11 @@ restate per-owner behavior; owner-level detail lives in `src/`, `src/ui/`, and
 - **Repro-1a — One process status item without resident mode.** Normal Desktop
   execution creates one process-owned macOS status item after the first shell,
   with exactly **Show LingTai**, a separator, and **Quit LingTai**. Show restores
-  and activates the most recently active still-owned shell (or the deterministic
-  remaining fallback); Quit follows Qt's application-quit path. Closing the
-  final window still quits, and opening or closing other windows never creates a
+  and activates the most recently active still-owned shell without discarding
+  its maximized state (or uses the deterministic remaining fallback); Quit
+  follows Qt's application-quit path. Offscreen tests construct the same adapter
+  without publishing a real tray item or mapping Show windows. Closing the final
+  window still quits, and opening or closing other windows never creates a
   second item. Proven by the three focused `native_shell_status_item*` /
   `native_shell_final_window_quit` ctests and
   `tests/test_desktop_status_item_contract.py`.

@@ -35,7 +35,9 @@ ShellHost::ShellHost(RuntimeOptions runtime_options, QObject *parent)
         [this] { show_lingtai(); },
         [] { QCoreApplication::quit(); },
         this);
-    status_item_->show();
+    if (!runtime_options_.offscreen_mode) {
+        status_item_->show();
+    }
 }
 
 ShellHost::~ShellHost() {
@@ -109,9 +111,15 @@ void ShellHost::show_lingtai() {
     auto &shell = *selected;
     auto &window = shell.window();
     if (window.isMinimized()) {
-        window.showNormal();
-    } else if (window.isHidden()) {
-        shell.show();
+        window.setWindowState(
+            window.windowState() & ~Qt::WindowMinimized);
+    }
+    if (window.isHidden()) {
+        if (runtime_options_.offscreen_mode) {
+            shell.show_offscreen();
+        } else {
+            shell.show();
+        }
     }
     window.raise();
     window.activateWindow();

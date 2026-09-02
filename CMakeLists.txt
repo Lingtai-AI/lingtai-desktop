@@ -209,6 +209,7 @@ target_link_libraries(lingtai_desktop_preset_catalog PRIVATE Qt6::Core)
 add_library(lingtai_desktop_native_shell STATIC
     src/attachment_thumbnail.cpp
     src/desktop_status_item.cpp
+    src/desktop_status_item.h
     src/mac_popup_dismissal_bridge.h
     src/mac_popup_dismissal_bridge.mm
     src/native_shell.cpp
@@ -993,7 +994,6 @@ endif()
 
 add_test(NAME native_shell_status_item_quit
     COMMAND lingtai_native_shell_test
-        "${CMAKE_CURRENT_BINARY_DIR}/native-shell-status-item-fixture"
         --status-item-quit-only)
 if(APPLE)
     set_tests_properties(native_shell_status_item_quit PROPERTIES
@@ -1005,7 +1005,6 @@ endif()
 
 add_test(NAME native_shell_final_window_quit
     COMMAND lingtai_native_shell_test
-        "${CMAKE_CURRENT_BINARY_DIR}/native-shell-status-item-fixture"
         --final-window-quit-only)
 if(APPLE)
     set_tests_properties(native_shell_final_window_quit PROPERTIES

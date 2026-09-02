@@ -31,11 +31,11 @@ test proves. This file descends into `tests/` itself.
   a ctest: it is a repository contract, not a product behavior. Its one
   CMake-source assertion owns the canonical product version; it is not a
   general repository-shape suite.
-- `tests/test_desktop_status_item_contract.py` — the focused source/packaging
-  guard for foreground-App policy (`LSUIElement`/`LSBackgroundOnly` absent),
-  unchanged last-window quit policy, and the status-item owner's prohibition
-  on timers, threads, processes, networking, availability gating, and native
-  AppKit/Cocoa code. CMake also registers it as
+- `tests/test_desktop_status_item_contract.py` — two focused static guards for
+  foreground-App policy (`LSUIElement`/`LSBackgroundOnly` absent), unchanged
+  last-window quit policy, and the status-item owner's prohibition on timers,
+  threads, processes, networking, availability gating, and native AppKit/Cocoa
+  code. CMake also registers it as
   `desktop_status_item_source_contract`.
 - `tests/test_app_archive.py` — the offline owner of the primary portable-App
   archive boundary: exact manifest/App-tree binding, safe private extraction,
@@ -227,9 +227,11 @@ touches a real Agent or project, and none depends on a network or provider.
   `commit-N-...-fixture` trees the test itself creates. The working
   directory is an injected path, not an OS or process sandbox.
 - Its focused `native_shell_status_item` journey proves one host-owned item,
-  exact menu order, compiled 18/36-pixel transparent mask resources, one-shot
-  callbacks, deterministic fallback, most-recent activation, minimized restore,
-  stale-window removal, and no duplication across a second shell. The separate
+  an unpublished offscreen tray, exact menu order, compiled 18/36-pixel
+  transparent mask resources, one-shot callbacks, deterministic fallback,
+  most-recent activation, plain and maximized minimized restore, safe owned-
+  shell fallback after the recent shell closes, and no duplication across a
+  second shell. The separate
   `native_shell_status_item_quit` and `native_shell_final_window_quit` event-loop
   journeys prove both quit paths terminate through Qt.
 - Its focused `native_shell_new_window_bootstrap` path commits literal `~`,

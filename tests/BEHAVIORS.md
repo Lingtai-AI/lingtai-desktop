@@ -236,10 +236,12 @@ Qt plugin path set and an 8 s watchdog.
   `verify_first_project_bootstrap`).
 - The focused `native_shell_status_item` journey directly triggers the owned
   menu without Accessibility or global menu-bar interaction. It proves one
-  item across two shells, exact Show/separator/Quit order, single callback
-  delivery, deterministic and most-recent selection, minimized restore,
-  stale-selection removal, secondary-close preservation, a mask icon, and
-  exact transparent 18/36-pixel compiled resources. The separate status-item
+  adapter across two shells without publishing a real offscreen tray item,
+  exact Show/separator/Quit order, single callback delivery, deterministic and
+  most-recent selection, hidden Show retaining `WA_DontShowOnScreen`, plain and
+  maximized minimized restore, safe fallback to an owned shell after recent-
+  shell removal, secondary-close preservation, a mask icon, and exact
+  transparent 18/36-pixel compiled resources. The separate status-item
   Quit and final-window-close journeys each run a bounded Qt event loop and
   prove exit code 0 before their failure watchdogs can fire.
 - The direct-conversation journey invokes the real ordinary one-second timer

@@ -15,13 +15,16 @@ its code.
 - Normal execution constructs one `NativeShell`, shows it, and schedules no
   automatic exit; `--offscreen` and `--smoke` are the only special argv
   (`main.cpp:15`).
-- After the first shell exists, `ShellHost` creates and shows one process-owned
-  macOS status item with exactly **Show LingTai**, a separator, and
-  **Quit LingTai**. Show restores a minimized shell and raises/activates the
-  most recently active still-owned shell, falling back deterministically to
-  the first remaining shell. Quit uses `QCoreApplication::quit`. Closing the
-  final window still quits normally; closing or opening secondary windows does
-  not destroy or duplicate the item.
+- After the first shell exists, normal execution creates and shows one
+  process-owned macOS status item with exactly **Show LingTai**, a separator,
+  and **Quit LingTai**. Offscreen execution constructs the same adapter/menu
+  for deterministic coverage but does not publish the tray icon. Show clears
+  only the minimized state (preserving maximized state), then raises/activates
+  the most recently active still-owned shell, falling back deterministically
+  to the first remaining shell; hidden offscreen shells retain
+  `WA_DontShowOnScreen`. Quit uses `QCoreApplication::quit`. Closing the final
+  window still quits normally; closing or opening secondary windows does not
+  destroy or duplicate the item.
 - Application composition initializes the pinned toolkit's emoji runtime once,
   after widget styles and before the first composer is constructed. Every
   simultaneous or later `NativeShell` under that `QApplication` reuses it;

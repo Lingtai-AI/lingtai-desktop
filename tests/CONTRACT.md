@@ -165,8 +165,8 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   then proves exact Unicode editor state, emoji input-method formatting,
   ordinary Send, and two-shell runtime sharing without accessing `QClipboard`.
   Its status-item journeys own the one-per-process/menu/icon/show/quit/final-
-  window-lifetime contract without requiring a real system-tray availability
-  check.
+  window-lifetime contract without requiring or publishing a real offscreen
+  system tray item.
 - The `native_shell_menu` journey owns the production composer context-menu
   proof. It must preserve the immediate standard menu and functional edit
   actions without spelling/Search rows, async deferral, platform callbacks, or
