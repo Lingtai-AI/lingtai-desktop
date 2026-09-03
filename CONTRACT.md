@@ -151,10 +151,12 @@ own `ANATOMY.md`/`CONTRACT.md`); it states the repository-level graph.
   any ancestor/root child, App receipt/version/bundle, support generation/file,
   support pointer/state/pending/cache, or stable launcher is unknown, linked,
   mode-mismatched, invalid, or substituted.
-- `ShellHost` owns application composition, every `NativeShell`, the single
-  process status item, and the one fallback kernel interpreter;
-  `DesktopStatusItem` owns only its menu/icon and delegates Show/Quit through
-  callbacks; `main.cpp` owns the `--smoke` path. The shell performs no
+- `ShellHost` owns application composition, every `NativeShell`, the one
+  process-session canonical-Project/Agent unread model, active-window read
+  eligibility, the unique-open-Project aggregate, the single process status
+  item, and the one fallback kernel interpreter; `DesktopStatusItem` owns only
+  menu/icon/tooltip presentation and delegates Show/Quit through callbacks;
+  `main.cpp` owns the `--smoke` path. The shell performs no
   project, registry, or settings writes beyond the explicit user-triggered
   actions (composer send, Request sleep, Start Agent, plus the explicit New
   Project creation transaction).

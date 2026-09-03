@@ -116,6 +116,9 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
 - `tests/project_attachment_test.cpp` — `project_attachment`.
 - `tests/attachment_selection_test.cpp` — `attachment_selection`.
 - `tests/workspace_selection_test.cpp` — `workspace_selection`.
+- `tests/conversation_unread_test.cpp` — `conversation_unread`; pure
+  process-session first-observation, monotonic/stale-observation, membership,
+  duplicate-Project, reopen, cursor-ordering, and saturating-total evidence.
 - `tests/agent_projection_test.cpp` — `agent_projection`.
 - `tests/direct_conversation_route_test.cpp` — `direct_conversation_route`.
 - `tests/direct_conversation_history_test.cpp` — `direct_conversation_history`.
@@ -164,9 +167,12 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   paste journey delivers logical text through a real MIME-carrying Qt event,
   then proves exact Unicode editor state, emoji input-method formatting,
   ordinary Send, and two-shell runtime sharing without accessing `QClipboard`.
-  Its status-item journeys own the one-per-process/menu/icon/show/quit/final-
-  window-lifetime contract without requiring or publishing a real offscreen
-  system tray item.
+  Its `native_shell_unread` journey owns shared-session multi-Project and
+  duplicate-window aggregation, active-visible-non-minimized read eligibility,
+  membership/lifecycle filtering, rebind/close/reopen, and coherent roster plus
+  tooltip projection. Its status-item journeys own the one-per-process/menu/
+  icon-renderer/show/quit/final-window-lifetime contract without requiring or
+  publishing a real offscreen system tray item.
 - The `native_shell_menu` journey owns the production composer context-menu
   proof. It must preserve the immediate standard menu and functional edit
   actions without spelling/Search rows, async deferral, platform callbacks, or

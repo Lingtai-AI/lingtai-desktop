@@ -24,7 +24,11 @@ its code.
   to the first remaining shell; hidden offscreen shells retain
   `WA_DontShowOnScreen`. Quit uses `QCoreApplication::quit`. Closing the final
   window still quits normally; closing or opening secondary windows does not
-  destroy or duplicate the item.
+  destroy or duplicate the item. With zero unread it uses the existing 18/36px
+  LingTai template resources. With unread it uses a deterministic 48×18 logical
+  (`96×36` Retina) template mask containing the logo and count capsule; counts
+  cap visually at `99+`, while the tooltip retains the exact total and unique
+  open-Project count.
 - Application composition initializes the pinned toolkit's emoji runtime once,
   after widget styles and before the first composer is constructed. Every
   simultaneous or later `NativeShell` under that `QApplication` reuses it;
@@ -308,6 +312,28 @@ its code.
   vice versa.
 
 ## Composer and conversation
+
+### Session unread
+
+- One memory-only `ConversationUnreadSession` is shared by every Desktop
+  window. The first accepted history for a canonical Project/Agent pair seeds
+  at zero; later inbound rows count, while outgoing rows and reaction receipts
+  do not. A close excludes a Project from the status total but retains its
+  cursor so a same-process reopen counts mail after that cursor. Process exit
+  clears the state.
+- A selected route advances its cursor only in the active/frontmost Desktop
+  shell while visible and non-minimized. Hidden, minimized, inactive, and
+  background selected routes accrue unread. Viewing the same Project/Agent in
+  either duplicate window advances the one shared cursor and updates every
+  duplicate roster.
+- Current snapshots include valid non-human Agents regardless of lifecycle and
+  exclude invalid manifests, the human pseudo-route, removed Agents, shells
+  without a Project, and Projects with no remaining open window. Duplicate
+  windows for one canonical Project are unioned and counted once. Roster badges
+  and the status total are both projections of the same filtered model.
+- Window activation/deactivation/show/hide/state changes reuse the already
+  accepted mailbox index and perform no new I/O. The existing per-shell mailbox
+  fingerprint/worker/generation flow remains the only refresh mechanism.
 
 - `preflight_attachments` is the UI-independent direct-file selection model:
   each selected path is canonicalized, opened nonblocking, and measured from

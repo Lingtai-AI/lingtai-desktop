@@ -1148,6 +1148,7 @@ set(LINGTAI_UI_TESTS
     native_shell_bootstrap
     native_shell_roster
     native_shell_conversation
+    native_shell_unread
     native_shell_lifecycle
     native_shell_layout
     native_shell_theme

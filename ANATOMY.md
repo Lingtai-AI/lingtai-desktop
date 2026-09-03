@@ -74,9 +74,12 @@ before exiting (`src/main.cpp:55-83`). `src/crl_integration.cpp` supplies the
 bounded no-emission parent `crl` update producer the smoke needs.
 
 `src/shell_host.cpp` owns normal window composition, including all native
-windows, the single process status item, most-recent-window selection, and the
-fallback kernel interpreter. `src/desktop_status_item.{h,cpp}` owns the narrow
-status-item menu and its compiled monochrome template icon.
+windows, the single process-session unread model, active/read-eligible and
+most-recent-window selection, the unique-open-Project aggregate, the single
+process status item, and the fallback kernel interpreter.
+`src/desktop_status_item.{h,cpp}` owns only the narrow status-item menu,
+resource-backed zero icon, generated wider alpha-mask count icon, and exact
+aggregate tooltip.
 
 - `src/native_shell.{h,cpp}` — `NativeShell` (`src/native_shell.h:64`), the
   one C5-owned composition: `WorkspaceSelectionState` C1 truth, the 260px
@@ -88,6 +91,8 @@ status-item menu and its compiled monochrome template icon.
 - `src/workspace_selection.{h,cpp}` — `WorkspaceSelectionState`
   (`src/workspace_selection.h:20`), the sole active-project/selected-Agent
   transition owner (C1).
+- `src/conversation_unread.{h,cpp}` — `ConversationUnreadSession`, the pure
+  memory-only canonical-Project/Agent unread owner shared by every shell.
 - `src/project_attachment.{h,cpp}` — `ProjectAttachment`
   (`src/project_attachment.h:34`) and `attach_project`
   (`src/project_attachment.h:59`): canonical-root containment seam.

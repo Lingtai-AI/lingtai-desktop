@@ -28,8 +28,10 @@ Obligations and prohibitions for agents working in `src/`:
    (`ShellHost`) is the only place that chooses the concrete fallback
    interpreter, owns the one process status item, and chooses which still-owned
    shell its Show action restores. `DesktopStatusItem` owns presentation only
-   and delegates Show/Quit through explicit callbacks; it must not introduce a
-   resident-process policy, polling, networking, or window ownership.
+   and delegates Show/Quit through explicit callbacks; its count setter accepts
+   already-derived exact/open-Project totals and must not introduce unread
+   domain ownership, a resident-process policy, polling, networking, or window
+   ownership.
    `make_native_window()` is the application boundary
    for pinned toolkit prerequisites: it initializes process-global emoji state
    once after widget styles and keeps it alive until `QApplication` teardown.
@@ -156,6 +158,13 @@ through normal attachment and launches through the lifecycle controller.
 State models: `WorkspaceSelectionState` (`workspace_selection.h`) is the only
 owner of the accepted active project and the selected Agent directory key. A
 caller proposes typed transitions only; the model performs no reads.
+`ConversationUnreadSession` (`conversation_unread.h`) is the only owner of
+process-session human unread truth. It keys state by the already-canonical
+Project root and Agent directory key, advances viewed/observation cursors
+monotonically, counts inbound only, filters current membership supplied by the
+caller, deduplicates open Project/Agent requests, and saturates totals. It owns
+no filesystem read, QObject, worker, timer, widget, status item, or persistence;
+`ShellHost` owns exactly one instance and injects it into every `NativeShell`.
 `DirectMailboxSnapshotIndex` (`direct_conversation_history.h`) is the only
 owner of mailbox single-flight/generation acceptance. It performs no reads or
 threading; `NativeShell` supplies fingerprints/results and runs accepted jobs.
@@ -226,8 +235,12 @@ coalescing, and stale-while-revalidate presentation.
    that the complete human outbox leaf
    was published; none claims kernel pickup, target acceptance, delivery,
    liveness, or lifecycle from the local write/start alone.
-4. **The shell composes.** `NativeShell` composes the widgets, native dialogs, and
-   timer, re-derives visible routes from C1 truth, and proposes transitions
+4. **The shell composes.** `ShellHost` owns the process unread session and all
+   shells. It derives the unique currently-open Project set from canonical
+   shell state, unions valid non-human Agent keys, owns active-window read
+   eligibility, and refreshes both rosters and the single status item from the
+   same model. `NativeShell` composes the widgets, native dialogs, and timer,
+   re-derives visible routes from C1 truth, and proposes transitions
    through the model. Its window factory also establishes the pinned toolkit's
    application-lifetime prerequisites before `AgentDetailView` can construct
    the composer. It also owns the composer-local dispatch after calling
@@ -300,6 +313,7 @@ paths and names are in [`../ANATOMY.md`](../ANATOMY.md) and `CMakeLists.txt`:
 - `tests/kanban_model_test.cpp` — `kanban_model`.
 - `tests/posix_descriptor_primitives_test.cpp` — `posix_descriptor_primitives`.
 - `tests/workspace_selection_test.cpp` — `workspace_selection`.
+- `tests/conversation_unread_test.cpp` — `conversation_unread`.
 - `tests/project_attachment_test.cpp` — `project_attachment`.
 - `tests/attachment_selection_test.cpp` — `attachment_selection`.
 - `tests/native_shell_test.cpp` — `native_shell_behavior` (links the shell +

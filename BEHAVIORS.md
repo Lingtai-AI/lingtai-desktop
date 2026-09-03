@@ -35,8 +35,13 @@ restate per-owner behavior; owner-level detail lives in `src/`, `src/ui/`, and
   follows Qt's application-quit path. Offscreen tests construct the same adapter
   without publishing a real tray item or mapping Show windows. Closing the final
   window still quits, and opening or closing other windows never creates a
-  second item. Proven by the three focused `native_shell_status_item*` /
-  `native_shell_final_window_quit` ctests and
+  second item. Its template icon displays the exact shared session unread count
+  through 99 and `99+` thereafter; its tooltip retains the exact count and
+  unique currently-open Project count. Roster badges and this aggregate derive
+  from one canonical-Project/Agent session model, with only active, visible,
+  non-minimized selected routes eligible to advance the shared cursor. Proven
+  by `conversation_unread`, `native_shell_unread`, the focused
+  `native_shell_status_item*` / `native_shell_final_window_quit` ctests, and
   `tests/test_desktop_status_item_contract.py`.
 - **Repro-2 — Pinned release inputs.** The canonical product version is v0.1.10,
   and the exact toolkit, third-party, Qt, and tdesktop-comparison commits in
@@ -83,7 +88,7 @@ restate per-owner behavior; owner-level detail lives in `src/`, `src/ui/`, and
 |---|---|---|
 | Repro-1 smoke marker order + exit codes | `tests/test_native_shell.py` (`native_shell`) | `ctest --test-dir build -R '^native_shell$'` |
 | Repro-1 real offscreen shell | `tests/native_shell_test.cpp` (`native_shell_behavior`) | `ctest --test-dir build -R '^native_shell_behavior$'` |
-| Repro-1a process status item | `tests/native_shell_test.cpp`; `tests/test_desktop_status_item_contract.py` | `ctest --test-dir build -R '^(desktop_status_item_source_contract|native_shell_status_item|native_shell_status_item_quit|native_shell_final_window_quit)$'` |
+| Repro-1a process status item + session unread | `tests/conversation_unread_test.cpp`; `tests/native_shell_test.cpp`; `tests/test_desktop_status_item_contract.py` | `ctest --test-dir build -R '^(conversation_unread|desktop_status_item_source_contract|native_shell_unread|native_shell_status_item|native_shell_status_item_quit|native_shell_final_window_quit)$'` |
 | Repro-2 lock provenance + v0.1.10 + hygiene | `tests/test_repository_contract.py` | `python3 -m unittest tests.test_repository_contract` |
 | Core attachment/containment | `tests/project_attachment_test.cpp` (`project_attachment`) | `ctest --test-dir build -R '^project_attachment$'` |
 | Direct attachment selection facts | `tests/attachment_selection_test.cpp` (`attachment_selection`) | `ctest --test-dir build -R '^attachment_selection$'` |

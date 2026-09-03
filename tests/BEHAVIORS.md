@@ -240,10 +240,19 @@ Qt plugin path set and an 8 s watchdog.
   exact Show/separator/Quit order, single callback delivery, deterministic and
   most-recent selection, hidden Show retaining `WA_DontShowOnScreen`, plain and
   maximized minimized restore, safe fallback to an owned shell after recent-
-  shell removal, secondary-close preservation, a mask icon, and exact
-  transparent 18/36-pixel compiled resources. The separate status-item
+  shell removal, secondary-close preservation, a mask icon, exact transparent
+  18/36-pixel zero resources, deterministic 48×18/96×36 alpha-only nonzero
+  masks, `99+` display capping, exact aggregate tooltips, and unchanged-bucket
+  icon reuse. The separate status-item
   Quit and final-window-close journeys each run a bounded Qt event loop and
   prove exit code 0 before their failure watchdogs can fire.
+- The focused `native_shell_unread` journey uses two canonical Projects and
+  duplicate real shells to prove one process-session total and coherent roster
+  badges; background/minimized/hidden accrual; active visible catch-up from an
+  already accepted snapshot; lifecycle-neutral valid-Agent membership; invalid
+  route exclusion; duplicate and last-window close behavior; Project rebind;
+  same-session reopen cursors; and synchronous final-close exclusion. It does
+  not publish the offscreen status item or claim physical menu-bar layout.
 - The direct-conversation journey invokes the real ordinary one-second timer
   seam and observes actual `message.json` opens: an unchanged completed
   generation opens none; after an append the timer's UI thread opens none and

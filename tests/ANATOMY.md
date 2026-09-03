@@ -31,11 +31,13 @@ test proves. This file descends into `tests/` itself.
   a ctest: it is a repository contract, not a product behavior. Its one
   CMake-source assertion owns the canonical product version; it is not a
   general repository-shape suite.
-- `tests/test_desktop_status_item_contract.py` — two focused static guards for
+- `tests/test_desktop_status_item_contract.py` — focused static guards for
   foreground-App policy (`LSUIElement`/`LSBackgroundOnly` absent), unchanged
   last-window quit policy, and the status-item owner's prohibition on timers,
   threads, processes, networking, availability gating, and native AppKit/Cocoa
-  code. CMake also registers it as
+  code. It also restricts the renderer to the narrow Qt image/painting surface,
+  alpha-only masks, resource-backed zero state, and no fixed colors or locale-
+  sensitive count formatting. CMake also registers it as
   `desktop_status_item_source_contract`.
 - `tests/test_app_archive.py` — the offline owner of the primary portable-App
   archive boundary: exact manifest/App-tree binding, safe private extraction,
@@ -181,6 +183,9 @@ touches a real Agent or project, and none depends on a network or provider.
   and the compiled bounded Desktop-owned content target.
 - `tests/agent_sleep_test.cpp` — `agent_sleep` ctest. Exact-target `.sleep`
   marker write plus the baseline/observe pair.
+- `tests/conversation_unread_test.cpp` — `conversation_unread`; the pure
+  process-session cursor, membership filtering, unique-Project aggregation,
+  stale duplicate observation, reopen, and saturation contract.
 - `tests/agent_lifecycle_test.cpp` — `agent_lifecycle` ctest. Deterministic
   signal/path safety, target/argument matrix, advisory leases, exact-process
   matching and escalation, every lifecycle flow/timeout, preset validation,
@@ -228,12 +233,17 @@ touches a real Agent or project, and none depends on a network or provider.
   directory is an injected path, not an OS or process sandbox.
 - Its focused `native_shell_status_item` journey proves one host-owned item,
   an unpublished offscreen tray, exact menu order, compiled 18/36-pixel
-  transparent mask resources, one-shot callbacks, deterministic fallback,
-  most-recent activation, plain and maximized minimized restore, safe owned-
-  shell fallback after the recent shell closes, and no duplication across a
-  second shell. The separate
+  transparent zero resources, deterministic 48×18/96×36 alpha-only count
+  masks, exact/capped buckets and tooltips, unchanged-bucket reuse, one-shot
+  callbacks, deterministic fallback, most-recent activation, plain and
+  maximized minimized restore, safe owned-shell fallback after the recent
+  shell closes, and no duplication across a second shell. The separate
   `native_shell_status_item_quit` and `native_shell_final_window_quit` event-loop
   journeys prove both quit paths terminate through Qt.
+- Its focused `native_shell_unread` journey owns real-shell duplicate-Project
+  roster/status coherence, active-visible-non-minimized read eligibility,
+  lifecycle-neutral valid-Agent membership, invalid-route exclusion, close/
+  rebind/reopen semantics, and final-close Project exclusion.
 - Its focused `native_shell_new_window_bootstrap` path commits literal `~`,
   `~/Documents`, `~/Documents/`, `~/Documents///`, and an absolute destination
   ending in `/` through real `Ui::InputField` editors, then activates the real
@@ -355,6 +365,7 @@ no fixture); the test itself creates and removes its sandbox within that root
 | `project_attachment_test.cpp` | `lingtai_project_attachment_test` | `project_attachment` | `project-attachment-fixture` |
 | `attachment_selection_test.cpp` | `lingtai_attachment_selection_test` | `attachment_selection` | `attachment-selection-fixture` |
 | `workspace_selection_test.cpp` | `lingtai_workspace_selection_test` | `workspace_selection` | `workspace-selection-fixture` |
+| `conversation_unread_test.cpp` | `lingtai_conversation_unread_test` | `conversation_unread` | — |
 | `agent_projection_test.cpp` | `lingtai_agent_projection_test` | `agent_projection` | `agent-projection-fixture` |
 | `direct_conversation_route_test.cpp` | `lingtai_direct_conversation_route_test` | `direct_conversation_route` | `direct-conversation-route-fixture` |
 | `direct_conversation_history_test.cpp` | `lingtai_direct_conversation_history_test` | `direct_conversation_history` | `direct-conversation-history-fixture` |
@@ -368,7 +379,7 @@ no fixture); the test itself creates and removes its sandbox within that root
 | `agent_lifecycle_real_smoke.cpp` | `lingtai_agent_lifecycle_real_smoke` | manual only | caller-owned isolated project root |
 | `kanban_model_test.cpp` | `lingtai_kanban_model_test` | `kanban_model` | `kanban-model-fixture` |
 | `mac_popup_dismissal_bridge_test.mm` | `lingtai_mac_popup_dismissal_test` | `mac_popup_dismissal` (macOS only) | — (temporary in-process Cocoa windows only) |
-| `native_shell_test.cpp` | `lingtai_native_shell_test` | split `native_shell_<journey>` tests, including `native_shell_lifecycle`, `native_shell_status_item`, `native_shell_status_item_quit`, and `native_shell_final_window_quit` | per-journey CMake fixture |
+| `native_shell_test.cpp` | `lingtai_native_shell_test` | split `native_shell_<journey>` tests, including `native_shell_unread`, `native_shell_lifecycle`, `native_shell_status_item`, `native_shell_status_item_quit`, and `native_shell_final_window_quit` | per-journey CMake fixture |
 | `native_shell_test.cpp` (paste journey) | `lingtai_native_shell_test` | `native_shell_paste` | `native-shell-paste-fixture` (CMake-created) |
 | `native_shell_destinations_test.cpp` | `lingtai_native_shell_destinations_test` | `native_shell_destinations` | — |
 | `native_shell_presets_test.cpp` | `lingtai_native_shell_presets_test` | `native_shell_presets` | `native-shell-presets-fixture` (CMake-created) |

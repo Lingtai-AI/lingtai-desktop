@@ -19,14 +19,17 @@ Entry point and composition root:
 
 - `main.cpp` — `main()`: constructs `ShellHost` and runs the `--smoke` /
   `--offscreen` paths.
-- `shell_host.{h,cpp}` — owns all native windows, the one process
-  `DesktopStatusItem`, most-recent-active-window selection, directory-picker
-  routing, and the fallback kernel interpreter. Final-window close still exits
-  the application; the status item does not make Desktop resident.
+- `shell_host.{h,cpp}` — owns all native windows, the one process-session
+  `ConversationUnreadSession`, the one `DesktopStatusItem`, active/read-
+  eligible and most-recent-active window selection, unique-open-Project unread
+  aggregation, directory-picker routing, and the fallback kernel interpreter.
+  Final-window close still exits the application; the status item does not make
+  Desktop resident.
 - `desktop_status_item.{h,cpp}` — the narrow Qt adapter that owns one
-  `QSystemTrayIcon`, its exact Show/separator/Quit menu, and the compiled
-  18-point monochrome mask icon. Its two callbacks leave window selection and
-  process lifetime policy in `ShellHost`.
+  `QSystemTrayIcon`, its exact Show/separator/Quit menu, the compiled 18/36px
+  zero-count masks, and deterministic wider 1×/2× alpha masks for a bounded
+  count capsule. It owns tooltip/icon presentation only; its two callbacks
+  leave window selection, unread truth, and process lifetime in `ShellHost`.
 - `mac_popup_dismissal_bridge.{h,mm}` — the macOS application-wide native
   event observer. It classifies mouse-down recipients by `NSWindow` identity
   against every visible top-level `Qt::Popup`, then invokes one synchronous
@@ -44,6 +47,11 @@ Entry point and composition root:
   project/Agent-keyed pending-publication projection merges publisher-proven
   outgoing rows with that accepted snapshot, maintains presentation append
   lineage, and retires a row only after the same ID is authoritative.
+  Accepted classified histories are fed into the injected process-session
+  unread model; the shell exposes canonical Project/current valid Agent domain
+  facts and renders its roster only from the model's filtered Project snapshot.
+  Its cheap visibility refresh reuses the already accepted mailbox index and
+  performs no fingerprint or filesystem read.
   The roster column is separated from the content pane by one semantic 8px
   drag handle (`lingtai_roster_resize_handle`, distinct from the one-pixel
   `Ui::PlainShadow` `lingtai_roster_separator` that follows it) whose drags
@@ -111,6 +119,11 @@ Domain models (pure, Qt-light state/derivation owners):
 - `workspace_selection.{h,cpp}` — C1 model: the sole owner of the optional
   accepted active project and optional selected Agent directory key, and the
   sole same-root/root-switch transition owner.
+- `conversation_unread.{h,cpp}` — the pure process-session unread model,
+  keyed by canonical Project root plus Agent directory key. It owns monotonic
+  viewed and latest-observation cursors, inbound-only counts, filtered Project
+  snapshots, duplicate-Project deduplication, and saturating totals; it owns no
+  Qt object, filesystem read, worker, timer, or persistence.
 - `agent_setup_store.{h,cpp}` — `AgentSetupState`/`AgentSetupDraft` plus
   `reconcile_agent_setup_presets` (`agent_setup_store.h:15-127`): the
   UI-independent existing-Agent setup domain. It retains full JSON values and
@@ -283,9 +296,12 @@ they are the shell's presentation layer and own no domain reads or writes.
 ## State
 
 - `WorkspaceSelectionState` (C1) holds the optional accepted `ProjectAttachment`
-  and the optional selected Agent directory key. It is the only in-process
-  persistent model; a fresh open preserves selection only for the same
-  canonical root (`workspace_selection.cpp:20`).
+  and the optional selected Agent directory key; a fresh open preserves
+  selection only for the same canonical root (`workspace_selection.cpp:20`).
+- `ConversationUnreadSession` holds process-lifetime, memory-only read cursors,
+  latest accepted observation tips, and unread counts. Closing the last window
+  for a Project excludes it from presentation without erasing its cached
+  cursor; process exit discards everything.
 - `NativeShell` holds one `agents_` snapshot (the sole roster owner) and the
   two click-armed pending observations (`SleepObservation` at most 3 s,
   `StartObservation` at most 10 s). All are discarded on project open
