@@ -243,7 +243,8 @@ touches a real Agent or project, and none depends on a network or provider.
 - Its focused `native_shell_unread` journey owns real-shell duplicate-Project
   roster/status coherence, active-visible-non-minimized read eligibility,
   lifecycle-neutral valid-Agent membership, invalid-route exclusion, close/
-  rebind/reopen semantics, and final-close Project exclusion.
+  rebind/reopen semantics, final-close Project exclusion, and held mailbox-
+  worker completion after both shell removal and host shutdown.
 - Its focused `native_shell_new_window_bootstrap` path commits literal `~`,
   `~/Documents`, `~/Documents/`, `~/Documents///`, and an absolute destination
   ending in `/` through real `Ui::InputField` editors, then activates the real

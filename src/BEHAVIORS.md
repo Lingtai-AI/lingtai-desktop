@@ -334,6 +334,10 @@ its code.
 - Window activation/deactivation/show/hide/state changes reuse the already
   accepted mailbox index and perform no new I/O. The existing per-shell mailbox
   fingerprint/worker/generation flow remains the only refresh mechanism.
+- An older duplicate-window observation, including an empty history behind a
+  newer non-empty tip, is ignored so it cannot regress unread. Existing mailbox
+  evidence cannot distinguish that case from a genuine deletion-to-empty, so
+  deletion reconciliation remains unchanged and out of scope.
 
 - `preflight_attachments` is the UI-independent direct-file selection model:
   each selected path is canonicalized, opened nonblocking, and measured from

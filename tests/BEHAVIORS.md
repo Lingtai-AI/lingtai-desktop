@@ -252,7 +252,10 @@ Qt plugin path set and an 8 s watchdog.
   already accepted snapshot; lifecycle-neutral valid-Agent membership; invalid
   route exclusion; duplicate and last-window close behavior; Project rebind;
   same-session reopen cursors; and synchronous final-close exclusion. It does
-  not publish the offscreen status item or claim physical menu-bar layout.
+  not publish the offscreen status item or claim physical menu-bar layout. A
+  held-worker suffix releases accepted mailbox work only after shell removal
+  and host shutdown, then drains posted events to prove no stale unread callback
+  survives either ownership boundary.
 - The direct-conversation journey invokes the real ordinary one-second timer
   seam and observes actual `message.json` opens: an unchanged completed
   generation opens none; after an append the timer's UI thread opens none and

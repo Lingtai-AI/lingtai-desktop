@@ -1366,11 +1366,128 @@ void verify_session_unread_aggregate(const fs::path &sandbox) {
     }, 5000),
         "same-session reopen must preserve the cursor and count later mail");
 
+    host.open_path_in_new_window(primary, project);
+    auto &closing_worker_shell = host.shell_at(1);
+    click_agent(closing_worker_shell, "alpha");
+    auto *closing_surface = required_child<QTextEdit>(
+        closing_worker_shell.window(), "lingtai_selected_agent_conversation");
+    require(wait_for_event_loop([&] {
+        return closing_surface->toPlainText().contains(
+            QStringLiteral("alpha hidden unread"));
+    }, 4000),
+        "the closing-worker fixture must first accept its mailbox snapshot");
+    auto worker_mutex = std::mutex();
+    auto worker_condition = std::condition_variable();
+    auto worker_entered = false;
+    auto worker_release = false;
+    auto worker_lifetime = std::make_shared<int>(0);
+    auto worker_finished = std::weak_ptr<int>(worker_lifetime);
+    closing_worker_shell.set_mailbox_snapshot_read_function(
+        [&, worker_lifetime](
+                const lingtai::desktop::DirectMailboxRequest &request) {
+            auto lock = std::unique_lock(worker_mutex);
+            worker_entered = true;
+            worker_condition.notify_all();
+            worker_condition.wait(lock, [&] { return worker_release; });
+            lock.unlock();
+            return lingtai::desktop::read_direct_mailbox_snapshot(request);
+        });
+    worker_lifetime.reset();
+    write_file(mailbox / "20260902T120500-gamma-held/message.json",
+        conversation_envelope_without_attachments(
+            "gamma", "human", "new", "gamma held during close",
+            "received_at", "2026-09-02T12:05:00Z"));
+    tick_mailbox(closing_worker_shell);
+    require(wait_for_event_loop([&] {
+        const auto lock = std::lock_guard(worker_mutex);
+        return worker_entered;
+    }, 1000), "the closing shell must hold one mailbox worker");
+    closing_worker_shell.window().close();
+    require(wait_for_event_loop([&] { return host.shell_count() == 1; }, 1000)
+            && host.unread_total() == 2,
+        "closing a shell must exclude it before its held worker can complete");
+    {
+        const auto lock = std::lock_guard(worker_mutex);
+        worker_release = true;
+    }
+    worker_condition.notify_all();
+    require(wait_for_event_loop([&] { return worker_finished.expired(); }, 2000),
+        "the removed shell's held mailbox worker must finish deterministically");
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
+    require(host.shell_count() == 1 && host.unread_total() == 2,
+        "a completed worker from a removed shell must publish no stale unread");
+
     primary.window().close();
     require(host.open_project_count() == 0,
         "closing the final Project window must synchronously exclude it");
     fs::remove_all(sandbox, cleanup_error);
     require(!cleanup_error, "the unread aggregate fixture must be removed");
+}
+
+void verify_unread_worker_host_shutdown(const fs::path &sandbox) {
+    using lingtai::desktop::RuntimeOptions;
+    using lingtai::desktop::ShellHost;
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "the unread shutdown fixture must start clean");
+    const auto project = sandbox / "project";
+    write_file(project / ".lingtai/human/.agent.json",
+        R"({"agent_id":"human-id","agent_name":"Human",)"
+        R"("address":"human","state":"active"})");
+    write_file(project / ".lingtai/alpha/.agent.json",
+        R"({"admin":{},"agent_id":"alpha-id","agent_name":"alpha",)"
+        R"("address":"alpha","state":"active"})");
+
+    auto worker_mutex = std::mutex();
+    auto worker_condition = std::condition_variable();
+    auto worker_entered = false;
+    auto worker_release = false;
+    auto worker_lifetime = std::make_shared<int>(0);
+    auto worker_finished = std::weak_ptr<int>(worker_lifetime);
+    auto status_item = QPointer<QSystemTrayIcon>();
+    {
+        RuntimeOptions options;
+        options.offscreen_mode = true;
+        options.ui_test_mode = true;
+        auto host = std::make_unique<ShellHost>(options);
+        status_item = host->findChild<QSystemTrayIcon *>();
+        host->primary().set_mailbox_snapshot_read_function(
+            [&, worker_lifetime](
+                    const lingtai::desktop::DirectMailboxRequest &request) {
+                auto lock = std::unique_lock(worker_mutex);
+                worker_entered = true;
+                worker_condition.notify_all();
+                worker_condition.wait(lock, [&] { return worker_release; });
+                lock.unlock();
+                return lingtai::desktop::read_direct_mailbox_snapshot(request);
+            });
+        worker_lifetime.reset();
+        static_cast<void>(host->primary().open_project(
+            project, fs::path(".lingtai/alpha")));
+        require(wait_for_event_loop([&] {
+            const auto lock = std::lock_guard(worker_mutex);
+            return worker_entered;
+        }, 1000), "host shutdown must hold one mailbox worker");
+        host.reset();
+    }
+    require(status_item.isNull(),
+        "host shutdown must synchronously destroy its status presentation");
+    {
+        const auto lock = std::lock_guard(worker_mutex);
+        worker_release = true;
+    }
+    worker_condition.notify_all();
+    require(wait_for_event_loop([&] { return worker_finished.expired(); }, 2000),
+        "the host-shutdown mailbox worker must finish deterministically");
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
+    require(status_item.isNull(),
+        "a held completion after host shutdown must publish no stale callback");
+
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "the unread shutdown fixture must be removed");
 }
 
 void verify_desktop_status_item(const fs::path &sandbox) {
@@ -1485,6 +1602,16 @@ void verify_desktop_status_item(const fs::path &sandbox) {
         }
         return false;
     };
+    const auto region_has_clear = [&](const QImage &image, const QRect &region) {
+        for (auto y = region.top(); y <= region.bottom(); ++y) {
+            for (auto x = region.left(); x <= region.right(); ++x) {
+                if (alpha_at(image, x, y) == 0) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
     require(row_is_clear(one_mask_1x, 0)
             && row_is_clear(one_mask_1x, one_mask_1x.height() - 1)
             && row_is_clear(one_mask_2x, 0)
@@ -1495,6 +1622,22 @@ void verify_desktop_status_item(const fs::path &sandbox) {
             && one_mask_1x != hundred_mask_1x,
         "wide status masks must retain clear vertical margins plus logo and "
         "distinct capsule glyphs");
+    for (const auto exact : std::array<std::size_t, 5>{1, 9, 10, 99, 100}) {
+        for (const auto scale : std::array{1, 2}) {
+            const auto mask = DesktopStatusItem::render_mask(exact, scale);
+            require(mask.size() == QSize(48 * scale, 18 * scale)
+                    && mask.format() == QImage::Format_Alpha8
+                    && row_is_clear(mask, 0)
+                    && row_is_clear(mask, mask.height() - 1)
+                    && region_has_ink(mask,
+                        QRect(20 * scale, scale, 27 * scale, 16 * scale))
+                    && region_has_clear(mask,
+                        QRect(22 * scale, 4 * scale,
+                            23 * scale, 10 * scale)),
+                "every representative count bucket must retain exact alpha-"
+                "mask geometry at both scales");
+        }
+    }
 
     auto &primary = host.primary();
     require(primary.window().isHidden(),
@@ -8874,6 +9017,8 @@ void run_native_shell_journey(
     if (journey == "unread") {
         verify_session_unread_aggregate(
             project_root / "session-unread-aggregate-fixture");
+        verify_unread_worker_host_shutdown(
+            project_root / "session-unread-shutdown-fixture");
         return;
     }
     if (journey == "paste") {
