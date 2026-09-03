@@ -233,8 +233,9 @@ touches a real Agent or project, and none depends on a network or provider.
   directory is an injected path, not an OS or process sandbox.
 - Its focused `native_shell_status_item` journey proves one host-owned item,
   an unpublished offscreen tray, exact menu order, compiled 18/36-pixel
-  transparent zero resources, deterministic 48×18/96×36 alpha-only count
-  masks, exact/capped buckets and tooltips, unchanged-bucket reuse, one-shot
+  transparent zero resources, deterministic 54×18/108×36 alpha-only count
+  masks with a lower-right badge sized from real font metrics plus explicit
+  padding, exact/capped buckets and tooltips, unchanged-bucket reuse, one-shot
   callbacks, deterministic fallback, most-recent activation, plain and
   maximized minimized restore, safe owned-shell fallback after the recent
   shell closes, and no duplication across a second shell. The separate

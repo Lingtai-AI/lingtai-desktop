@@ -1,8 +1,10 @@
 #include "desktop_status_item.h"
 
+#include <QtCore/QRect>
 #include <QtCore/QRectF>
 #include <QtCore/QSize>
 #include <QtGui/QFont>
+#include <QtGui/QFontMetrics>
 #include <QtGui/QIcon>
 #include <QtGui/QPainter>
 #include <QtGui/QPixmap>
@@ -15,11 +17,37 @@ namespace lingtai::desktop {
 namespace {
 
 constexpr auto kStatusItemHeight = 18;
-constexpr auto kUnreadStatusItemWidth = 48;
-constexpr auto kCapsuleLeft = 20;
-constexpr auto kCapsuleTop = 2;
-constexpr auto kCapsuleWidth = 27;
-constexpr auto kCapsuleHeight = 14;
+// Widened from the logo-only 18px to hold a lower-right badge sized for
+// "99+" without crowding the logo; kept identical across every nonzero
+// bucket so the status item never changes width as counts change.
+constexpr auto kUnreadStatusItemWidth = 54;
+// DemiBold pixel size for the badge label at 1x. Materially larger than the
+// prior 9px: ~28% taller ink and ~21% wider advance for "99+" (measured via
+// QFontMetrics), while still leaving room to anchor the badge low-right
+// within the 18px-tall status item.
+constexpr auto kBadgeFontPixelSize = 11;
+// Explicit padding around the real font-metric text box, at 1x.
+constexpr auto kBadgeHorizontalPadding = 4;
+constexpr auto kBadgeVerticalPadding = 2;
+// Explicit clearance from the canvas edges, at 1x, so the badge reads as a
+// lower-right anchor with margin instead of touching the corner.
+constexpr auto kBadgeRightMargin = 2;
+constexpr auto kBadgeBottomMargin = 1;
+// The widest label any bucket can render; sizing the badge for this keeps
+// its rectangle identical across every nonzero bucket.
+[[nodiscard]] QString widest_badge_text() {
+    return QStringLiteral("99+");
+}
+
+// Shared by both the sizing math (`unread_badge_rect`) and the paint call
+// (`render_mask`), so the rectangle is always sized from the exact font it
+// is drawn with, not a coincidentally-matching duplicate.
+[[nodiscard]] QFont badge_font(int scale) {
+    auto font = QFont();
+    font.setPixelSize(kBadgeFontPixelSize * scale);
+    font.setWeight(QFont::DemiBold);
+    return font;
+}
 
 [[nodiscard]] QString template_resource(int scale) {
     return scale == 1
@@ -128,6 +156,23 @@ QString DesktopStatusItem::display_count_text(std::size_t exact_count) {
         : QString::number(exact_count);
 }
 
+QRect DesktopStatusItem::unread_badge_rect(int scale) {
+    if (scale != 1 && scale != 2) {
+        return {};
+    }
+    const auto metrics = QFontMetrics(badge_font(scale));
+    const auto text_width = metrics.horizontalAdvance(widest_badge_text());
+    const auto text_height =
+        metrics.tightBoundingRect(widest_badge_text()).height();
+    const auto width = text_width + 2 * kBadgeHorizontalPadding * scale;
+    const auto height = text_height + 2 * kBadgeVerticalPadding * scale;
+    const auto right = kUnreadStatusItemWidth * scale
+        - kBadgeRightMargin * scale;
+    const auto bottom = kStatusItemHeight * scale
+        - kBadgeBottomMargin * scale;
+    return QRect(right - width, bottom - height, width, height);
+}
+
 QImage DesktopStatusItem::render_mask(
         std::size_t exact_count,
         int scale) {
@@ -151,22 +196,14 @@ QImage DesktopStatusItem::render_mask(
     painter.setRenderHint(QPainter::TextAntialiasing);
     painter.drawImage(QPoint(0, 0), alpha_channel(logo));
 
-    const auto capsule = QRectF(
-        kCapsuleLeft * scale,
-        kCapsuleTop * scale,
-        kCapsuleWidth * scale,
-        kCapsuleHeight * scale);
+    const auto capsule = QRectF(unread_badge_rect(scale));
     const auto template_brush = painter.pen().brush();
     painter.setPen(Qt::NoPen);
     painter.setBrush(template_brush);
     painter.drawRoundedRect(
-        capsule, kCapsuleHeight * scale / 2.0,
-        kCapsuleHeight * scale / 2.0);
+        capsule, capsule.height() / 2.0, capsule.height() / 2.0);
 
-    auto font = painter.font();
-    font.setPixelSize(9 * scale);
-    font.setWeight(QFont::DemiBold);
-    painter.setFont(font);
+    painter.setFont(badge_font(scale));
     painter.setCompositionMode(QPainter::CompositionMode_Clear);
     painter.setPen(QPen());
     painter.setBrush(Qt::NoBrush);

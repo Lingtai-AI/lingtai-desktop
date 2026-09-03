@@ -66,10 +66,12 @@ class DesktopStatusItemContractTest(unittest.TestCase):
 
         allowed_qt_headers = {
             "<QtCore/QObject>",
+            "<QtCore/QRect>",
             "<QtCore/QRectF>",
             "<QtCore/QSize>",
             "<QtCore/QString>",
             "<QtGui/QFont>",
+            "<QtGui/QFontMetrics>",
             "<QtGui/QIcon>",
             "<QtGui/QImage>",
             "<QtGui/QPainter>",

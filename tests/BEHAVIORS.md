@@ -241,8 +241,9 @@ Qt plugin path set and an 8 s watchdog.
   most-recent selection, hidden Show retaining `WA_DontShowOnScreen`, plain and
   maximized minimized restore, safe fallback to an owned shell after recent-
   shell removal, secondary-close preservation, a mask icon, exact transparent
-  18/36-pixel zero resources, deterministic 48×18/96×36 alpha-only nonzero
-  masks, `99+` display capping, exact aggregate tooltips, and unchanged-bucket
+  18/36-pixel zero resources, deterministic 54×18/108×36 alpha-only nonzero
+  masks with a lower-right badge sized from real font metrics plus explicit
+  padding, `99+` display capping, exact aggregate tooltips, and unchanged-bucket
   icon reuse. The separate status-item
   Quit and final-window-close journeys each run a bounded Qt event loop and
   prove exit code 0 before their failure watchdogs can fire.

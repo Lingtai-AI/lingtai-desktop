@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QtCore/QObject>
+#include <QtCore/QRect>
 #include <QtCore/QString>
 #include <QtGui/QImage>
 
@@ -34,6 +35,11 @@ public:
     [[nodiscard]] static QImage render_mask(
         std::size_t exact_count,
         int scale);
+    // The lower-right badge rectangle render_mask paints into, sized from
+    // real font metrics for the widest label ("99+") plus explicit padding.
+    // Shared with tests so the fit/anchor math is asserted, not duplicated.
+    // `scale` accepts only 1 or 2; returns an empty rect otherwise.
+    [[nodiscard]] static QRect unread_badge_rect(int scale);
     [[nodiscard]] std::size_t icon_rebuild_count() const noexcept;
 
 private:
