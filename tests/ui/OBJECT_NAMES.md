@@ -60,7 +60,7 @@ test helpers that click the canvas by row index. Do not use screen coordinates.
 | `lingtai_agent_page_nav_presets` | Presets tab (hidden on presets page) |
 | `lingtai_agent_pages_host` | Presets / kanban host |
 | `lingtai_selected_agent_conversation` | Conversation surface |
-| `lingtai_selected_agent_conversation_state` | Conversation status |
+| `lingtai_selected_agent_conversation_state` | Persistent runtime footer (`model · Context used / window (pct)`) |
 | `lingtai_composer` | Composer lane |
 | `lingtai_composer_controls` | Input action row |
 | `lingtai_composer_attachment_button` | Native file picker request |

@@ -77,7 +77,6 @@ public:
     void render_conversation(
         const QString &them,
         const DirectConversationHistory &history,
-        const QString &compact_state,
         bool selection_present,
         bool conversation_route_available,
         const std::unordered_map<std::string, MessageReactions> &reactions = {},
@@ -87,6 +86,16 @@ public:
         std::optional<ConversationPresentationRevision> revision = std::nullopt);
 
     [[nodiscard]] ConversationVerboseLevel conversation_verbose_level() const;
+
+    // Persistent composer runtime footer: selected-Agent `model` and
+    // `Context used / window (pct)`, fed on every accepted roster projection
+    // refresh independent of conversation/mail render invalidation. Both
+    // segments arrive pre-formatted (including honest "Model —"/"Context —"
+    // placeholders); this view only owns layout, elision, and accessible/
+    // tooltip truth. Passing two empty strings clears the footer (no valid
+    // Agent selected).
+    void set_runtime_footer(
+        const QString &model_segment, const QString &context_segment);
 
     // Rebuilds verbose interleaves from freshly loaded session events without
     // replacing the cached mail rows.
@@ -165,7 +174,9 @@ private:
     QGridLayout *composer_attachment_layout_ = nullptr;
     QLabel *composer_status_ = nullptr;
     QTimer *composer_notice_timer_ = nullptr;
-    QLabel *conversation_state_ = nullptr;
+    // Persistent composer runtime footer (repurposes the former conversation-
+    // state anchor; object name stays "lingtai_selected_agent_conversation_state").
+    QLabel *runtime_footer_ = nullptr;
     PaletteActionButton *conversation_detail_button_ = nullptr;
     ConversationSurface *conversation_surface_ = nullptr;
 
@@ -188,10 +199,11 @@ private:
     void refresh_composer_enablement(bool composer_eligible);
     void rebuild_attachment_cards();
     void reflow_attachment_cards(int available_width);
-    void refresh_conversation_state_hint();
     void refresh_conversation_detail_button();
+    void refresh_runtime_footer_fit();
 
-    QString last_compact_state_;
+    QString runtime_footer_full_text_;
+    int runtime_footer_available_width_ = 0;
     bool session_log_present_ = false;
     bool conversation_route_available_ = false;
     bool composer_eligible_ = false;

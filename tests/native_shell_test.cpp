@@ -3204,9 +3204,13 @@ void verify_selected_agent_conversation(
         "the legacy `body` field must never be rendered");
     require(!conversation.contains(QStringLiteral("SHOULD NOT APPEAR")),
         "mail for another conversation must be absent");
-    require(state->text() == QStringLiteral("1 skipped"),
-        "the compact state must show the skipped count without a message "
-        "total");
+    require(!state->text().contains(QStringLiteral("skipped")),
+        "the persistent runtime footer must never surface the skipped "
+        "count as visible text, even though the fixture's one malformed "
+        "inbox entry is skipped");
+    require(state->text() == QStringLiteral("Model — · Context —"),
+        "the persistent runtime footer must show an honest missing-model/"
+        "missing-context placeholder for an Agent manifest with neither");
 
 #ifdef __APPLE__
     // Exercise the ordinary one-second composition seam deterministically.
@@ -3768,6 +3772,212 @@ void verify_selected_agent_conversation(
     std::error_code cleanup_error;
     fs::remove_all(sandbox, cleanup_error);
     require(!cleanup_error, "conversation fixtures must be removed");
+}
+
+// The persistent composer runtime footer: a compact, never-wrapping
+// `model · Context used / window (pct)` line fed from the same projected
+// selected `AgentRow` render_roster already holds on every accepted
+// projection refresh -- independent of conversation/mail render
+// invalidation, the Kanban ledger/model, and the removed `N skipped`
+// composer text (whose underlying `DirectConversationHistory::skipped`
+// counter keeps accruing, just never rendered here again).
+void verify_selected_agent_runtime_footer(
+        lingtai::desktop::NativeShell &shell,
+        const fs::path &sandbox) {
+    std::error_code stale_fixture_error;
+    fs::remove_all(sandbox, stale_fixture_error);
+    require(!stale_fixture_error,
+        "a stale runtime footer fixture must be removable before setup");
+    auto &window = shell.window();
+    window.resize(1200, 800);
+    QCoreApplication::processEvents();
+    auto *footer = required_child<QLabel>(
+        window, "lingtai_selected_agent_conversation_state");
+
+    const auto project = sandbox / "project";
+    write_file(project / ".lingtai/human/.agent.json",
+        R"({"agent_id":"20260101-000000-h001","agent_name":"Ted",)"
+        R"("address":"human","state":"active"})");
+    const auto alpha = project / ".lingtai/alpha";
+    write_file(alpha / ".agent.json",
+        R"({"admin":{},"agent_id":"20260712-191609-a001",)"
+        R"("agent_name":"alpha","address":"alpha","state":"active",)"
+        R"("llm":{"provider":"anthropic","model":"gpt-5.6-sol"}})");
+    // A deliberately mismatched source percentage (90%): the projection
+    // exercised below must prefer it over the ~61.7% the raw tokens would
+    // otherwise compute, proving source usage_pct precedence.
+    write_file(alpha / ".status.json",
+        R"({"tokens":{"context":{"total_tokens":185000,"window_size":300000,)"
+        R"("usage_pct":90.0}}})");
+    const auto no_model = project / ".lingtai/no-model";
+    write_file(no_model / ".agent.json",
+        R"({"admin":{},"agent_id":"20260712-191610-b001",)"
+        R"("agent_name":"no-model","address":"no-model","state":"active"})");
+    const auto no_context = project / ".lingtai/no-context";
+    write_file(no_context / ".agent.json",
+        R"({"admin":{},"agent_id":"20260712-191611-c001",)"
+        R"("agent_name":"no-context","address":"no-context","state":"active",)"
+        R"("llm":{"provider":"anthropic","model":"claude-solo"}})");
+    const auto invalid_window = project / ".lingtai/invalid-window";
+    write_file(invalid_window / ".agent.json",
+        R"({"admin":{},"agent_id":"20260712-191612-d001",)"
+        R"("agent_name":"invalid-window","address":"invalid-window",)"
+        R"("state":"active","llm":{"model":"claude-solo"}})");
+    write_file(invalid_window / ".status.json",
+        R"({"tokens":{"context":{"total_tokens":60,"window_size":"invalid",)"
+        R"("usage_pct":88}}})");
+    const auto verbose_model = project / ".lingtai/verbose-model";
+    const auto long_model_name = std::string(
+        "an-extremely-long-fully-qualified-model-identifier-that-cannot-"
+        "possibly-fit-a-narrow-composer-lane-v42");
+    write_file(verbose_model / ".agent.json",
+        R"({"admin":{},"agent_id":"20260712-191613-e001",)"
+        R"("agent_name":"verbose-model","address":"verbose-model",)"
+        R"("state":"active","llm":{"model":")" + long_model_name + R"("}})");
+    write_file(verbose_model / ".status.json",
+        R"({"tokens":{"context":{"total_tokens":185000,"window_size":300000,)"
+        R"("usage_pct":62.0}}})");
+
+    static_cast<void>(shell.open_project(project, std::nullopt));
+
+    // No selected valid Agent: the footer must be empty, not stale.
+    require(footer->text().isEmpty(),
+        "the persistent runtime footer must be empty with no selected Agent");
+
+    // Source usage_pct precedence: the fixture's 90% must win over the
+    // ~61.7% the raw tokens would otherwise compute.
+    click_agent(shell, "alpha");
+    require(footer->text() == QStringLiteral("gpt-5.6-sol · Context 185k / 300k (90%)"),
+        "source usage_pct must take precedence over the computed ratio: got '"
+            + footer->text().toStdString() + "'");
+    require(required_child<QLabel>(window,
+                "lingtai_selected_agent_conversation_state")
+                ->accessibleDescription()
+            == QStringLiteral("gpt-5.6-sol · Context 185k / 300k (90%)"),
+        "the accessible description must carry the exact same full text as "
+        "the visible one-line footer at a wide width");
+
+    // Computed-percent fallback: the same tokens without a source usage_pct
+    // must derive 100 * 185000 / 300000 rounded to 62%, matching the brief's
+    // literal example text exactly.
+    write_file(alpha / ".status.json",
+        R"({"tokens":{"context":{"total_tokens":185000,"window_size":300000}}})");
+    require(wait_for_event_loop([&] {
+        return footer->text()
+            == QStringLiteral("gpt-5.6-sol · Context 185k / 300k (62%)");
+    }, 3000),
+        "a context-only status refresh must reach the footer via the "
+        "ordinary projection tick even though no mail/conversation history "
+        "changed and the conversation render key is unaffected; got '"
+            + footer->text().toStdString() + "'");
+
+    // Missing model: an honest placeholder, never a fabricated model name.
+    click_agent(shell, "no-model");
+    require(footer->text() == QStringLiteral("Model — · Context —"),
+        "a manifest with neither `llm.model` nor a status file must show "
+        "both honest placeholders: got '" + footer->text().toStdString() + "'");
+
+    // Missing context: a known model with no status file at all.
+    click_agent(shell, "no-context");
+    require(footer->text() == QStringLiteral("claude-solo · Context —"),
+        "a known model with no status source must show an honest missing-"
+        "context placeholder: got '" + footer->text().toStdString() + "'");
+
+    // Invalid/nonpositive window: the projection itself rejects the context
+    // (agent_projection.cpp only constructs AgentContextFacts when
+    // window_size > 0), so this must degrade exactly like a wholly absent
+    // status source -- never a stale or fabricated value.
+    click_agent(shell, "invalid-window");
+    require(footer->text() == QStringLiteral("claude-solo · Context —"),
+        "a non-numeric window_size must leave the context wholly "
+        "unprojected, degrading like a missing status source: got '"
+            + footer->text().toStdString() + "'");
+
+    // Selection change must never leave a stale footer from the prior
+    // selection.
+    click_agent(shell, "alpha");
+    require(footer->text() == QStringLiteral("gpt-5.6-sol · Context 185k / 300k (62%)"),
+        "reselecting alpha must restore its own current footer, not a "
+        "neighbor's stale text");
+
+    // The transient composer notice is a distinct, separate mechanism: it
+    // must never replace the persistent footer. A regular file where the
+    // outbox directory belongs makes every send in this fresh project fail
+    // closed, so the notice is a real, reliably reproducible failure rather
+    // than a silent whitespace-only no-op -- isolated to its own project so
+    // it cannot affect any other assertion's mailbox reads.
+    const auto notice_project = sandbox / "notice-project";
+    write_file(notice_project / ".lingtai/human/.agent.json",
+        R"({"agent_id":"20260101-000000-h001","agent_name":"Ted",)"
+        R"("address":"human","state":"active"})");
+    const auto notice_agent = notice_project / ".lingtai/alpha";
+    write_file(notice_agent / ".agent.json",
+        R"({"admin":{},"agent_id":"20260712-191609-a001",)"
+        R"("agent_name":"alpha","address":"alpha","state":"active",)"
+        R"("llm":{"provider":"anthropic","model":"gpt-5.6-sol"}})");
+    write_file(notice_agent / ".status.json",
+        R"({"tokens":{"context":{"total_tokens":185000,"window_size":300000,)"
+        R"("usage_pct":90.0}}})");
+    write_file(notice_project / ".lingtai/human/mailbox/outbox", "not a directory");
+    static_cast<void>(shell.open_project(notice_project, std::nullopt));
+    click_agent(shell, "alpha");
+    const auto footer_before_notice = footer->text();
+    require(!footer_before_notice.isEmpty(),
+        "the notice-project fixture must select an Agent with a real footer "
+        "before the failure attempt");
+    auto *input = static_cast<Ui::InputField *>(
+        required_child<QObject>(window, "lingtai_composer_input"));
+    auto *send_button = static_cast<Ui::RoundButton *>(
+        required_child<QObject>(window, "lingtai_composer_send_button"));
+    auto *composer_status = required_child<QLabel>(
+        window, "lingtai_composer_status");
+    input->setText(QStringLiteral("This send is forced to fail closed."));
+    send_button->clicked(Qt::NoModifier, Qt::LeftButton);
+    require(composer_status->text().contains(
+                QStringLiteral("local mailbox is unavailable")),
+        "the blocked-outbox fixture must surface a real transient composer "
+        "notice: got '" + composer_status->text().toStdString() + "'");
+    require(footer->text() == footer_before_notice,
+        "a transient composer notice must never replace the persistent "
+        "runtime footer");
+    input->clear();
+
+    // Back to the main fixture project for the remaining assertions.
+    static_cast<void>(shell.open_project(project, std::nullopt));
+
+    // Narrow width: one line, no wrap, no composer-height jump, and the
+    // truthful full text remains available via the accessible description
+    // even while the visible text is progressively shortened.
+    click_agent(shell, "verbose-model");
+    const auto full_verbose_text = QString::fromStdString(long_model_name)
+        + QStringLiteral(" · Context 185k / 300k (62%)");
+    require(footer->accessibleDescription() == full_verbose_text,
+        "the accessible description must always carry the full unelided "
+        "text, even before any narrowing");
+    const auto *composer_widget = required_child<QWidget>(
+        window, "lingtai_composer");
+    const auto composer_height_wide = composer_widget->height();
+    window.resize(380, 480);
+    QCoreApplication::processEvents();
+    require(!footer->text().contains(QLatin1Char('\n')),
+        "the persistent runtime footer must never wrap to a second line");
+    require(footer->text() != full_verbose_text,
+        "an unfittable model identifier must be shortened at a narrow width, "
+        "not rendered in full");
+    require(footer->accessibleDescription() == full_verbose_text,
+        "the full text must remain the accessible/tooltip truth even while "
+        "the visible text is elided for width");
+    require(footer->toolTip() == full_verbose_text,
+        "the tooltip must carry the same full, unelided text");
+    require(composer_widget->height() == composer_height_wide,
+        "narrowing must reflow the footer text, never grow the composer "
+        "lane's height");
+    window.resize(1200, 800);
+    QCoreApplication::processEvents();
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "runtime footer fixtures must be removed");
 }
 
 // The final Step-3 product action: a visible composer that queues one real
@@ -4852,7 +5062,22 @@ void verify_outgoing_message_immediate_presentation(
             fs::path("telegram-bot")),
     }}};
     stale = lingtai::desktop::read_direct_mailbox_snapshot(request);
-    stale.histories["telegram-bot"].skipped = 7;
+    auto &stale_history = stale.histories["telegram-bot"];
+    // The persistent runtime footer no longer surfaces `skipped` as visible
+    // text, so a distinct rendered message is the deterministic barrier
+    // proving this exact transient snapshot reached the surface; `skipped`
+    // itself is still set and asserted below to prove the underlying counter
+    // (DirectConversationHistory::skipped) survives independent of display.
+    require(!stale_history.messages.empty(),
+        "the stale snapshot fixture must retain the baseline message to mutate");
+    auto &stale_baseline_message = stale_history.messages.front();
+    require(stale_baseline_message.text == "Initial accepted row.",
+        "the stale snapshot's sole message must be the known baseline row");
+    stale_baseline_message.text = "Baseline row (stale variant 1).";
+    stale_history.skipped = 7;
+    require(stale.histories["telegram-bot"].skipped == 7,
+        "DirectConversationHistory::skipped must remain an ordinary settable "
+        "field even though nothing renders it");
     {
         const auto lock = std::lock_guard(mutex);
         hold = true;
@@ -4888,22 +5113,30 @@ void verify_outgoing_message_immediate_presentation(
     condition.notify_all();
     require(wait_for_event_loop([&] {
         return stale_returned.load(std::memory_order_acquire)
-            && conversation_state->text() == QStringLiteral("7 skipped");
+            && surface->toPlainText().contains(
+                QStringLiteral("Baseline row (stale variant 1)."));
     }, 1000),
         "the deliberate transient snapshot must be accepted while the published row remains visible");
     text = surface->toPlainText();
     require(occurrences(text,
                 QStringLiteral("Immediate mixed publication.")) == 1,
         "an accepted transient snapshot without the published ID must retain exactly one pending row");
+    require(!conversation_state->text().contains(QStringLiteral("skipped")),
+        "the persistent runtime footer must never surface the skipped count, "
+        "even while the underlying stale snapshot carries skipped = 7");
 
     {
         const auto lock = std::lock_guard(mutex);
         hold = true;
         entered = false;
         release = false;
-        stale.histories["telegram-bot"].skipped = 8;
+        stale_history.messages.front().text = "Baseline row (stale variant 2).";
+        stale_history.skipped = 8;
         stale_returned.store(false, std::memory_order_release);
     }
+    require(stale.histories["telegram-bot"].skipped == 8,
+        "DirectConversationHistory::skipped must remain independently "
+        "settable across successive transient snapshots");
 
     input->setText(QStringLiteral("Rapid second publication."));
     send_button->clicked(Qt::NoModifier, Qt::LeftButton);
@@ -4945,8 +5178,12 @@ void verify_outgoing_message_immediate_presentation(
     condition.notify_all();
     require(wait_for_event_loop([&] {
         return stale_returned.load(std::memory_order_acquire)
-            && conversation_state->text() == QStringLiteral("8 skipped");
+            && surface->toPlainText().contains(
+                QStringLiteral("Baseline row (stale variant 2)."));
     }, 1000), "the second transient snapshot must be accepted without authoritative catch-up");
+    require(!conversation_state->text().contains(QStringLiteral("skipped")),
+        "the persistent runtime footer must never surface the skipped count, "
+        "even while the underlying stale snapshot carries skipped = 8");
 
     text = surface->toPlainText();
     const auto first_transient_count = occurrences(
@@ -9560,6 +9797,8 @@ void run_native_shell_journey(
         with_offscreen_shell([&](NativeShell &shell) {
             verify_selected_agent_conversation(
                 shell, project_root / "commit-13-conversation-fixture");
+            verify_selected_agent_runtime_footer(
+                shell, project_root / "runtime-footer-fixture");
             verify_composer_send_behavior(
                 shell, project_root / "commit-14-composer-fixture");
             verify_conversation_slash_interception(

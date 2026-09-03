@@ -959,6 +959,71 @@ QString value_text(const std::optional<bool> &value) {
                  : QStringLiteral("unavailable");
 }
 
+// Compact "185k" / "2.5M" token abbreviation for the persistent runtime
+// footer. Distinct from Kanban's full comma-grouped `compact_number`: the
+// footer trades exact digits for a one-line, never-wrapping compact form.
+QString abbreviate_runtime_tokens(std::int64_t value) {
+    const auto magnitude = value < 0 ? -value : value;
+    if (magnitude >= 1'000'000) {
+        auto text = QString::number(
+            static_cast<double>(value) / 1'000'000.0, 'f', 1);
+        if (text.endsWith(QStringLiteral(".0"))) text.chop(2);
+        return text + QStringLiteral("M");
+    }
+    if (magnitude >= 1000) {
+        auto text = QString::number(
+            static_cast<double>(value) / 1000.0, 'f', 1);
+        if (text.endsWith(QStringLiteral(".0"))) text.chop(2);
+        return text + QStringLiteral("k");
+    }
+    return QString::number(value);
+}
+
+// The selected-Agent model segment of the persistent composer runtime
+// footer, from the same projected `AgentRow.identity` render_roster already
+// holds. An honest placeholder, never a fabricated model name, stands in for
+// an absent manifest `llm.model`.
+QString runtime_footer_model_segment(
+        const std::optional<AgentIdentityFacts> &identity) {
+    if (identity && identity->llm.model && !identity->llm.model->empty()) {
+        return QString::fromStdString(*identity->llm.model);
+    }
+    return QStringLiteral("Model —");
+}
+
+// The context segment of the persistent runtime footer, from the same
+// projected `AgentRow.status->context` render_roster already holds. Source
+// `usage_percent` takes precedence when present and finite; otherwise the
+// percentage is derived from valid `total_tokens / window_size`. A wholly
+// unavailable context (absent status, or a non-positive window already
+// rejected by the projection) degrades to an honest placeholder rather than
+// a fabricated zero.
+QString runtime_footer_context_segment(
+        const std::optional<AgentRuntimeFacts> &status) {
+    if (!status || !status->context) {
+        return QStringLiteral("Context —");
+    }
+    const auto &context = *status->context;
+    const auto window_text = abbreviate_runtime_tokens(context.window_size);
+    const auto used_text = context.total_tokens
+        ? abbreviate_runtime_tokens(*context.total_tokens)
+        : QStringLiteral("—");
+    auto percent = context.usage_percent;
+    if (!percent && context.total_tokens && context.window_size > 0) {
+        percent = 100.0 * static_cast<double>(*context.total_tokens)
+            / static_cast<double>(context.window_size);
+    }
+    auto text = QStringLiteral("Context %1 / %2").arg(used_text, window_text);
+    if (percent) {
+        // qRound(double) casting to int is undefined behavior once the
+        // magnitude exceeds int range; a status source is an untrusted
+        // system boundary, so clamp before rounding rather than trust it.
+        const auto bounded = std::clamp(*percent, -1'000'000.0, 1'000'000.0);
+        text += QStringLiteral(" (%1%)").arg(qRound(bounded));
+    }
+    return text;
+}
+
 QString joined_names(const std::vector<std::string> &names) {
     auto text = QStringList();
     for (const auto &name : names) text.push_back(QString::fromStdString(name));
@@ -3719,6 +3784,9 @@ void NativeShell::render_roster() {
         set_label_text(status_context, QString());
         set_label_text(selected_facts, QStringLiteral(
             "Choose a valid manifest row to inspect its detail."));
+        if (detail_view_) {
+            detail_view_->set_runtime_footer(QString(), QString());
+        }
         render_conversation(std::move(selected_history));
         render_agent_preset_summary();
         render_agent_sleep_status();
@@ -3830,6 +3898,14 @@ void NativeShell::render_roster() {
         QStringLiteral("manifest: %1\nrole: %2\npresence: %3")
         .arg(manifest_text(detail_item->manifest_kind),
             role_text(detail_item->role), presence_text(detail_item->presence)));
+    // Fed on every accepted projection refresh, independent of the
+    // conversation render key: a context-only status tick must reach the
+    // footer even when mail/conversation history is unchanged.
+    if (detail_view_) {
+        detail_view_->set_runtime_footer(
+            runtime_footer_model_segment(identity),
+            runtime_footer_context_segment(detail_item->status));
+    }
     render_conversation(std::move(selected_history));
     render_agent_preset_summary();
     render_agent_sleep_status();
@@ -4341,7 +4417,7 @@ void NativeShell::render_conversation(
         conversation_render_key_.reset();
         DirectConversationHistory empty;
         detail_view_->render_conversation(
-            QString(), empty, QString(),
+            QString(), empty,
             /*selection_present=*/false,
             /*conversation_route_available=*/false,
             {},
@@ -4359,7 +4435,7 @@ void NativeShell::render_conversation(
         detail_view_->clear_pending_attachments();
         DirectConversationHistory empty;
         detail_view_->render_conversation(
-            QString(), empty, QString(),
+            QString(), empty,
             /*selection_present=*/true,
             /*conversation_route_available=*/false);
         return;
@@ -4411,15 +4487,6 @@ void NativeShell::render_conversation(
         ? full_title
         : path_text(route->target_directory_key);
 
-    // Keep only non-count diagnostics under the conversation (e.g. skipped
-    // malformed mail). Message totals are visible in the thread itself.
-    auto compact = QString();
-    if (history.skipped > 0) {
-        compact = history.skipped == 1
-            ? QStringLiteral("1 skipped")
-            : QStringLiteral("%1 skipped").arg(history.skipped);
-    }
-
     const auto session_stat = conversation_session_log_stat(
         route->project_root, route->target_directory_key);
     const auto session_log_present = session_stat.present;
@@ -4427,7 +4494,6 @@ void NativeShell::render_conversation(
         .selection = selection_generation_,
         .route = route->target_directory_key.generic_string(),
         .them = them,
-        .compact = compact,
         .history = projected.revision.revision,
         .reactions = reaction_store_.revision(),
         .injected = injected_mail_journal_.revision(),
@@ -4445,7 +4511,7 @@ void NativeShell::render_conversation(
     const auto &session_events = cached_session_events_for(*route);
 
     detail_view_->render_conversation(
-        them, history, compact,
+        them, history,
         /*selection_present=*/true,
         /*conversation_route_available=*/true,
         reaction_store_.all(),

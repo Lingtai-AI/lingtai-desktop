@@ -313,7 +313,15 @@ they are the shell's presentation layer and own no domain reads or writes.
   foreign `Ui::Integration` prevents Desktop from installing either object.
 - `AgentDetailView` holds the session-only attachment draft and errors for the
   currently selected target. Project/Agent changes and route loss clear it;
-  it is never persisted or shared across targets.
+  it is never persisted or shared across targets. It also owns the composer's
+  persistent runtime footer (`AgentDetailView::set_runtime_footer`): a
+  `model · Context used / window (pct)` line fed by `NativeShell::render_roster`
+  from the same projected `AgentRow` on every accepted roster refresh,
+  decoupled from `ConversationRenderKey` so a context-only status tick
+  updates it even when mail/conversation history is unchanged. It never
+  wraps; narrow widths progressively shorten the visible text (context
+  detail yields before the model) while the accessible description/tooltip
+  always carry the full, unelided text.
 - `KanbanSnapshotIndex` keeps only in-session source cursors and completed-run
   summaries for the active project; project change discards them and nothing
   is persisted. Other readers remain independent stateless observations.

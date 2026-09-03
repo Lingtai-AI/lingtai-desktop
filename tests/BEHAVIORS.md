@@ -221,8 +221,15 @@ Qt plugin path set and an 8 s watchdog.
   that inspect the composer's stored text/placeholder/selection colors and
   document format, its Send/attachment paint, and the actual Agent Config,
   Agent Presets, and Preset Editor control palettes/QSS, open-project behavior, shell
-  semantics and named regions, selected-Agent conversation, composer send,
-  Request sleep / Start Agent / Presets panels,
+  semantics and named regions, selected-Agent conversation, the persistent
+  composer runtime footer (`verify_selected_agent_runtime_footer`: exact
+  model/context text, source `usage_pct` precedence over the computed
+  fallback, missing-model/missing-context/invalid-window placeholders,
+  stale-free selection changes, a context-only status refresh reaching the
+  footer without any mail/conversation render-key change, the transient
+  composer notice never replacing it, and narrow-width one-line elision with
+  full accessible/tooltip text and an unchanged composer height), composer
+  send, Request sleep / Start Agent / Presets panels,
   Kanban stale-while-revalidate updating/failure states, Reload single-flight,
   and old-project generation rejection,
   first-project bootstrap, layout modes, the persistent roster shell, the

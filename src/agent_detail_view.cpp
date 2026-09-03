@@ -801,7 +801,7 @@ AgentDetailView::AgentDetailView(
         conversation_surface_ = conversation;
         connect(conversation, &ConversationSurface::verbose_level_changed,
             this, [this](ConversationVerboseLevel level) {
-                refresh_conversation_state_hint();
+                refresh_conversation_detail_button();
                 emit conversation_verbose_changed(level);
             });
         connect(conversation, &ConversationSurface::attachment_action_requested,
@@ -1038,7 +1038,7 @@ AgentDetailView::AgentDetailView(
     conversation_surface_ = conversation;
     connect(conversation, &ConversationSurface::verbose_level_changed,
         this, [this](ConversationVerboseLevel level) {
-            refresh_conversation_state_hint();
+            refresh_conversation_detail_button();
             emit conversation_verbose_changed(level);
         });
     connect(conversation, &ConversationSurface::attachment_action_requested,
@@ -1191,11 +1191,16 @@ AgentDetailView::AgentDetailView(
     QObject::connect(composer_notice_timer_, &QTimer::timeout,
         this, [this] { clear_composer_notice(); });
 
-    conversation_state_ = make_label(
+    // Persistent runtime footer: repurposes the former conversation-state
+    // anchor. A stable accessible name survives even while empty (no
+    // selection); the truthful full text lives in the accessible
+    // description/tooltip, never in wrapped/second-line visible text.
+    runtime_footer_ = make_label(
         composer, QString(), "lingtai_selected_agent_conversation_state", 10);
-    conversation_state_->setAccessibleName(
-        QStringLiteral("Selected Agent conversation state"));
-    composer_layout->addWidget(conversation_state_);
+    runtime_footer_->setWordWrap(false);
+    runtime_footer_->setAccessibleName(
+        QStringLiteral("Selected Agent runtime"));
+    composer_layout->addWidget(runtime_footer_);
 
     auto *composer_surface = new QHBoxLayout;
     composer_surface->setContentsMargins(16, 0, 16, 12);
@@ -1445,7 +1450,7 @@ void AgentDetailView::set_page(AgentDetailPage page) {
     }
     if (composer_) composer_->setVisible(on_conversation);
     if (composer_status_) composer_status_->setVisible(on_conversation);
-    if (conversation_state_) conversation_state_->setVisible(on_conversation);
+    if (runtime_footer_) runtime_footer_->setVisible(on_conversation);
 
     if (pages_host_) pages_host_->setVisible(!on_conversation);
     if (pages_nav_) pages_nav_->setVisible(page == AgentDetailPage::presets);
@@ -1487,6 +1492,8 @@ void AgentDetailView::set_detail_width(int detail_width) {
         composer_->setMaximumWidth(QWIDGETSIZE_MAX);
         composer_->layout()->setContentsMargins(outer, 10, outer, 8);
         reflow_attachment_cards(std::max(1, detail_width - 2 * outer));
+        runtime_footer_available_width_ = std::max(1, detail_width - 2 * outer);
+        refresh_runtime_footer_fit();
         if (composer_input_) {
             QListWidget *popup = nullptr;
             if (outer_scroll_) {
@@ -1532,7 +1539,6 @@ void AgentDetailView::set_detail_width(int detail_width) {
 void AgentDetailView::render_conversation(
     const QString &them,
     const DirectConversationHistory &history,
-    const QString &compact_state,
     bool selection_present,
     bool conversation_route_available,
     const std::unordered_map<std::string, MessageReactions> &reactions,
@@ -1543,12 +1549,10 @@ void AgentDetailView::render_conversation(
     const auto composer_eligible = selection_present
         && conversation_route_available;
     refresh_composer_enablement(composer_eligible);
-    if (!conversation_surface_ || !conversation_state_) return;
+    if (!conversation_surface_) return;
 
     if (!selection_present) {
         conversation_surface_->set_select_agent_prompt(main_agent_name);
-        conversation_state_->setText(QString());
-        last_compact_state_.clear();
         session_log_present_ = false;
         conversation_route_available_ = false;
         refresh_conversation_detail_button();
@@ -1558,15 +1562,12 @@ void AgentDetailView::render_conversation(
     if (!conversation_route_available) {
         conversation_surface_->set_plain_state(
             QStringLiteral("No conversation is available for this selection."));
-        conversation_state_->setText(QString());
-        last_compact_state_.clear();
         session_log_present_ = false;
         conversation_route_available_ = false;
         refresh_conversation_detail_button();
         return;
     }
 
-    last_compact_state_ = compact_state;
     session_log_present_ = session_log_present;
     conversation_route_available_ = true;
     if (history.messages.empty()) {
@@ -1581,7 +1582,7 @@ void AgentDetailView::render_conversation(
                 them, history.messages, reactions, session_events);
         }
     }
-    refresh_conversation_state_hint();
+    refresh_conversation_detail_button();
 }
 
 ConversationVerboseLevel AgentDetailView::conversation_verbose_level() const {
@@ -1635,12 +1636,66 @@ void AgentDetailView::refresh_conversation_detail_button() {
     conversation_detail_button_->update();
 }
 
-void AgentDetailView::refresh_conversation_state_hint() {
-    if (!conversation_state_) {
+void AgentDetailView::set_runtime_footer(
+        const QString &model_segment, const QString &context_segment) {
+    if (!runtime_footer_) return;
+    const auto full_text = model_segment.isEmpty() && context_segment.isEmpty()
+        ? QString()
+        : QStringLiteral("%1 · %2").arg(model_segment, context_segment);
+    if (runtime_footer_full_text_ == full_text) return;
+    runtime_footer_full_text_ = full_text;
+    // The full, unelided text is the accessibility/tooltip truth; only the
+    // visible label text is ever progressively shortened for width.
+    runtime_footer_->setAccessibleDescription(full_text);
+    runtime_footer_->setToolTip(full_text);
+    refresh_runtime_footer_fit();
+}
+
+// Never wraps and never grows the composer height: at narrow widths, the
+// rightmost/context detail yields before the model, and the model itself is
+// elided only as a last resort. The full text always remains available via
+// the accessible description and tooltip set in set_runtime_footer().
+void AgentDetailView::refresh_runtime_footer_fit() {
+    if (!runtime_footer_) return;
+    if (runtime_footer_full_text_.isEmpty()) {
+        if (!runtime_footer_->text().isEmpty()) runtime_footer_->setText(QString());
         return;
     }
-    conversation_state_->setText(last_compact_state_);
-    refresh_conversation_detail_button();
+    // Before the first set_detail_width() call, the available width is
+    // unknown: show the honest full text rather than fabricating an
+    // elided/ellipsis placeholder from an assumed 1px width.
+    if (runtime_footer_available_width_ <= 0) {
+        runtime_footer_->setText(runtime_footer_full_text_);
+        return;
+    }
+    const auto available = runtime_footer_available_width_;
+    const auto metrics = QFontMetrics(runtime_footer_->font());
+    if (metrics.horizontalAdvance(runtime_footer_full_text_) <= available) {
+        runtime_footer_->setText(runtime_footer_full_text_);
+        return;
+    }
+    static const auto kSeparator = QStringLiteral(" · ");
+    const auto separator_at = runtime_footer_full_text_.indexOf(kSeparator);
+    const auto model_segment = separator_at >= 0
+        ? runtime_footer_full_text_.left(separator_at)
+        : runtime_footer_full_text_;
+    const auto context_segment = separator_at >= 0
+        ? runtime_footer_full_text_.mid(separator_at + kSeparator.size())
+        : QString();
+    const auto percent_at = context_segment.indexOf(QStringLiteral(" ("));
+    if (percent_at >= 0) {
+        const auto candidate = model_segment + kSeparator + context_segment.left(percent_at);
+        if (metrics.horizontalAdvance(candidate) <= available) {
+            runtime_footer_->setText(candidate);
+            return;
+        }
+    }
+    if (metrics.horizontalAdvance(model_segment) <= available) {
+        runtime_footer_->setText(model_segment);
+        return;
+    }
+    runtime_footer_->setText(
+        metrics.elidedText(model_segment, Qt::ElideRight, available));
 }
 
 void AgentDetailView::scroll_conversation_to_bottom() {

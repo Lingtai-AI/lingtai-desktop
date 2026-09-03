@@ -461,7 +461,6 @@ private:
         std::uint64_t selection = 0;
         std::string route;
         QString them;
-        QString compact;
         std::uint64_t history = 0;
         std::uint64_t reactions = 0;
         std::uint64_t injected = 0;
