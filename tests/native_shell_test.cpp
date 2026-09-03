@@ -184,6 +184,36 @@ bool wait_for_event_loop(Predicate predicate, int timeout_ms) {
     return predicate();
 }
 
+struct SharedHeldWorkerGate final {
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool entered = false;
+    bool release = false;
+};
+
+class ScopedHeldWorkerRelease final {
+public:
+    explicit ScopedHeldWorkerRelease(
+        std::shared_ptr<SharedHeldWorkerGate> gate)
+    : gate_(std::move(gate)) {
+    }
+
+    ~ScopedHeldWorkerRelease() {
+        {
+            const auto lock = std::lock_guard(gate_->mutex);
+            gate_->release = true;
+        }
+        gate_->condition.notify_all();
+    }
+
+    ScopedHeldWorkerRelease(const ScopedHeldWorkerRelease &) = delete;
+    ScopedHeldWorkerRelease &operator=(
+        const ScopedHeldWorkerRelease &) = delete;
+
+private:
+    std::shared_ptr<SharedHeldWorkerGate> gate_;
+};
+
 class ScopedApplicationPalette final {
 public:
     explicit ScopedApplicationPalette(const QPalette &palette)
@@ -1376,19 +1406,18 @@ void verify_session_unread_aggregate(const fs::path &sandbox) {
             QStringLiteral("alpha hidden unread"));
     }, 4000),
         "the closing-worker fixture must first accept its mailbox snapshot");
-    auto worker_mutex = std::mutex();
-    auto worker_condition = std::condition_variable();
-    auto worker_entered = false;
-    auto worker_release = false;
+    const auto worker_gate = std::make_shared<SharedHeldWorkerGate>();
+    const auto held_worker_release = ScopedHeldWorkerRelease(worker_gate);
     auto worker_lifetime = std::make_shared<int>(0);
     auto worker_finished = std::weak_ptr<int>(worker_lifetime);
     closing_worker_shell.set_mailbox_snapshot_read_function(
-        [&, worker_lifetime](
+        [worker_gate, worker_lifetime](
                 const lingtai::desktop::DirectMailboxRequest &request) {
-            auto lock = std::unique_lock(worker_mutex);
-            worker_entered = true;
-            worker_condition.notify_all();
-            worker_condition.wait(lock, [&] { return worker_release; });
+            auto lock = std::unique_lock(worker_gate->mutex);
+            worker_gate->entered = true;
+            worker_gate->condition.notify_all();
+            worker_gate->condition.wait(
+                lock, [&] { return worker_gate->release; });
             lock.unlock();
             return lingtai::desktop::read_direct_mailbox_snapshot(request);
         });
@@ -1399,18 +1428,18 @@ void verify_session_unread_aggregate(const fs::path &sandbox) {
             "received_at", "2026-09-02T12:05:00Z"));
     tick_mailbox(closing_worker_shell);
     require(wait_for_event_loop([&] {
-        const auto lock = std::lock_guard(worker_mutex);
-        return worker_entered;
+        const auto lock = std::lock_guard(worker_gate->mutex);
+        return worker_gate->entered;
     }, 1000), "the closing shell must hold one mailbox worker");
     closing_worker_shell.window().close();
     require(wait_for_event_loop([&] { return host.shell_count() == 1; }, 1000)
             && host.unread_total() == 2,
         "closing a shell must exclude it before its held worker can complete");
     {
-        const auto lock = std::lock_guard(worker_mutex);
-        worker_release = true;
+        const auto lock = std::lock_guard(worker_gate->mutex);
+        worker_gate->release = true;
     }
-    worker_condition.notify_all();
+    worker_gate->condition.notify_all();
     require(wait_for_event_loop([&] { return worker_finished.expired(); }, 2000),
         "the removed shell's held mailbox worker must finish deterministically");
     QCoreApplication::sendPostedEvents();
@@ -1440,10 +1469,8 @@ void verify_unread_worker_host_shutdown(const fs::path &sandbox) {
         R"({"admin":{},"agent_id":"alpha-id","agent_name":"alpha",)"
         R"("address":"alpha","state":"active"})");
 
-    auto worker_mutex = std::mutex();
-    auto worker_condition = std::condition_variable();
-    auto worker_entered = false;
-    auto worker_release = false;
+    const auto worker_gate = std::make_shared<SharedHeldWorkerGate>();
+    const auto held_worker_release = ScopedHeldWorkerRelease(worker_gate);
     auto worker_lifetime = std::make_shared<int>(0);
     auto worker_finished = std::weak_ptr<int>(worker_lifetime);
     auto status_item = QPointer<QSystemTrayIcon>();
@@ -1454,12 +1481,13 @@ void verify_unread_worker_host_shutdown(const fs::path &sandbox) {
         auto host = std::make_unique<ShellHost>(options);
         status_item = host->findChild<QSystemTrayIcon *>();
         host->primary().set_mailbox_snapshot_read_function(
-            [&, worker_lifetime](
+            [worker_gate, worker_lifetime](
                     const lingtai::desktop::DirectMailboxRequest &request) {
-                auto lock = std::unique_lock(worker_mutex);
-                worker_entered = true;
-                worker_condition.notify_all();
-                worker_condition.wait(lock, [&] { return worker_release; });
+                auto lock = std::unique_lock(worker_gate->mutex);
+                worker_gate->entered = true;
+                worker_gate->condition.notify_all();
+                worker_gate->condition.wait(
+                    lock, [&] { return worker_gate->release; });
                 lock.unlock();
                 return lingtai::desktop::read_direct_mailbox_snapshot(request);
             });
@@ -1467,18 +1495,18 @@ void verify_unread_worker_host_shutdown(const fs::path &sandbox) {
         static_cast<void>(host->primary().open_project(
             project, fs::path(".lingtai/alpha")));
         require(wait_for_event_loop([&] {
-            const auto lock = std::lock_guard(worker_mutex);
-            return worker_entered;
+            const auto lock = std::lock_guard(worker_gate->mutex);
+            return worker_gate->entered;
         }, 1000), "host shutdown must hold one mailbox worker");
         host.reset();
     }
     require(status_item.isNull(),
         "host shutdown must synchronously destroy its status presentation");
     {
-        const auto lock = std::lock_guard(worker_mutex);
-        worker_release = true;
+        const auto lock = std::lock_guard(worker_gate->mutex);
+        worker_gate->release = true;
     }
-    worker_condition.notify_all();
+    worker_gate->condition.notify_all();
     require(wait_for_event_loop([&] { return worker_finished.expired(); }, 2000),
         "the host-shutdown mailbox worker must finish deterministically");
     QCoreApplication::sendPostedEvents();
