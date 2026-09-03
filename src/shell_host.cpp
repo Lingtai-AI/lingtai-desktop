@@ -242,6 +242,9 @@ void ShellHost::refresh_unread_presentations() {
     }
     unread_total_ = unread_session_.total_for(requests);
     open_project_count_ = requests.size();
+    if (status_item_) {
+        status_item_->set_unread_count(unread_total_, open_project_count_);
+    }
 }
 
 std::optional<std::filesystem::path> ShellHost::pick_project_directory(

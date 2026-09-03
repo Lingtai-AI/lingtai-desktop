@@ -45,5 +45,44 @@ class DesktopStatusItemContractTest(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, status_item)
 
+    def test_status_item_uses_only_template_safe_qt_rendering(self) -> None:
+        header = STATUS_HEADER.read_text()
+        source = STATUS_SOURCE.read_text()
+        self.assertIn("set_unread_count", header)
+        self.assertIn("QPainter", source)
+        self.assertIn("QImage::Format_Alpha8", source)
+        self.assertIn("icon.setIsMask(true)", source)
+        self.assertIn("StatusItemTemplate.png", source)
+        self.assertIn("StatusItemTemplate@2x.png", source)
+        for forbidden in (
+            "QColor",
+            "Qt::black",
+            "Qt::white",
+            "Qt::red",
+            "QLocale",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, source)
+
+        allowed_qt_headers = {
+            "<QtCore/QObject>",
+            "<QtCore/QRectF>",
+            "<QtCore/QSize>",
+            "<QtCore/QString>",
+            "<QtGui/QFont>",
+            "<QtGui/QIcon>",
+            "<QtGui/QImage>",
+            "<QtGui/QPainter>",
+            "<QtGui/QPixmap>",
+            "<QtWidgets/QMenu>",
+            "<QtWidgets/QSystemTrayIcon>",
+        }
+        qt_headers = {
+            line.removeprefix("#include ").strip()
+            for line in (header + source).splitlines()
+            if line.startswith("#include <Qt")
+        }
+        self.assertEqual(qt_headers, allowed_qt_headers)
+
 if __name__ == "__main__":
     unittest.main()

@@ -1246,6 +1246,12 @@ void verify_session_unread_aggregate(const fs::path &sandbox) {
     require(host.open_project_count() == 1
             && primary_roster->unseen_count("invalid") == 0,
         "duplicate Project windows must dedupe and invalid routes stay excluded");
+    auto *aggregate_tray = host.findChild<QSystemTrayIcon *>();
+    require(aggregate_tray
+            && aggregate_tray->toolTip()
+                == QStringLiteral(
+                    "LingTai Desktop — 2 unread across 1 open project"),
+        "the one status item must project the exact shared unread aggregate");
     click_agent(secondary, "alpha");
     require(wait_for_event_loop([&] {
         return host.unread_total() == 1
@@ -1434,6 +1440,62 @@ void verify_desktop_status_item(const fs::path &sandbox) {
             && is_monochrome_brush(status_icon_2x),
         "the monochrome transparent resources must load at exact 1x/2x sizes");
 
+    using lingtai::desktop::DesktopStatusItem;
+    require(DesktopStatusItem::display_count_text(0).isEmpty()
+            && DesktopStatusItem::display_count_text(1)
+                == QStringLiteral("1")
+            && DesktopStatusItem::display_count_text(99)
+                == QStringLiteral("99")
+            && DesktopStatusItem::display_count_text(100)
+                == QStringLiteral("99+"),
+        "the status count buckets must be 0, exact 1..99, and 99+");
+    const auto zero_mask_1x = DesktopStatusItem::render_mask(0, 1);
+    const auto zero_mask_2x = DesktopStatusItem::render_mask(0, 2);
+    require(zero_mask_1x == status_icon_1x
+            && zero_mask_2x == status_icon_2x,
+        "zero rendering must return the byte-resource template images");
+    const auto one_mask_1x = DesktopStatusItem::render_mask(1, 1);
+    const auto one_mask_2x = DesktopStatusItem::render_mask(1, 2);
+    const auto hundred_mask_1x = DesktopStatusItem::render_mask(100, 1);
+    require(one_mask_1x.size() == QSize(48, 18)
+            && one_mask_2x.size() == QSize(96, 36)
+            && hundred_mask_1x.size() == QSize(48, 18)
+            && one_mask_1x.format() == QImage::Format_Alpha8
+            && one_mask_2x.format() == QImage::Format_Alpha8
+            && hundred_mask_1x.format() == QImage::Format_Alpha8,
+        "nonzero status masks must use deterministic 1x/2x alpha-only sizes");
+    const auto alpha_at = [](const QImage &image, int x, int y) {
+        return image.pixelColor(x, y).alpha();
+    };
+    const auto row_is_clear = [&](const QImage &image, int y) {
+        for (auto x = 0; x != image.width(); ++x) {
+            if (alpha_at(image, x, y) != 0) {
+                return false;
+            }
+        }
+        return true;
+    };
+    const auto region_has_ink = [&](const QImage &image, const QRect &region) {
+        for (auto y = region.top(); y <= region.bottom(); ++y) {
+            for (auto x = region.left(); x <= region.right(); ++x) {
+                if (alpha_at(image, x, y) != 0) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+    require(row_is_clear(one_mask_1x, 0)
+            && row_is_clear(one_mask_1x, one_mask_1x.height() - 1)
+            && row_is_clear(one_mask_2x, 0)
+            && row_is_clear(one_mask_2x, one_mask_2x.height() - 1)
+            && region_has_ink(one_mask_1x, QRect(1, 1, 16, 16))
+            && region_has_ink(one_mask_1x, QRect(20, 1, 27, 16))
+            && region_has_ink(hundred_mask_1x, QRect(20, 1, 27, 16))
+            && one_mask_1x != hundred_mask_1x,
+        "wide status masks must retain clear vertical margins plus logo and "
+        "distinct capsule glyphs");
+
     auto &primary = host.primary();
     require(primary.window().isHidden(),
         "the fallback selection fixture must begin with no shown shell");
@@ -1520,6 +1582,29 @@ void verify_desktop_status_item(const fs::path &sandbox) {
     callback_actions[2]->trigger();
     require(show_calls == 1 && quit_calls == 1,
         "each explicit status menu action must invoke its callback exactly once");
+    const auto zero_rebuilds = callbacks.icon_rebuild_count();
+    callbacks.set_unread_count(7, 2);
+    require(callbacks.icon_rebuild_count() == zero_rebuilds + 1
+            && !callback_tray->icon().isNull()
+            && callback_tray->icon().isMask()
+            && callback_tray->toolTip()
+                == QStringLiteral(
+                    "LingTai Desktop — 7 unread across 2 open projects"),
+        "a nonzero bucket must rebuild once and expose exact tooltip values");
+    callbacks.set_unread_count(7, 3);
+    require(callbacks.icon_rebuild_count() == zero_rebuilds + 1
+            && callback_tray->toolTip()
+                == QStringLiteral(
+                    "LingTai Desktop — 7 unread across 3 open projects"),
+        "a Project-only change must update the tooltip without rebuilding");
+    callbacks.set_unread_count(100, 4);
+    const auto capped_rebuilds = callbacks.icon_rebuild_count();
+    callbacks.set_unread_count(101, 5);
+    require(callbacks.icon_rebuild_count() == capped_rebuilds
+            && callback_tray->toolTip()
+                == QStringLiteral(
+                    "LingTai Desktop — 101 unread across 5 open projects"),
+        "the 99+ bucket must avoid recreation while retaining the exact total");
 
     fs::remove_all(sandbox, cleanup_error);
     require(!cleanup_error,
