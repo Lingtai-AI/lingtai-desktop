@@ -244,11 +244,16 @@ Qt plugin path set and an 8 s watchdog.
   18/36-pixel zero resources, deterministic alpha-only nonzero masks pinned to
   that same 18/36-pixel height (never taller, naming and guarding the
   platform tray plugin's status-item pixmap cap directly) with a compact,
-  formula-derived width and a bottom-anchored badge overlapping the logo's
-  lower-right quadrant, sized from real font metrics plus explicit padding,
-  measured real-pixel logo-ink-coverage bounds keeping the logo perceptually
-  primary, `99+` display capping, exact aggregate tooltips, and
-  unchanged-bucket icon reuse. The separate status-item
+  formula-derived width containing the logo's own meaningful-alpha ink
+  cropped and enlarged (never distorted) to fill most of the fixed canvas
+  height, and a tall/round badge sized near that enlarged logo's own width
+  from real font metrics, deeply overlapping its lower-right region at
+  dimensionless ratios converted from the accepted human visual reference
+  (never measured against the nominal 18x18 box), with cross-scale
+  consistency between 1x/2x, a footprint-primacy and hard no-erasure bound
+  keeping the logo perceptually primary, `99+` display capping, exact
+  aggregate tooltips, and unchanged-bucket icon reuse. The separate
+  status-item
   Quit and final-window-close journeys each run a bounded Qt event loop and
   prove exit code 0 before their failure watchdogs can fire.
 - The focused `native_shell_unread` journey uses two canonical Projects and

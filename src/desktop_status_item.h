@@ -40,6 +40,11 @@ public:
     // Shared with tests so the fit/anchor math is asserted, not duplicated.
     // `scale` accepts only 1 or 2; returns an empty rect otherwise.
     [[nodiscard]] static QRect unread_badge_rect(int scale);
+    // The logo ink rectangle render_mask paints for unread>0 states. Shared
+    // with tests so overlap/union/hierarchy gates measure against the real
+    // painted logo footprint, not an assumed nominal box.
+    // `scale` accepts only 1 or 2; returns an empty rect otherwise.
+    [[nodiscard]] static QRect unread_logo_rect(int scale);
     [[nodiscard]] std::size_t icon_rebuild_count() const noexcept;
 
 private:

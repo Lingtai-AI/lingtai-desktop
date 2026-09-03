@@ -88,6 +88,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdarg>
 #include <dlfcn.h>
@@ -1602,14 +1603,6 @@ void verify_desktop_status_item(const fs::path &sandbox) {
     const auto alpha_at = [](const QImage &image, int x, int y) {
         return image.pixelColor(x, y).alpha();
     };
-    const auto row_is_clear = [&](const QImage &image, int y) {
-        for (auto x = 0; x != image.width(); ++x) {
-            if (alpha_at(image, x, y) != 0) {
-                return false;
-            }
-        }
-        return true;
-    };
     const auto region_has_ink = [&](const QImage &image, const QRect &region) {
         for (auto y = region.top(); y <= region.bottom(); ++y) {
             for (auto x = region.left(); x <= region.right(); ++x) {
@@ -1620,16 +1613,31 @@ void verify_desktop_status_item(const fs::path &sandbox) {
         }
         return false;
     };
-    const auto region_has_clear = [&](const QImage &image, const QRect &region) {
-        for (auto y = region.top(); y <= region.bottom(); ++y) {
-            for (auto x = region.left(); x <= region.right(); ++x) {
-                if (alpha_at(image, x, y) == 0) {
-                    return true;
+    // A "real" digit cutout, at a font size compact enough to keep the
+    // badge near the enlarged logo's own width (see the badge-shape gates
+    // below): CompositionMode_Clear reduces destination alpha by the
+    // glyph's own source-coverage fraction, and a single-pixel-wide stroke
+    // like "1" at this pixel size never gets antialiased to a perfect,
+    // fully-covered pixel (measured worst case against the real capsule+
+    // clear-text technique: alpha 41/255, an 84% reduction from the solid
+    // capsule's 255). Repair 3's bigger 12px font happened to reach exact
+    // zero trivially; requiring exact zero here would reject a real,
+    // visually meaningful cutout as if it were a rendering failure. The
+    // honest bar is a large, real reduction from the capsule's own solid
+    // fill -- not perfect zero -- so a merely-cosmetic antialiasing fringe
+    // still cannot pass.
+    constexpr auto kRealCutoutMaxAlpha = 64;
+    const auto region_has_real_cutout =
+        [&](const QImage &image, const QRect &region) {
+            for (auto y = region.top(); y <= region.bottom(); ++y) {
+                for (auto x = region.left(); x <= region.right(); ++x) {
+                    if (alpha_at(image, x, y) <= kRealCutoutMaxAlpha) {
+                        return true;
+                    }
                 }
             }
-        }
-        return false;
-    };
+            return false;
+        };
     const auto opaque_bounds = [&](const QImage &image) {
         auto min_x = image.width();
         auto min_y = image.height();
@@ -1649,49 +1657,172 @@ void verify_desktop_status_item(const fs::path &sandbox) {
         return QRect(QPoint(min_x, min_y), QPoint(max_x, max_y));
     };
 
-    // Regression: for unread > 0 the badge overlays the logo's own
-    // lower-right quadrant (Telegram paper-plane-plus-badge style) instead
-    // of sitting beside it with a gap. The badge is sized from real font
-    // metrics for "99+" (the widest label) plus explicit padding; its
-    // position structurally overlaps the logo's own footprint (never floats
-    // beside it), and the canvas is sized from that badge rect plus a
-    // minimal declared margin so the combined logo+badge silhouette fills
-    // almost the whole canvas by construction rather than floating inside a
-    // mostly-empty one.
+    // Repair 4 regression (human-rejected repair 3, email
+    // 20260903T163822-b780, "实在是太小了" against the exact unread=100
+    // preview built from repair-3 HEAD 162cdba263b40e19b3b40df48dfd66c8cf
+    // 7e5835): repair 3 drew the native 18/36 template resource completely
+    // unscaled, so its own opaque "字" ink read as small even before a
+    // short, wide, 2.29:1 badge sitting mostly beside it (overlap starting
+    // at 71% of the nominal box) crowded it further. These gates measure
+    // actual rendered/declared alpha bounds -- never the nominal 18x18 box
+    // -- against dimensionless ratios converted from the human's Telegram
+    // reference (email 20260903T141315-50fc) and the measured repair-3
+    // failure, so a nominal-rectangle or private-constant coincidence
+    // cannot pass them vacuously.
+    //
+    // "Meaningful alpha" for every gate below is >=128: measured against
+    // this project's own StatusItemTemplate resources, the "字" stroke
+    // bodies solidify (the alpha-threshold bounding box stops shrinking
+    // materially) right around this level at both 1x/2x, distinguishing
+    // real ink from the faint antialiased halo around it.
+    constexpr auto kMeaningfulAlpha = 128;
+    const auto count_meaningful = [&](const QImage &image, const QRect &region) {
+        auto count = 0;
+        for (auto y = region.top(); y <= region.bottom(); ++y) {
+            for (auto x = region.left(); x <= region.right(); ++x) {
+                if (alpha_at(image, x, y) >= kMeaningfulAlpha) {
+                    ++count;
+                }
+            }
+        }
+        return count;
+    };
+    const auto ink_bounds = [&](const QImage &image, int threshold) {
+        auto min_x = image.width();
+        auto min_y = image.height();
+        auto max_x = -1;
+        auto max_y = -1;
+        for (auto y = 0; y != image.height(); ++y) {
+            for (auto x = 0; x != image.width(); ++x) {
+                if (alpha_at(image, x, y) < threshold) {
+                    continue;
+                }
+                min_x = std::min(min_x, x);
+                min_y = std::min(min_y, y);
+                max_x = std::max(max_x, x);
+                max_y = std::max(max_y, y);
+            }
+        }
+        if (max_x < 0) {
+            return QRect();
+        }
+        return QRect(QPoint(min_x, min_y), QPoint(max_x, max_y));
+    };
+    // Largest real DemiBold pixel size whose "99+" metrics fit inside
+    // `width`x`height` with at least `min_padding` clearance on every side.
+    // An independent search over the real, linked QFontMetrics -- not a
+    // copy of the product's private font-size constant -- so this proves
+    // the *feasibility* of the declared badge rect, not a coincidence.
+    const auto largest_fitting_pixel_size =
+        [](int width, int height, int min_padding) {
+            for (auto px = height; px >= 1; --px) {
+                auto font = QFont();
+                font.setPixelSize(px);
+                font.setWeight(QFont::DemiBold);
+                const QFontMetrics metrics(font);
+                const auto advance =
+                    metrics.horizontalAdvance(QStringLiteral("99+"));
+                const auto tight_height =
+                    metrics.tightBoundingRect(QStringLiteral("99+")).height();
+                if (advance + 2 * min_padding <= width
+                        && tight_height + 2 * min_padding <= height) {
+                    return px;
+                }
+            }
+            return 0;
+        };
+
+    // Vacuity canary: the counting helper itself cannot pass a meaningful-
+    // alpha threshold on an empty/transparent region.
+    {
+        auto blank = QImage(8, 8, QImage::Format_Alpha8);
+        blank.fill(0);
+        require(count_meaningful(blank, QRect(0, 0, 8, 8)) == 0,
+            "the meaningful-alpha counter must report zero ink on a fully "
+            "transparent region, so a passing gate below cannot be a "
+            "counting-helper artifact");
+        require(ink_bounds(blank, kMeaningfulAlpha).isEmpty(),
+            "the ink-bounds helper must report an empty rect for a fully "
+            "transparent image");
+    }
+
+    // Captured control, repair-3-linked: exact geometry this suite's own
+    // predecessor measured against repair-3 HEAD
+    // 162cdba263b40e19b3b40df48dfd66c8cf7e5835 (see
+    // unread_badge_rect(scale) == {13,3,32,14} / {26,8,61,26} there). These
+    // are literal, frozen numbers -- not recomputed from any live seam --
+    // so this control cannot silently drift if the product later changes;
+    // it exists solely to prove the *new* gates below actually reject the
+    // rejected geometry, not just accept the new one.
     for (const auto scale : std::array{1, 2}) {
-        const auto &resource = scale == 1 ? status_icon_1x : status_icon_2x;
+        const auto captured_logo = QRect(0, 0, 18 * scale, 18 * scale);
+        const auto captured_badge = scale == 1
+            ? QRect(13, 3, 32, 14)
+            : QRect(26, 8, 61, 26);
+        const auto width_ratio =
+            static_cast<double>(captured_badge.width()) / captured_logo.width();
+        const auto aspect =
+            static_cast<double>(captured_badge.width()) / captured_badge.height();
+        const auto overlap_ratio =
+            static_cast<double>(captured_badge.x()) / captured_logo.width();
+        const auto captured_logo_far_x =
+            captured_logo.x() + captured_logo.width();
+        const auto coverage_ratio =
+            static_cast<double>(captured_logo_far_x - captured_badge.x())
+                / captured_logo.width();
+        const auto logo_area = captured_logo.width() * captured_logo.height();
+        const auto badge_area = captured_badge.width() * captured_badge.height();
+        require(width_ratio > 1.0,
+            "control: repair 3's captured badge/logo width ratio must "
+            "itself sit above the new [0.85,1.0] target so the new gate "
+            "is proven to reject it -- got " + std::to_string(width_ratio));
+        require(aspect > 1.45,
+            "control: repair 3's captured badge aspect must itself sit "
+            "above the new [1.25,1.45] target so the new gate is proven "
+            "to reject it");
+        require(overlap_ratio > 0.35,
+            "control: repair 3's captured badge-offset ratio must itself "
+            "sit above the new [0.15,0.35] offset band so the new gate is "
+            "proven to reject it");
+        require(coverage_ratio < 0.65,
+            "control: repair 3's captured horizontal-coverage ratio must "
+            "itself sit below the new >=0.65 deep-overlap floor -- its "
+            "shallow 71%-in offset only ever covered the logo's last "
+            "~29% -- so the new gate is proven to reject it -- got "
+            + std::to_string(coverage_ratio));
+        require(logo_area < badge_area,
+            "control: repair 3's captured nominal-logo footprint must "
+            "itself be smaller than its own badge footprint, so the new "
+            "footprint-primacy gate is proven to reject it");
+    }
+
+    // Per-scale ratios, recorded once so the cross-scale consistency gate
+    // below can compare them directly.
+    double width_ratio_by_scale[3] = {0, 0, 0};
+    double aspect_by_scale[3] = {0, 0, 0};
+    double overlap_ratio_by_scale[3] = {0, 0, 0};
+    double union_fill_by_scale[3] = {0, 0, 0};
+
+    for (const auto scale : std::array{1, 2}) {
         const auto badge = DesktopStatusItem::unread_badge_rect(scale);
+        const auto logo = DesktopStatusItem::unread_logo_rect(scale);
         const auto canvas = DesktopStatusItem::render_mask(1, scale).size();
-        QFont badge_font;
-        badge_font.setPixelSize(12 * scale);
-        badge_font.setWeight(QFont::DemiBold);
-        const QFontMetrics metrics(badge_font);
-        const auto text_width =
-            metrics.horizontalAdvance(QStringLiteral("99+"));
-        const auto text_height =
-            metrics.tightBoundingRect(QStringLiteral("99+")).height();
-        const auto logo_size = 18 * scale;
-        // QRect::right()/bottom() are the inclusive last pixel (x+width-1),
-        // not the exclusive far edge; use the exclusive far edge throughout
-        // so canvas/margin arithmetic matches render_mask's own
-        // x()+width() / y()+height() convention exactly.
         const auto badge_far_x = badge.x() + badge.width();
         const auto badge_far_y = badge.y() + badge.height();
+        const auto logo_far_x = logo.x() + logo.width();
+        const auto logo_far_y = logo.y() + logo.height();
+
+        require(!badge.isEmpty() && !logo.isEmpty(),
+            "vacuity: both the badge and logo rectangles must be nonempty "
+            "regions to measure");
 
         // Direct, non-circular guard naming the actual constraint: Qt
         // 6.11.1's Cocoa platform plugin (QCocoaSystemTrayIcon::updateIcon)
         // caps a status-item pixmap at int(dpr * (NSStatusBar.thickness -
         // 4)) device px and smooth-downscales anything taller. At a
-        // 22pt-thick bar (this machine) that cap is exactly 18*scale,
-        // which is also the zero-state logo's own height; at a 24pt-thick
-        // bar (a typical secondary display) it is 20*scale -- strictly
-        // above 18*scale, never below. So pinning the nonzero mask to
-        // 18*scale (never taller) stays at or under the cap on every
-        // observed thickness, and the plugin never resamples it (the
-        // opposite -- growing the mask past 18*scale -- is the real,
-        // observed regression this guards against). This assertion is
-        // independent of how the canvas size is computed below: it pins
-        // the literal height, naming the rule it protects against.
+        // 22pt-thick bar (this machine) that cap is exactly 18*scale; at a
+        // 24pt-thick bar (a typical secondary display) it is 20*scale --
+        // strictly above, never below. Repair-3 cap guard, unchanged.
         for (const auto thickness : std::array{22, 24}) {
             const auto max_image_height = scale * (thickness - 4);
             require(canvas.height() <= max_image_height,
@@ -1703,96 +1834,151 @@ void verify_desktop_status_item(const fs::path &sandbox) {
                 "unscaled instead of smooth-resampling a taller mask");
         }
         require(canvas.height() == 18 * scale,
-            "the nonzero mask height must stay pinned to exactly "
-            "18*scale -- identical to the zero-state logo's own height "
-            "-- rather than growing for the badge's protrusion, which is "
-            "what previously pushed the Cocoa plugin into smooth-"
-            "downscaling the whole icon (logo ~14.7pt instead of 18pt, "
-            "\"99+\" smaller than the human-rejected 11px design)");
+            "the nonzero mask height must stay pinned to exactly 18*scale "
+            "-- the repair-3 Cocoa-cap correction -- regardless of how "
+            "the logo/badge are recomposed inside it");
         require(canvas == QSize(
                     badge.x() + badge.width() + 2 * scale, 18 * scale),
-            "the rendered nonzero canvas must be sized from the real badge "
-            "rect's horizontal protrusion plus a minimal declared right "
-            "margin, and a height pinned to the zero-state logo's own "
-            "18*scale height (safely at or under the recovered Cocoa cap "
-            "on every observed thickness) -- never an independent fixed "
-            "guess and never taller than the logo");
-        require(badge.width() >= text_width + 2 * 4 * scale
-                && badge.height() >= text_height + 2 * 2 * scale,
-            "the badge rectangle must fit \"99+\" with nontrivial explicit "
-            "padding on every side at both scales, so it is never clipped");
-        require(badge.x() > 0 && badge.x() < logo_size
-                && badge.y() >= 0 && badge.y() < logo_size,
-            "the badge must start inside the logo's own footprint -- a "
-            "genuine overlap -- rather than beside it with a wide gap");
-        require(badge_far_x > logo_size,
-            "the badge must extend past the logo's right edge, reading as "
-            "an overlaid corner badge rather than an inset one");
-        // The badge is bottom-anchored inside the pinned 18*scale canvas
-        // (never protruding past it -- that is exactly the regression the
-        // 18*scale guard above catches), so it must land exactly one
-        // declared bottom-margin row above the canvas floor, not merely
-        // "beyond the logo" as repair-2 required.
-        require(badge_far_y == logo_size - 1 * scale,
-            "the badge must be bottom-anchored inside the pinned 18/36 "
-            "canvas with exactly one clear bottom-margin row beneath it, "
-            "never protruding past the logo's own height");
-        const auto right_margin = canvas.width() - badge_far_x;
-        const auto bottom_margin = canvas.height() - badge_far_y;
-        require(right_margin == 2 * scale,
-            "the outer right margin beyond the badge must stay pinned to "
-            "the declared minimal clearance so the combined logo+badge "
-            "union fills almost the whole canvas width");
-        require(bottom_margin == 1 * scale,
-            "the bottom margin beneath the bottom-anchored badge must be "
-            "exactly the declared one clear margin row, matching the "
-            "binding correction");
+            "the rendered nonzero canvas must be sized from the real "
+            "badge rect's horizontal protrusion plus a minimal declared "
+            "right margin, and a height pinned to 18*scale");
 
-        // Everywhere in the logo's own footprint outside the badge rect
-        // (expanded by a small clearance for rounded-rect antialiasing
-        // bleed) must render byte-identical to the unread=0 resource: the
-        // logo is drawn unscaled and unmoved, and only the overlapping
-        // badge touches pixels inside its own rectangle. Because the badge
-        // is anchored toward the logo's lower-right corner, this untouched
-        // region is the logo's whole left band (every row) plus its whole
-        // top band, proving the logo keeps a substantial, unobscured
-        // upper-left core and stays recognizable rather than being
-        // replaced or reduced to a sliver.
-        const auto exclusion = badge.adjusted(
-            -2 * scale, -2 * scale, 2 * scale, 2 * scale);
+        const auto fitting_px =
+            largest_fitting_pixel_size(badge.width(), badge.height(), 1 * scale);
+        require(fitting_px >= 1,
+            "the badge rectangle must fit \"99+\" at some real DemiBold "
+            "pixel size with at least one px of nontrivial clearance on "
+            "every side, so it is never clipped");
 
-        // Perceptual-primacy proof: measure actual rendered ink, not
-        // bounding-box footprint (a footprint-only bound can hide a badge
-        // that overlaps mostly-transparent logo padding, or wrongly reject
-        // one that overlaps mostly-transparent badge padding). Bound how
-        // much of the *real* resource's opaque logo ink the badge's
-        // exclusion zone actually covers, against an honest, independently
-        // measured threshold: target <=40%, hard <50%, at both scales.
-        auto logo_ink_total = 0;
-        auto logo_ink_obscured = 0;
-        for (auto y = 0; y != logo_size; ++y) {
-            for (auto x = 0; x != logo_size; ++x) {
-                if (alpha_at(resource, x, y) == 0) {
-                    continue;
-                }
-                ++logo_ink_total;
-                if (exclusion.contains(x, y)) {
-                    ++logo_ink_obscured;
-                }
-            }
-        }
-        require(logo_ink_total > 0,
-            "the zero-state logo resource must contain rendered ink to "
-            "measure primacy against");
-        require(logo_ink_obscured * 100 <= logo_ink_total * 40,
-            "the badge (plus antialiasing clearance) must obscure at most "
-            "40% of the logo's actual rendered ink -- an honest bound "
-            "measured against real resource pixels, not bounding-box "
-            "footprint -- so the logo stays perceptually primary");
-        require(logo_ink_obscured * 2 < logo_ink_total,
-            "the badge must never obscure half or more of the logo's "
-            "actual rendered ink -- a hard perceptual floor beneath the "
-            "40% target");
+        // Gate: visible logo footprint. The enlarged logo must occupy a
+        // strong fraction of the fixed 18/36 canvas height (repair 3's own
+        // opaque ink filled only ~13/18 (1x) / ~28/36 (2x) at this same
+        // meaningful-alpha threshold, before the badge cut further into
+        // it).
+        require(logo.height() * 100 >= 18 * scale * 90,
+            "the enlarged logo ink must occupy at least 90% of the fixed "
+            "18/36 canvas height, not repair 3's shrunken native footprint");
+
+        // Gate: badge shape. Tall/round, inside the human's Telegram-
+        // reference envelope (~1.3:1), never repair 3's flat 2.29-2.35:1
+        // capsule.
+        const auto aspect =
+            static_cast<double>(badge.width()) / badge.height();
+        require(aspect >= 1.20 && aspect <= 1.45,
+            "the badge must be tall/round (aspect in [1.20,1.45]), not "
+            "repair 3's flat wide capsule -- got " + std::to_string(aspect));
+
+        // Gate: relative scale. The badge must read as roughly the same
+        // width as the enlarged logo, not repair 3's ~1.7-1.8x-wider
+        // capsule that visually dwarfed a small logo.
+        const auto width_ratio =
+            static_cast<double>(badge.width()) / logo.width();
+        require(width_ratio >= 0.85 && width_ratio <= 1.0,
+            "the badge width must be near the enlarged logo's own width "
+            "(ratio in [0.85,1.0]), not repair 3's much wider capsule -- "
+            "got " + std::to_string(width_ratio));
+
+        // Gate: deep overlap, measured against the *enlarged* logo's own
+        // bounds, not the nominal 18x18 box.
+        //
+        // Two distinct, unambiguously-named ratios, so neither can be
+        // mistaken for the other:
+        //   - badge_offset_ratio = badge.x() / logo.width(): where the
+        //     badge's own left edge lands, as a fraction of the logo's own
+        //     width, measured from the logo's left edge. The human
+        //     reference's "~23% into logo width" is this offset, not a
+        //     coverage fraction -- a *small* offset here means the badge
+        //     starts early and so covers *more* of the logo, not less.
+        //   - horizontal_coverage_ratio = (logo_far_x - badge.x()) /
+        //     logo.width(): the fraction of the logo's own width, from
+        //     the badge's left edge to the logo's right edge, that the
+        //     badge actually overlays. This is the direct, unambiguous
+        //     "how deep" measure: repair 3's badge started at 71% in in
+        //     offset terms and so only ever covered the last ~29% of the
+        //     logo's width (a shallow corner touch); the human reference
+        //     and this repair cover the last ~65-85% of it (a deep
+        //     overlay), so a shallow overlap cannot pass by accident.
+        const auto badge_offset_ratio =
+            static_cast<double>(badge.x()) / logo.width();
+        require(badge_offset_ratio >= 0.15 && badge_offset_ratio <= 0.35,
+            "the badge must begin well inside the enlarged logo's own "
+            "width (offset ratio in [0.15,0.35], matching the human "
+            "reference's ~23% mark), not repair 3's shallow 71%-in "
+            "contact -- got " + std::to_string(badge_offset_ratio));
+        require(badge_far_x > logo_far_x
+                && badge_far_x - logo_far_x <= (logo.width() * 35) / 100,
+            "the badge must extend past the enlarged logo's own right "
+            "edge, but only modestly (<=35% of the logo's own width), "
+            "reading as a deep overlay rather than a side-by-side pair");
+        const auto horizontal_coverage_ratio =
+            static_cast<double>(logo_far_x - badge.x()) / logo.width();
+        require(horizontal_coverage_ratio >= 0.65,
+            "the badge must actually cover at least 65% of the enlarged "
+            "logo's own width (measured from the badge's own left edge to "
+            "the logo's own right edge), the direct, unambiguous \"how "
+            "deep\" measure that a merely-small offset ratio cannot "
+            "satisfy by itself -- got "
+            + std::to_string(horizontal_coverage_ratio));
+        require(badge_far_y >= logo_far_y
+                && badge_far_y - logo_far_y <= (logo.height() * 20) / 100,
+            "the badge must reach at least the enlarged logo's own bottom "
+            "edge and extend only modestly past it");
+
+        // Gate: union fill. The combined meaningful-alpha bounds must
+        // fill most of the fixed 18/36 height -- repair 3's own combined
+        // meaningful-alpha bounds filled only 15/18 (1x) / 30/36 (2x),
+        // 83.3% at this same threshold, leaving repair-3-sized dead
+        // vertical space.
+        const auto representative_mask = DesktopStatusItem::render_mask(1, scale);
+        const auto union_bounds = ink_bounds(representative_mask, kMeaningfulAlpha);
+        require(!union_bounds.isEmpty(),
+            "vacuity: the rendered mask must contain meaningful-alpha ink "
+            "to measure the union bounds against");
+        const auto union_fill =
+            static_cast<double>(union_bounds.height()) / canvas.height();
+        require(union_fill >= 0.90,
+            "the combined logo+badge meaningful-alpha bounds must fill at "
+            "least 90% of the fixed canvas height, not leave repair-3-"
+            "sized dead vertical space (repair 3 measured 83.3%) -- got "
+            + std::to_string(union_fill));
+
+        // Gate: visual hierarchy -- footprint primacy plus a hard
+        // no-erasure floor, replacing repair 3's now-inapplicable
+        // "<=40% obscured" formula (a deep lower-right overlay on a
+        // near-square glyph legitimately obscures well over 40% of its
+        // raw ink; the honest bound is that the logo's own declared
+        // footprint still dominates the badge's, and that real ink
+        // measurably survives).
+        require(logo.width() * logo.height() > badge.width() * badge.height(),
+            "the enlarged logo's own footprint must remain larger than "
+            "the badge's own footprint, keeping the logo the spatially "
+            "primary shape (repair 3's nominal logo footprint was smaller "
+            "than its own oversized badge)");
+        const auto surviving_in_logo =
+            count_meaningful(representative_mask, QRect(logo.topLeft(),
+                QSize(std::min(logo.width(), representative_mask.width() - logo.x()),
+                    std::min(logo.height(), representative_mask.height() - logo.y()))));
+        require(surviving_in_logo > 0,
+            "hard no-erasure floor: the logo's own region in the real "
+            "rendered mask must retain nonzero meaningful-alpha ink");
+        require(surviving_in_logo * 100 >= logo.width() * logo.height() * 15,
+            "hard no-erasure floor: surviving meaningful-alpha ink inside "
+            "the logo's own region must be at least 15% of that region's "
+            "area, so the badge can deepen its overlap without reading as "
+            "erasing the mark");
+        const auto repair3_native_meaningful = scale == 1 ? 61 : 219;
+        require(surviving_in_logo > (repair3_native_meaningful * 115) / 100,
+            "the surviving meaningful-alpha ink in the recomposed logo "
+            "region must exceed repair 3's own captured native ink count "
+            "by a healthy margin, proving the enlargement is real and "
+            "substantial rather than a rounding artifact -- got "
+            + std::to_string(surviving_in_logo) + " vs repair3="
+            + std::to_string(repair3_native_meaningful));
+
+        width_ratio_by_scale[scale] = width_ratio;
+        aspect_by_scale[scale] = aspect;
+        overlap_ratio_by_scale[scale] = badge_offset_ratio;
+        union_fill_by_scale[scale] = union_fill;
 
         for (const auto exact : std::array<std::size_t, 4>{1, 10, 99, 100}) {
             const auto mask = DesktopStatusItem::render_mask(exact, scale);
@@ -1800,30 +1986,11 @@ void verify_desktop_status_item(const fs::path &sandbox) {
                     && mask.format() == QImage::Format_Alpha8,
                 "every representative count bucket must keep the "
                 "deterministic, formula-derived canvas size");
-            require(row_is_clear(mask, 0)
-                    && row_is_clear(mask, mask.height() - 1),
-                "the canvas must keep a clear top row (the logo resource's "
-                "own transparent border) and a clear bottom row (the "
-                "declared minimal bottom margin)");
-
-            for (auto y = 0; y != logo_size; ++y) {
-                for (auto x = 0; x != logo_size; ++x) {
-                    if (exclusion.contains(x, y)) {
-                        continue;
-                    }
-                    require(alpha_at(mask, x, y)
-                                == resource.pixelColor(x, y).alpha(),
-                        "the logo's unobscured upper-left core must render "
-                        "byte-identical to the unread=0 resource at every "
-                        "pixel, proving the logo stays recognizable and "
-                        "unscaled outside the badge's own rectangle");
-                }
-            }
 
             require(region_has_ink(mask, badge.adjusted(1, 1, -1, -1)),
                 "the badge capsule must paint ink inside its declared "
                 "overlapping rectangle");
-            require(region_has_clear(mask,
+            require(region_has_real_cutout(mask,
                     badge.adjusted(2 * scale, 2 * scale,
                         -2 * scale, -2 * scale)),
                 "the glyph cutout must remain inside the capsule interior "
@@ -1858,6 +2025,28 @@ void verify_desktop_status_item(const fs::path &sandbox) {
             "distinct buckets (1/10/99/100) must render distinct glyph "
             "cutouts at both scales");
     }
+
+    // Gate: scale consistency. A green 1x result must not be hiding a weak
+    // 2x result (or vice versa): every dimensionless ratio above must
+    // agree between scales within an explicit tolerance.
+    constexpr auto kScaleConsistencyTolerance = 0.05;
+    require(std::abs(width_ratio_by_scale[1] - width_ratio_by_scale[2])
+                <= kScaleConsistencyTolerance,
+        "the badge/logo width ratio must agree between 1x and 2x within "
+        "an explicit tolerance");
+    require(std::abs(aspect_by_scale[1] - aspect_by_scale[2])
+                <= kScaleConsistencyTolerance * 3,
+        "the badge aspect ratio must agree between 1x and 2x within an "
+        "explicit tolerance");
+    require(std::abs(overlap_ratio_by_scale[1] - overlap_ratio_by_scale[2])
+                <= kScaleConsistencyTolerance,
+        "the overlap ratio must agree between 1x and 2x within an "
+        "explicit tolerance");
+    require(std::abs(union_fill_by_scale[1] - union_fill_by_scale[2])
+                <= kScaleConsistencyTolerance,
+        "the union-fill ratio must agree between 1x and 2x within an "
+        "explicit tolerance, so a green 1x result cannot hide a weak "
+        "Retina result");
 
     auto &primary = host.primary();
     require(primary.window().isHidden(),

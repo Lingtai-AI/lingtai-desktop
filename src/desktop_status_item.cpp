@@ -11,6 +11,7 @@
 #include <QtWidgets/QMenu>
 #include <QtWidgets/QSystemTrayIcon>
 
+#include <algorithm>
 #include <cmath>
 #include <utility>
 
@@ -18,70 +19,90 @@ namespace lingtai::desktop {
 namespace {
 
 constexpr auto kStatusItemHeight = 18;
-// The unread logo is drawn at its own native square footprint, unscaled and
-// unmoved from the zero-state resource; only the overlapping badge grows
-// the canvas beyond it.
+// Hard platform-safety cap, proven in repair 3: the platform tray plugin
+// caps a status-item pixmap at int(dpr * (NSStatusBar.thickness - 4)) device
+// px and smooth-downscales anything taller. kLogoSize * scale stays at or
+// under that cap on every observed bar thickness, so the nonzero-count
+// canvas is pinned to this height (never taller) below.
 constexpr auto kLogoSize = kStatusItemHeight;
-// The badge's left edge lands this fraction across the logo's own width
-// (measured from the logo's own top-left origin), so the badge always
-// overlaps the logo's lower-right quadrant by construction -- Telegram-
-// style, paper-plane-plus-badge -- instead of floating beside it with a
-// gap, for any font metrics the real system produces. Chosen (not 0.5) so
-// that, combined with the bottom-anchored badge below, real-resource ink
-// coverage of the logo stays at or under the perceptual-primacy target
-// (<=40%, hard <50%) at both 1x and 2x: measured against the actual
-// StatusItemTemplate resources, 0.5 obscures ~64% of the logo's ink, 0.71
-// obscures ~34-40%.
-constexpr auto kBadgeLogoHorizontalOverlap = 0.71;
-// DemiBold pixel size for the badge label at 1x.
-constexpr auto kBadgeFontPixelSize = 12;
-// Explicit padding around the real font-metric text box, at 1x.
-constexpr auto kBadgeHorizontalPadding = 4;
-constexpr auto kBadgeVerticalPadding = 2;
-// Explicit clearance from the canvas edges, at 1x, so the badge still reads
-// as inset rather than touching the corner; kept minimal so the combined
-// logo+badge silhouette fills almost the whole canvas.
-constexpr auto kCanvasRightMargin = 2;
-// Also doubles as the badge's bottom anchor clearance: the badge sits
-// `kCanvasBottomMargin * scale` px above the fixed kLogoSize*scale floor,
-// so the mask height never grows past the logo's own height (see
-// nonzero_canvas_size) and the platform tray plugin's status-item icon
-// cap -- int(dpr * (NSStatusBar.thickness - 4)) -- selects it unscaled
-// instead of smooth-downscaling a taller mask.
-constexpr auto kCanvasBottomMargin = 1;
+
+// Repair 4 root cause (human-rejected repair 3, email 20260903T163822-b780,
+// "实在是太小了"): repair 3 drew the 18/36 template resource completely
+// unscaled, so its own opaque "字" ink -- only ~13/18 (1x) / ~28/36 (2x) of
+// the canvas at meaningful alpha -- read as a small mark even before the
+// badge cut further into it. Repair 4 crops the resource's own meaningful-
+// alpha ink and re-scales it to fill most of the fixed 18/36 height, then
+// sizes/positions a taller, rounder badge relative to that enlarged (not
+// nominal) logo footprint. All geometry below is derived once at 1x from
+// the real cropped-ink aspect ratio and real QFontMetrics, then doubled for
+// 2x, so the two scales agree by construction (see the scale-consistency
+// regression in tests/native_shell_test.cpp).
+
+// Alpha at/above this level is "meaningful" ink for measuring and cropping
+// the logo: low enough to keep the glyph's real silhouette (not just its
+// fully-opaque core), high enough to exclude the faint antialiased halo
+// that reads as a soft shadow rather than a solid mark. Chosen from the
+// resource's own alpha histogram: the "字" stroke bodies solidify (bounding
+// box stops shrinking materially) right around this level at both 1x/2x.
+constexpr auto kMeaningfulAlphaThreshold = 128;
+
+// The enlarged logo ink's height at 1x: 17 of the fixed 18px canvas (94%),
+// leaving exactly one clear row so the ink never touches the raw canvas
+// edge. This is the practical ceiling: the source ink's own aspect ratio
+// (~1.04, near-square) means pushing height to the full 18 would still only
+// buy ~1 extra px of width, at the cost of edge-touching ink.
+constexpr auto kLogoInkHeightBase = 17;
+
+// The badge is exactly as wide as the enlarged logo ink -- the top of the
+// human-rejected target's 0.85-1.0 "badge/logo width ratio" envelope. This
+// is also the widest the badge can be while still leaving room, at a real
+// DemiBold pixel size, for a height at or above repair 3's own 14px (see
+// kBadgeAspectRatio below): shrinking this ratio below ~0.9 forces the
+// badge shorter than repair 3 to hold the same tall/round aspect, which
+// would be a regression against "make the badge tall/round", not an
+// improvement.
+[[nodiscard]] int badge_width_base(int logo_ink_width_base) {
+    return logo_ink_width_base;
+}
+
+// Target badge aspect (width/height): 9/7 ~= 1.2857, inside the reference
+// envelope (1.25-1.45) and, combined with badge_width_base above, the
+// tallest integral aspect this canvas supports without exceeding the fixed
+// 18px height cap (solved from the real cropped-ink width: at width=18 the
+// aspect floor of 1.25 already implies height ~14.4, i.e. repair 3's own
+// 14px is the practical ceiling here, not a shortfall -- repair 4's actual
+// improvement is eliminating repair 3's 2.29:1 flat-wide shape, not adding
+// raw height room the fixed cap does not have).
+constexpr double kBadgeAspectRatio = 9.0 / 7.0;
+
+// The badge's left edge lands this fraction into the *enlarged* logo's own
+// width (not the nominal 18px box), so the overlap reads as deep/Telegram-
+// style ("badge begins around 23% into logo width") rather than repair 3's
+// shallow contact-only overlap at 71%. Combined with badge_width_base
+// above (badge as wide as the logo itself), the badge covers the logo's
+// own last ~(1 - kBadgeLogoOverlapRatio) of its width -- roughly 77%, a
+// genuinely deep overlay, not merely a small corner touch.
+constexpr double kBadgeLogoOverlapRatio = 0.23;
+
+// How far the badge's bottom edge extends past the enlarged logo's own
+// bottom edge, at 1x: a small, deliberate protrusion ("extends only
+// modestly beyond") rather than repair 3's badge floating with a full clear
+// margin row beneath it.
+constexpr auto kBadgeBottomProtrusionBase = 1;
+
+// Minimum clearance, at 1x, between the real font-metric text box and the
+// badge's own edges on every side, so the label is never clipped and the
+// padding is always nontrivial.
+constexpr auto kMinBadgePaddingBase = 1;
+
+// Explicit clearance from the canvas's own right edge, at 1x, so the badge
+// still reads as inset rather than touching the corner.
+constexpr auto kCanvasRightMarginBase = 2;
+
 // The widest label any bucket can render; sizing the badge for this keeps
 // its rectangle identical across every nonzero bucket.
 [[nodiscard]] QString widest_badge_text() {
     return QStringLiteral("99+");
-}
-
-// Shared by both the sizing math (`unread_badge_rect`) and the paint call
-// (`render_mask`), so the rectangle is always sized from the exact font it
-// is drawn with, not a coincidentally-matching duplicate.
-[[nodiscard]] QFont badge_font(int scale) {
-    auto font = QFont();
-    font.setPixelSize(kBadgeFontPixelSize * scale);
-    font.setWeight(QFont::DemiBold);
-    return font;
-}
-
-// The nonzero-count canvas size render_mask allocates: exactly the logo's
-// own square footprint tall (never taller -- the platform tray plugin
-// caps a status-item pixmap at int(dpr * (NSStatusBar.thickness - 4))
-// device px, which is exactly kLogoSize * scale at a 22pt-thick bar and
-// kLogoSize * scale + 2 * scale at a 24pt-thick bar, i.e. at or above
-// kLogoSize * scale on every observed thickness, so pinning the mask to
-// kLogoSize * scale keeps it safely at or under the cap everywhere;
-// growing past it forces the plugin to smooth-downscale the whole icon)
-// plus the overlapping badge's horizontal
-// protrusion (from DesktopStatusItem::unread_badge_rect, the public seam)
-// and a minimal outer right margin, so the combined logo+badge silhouette
-// fills almost the whole canvas by construction. Identical across every
-// nonzero bucket because the badge is always sized for the widest label.
-[[nodiscard]] QSize nonzero_canvas_size(int scale) {
-    const auto badge = DesktopStatusItem::unread_badge_rect(scale);
-    const auto width = badge.x() + badge.width() + kCanvasRightMargin * scale;
-    return QSize(width, kLogoSize * scale);
 }
 
 [[nodiscard]] QString template_resource(int scale) {
@@ -100,6 +121,129 @@ constexpr auto kCanvasBottomMargin = 1;
         }
     }
     return result;
+}
+
+// The real, meaningful-alpha bounding box of `image` -- never a nominal or
+// assumed footprint. Shared conceptually with the equivalent measurement
+// tests/native_shell_test.cpp performs independently on the rendered
+// output, so this crop's honesty is cross-checked, not merely asserted.
+[[nodiscard]] QRect ink_bounds(const QImage &image, int alpha_threshold) {
+    auto min_x = image.width();
+    auto min_y = image.height();
+    auto max_x = -1;
+    auto max_y = -1;
+    for (auto y = 0; y != image.height(); ++y) {
+        for (auto x = 0; x != image.width(); ++x) {
+            if (qAlpha(image.pixel(x, y)) < alpha_threshold) {
+                continue;
+            }
+            min_x = std::min(min_x, x);
+            min_y = std::min(min_y, y);
+            max_x = std::max(max_x, x);
+            max_y = std::max(max_y, y);
+        }
+    }
+    if (max_x < 0) {
+        return {};
+    }
+    return QRect(QPoint(min_x, min_y), QPoint(max_x, max_y));
+}
+
+// The real template resource's own meaningful-alpha ink, always cropped
+// from the sharper 2x asset (even when composing the 1x mask) so a
+// downscale -- not an upscale of the softer native 18x18 PNG -- supplies
+// the enlarged logo's pixels.
+[[nodiscard]] QImage source_ink_2x() {
+    return QImage(template_resource(2));
+}
+
+[[nodiscard]] QRect source_ink_crop() {
+    return ink_bounds(source_ink_2x(), kMeaningfulAlphaThreshold);
+}
+
+// The enlarged logo ink's own width at 1x, solved from the real cropped
+// ink's aspect ratio so the recomposition never distorts the glyph.
+[[nodiscard]] int logo_ink_width_base(const QRect &crop) {
+    return static_cast<int>(std::lround(
+        kLogoInkHeightBase * crop.width() / static_cast<double>(crop.height())));
+}
+
+// Largest real DemiBold pixel size whose "99+" metrics -- horizontal
+// advance and tight bounding height -- fit inside the badge with at least
+// kMinBadgePaddingBase clearance on every side, searched top-down from the
+// tallest size that could conceivably fit. This makes the font size a
+// derived fact about the real, linked QFontMetrics for this badge's actual
+// dimensions, not an assumed constant.
+[[nodiscard]] int badge_font_pixel_size_base(int width_base, int height_base) {
+    for (auto px = height_base; px >= 1; --px) {
+        auto font = QFont();
+        font.setPixelSize(px);
+        font.setWeight(QFont::DemiBold);
+        const auto metrics = QFontMetrics(font);
+        const auto advance = metrics.horizontalAdvance(widest_badge_text());
+        const auto tight_height =
+            metrics.tightBoundingRect(widest_badge_text()).height();
+        if (advance + 2 * kMinBadgePaddingBase <= width_base
+                && tight_height + 2 * kMinBadgePaddingBase <= height_base) {
+            return px;
+        }
+    }
+    return 1;
+}
+
+struct BaseGeometry {
+    int logo_width;
+    int logo_height;
+    int badge_x;
+    int badge_y;
+    int badge_width;
+    int badge_height;
+    int font_pixel_size;
+};
+
+// Every 1x geometry fact this file needs, computed once from the real
+// resource ink and real font metrics. 2x geometry is this struct's values
+// doubled exactly (see unread_logo_rect / unread_badge_rect / badge_font),
+// so the two scales agree by construction rather than by two independent,
+// potentially-drifting roundings.
+[[nodiscard]] BaseGeometry base_geometry() {
+    const auto crop = source_ink_crop();
+    BaseGeometry geometry{};
+    geometry.logo_height = kLogoInkHeightBase;
+    geometry.logo_width = logo_ink_width_base(crop);
+    geometry.badge_width = badge_width_base(geometry.logo_width);
+    geometry.badge_height = static_cast<int>(
+        std::lround(geometry.badge_width / kBadgeAspectRatio));
+    geometry.badge_x = static_cast<int>(
+        std::lround(kBadgeLogoOverlapRatio * geometry.logo_width));
+    const auto badge_far_y = geometry.logo_height + kBadgeBottomProtrusionBase;
+    geometry.badge_y = badge_far_y - geometry.badge_height;
+    geometry.font_pixel_size = badge_font_pixel_size_base(
+        geometry.badge_width, geometry.badge_height);
+    return geometry;
+}
+
+// Shared by both the sizing math (`unread_badge_rect`) and the paint call
+// (`render_mask`), so the rectangle is always sized from the exact font it
+// is drawn with, not a coincidentally-matching duplicate.
+[[nodiscard]] QFont badge_font(int scale) {
+    auto font = QFont();
+    font.setPixelSize(base_geometry().font_pixel_size * scale);
+    font.setWeight(QFont::DemiBold);
+    return font;
+}
+
+// The nonzero-count canvas size render_mask allocates: exactly the fixed
+// kLogoSize * scale tall (never taller -- see the platform-cap comment on
+// kLogoSize) and wide enough for the badge's own horizontal protrusion
+// (from DesktopStatusItem::unread_badge_rect, the public seam) plus a
+// minimal outer right margin. Identical across every nonzero bucket
+// because the badge is always sized for the widest label.
+[[nodiscard]] QSize nonzero_canvas_size(int scale) {
+    const auto badge = DesktopStatusItem::unread_badge_rect(scale);
+    const auto width =
+        badge.x() + badge.width() + kCanvasRightMarginBase * scale;
+    return QSize(width, kLogoSize * scale);
 }
 
 [[nodiscard]] QIcon status_icon(std::size_t exact_count) {
@@ -191,27 +335,22 @@ QString DesktopStatusItem::display_count_text(std::size_t exact_count) {
         : QString::number(exact_count);
 }
 
+QRect DesktopStatusItem::unread_logo_rect(int scale) {
+    if (scale != 1 && scale != 2) {
+        return {};
+    }
+    const auto geometry = base_geometry();
+    return QRect(0, 0,
+        geometry.logo_width * scale, geometry.logo_height * scale);
+}
+
 QRect DesktopStatusItem::unread_badge_rect(int scale) {
     if (scale != 1 && scale != 2) {
         return {};
     }
-    const auto metrics = QFontMetrics(badge_font(scale));
-    const auto text_width = metrics.horizontalAdvance(widest_badge_text());
-    const auto text_height =
-        metrics.tightBoundingRect(widest_badge_text()).height();
-    const auto width = text_width + 2 * kBadgeHorizontalPadding * scale;
-    const auto height = text_height + 2 * kBadgeVerticalPadding * scale;
-    const auto logo_size = kLogoSize * scale;
-    const auto x = static_cast<int>(
-        std::lround(logo_size * kBadgeLogoHorizontalOverlap));
-    // Bottom-anchored against the fixed logo_size floor (never against the
-    // badge's own height growing the canvas -- see nonzero_canvas_size),
-    // with exactly one kCanvasBottomMargin-px clear row beneath it, so
-    // "99+" gets the most vertical room real font metrics allow inside the
-    // mask's own fixed 18/36 height (see nonzero_canvas_size; always at or
-    // under the platform tray-icon cap) without clipping.
-    const auto y = logo_size - height - kCanvasBottomMargin * scale;
-    return QRect(x, y, width, height);
+    const auto geometry = base_geometry();
+    return QRect(geometry.badge_x * scale, geometry.badge_y * scale,
+        geometry.badge_width * scale, geometry.badge_height * scale);
 }
 
 QImage DesktopStatusItem::render_mask(
@@ -220,20 +359,32 @@ QImage DesktopStatusItem::render_mask(
     if (scale != 1 && scale != 2) {
         return {};
     }
-    const auto logo = QImage(template_resource(scale));
     if (exact_count == 0) {
-        return logo;
+        return QImage(template_resource(scale));
     }
-    if (logo.isNull()) {
+
+    const auto source = source_ink_2x();
+    if (source.isNull()) {
         return {};
     }
+    const auto crop = ink_bounds(source, kMeaningfulAlphaThreshold);
+    if (crop.isEmpty()) {
+        return {};
+    }
+    const auto source_alpha = alpha_channel(source);
 
     auto result = QImage(nonzero_canvas_size(scale), QImage::Format_Alpha8);
     result.fill(0);
     auto painter = QPainter(&result);
     painter.setRenderHint(QPainter::Antialiasing);
     painter.setRenderHint(QPainter::TextAntialiasing);
-    painter.drawImage(QPoint(0, 0), alpha_channel(logo));
+    painter.setRenderHint(QPainter::SmoothPixmapTransform);
+
+    // The enlarged logo: the real resource's own meaningful-alpha ink,
+    // cropped and scaled (never distorted -- unread_logo_rect preserves the
+    // crop's own aspect ratio) to fill most of the fixed canvas height.
+    const auto logo = unread_logo_rect(scale);
+    painter.drawImage(QRectF(logo), source_alpha, QRectF(crop));
 
     const auto capsule = QRectF(unread_badge_rect(scale));
     const auto template_brush = painter.pen().brush();
