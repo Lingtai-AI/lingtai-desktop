@@ -11,28 +11,35 @@
 #include <QtWidgets/QMenu>
 #include <QtWidgets/QSystemTrayIcon>
 
+#include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace lingtai::desktop {
 namespace {
 
 constexpr auto kStatusItemHeight = 18;
-// Widened from the logo-only 18px to hold a lower-right badge sized for
-// "99+" without crowding the logo; kept identical across every nonzero
-// bucket so the status item never changes width as counts change.
-constexpr auto kUnreadStatusItemWidth = 54;
-// DemiBold pixel size for the badge label at 1x. Materially larger than the
-// prior 9px: ~28% taller ink and ~21% wider advance for "99+" (measured via
-// QFontMetrics), while still leaving room to anchor the badge low-right
-// within the 18px-tall status item.
-constexpr auto kBadgeFontPixelSize = 11;
+// The unread logo is drawn at its own native square footprint, unscaled and
+// unmoved from the zero-state resource; only the overlapping badge grows
+// the canvas beyond it.
+constexpr auto kLogoSize = kStatusItemHeight;
+// The badge's left/top edges land this fraction across the logo's own
+// width/height (measured from the logo's own top-left origin), so the
+// badge always overlaps the logo's lower-right quadrant by construction --
+// Telegram-style, paper-plane-plus-badge -- instead of floating beside it
+// with a gap, for any font metrics the real system produces.
+constexpr auto kBadgeLogoHorizontalOverlap = 0.5;
+constexpr auto kBadgeLogoVerticalOverlap = 0.45;
+// DemiBold pixel size for the badge label at 1x.
+constexpr auto kBadgeFontPixelSize = 12;
 // Explicit padding around the real font-metric text box, at 1x.
 constexpr auto kBadgeHorizontalPadding = 4;
 constexpr auto kBadgeVerticalPadding = 2;
-// Explicit clearance from the canvas edges, at 1x, so the badge reads as a
-// lower-right anchor with margin instead of touching the corner.
-constexpr auto kBadgeRightMargin = 2;
-constexpr auto kBadgeBottomMargin = 1;
+// Explicit clearance from the canvas edges, at 1x, so the badge still reads
+// as inset rather than touching the corner; kept minimal so the combined
+// logo+badge silhouette fills almost the whole canvas.
+constexpr auto kCanvasRightMargin = 2;
+constexpr auto kCanvasBottomMargin = 1;
 // The widest label any bucket can render; sizing the badge for this keeps
 // its rectangle identical across every nonzero bucket.
 [[nodiscard]] QString widest_badge_text() {
@@ -47,6 +54,21 @@ constexpr auto kBadgeBottomMargin = 1;
     font.setPixelSize(kBadgeFontPixelSize * scale);
     font.setWeight(QFont::DemiBold);
     return font;
+}
+
+// The nonzero-count canvas size render_mask allocates: the logo's own
+// square footprint plus the overlapping badge's protrusion (from
+// DesktopStatusItem::unread_badge_rect, the public seam) and a minimal
+// outer margin, so the combined logo+badge silhouette fills almost the
+// whole canvas by construction. Identical across every nonzero bucket
+// because the badge is always sized for the widest label.
+[[nodiscard]] QSize nonzero_canvas_size(int scale) {
+    const auto badge = DesktopStatusItem::unread_badge_rect(scale);
+    const auto logo_size = kLogoSize * scale;
+    const auto width = badge.x() + badge.width() + kCanvasRightMargin * scale;
+    const auto height = std::max(
+        logo_size, badge.y() + badge.height() + kCanvasBottomMargin * scale);
+    return QSize(width, height);
 }
 
 [[nodiscard]] QString template_resource(int scale) {
@@ -166,11 +188,12 @@ QRect DesktopStatusItem::unread_badge_rect(int scale) {
         metrics.tightBoundingRect(widest_badge_text()).height();
     const auto width = text_width + 2 * kBadgeHorizontalPadding * scale;
     const auto height = text_height + 2 * kBadgeVerticalPadding * scale;
-    const auto right = kUnreadStatusItemWidth * scale
-        - kBadgeRightMargin * scale;
-    const auto bottom = kStatusItemHeight * scale
-        - kBadgeBottomMargin * scale;
-    return QRect(right - width, bottom - height, width, height);
+    const auto logo_size = kLogoSize * scale;
+    const auto x = static_cast<int>(
+        std::lround(logo_size * kBadgeLogoHorizontalOverlap));
+    const auto y = static_cast<int>(
+        std::lround(logo_size * kBadgeLogoVerticalOverlap));
+    return QRect(x, y, width, height);
 }
 
 QImage DesktopStatusItem::render_mask(
@@ -187,9 +210,7 @@ QImage DesktopStatusItem::render_mask(
         return {};
     }
 
-    auto result = QImage(
-        QSize(kUnreadStatusItemWidth * scale, kStatusItemHeight * scale),
-        QImage::Format_Alpha8);
+    auto result = QImage(nonzero_canvas_size(scale), QImage::Format_Alpha8);
     result.fill(0);
     auto painter = QPainter(&result);
     painter.setRenderHint(QPainter::Antialiasing);

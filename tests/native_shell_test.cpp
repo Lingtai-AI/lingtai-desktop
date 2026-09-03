@@ -1599,16 +1599,6 @@ void verify_desktop_status_item(const fs::path &sandbox) {
     require(zero_mask_1x == status_icon_1x
             && zero_mask_2x == status_icon_2x,
         "zero rendering must return the byte-resource template images");
-    const auto one_mask_1x = DesktopStatusItem::render_mask(1, 1);
-    const auto one_mask_2x = DesktopStatusItem::render_mask(1, 2);
-    const auto hundred_mask_1x = DesktopStatusItem::render_mask(100, 1);
-    require(one_mask_1x.size() == QSize(54, 18)
-            && one_mask_2x.size() == QSize(108, 36)
-            && hundred_mask_1x.size() == QSize(54, 18)
-            && one_mask_1x.format() == QImage::Format_Alpha8
-            && one_mask_2x.format() == QImage::Format_Alpha8
-            && hundred_mask_1x.format() == QImage::Format_Alpha8,
-        "nonzero status masks must use deterministic 1x/2x alpha-only sizes");
     const auto alpha_at = [](const QImage &image, int x, int y) {
         return image.pixelColor(x, y).alpha();
     };
@@ -1640,85 +1630,169 @@ void verify_desktop_status_item(const fs::path &sandbox) {
         }
         return false;
     };
-    require(row_is_clear(one_mask_1x, 0)
-            && row_is_clear(one_mask_1x, one_mask_1x.height() - 1)
-            && row_is_clear(one_mask_2x, 0)
-            && row_is_clear(one_mask_2x, one_mask_2x.height() - 1)
-            && region_has_ink(one_mask_1x, QRect(1, 1, 16, 16))
-            && one_mask_1x != hundred_mask_1x,
-        "wide status masks must retain clear vertical margins plus a "
-        "present logo and distinct capsule glyphs");
+    const auto opaque_bounds = [&](const QImage &image) {
+        auto min_x = image.width();
+        auto min_y = image.height();
+        auto max_x = -1;
+        auto max_y = -1;
+        for (auto y = 0; y != image.height(); ++y) {
+            for (auto x = 0; x != image.width(); ++x) {
+                if (alpha_at(image, x, y) == 0) {
+                    continue;
+                }
+                min_x = std::min(min_x, x);
+                min_y = std::min(min_y, y);
+                max_x = std::max(max_x, x);
+                max_y = std::max(max_y, y);
+            }
+        }
+        return QRect(QPoint(min_x, min_y), QPoint(max_x, max_y));
+    };
 
-    // Regression: the badge is a lower-right anchor sized from real font
-    // metrics for "99+" (the widest label) plus explicit padding, so it
-    // cannot be squeezed or clipped at 1x or 2x, and must read closer to
-    // the bottom-right corner than the old vertically-centered capsule did.
+    // Regression: for unread > 0 the badge overlays the logo's own
+    // lower-right quadrant (Telegram paper-plane-plus-badge style) instead
+    // of sitting beside it with a gap. The badge is sized from real font
+    // metrics for "99+" (the widest label) plus explicit padding; its
+    // position structurally overlaps the logo's own footprint (never floats
+    // beside it), and the canvas is sized from that badge rect plus a
+    // minimal declared margin so the combined logo+badge silhouette fills
+    // almost the whole canvas by construction rather than floating inside a
+    // mostly-empty one.
     for (const auto scale : std::array{1, 2}) {
+        const auto &resource = scale == 1 ? status_icon_1x : status_icon_2x;
         const auto badge = DesktopStatusItem::unread_badge_rect(scale);
+        const auto canvas = DesktopStatusItem::render_mask(1, scale).size();
         QFont badge_font;
-        badge_font.setPixelSize(11 * scale);
+        badge_font.setPixelSize(12 * scale);
         badge_font.setWeight(QFont::DemiBold);
         const QFontMetrics metrics(badge_font);
         const auto text_width =
             metrics.horizontalAdvance(QStringLiteral("99+"));
         const auto text_height =
             metrics.tightBoundingRect(QStringLiteral("99+")).height();
-        const auto canvas_width = 54 * scale;
-        const auto canvas_height = 18 * scale;
-        const auto logo_width = 18 * scale;
-        const auto right_margin = canvas_width - (badge.x() + badge.width());
-        const auto bottom_margin =
-            canvas_height - (badge.y() + badge.height());
+        const auto logo_size = 18 * scale;
+        // QRect::right()/bottom() are the inclusive last pixel (x+width-1),
+        // not the exclusive far edge; use the exclusive far edge throughout
+        // so canvas/margin arithmetic matches render_mask's own
+        // x()+width() / y()+height() convention exactly.
+        const auto badge_far_x = badge.x() + badge.width();
+        const auto badge_far_y = badge.y() + badge.height();
+
+        require(canvas == QSize(
+                    badge.x() + badge.width() + 2 * scale,
+                    std::max(logo_size,
+                        badge.y() + badge.height() + 1 * scale)),
+            "the rendered nonzero canvas must be sized from the real badge "
+            "rect plus a minimal declared margin, not an independent fixed "
+            "guess");
         require(badge.width() >= text_width + 2 * 4 * scale
                 && badge.height() >= text_height + 2 * 2 * scale,
             "the badge rectangle must fit \"99+\" with nontrivial explicit "
-            "padding on every side at both scales");
-        require(badge.x() >= logo_width
-                && right_margin >= 1 * scale
-                && bottom_margin >= 0
-                && bottom_margin <= 2 * scale
-                && bottom_margin < badge.y(),
-            "the badge must sit clear of the logo and the canvas edges, "
-            "anchored toward the lower-right corner");
+            "padding on every side at both scales, so it is never clipped");
+        require(badge.x() > 0 && badge.x() < logo_size
+                && badge.y() >= 0 && badge.y() < logo_size,
+            "the badge must start inside the logo's own footprint -- a "
+            "genuine overlap -- rather than beside it with a wide gap");
+        require(badge_far_x > logo_size && badge_far_y > logo_size,
+            "the badge must extend past the logo's lower-right corner, "
+            "reading as an overlaid corner badge rather than an inset one");
+        const auto right_margin = canvas.width() - badge_far_x;
+        const auto bottom_margin = canvas.height() - badge_far_y;
+        require(right_margin >= 0 && right_margin <= 2 * scale
+                && bottom_margin >= 0 && bottom_margin <= 1 * scale,
+            "the outer margin beyond the badge must stay minimal so the "
+            "combined logo+badge union fills almost the whole canvas");
 
-        for (const auto exact : std::array<std::size_t, 5>{1, 9, 10, 99, 100}) {
+        // Everywhere in the logo's own footprint outside the badge rect
+        // (expanded by a small clearance for rounded-rect antialiasing
+        // bleed) must render byte-identical to the unread=0 resource: the
+        // logo is drawn unscaled and unmoved, and only the overlapping
+        // badge touches pixels inside its own rectangle. Because the badge
+        // is anchored at half the logo's width/height, this untouched
+        // region is the logo's whole left column (every row, not just the
+        // rows above the badge) plus its whole top band -- an L-shaped
+        // majority of the glyph's own area -- proving the logo keeps a
+        // substantial, unobscured upper-left core and stays recognizable
+        // rather than being replaced or reduced to a sliver.
+        const auto exclusion = badge.adjusted(
+            -2 * scale, -2 * scale, 2 * scale, 2 * scale);
+        auto excluded_area = 0;
+        auto logo_area = 0;
+        for (auto y = 0; y != logo_size; ++y) {
+            for (auto x = 0; x != logo_size; ++x) {
+                ++logo_area;
+                if (exclusion.contains(x, y)) {
+                    ++excluded_area;
+                }
+            }
+        }
+        require(excluded_area * 2 < logo_area,
+            "the badge (plus antialiasing clearance) must not obscure "
+            "more than half of the logo's own footprint area");
+
+        for (const auto exact : std::array<std::size_t, 4>{1, 10, 99, 100}) {
             const auto mask = DesktopStatusItem::render_mask(exact, scale);
-            require(mask.size()
-                        == QSize(54 * scale, 18 * scale)
-                    && mask.format() == QImage::Format_Alpha8
-                    && row_is_clear(mask, 0)
-                    && row_is_clear(mask, mask.height() - 1),
+            require(mask.size() == canvas
+                    && mask.format() == QImage::Format_Alpha8,
                 "every representative count bucket must keep the "
-                "deterministic canvas size and clear top/bottom margins");
+                "deterministic, formula-derived canvas size");
+            require(row_is_clear(mask, 0)
+                    && row_is_clear(mask, mask.height() - 1),
+                "the canvas must keep a clear top row (the logo resource's "
+                "own transparent border) and a clear bottom row (the "
+                "declared minimal bottom margin)");
+
+            for (auto y = 0; y != logo_size; ++y) {
+                for (auto x = 0; x != logo_size; ++x) {
+                    if (exclusion.contains(x, y)) {
+                        continue;
+                    }
+                    require(alpha_at(mask, x, y)
+                                == resource.pixelColor(x, y).alpha(),
+                        "the logo's unobscured upper-left core must render "
+                        "byte-identical to the unread=0 resource at every "
+                        "pixel, proving the logo stays recognizable and "
+                        "unscaled outside the badge's own rectangle");
+                }
+            }
+
             require(region_has_ink(mask, badge.adjusted(1, 1, -1, -1)),
                 "the badge capsule must paint ink inside its declared "
-                "lower-right rectangle");
-            require(!region_has_ink(mask,
-                    QRect(badge.x() + badge.width(), 0,
-                        mask.width() - (badge.x() + badge.width()),
-                        mask.height())),
-                "no ink may bleed past the badge's right edge toward the "
-                "canvas edge");
-            require(!region_has_ink(mask,
-                    QRect(badge.x(), badge.y() + badge.height(),
-                        badge.width(),
-                        mask.height() - (badge.y() + badge.height()))),
-                "no ink may bleed past the badge's bottom edge toward the "
-                "canvas edge");
-            require(region_has_ink(mask,
-                    QRect(scale, scale, 16 * scale, 16 * scale)),
-                "the logo region must remain present alongside every "
-                "nonzero badge");
+                "overlapping rectangle");
             require(region_has_clear(mask,
                     badge.adjusted(2 * scale, 2 * scale,
                         -2 * scale, -2 * scale)),
                 "the glyph cutout must remain inside the capsule interior "
                 "without being fully painted over");
+            require(!region_has_ink(mask,
+                    QRect(badge_far_x, 0,
+                        mask.width() - badge_far_x, mask.height())),
+                "no ink may bleed past the badge's right edge toward the "
+                "canvas edge");
+            require(!region_has_ink(mask,
+                    QRect(0, badge_far_y,
+                        mask.width(), mask.height() - badge_far_y)),
+                "no ink may bleed past the badge's bottom edge toward the "
+                "canvas edge");
+
+            const auto bounds = opaque_bounds(mask);
+            require(bounds.left() <= 3 * scale
+                    && bounds.top() <= 3 * scale
+                    && bounds.right() >= canvas.width() - 1 - 3 * scale
+                    && bounds.bottom() >= canvas.height() - 1 - 3 * scale,
+                "the combined logo+badge opaque bounds must nearly fill "
+                "the fixed compact canvas on every side, not float inside "
+                "a mostly-empty canvas");
         }
+
         require(DesktopStatusItem::render_mask(1, scale)
+                    != DesktopStatusItem::render_mask(10, scale)
+                && DesktopStatusItem::render_mask(10, scale)
+                    != DesktopStatusItem::render_mask(99, scale)
+                && DesktopStatusItem::render_mask(99, scale)
                     != DesktopStatusItem::render_mask(100, scale),
-            "distinct buckets must still render distinct glyph cutouts "
-            "at both scales");
+            "distinct buckets (1/10/99/100) must render distinct glyph "
+            "cutouts at both scales");
     }
 
     auto &primary = host.primary();
