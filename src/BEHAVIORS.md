@@ -28,17 +28,21 @@ its code.
   LingTai template resources. With unread it uses a deterministic template
   mask pinned to that same 18/36 logical/Retina height (never taller, so the
   platform tray plugin's status-item pixmap cap always selects it unscaled
-  instead of smooth-downscaling it) and a compact width sized from real font
-  metrics for the widest label, containing the logo's own meaningful-alpha
-  ink cropped from the template resource and enlarged (never distorted) to
-  fill most of that fixed height, plus a count badge, sized from a real,
-  genuinely legible font (never shrunk below a minimum readable pixel size
-  to force a tighter width) within a modest tolerance of the enlarged
-  logo's own width, deeply overlapping its lower-right region (beginning
-  well inside the logo's own width, extending only modestly past its
-  right/bottom edges) so `99+` cannot be squeezed or clipped; counts cap
-  visually at `99+`, while the tooltip retains the exact total and unique
-  open-Project count.
+  instead of smooth-downscaling it) and a compact width fixed independent of
+  which real font family the running platform resolves an unstyled font to
+  (never derived from live font metrics, so the declared geometry cannot
+  drift with the platform's own font-fallback resolution), containing the
+  logo's own meaningful-alpha ink cropped from the template resource and
+  enlarged (never distorted) to fill most of that fixed height, plus a count
+  badge, sized from a real, genuinely legible font (never shrunk below a
+  minimum readable pixel size to force a tighter width) within a modest
+  tolerance of the enlarged logo's own width, deeply overlapping its
+  lower-right region (beginning well inside the logo's own width, extending
+  only modestly past its right/bottom edges) so `99+` cannot be squeezed or
+  clipped; if a platform's own font metrics for the label would overflow the
+  fixed badge envelope, the glyph is condensed horizontally (never widened,
+  never shrunk in height) to stay inside it. Counts cap visually at `99+`,
+  while the tooltip retains the exact total and unique open-Project count.
 - Application composition initializes the pinned toolkit's emoji runtime once,
   after widget styles and before the first composer is constructed. Every
   simultaneous or later `NativeShell` under that `QApplication` reuses it;

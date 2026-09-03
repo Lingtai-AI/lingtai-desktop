@@ -33,10 +33,13 @@ constexpr auto kLogoSize = kStatusItemHeight;
 // badge cut further into it. Repair 4 crops the resource's own meaningful-
 // alpha ink and re-scales it to fill most of the fixed 18/36 height, then
 // sizes/positions a taller, rounder badge relative to that enlarged (not
-// nominal) logo footprint. All geometry below is derived once at 1x from
-// the real cropped-ink aspect ratio and real QFontMetrics, then doubled for
-// 2x, so the two scales agree by construction (see the scale-consistency
-// regression in tests/native_shell_test.cpp).
+// nominal) logo footprint. Geometry below is derived once at 1x, then
+// doubled for 2x, so the two scales agree by construction (see the
+// scale-consistency regression in tests/native_shell_test.cpp): the logo's
+// own width comes from the real cropped-ink aspect ratio (see
+// logo_ink_width_base() below), while the badge's own width/height are a
+// fixed envelope, not derived from QFontMetrics at all -- see the repair 5
+// correction below kCanvasRightMarginBase for why.
 
 // Alpha at/above this level is "meaningful" ink for measuring and cropping
 // the logo: low enough to keep the glyph's real silhouette (not just its
@@ -70,14 +73,17 @@ constexpr auto kMinLegibleFontPixelSize = 11;
 
 // The badge's left edge lands this fraction into the *enlarged* logo's own
 // width (not the nominal 18px box). Repair 4 correction: a genuinely
-// legible badge (see kMinLegibleFontPixelSize above) is real-font-metrics
-// wide rather than pinned to the logo's own width, so holding repair 4's
-// original 0.23 offset here would push the badge's own right edge far past
-// a modest protrusion of the enlarged logo. This smaller offset still reads
-// as a deep, deliberate overlap into the logo's own left portion (not
-// repair 3's shallow 71%-in contact-only touch), while leaving enough
-// budget for the wider, legible badge's own protrusion to stay modest (see
-// the deep-overlap regression in tests/native_shell_test.cpp).
+// legible badge (see kMinLegibleFontPixelSize above) was real-font-metrics
+// wide when this ratio was chosen (repair 5 later fixed that width at the
+// same value as a constant envelope, see kBadgeWidthBase below -- this
+// ratio's own rationale is unaffected) rather than pinned to the logo's
+// own width, so holding repair 4's original 0.23 offset here would push
+// the badge's own right edge far past a modest protrusion of the enlarged
+// logo. This smaller offset still reads as a deep, deliberate overlap into
+// the logo's own left portion (not repair 3's shallow 71%-in contact-only
+// touch), while leaving enough budget for the wider, legible badge's own
+// protrusion to stay modest (see the deep-overlap regression in
+// tests/native_shell_test.cpp).
 constexpr double kBadgeLogoOverlapRatio = 0.10;
 
 // How far the badge's bottom edge extends past the enlarged logo's own
@@ -86,20 +92,40 @@ constexpr double kBadgeLogoOverlapRatio = 0.10;
 // margin row beneath it.
 constexpr auto kBadgeBottomProtrusionBase = 1;
 
-// Minimum clearance, at 1x, between the real font-metric text box and the
-// badge's own edges on every side, so the label is never clipped and the
-// padding is always nontrivial.
+// Minimum clearance, at 1x, on every side between the badge's own edges
+// and the label drawn inside it: used both as fixed inset margin when
+// render_mask() decides whether/how much to horizontally condense the
+// label to fit the fixed badge envelope (see base_geometry() and
+// render_mask() below), so the label is never clipped and the padding is
+// always nontrivial.
 constexpr auto kMinBadgePaddingBase = 1;
 
 // Explicit clearance from the canvas's own right edge, at 1x, so the badge
 // still reads as inset rather than touching the corner.
 constexpr auto kCanvasRightMarginBase = 2;
 
-// The widest label any bucket can render; sizing the badge for this keeps
-// its rectangle identical across every nonzero bucket.
-[[nodiscard]] QString widest_badge_text() {
-    return QStringLiteral("99+");
-}
+// Repair 5 correction (parent-accepted ab37d0a's own latent fragility,
+// diagnosed via this machine's offscreen QPA platform): badge geometry used
+// to be derived from QFontMetrics of an unstyled QFont() at paint time --
+// but which real font family that resolves to is QPA-plugin-dependent (the
+// real windowed platform's own system font in the normal GUI case, a
+// generic "Sans Serif" fallback under the offscreen QPA plugin), and the
+// two disagree on "99+"'s own horizontal advance by a single pixel. That
+// 1px metric drift alone was enough to push the badge's aspect ratio
+// (badge_width/badge_height) across the accepted [1.20,2.20] contract on
+// one platform but not the other -- the same product bytes, the same font
+// *size* and weight, produced two different accepted/rejected verdicts
+// depending only on which QPA plugin resolved the font family. The fix:
+// the badge's own width and height are fixed constants, computed with zero
+// QFontMetrics calls, so they cannot vary with the platform's font-
+// fallback resolution at all. The values below are exactly ab37d0a's own
+// already-reviewed windowed-platform geometry (badge 24x11 at 1x, aspect
+// 2.1818, width ratio 1.333 -- both comfortably inside every existing
+// gate), so this is a determinism fix, not a redesign: the normal GUI
+// platform's rendered geometry is unchanged, and every other platform now
+// matches it exactly instead of drifting.
+constexpr auto kBadgeWidthBase = 24;
+constexpr auto kBadgeHeightBase = 11;
 
 [[nodiscard]] QString template_resource(int scale) {
     return scale == 1
@@ -164,58 +190,6 @@ constexpr auto kCanvasRightMarginBase = 2;
         kLogoInkHeightBase * crop.width() / static_cast<double>(crop.height())));
 }
 
-// Largest real DemiBold pixel size, at or above the legibility floor above,
-// whose own natural "99+" metrics (horizontal advance and tight bounding
-// height, each plus kMinBadgePaddingBase clearance) still produce a badge
-// box smaller in area than the enlarged logo's own footprint -- keeping the
-// logo spatially primary (see the footprint-primacy hierarchy gate) -- so
-// the font is the largest genuinely legible size the current logo crop
-// actually affords, not a hardcoded constant that could go stale if the
-// resource ink changes. Falls back to the floor itself if even that would
-// not fit (this project's own resource crop always accepts it in practice).
-[[nodiscard]] int badge_font_pixel_size_base(int logo_area) {
-    constexpr auto kMaxCandidatePixelSize = 16;
-    for (auto px = kMaxCandidatePixelSize; px > kMinLegibleFontPixelSize;
-            --px) {
-        auto font = QFont();
-        font.setPixelSize(px);
-        font.setWeight(QFont::DemiBold);
-        const auto metrics = QFontMetrics(font);
-        const auto width =
-            metrics.horizontalAdvance(widest_badge_text())
-                + 2 * kMinBadgePaddingBase;
-        const auto height =
-            metrics.tightBoundingRect(widest_badge_text()).height()
-                + 2 * kMinBadgePaddingBase;
-        if (width * height < logo_area) {
-            return px;
-        }
-    }
-    return kMinLegibleFontPixelSize;
-}
-
-// The real, undistorted DemiBold metrics of the widest label at the chosen
-// legible pixel size, plus kMinBadgePaddingBase clearance on every side --
-// the badge's own width and height, honestly derived from the exact font it
-// will be painted with rather than pinned to the logo's own nominal width.
-struct BadgeBoxBase {
-    int width;
-    int height;
-};
-
-[[nodiscard]] BadgeBoxBase badge_box_base(int font_pixel_size) {
-    auto font = QFont();
-    font.setPixelSize(font_pixel_size);
-    font.setWeight(QFont::DemiBold);
-    const auto metrics = QFontMetrics(font);
-    BadgeBoxBase box{};
-    box.width = metrics.horizontalAdvance(widest_badge_text())
-        + 2 * kMinBadgePaddingBase;
-    box.height = metrics.tightBoundingRect(widest_badge_text()).height()
-        + 2 * kMinBadgePaddingBase;
-    return box;
-}
-
 struct BaseGeometry {
     int logo_width;
     int logo_height;
@@ -227,23 +201,24 @@ struct BaseGeometry {
 };
 
 // Every 1x geometry fact this file needs, computed once from the real
-// resource ink and real font metrics. 2x geometry is this struct's values
-// doubled exactly (see unread_logo_rect / unread_badge_rect / badge_font),
-// so the two scales agree by construction rather than by two independent,
-// potentially-drifting roundings.
+// resource ink and the fixed badge envelope above -- deliberately with zero
+// QFontMetrics calls, so nothing here can vary with which font family the
+// platform's QPA plugin resolves an unstyled QFont() to. 2x geometry is
+// this struct's values doubled exactly (see unread_logo_rect /
+// unread_badge_rect / badge_font), so the two scales agree by construction
+// rather than by two independent, potentially-drifting roundings.
 [[nodiscard]] BaseGeometry base_geometry() {
     const auto crop = source_ink_crop();
     BaseGeometry geometry{};
     geometry.logo_height = kLogoInkHeightBase;
     geometry.logo_width = logo_ink_width_base(crop);
-    const auto logo_area = geometry.logo_width * geometry.logo_height;
-    geometry.font_pixel_size = badge_font_pixel_size_base(logo_area);
-    const auto box = badge_box_base(geometry.font_pixel_size);
+    geometry.font_pixel_size = kMinLegibleFontPixelSize;
     // The badge is never narrower than the enlarged logo itself (it must
     // still read as covering the logo's own width, not a slim tag beside
-    // it), but a genuinely legible font's own real metrics may need more.
-    geometry.badge_width = std::max(box.width, geometry.logo_width);
-    geometry.badge_height = box.height;
+    // it); the fixed envelope already exceeds the logo's own width in
+    // practice, but this keeps that invariant explicit rather than assumed.
+    geometry.badge_width = std::max(kBadgeWidthBase, geometry.logo_width);
+    geometry.badge_height = kBadgeHeightBase;
     geometry.badge_x = static_cast<int>(
         std::lround(kBadgeLogoOverlapRatio * geometry.logo_width));
     const auto badge_far_y = geometry.logo_height + kBadgeBottomProtrusionBase;
@@ -251,9 +226,13 @@ struct BaseGeometry {
     return geometry;
 }
 
-// Shared by both the sizing math (`unread_badge_rect`) and the paint call
-// (`render_mask`), so the rectangle is always sized from the exact font it
-// is drawn with, not a coincidentally-matching duplicate.
+// Paint-only: used by `render_mask` both to draw the label and to measure
+// whether it needs horizontal condensing to fit the badge's own declared
+// interior (see the bounded-horizontal-fitting comment in `render_mask`
+// below). The declared badge rectangle (`unread_badge_rect` /
+// `base_geometry`) does not call this and must stay independent of
+// whatever real font family this resolves to on a given platform -- see
+// the repair 5 correction on kBadgeWidthBase/kBadgeHeightBase above.
 [[nodiscard]] QFont badge_font(int scale) {
     auto font = QFont();
     font.setPixelSize(base_geometry().font_pixel_size * scale);
@@ -266,7 +245,12 @@ struct BaseGeometry {
 // kLogoSize) and wide enough for the badge's own horizontal protrusion
 // (from DesktopStatusItem::unread_badge_rect, the public seam) plus a
 // minimal outer right margin. Identical across every nonzero bucket
-// because the badge is always sized for the widest label.
+// because the badge is a fixed envelope (see kBadgeWidthBase/
+// kBadgeHeightBase above), selected once to fit the widest label ("99+")
+// at the accepted geometry; any label that would overflow it at paint
+// time is condensed horizontally to fit instead of changing the
+// rectangle -- see the bounded-horizontal-fitting comment in
+// `render_mask` below.
 [[nodiscard]] QSize nonzero_canvas_size(int scale) {
     const auto badge = DesktopStatusItem::unread_badge_rect(scale);
     const auto width =
@@ -421,12 +405,38 @@ QImage DesktopStatusItem::render_mask(
     painter.drawRoundedRect(
         capsule, capsule.height() / 2.0, capsule.height() / 2.0);
 
-    painter.setFont(badge_font(scale));
+    const auto text = display_count_text(exact_count);
+    const auto font = badge_font(scale);
+    painter.setFont(font);
     painter.setCompositionMode(QPainter::CompositionMode_Clear);
     painter.setPen(QPen());
     painter.setBrush(Qt::NoBrush);
-    painter.drawText(capsule, Qt::AlignCenter,
-        display_count_text(exact_count));
+
+    // Bounded horizontal fitting: the badge's own width is now a fixed
+    // constant (kBadgeWidthBase), never derived from this font's own
+    // metrics (see base_geometry() above), so whichever real font family
+    // the platform's QPA plugin resolves this unstyled QFont() to, its
+    // natural glyph advance for this label may not match the advance the
+    // envelope was calibrated against. Never widen -- a natural advance
+    // that already fits (the normal GUI platform's own current rendering)
+    // is left untouched -- only ever condense, and only just enough to
+    // keep the glyph inside the fixed envelope's own interior on every
+    // platform, so the badge rectangle itself never has to vary to stay
+    // legible.
+    const auto interior_width =
+        capsule.width() - 2.0 * kMinBadgePaddingBase * scale;
+    const auto natural_width =
+        static_cast<double>(QFontMetrics(font).horizontalAdvance(text));
+    painter.save();
+    if (natural_width > interior_width && natural_width > 0.0) {
+        const auto scale_x = interior_width / natural_width;
+        const auto center = capsule.center();
+        painter.translate(center);
+        painter.scale(scale_x, 1.0);
+        painter.translate(-center);
+    }
+    painter.drawText(capsule, Qt::AlignCenter, text);
+    painter.restore();
     painter.end();
     return result;
 }

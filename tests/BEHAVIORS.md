@@ -257,7 +257,14 @@ Qt plugin path set and an 8 s watchdog.
   substantial strongly-cleared pixel area across multiple rows/columns (not
   a single low-alpha fringe pixel) for every displayed bucket at both
   scales, `99+` display capping, exact aggregate tooltips, and
-  unchanged-bucket icon reuse. The separate status-item
+  unchanged-bucket icon reuse. A dedicated regression additionally proves
+  the declared badge/logo/canvas rectangles are invariant to
+  `QApplication::setFont()` across several deliberately different real font
+  families, so the declared geometry can never again silently depend on
+  which real font family the running platform resolves an unstyled font to
+  (the badge's own width/height are fixed constants; only the glyph itself
+  may be condensed horizontally, never widened or shrunk in height, to stay
+  inside the fixed envelope on every platform). The separate status-item
   Quit and final-window-close journeys each run a bounded Qt event loop and
   prove exit code 0 before their failure watchdogs can fire.
 - The focused `native_shell_unread` journey uses two canonical Projects and

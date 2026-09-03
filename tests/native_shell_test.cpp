@@ -2157,6 +2157,41 @@ void verify_desktop_status_item(const fs::path &sandbox) {
         "tolerance, so a green 1x legibility result cannot be hiding a "
         "weak Retina cutout or vice versa");
 
+    // Repair 5 regression (parent-accepted ab37d0a's own latent QPA/font-
+    // metric fragility): an unstyled QFont() resolves through
+    // QApplication::font(), so whichever real font family the platform's
+    // font-fallback machinery happens to pick for it could silently move
+    // badge/logo/canvas geometry if that geometry is ever derived from
+    // QFontMetrics again -- exactly what let Cocoa's real system font and
+    // the offscreen QPA's generic "Sans Serif" fallback disagree on the
+    // declared badge rect by a single advance pixel, crossing the accepted
+    // badge-aspect gate on one platform but not the other. This proves
+    // invariance directly and portably -- forcing three deliberately
+    // different real font families through QApplication::setFont() and
+    // requiring the declared geometry seams to report byte-identical
+    // rectangles for all of them -- rather than depending on which QPA
+    // plugin happens to be running this test.
+    {
+        const auto baseline_font = QApplication::font();
+        const auto baseline_badge = DesktopStatusItem::unread_badge_rect(1);
+        const auto baseline_logo = DesktopStatusItem::unread_logo_rect(1);
+        const auto baseline_canvas =
+            DesktopStatusItem::render_mask(1, 1).size();
+        for (const auto &family : {QStringLiteral("Courier New"),
+                QStringLiteral("Helvetica"), QStringLiteral("Georgia")}) {
+            QApplication::setFont(QFont(family));
+            require(DesktopStatusItem::unread_badge_rect(1) == baseline_badge
+                    && DesktopStatusItem::unread_logo_rect(1) == baseline_logo
+                    && DesktopStatusItem::render_mask(1, 1).size()
+                        == baseline_canvas,
+                "badge/logo/canvas geometry must be invariant to "
+                "QApplication::setFont(), not silently drift with "
+                "whichever font family the platform resolves an unstyled "
+                "QFont() to -- family=" + family.toStdString());
+        }
+        QApplication::setFont(baseline_font);
+    }
+
     auto &primary = host.primary();
     require(primary.window().isHidden(),
         "the fallback selection fixture must begin with no shown shell");
