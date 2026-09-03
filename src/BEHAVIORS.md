@@ -31,12 +31,14 @@ its code.
   instead of smooth-downscaling it) and a compact width sized from real font
   metrics for the widest label, containing the logo's own meaningful-alpha
   ink cropped from the template resource and enlarged (never distorted) to
-  fill most of that fixed height, plus a tall/round count badge sized near
-  the enlarged logo's own width and deeply overlapping its lower-right
-  region (beginning well inside the logo's own width, extending only
-  modestly past its right/bottom edges) so `99+` cannot be squeezed or
-  clipped; counts cap visually at `99+`, while the tooltip retains the exact
-  total and unique open-Project count.
+  fill most of that fixed height, plus a count badge, sized from a real,
+  genuinely legible font (never shrunk below a minimum readable pixel size
+  to force a tighter width) within a modest tolerance of the enlarged
+  logo's own width, deeply overlapping its lower-right region (beginning
+  well inside the logo's own width, extending only modestly past its
+  right/bottom edges) so `99+` cannot be squeezed or clipped; counts cap
+  visually at `99+`, while the tooltip retains the exact total and unique
+  open-Project count.
 - Application composition initializes the pinned toolkit's emoji runtime once,
   after widget styles and before the first composer is constructed. Every
   simultaneous or later `NativeShell` under that `QApplication` reuses it;

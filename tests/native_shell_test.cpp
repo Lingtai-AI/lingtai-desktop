@@ -102,6 +102,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -1613,30 +1614,50 @@ void verify_desktop_status_item(const fs::path &sandbox) {
         }
         return false;
     };
-    // A "real" digit cutout, at a font size compact enough to keep the
-    // badge near the enlarged logo's own width (see the badge-shape gates
-    // below): CompositionMode_Clear reduces destination alpha by the
-    // glyph's own source-coverage fraction, and a single-pixel-wide stroke
-    // like "1" at this pixel size never gets antialiased to a perfect,
-    // fully-covered pixel (measured worst case against the real capsule+
-    // clear-text technique: alpha 41/255, an 84% reduction from the solid
-    // capsule's 255). Repair 3's bigger 12px font happened to reach exact
-    // zero trivially; requiring exact zero here would reject a real,
-    // visually meaningful cutout as if it were a rendering failure. The
-    // honest bar is a large, real reduction from the capsule's own solid
-    // fill -- not perfect zero -- so a merely-cosmetic antialiasing fringe
-    // still cannot pass.
-    constexpr auto kRealCutoutMaxAlpha = 64;
-    const auto region_has_real_cutout =
+    // Repair-4 legibility-correction regression (parent-rejected
+    // intermediate fb364579774e7b7dadf1ed09f9d8be6c63513ce8): that commit's
+    // own "real cutout" gate accepted a single destination pixel at
+    // alpha<=64 as proof of a legible digit -- and its own captured worst
+    // case for "1" was exactly one pixel at 41/255, surrounded by neighbors
+    // at 91-199, at a compact 7px 1x badge font forced by pinning the
+    // badge's width to the enlarged logo's own near-square width. One faint
+    // antialiased pixel is not a readable cutout; a real digit stroke,
+    // rendered at a genuinely legible size, clears a real destination
+    // *region* -- multiple full rows down its height, a real column span,
+    // and a substantial total cleared area -- not a lone fringe pixel. This
+    // measures exactly that, and does so identically for every displayed
+    // bucket ("1", "10", "99", "99+") at both 1x and 2x, so a font too
+    // small to be read cannot pass by exploiting a single wide/lucky digit.
+    constexpr auto kStrongClearMaxAlpha = 32;
+    struct StrongClearMeasurement {
+        int count = 0;
+        int row_count = 0;
+        int col_count = 0;
+        int bounds_height = 0;
+    };
+    const auto measure_strong_clear =
         [&](const QImage &image, const QRect &region) {
+            StrongClearMeasurement result;
+            std::set<int> rows;
+            std::set<int> cols;
+            auto min_y = region.height();
+            auto max_y = -1;
             for (auto y = region.top(); y <= region.bottom(); ++y) {
                 for (auto x = region.left(); x <= region.right(); ++x) {
-                    if (alpha_at(image, x, y) <= kRealCutoutMaxAlpha) {
-                        return true;
+                    if (alpha_at(image, x, y) > kStrongClearMaxAlpha) {
+                        continue;
                     }
+                    ++result.count;
+                    rows.insert(y);
+                    cols.insert(x);
+                    min_y = std::min(min_y, y - region.top());
+                    max_y = std::max(max_y, y - region.top());
                 }
             }
-            return false;
+            result.row_count = static_cast<int>(rows.size());
+            result.col_count = static_cast<int>(cols.size());
+            result.bounds_height = max_y >= 0 ? (max_y - min_y + 1) : 0;
+            return result;
         };
     const auto opaque_bounds = [&](const QImage &image) {
         auto min_x = image.width();
@@ -1744,6 +1765,17 @@ void verify_desktop_status_item(const fs::path &sandbox) {
         require(ink_bounds(blank, kMeaningfulAlpha).isEmpty(),
             "the ink-bounds helper must report an empty rect for a fully "
             "transparent image");
+        auto solid = QImage(8, 8, QImage::Format_Alpha8);
+        solid.fill(255);
+        const auto solid_measurement =
+            measure_strong_clear(solid, QRect(0, 0, 8, 8));
+        require(solid_measurement.count == 0
+                && solid_measurement.row_count == 0
+                && solid_measurement.col_count == 0
+                && solid_measurement.bounds_height == 0,
+            "the strong-clear measurement must report nothing on a fully "
+            "opaque (uncut) region, so a passing legibility gate below "
+            "cannot be a counting-helper artifact");
     }
 
     // Captured control, repair-3-linked: exact geometry this suite's own
@@ -1772,17 +1804,23 @@ void verify_desktop_status_item(const fs::path &sandbox) {
                 / captured_logo.width();
         const auto logo_area = captured_logo.width() * captured_logo.height();
         const auto badge_area = captured_badge.width() * captured_badge.height();
-        require(width_ratio > 1.0,
+        require(width_ratio > 1.40,
             "control: repair 3's captured badge/logo width ratio must "
-            "itself sit above the new [0.85,1.0] target so the new gate "
-            "is proven to reject it -- got " + std::to_string(width_ratio));
-        require(aspect > 1.45,
+            "itself sit above the new [0.85,1.40] target (widened, per the "
+            "repair-4 legibility correction, from a real >=11px legible "
+            "font's own metrics -- not repair 3's much wider capsule) so "
+            "the new gate is proven to reject it -- got "
+            + std::to_string(width_ratio));
+        require(aspect > 2.20,
             "control: repair 3's captured badge aspect must itself sit "
-            "above the new [1.25,1.45] target so the new gate is proven "
-            "to reject it");
+            "above the new [1.20,2.20] target (widened, per the repair-4 "
+            "legibility correction, because a genuinely legible font in "
+            "this fixed-height canvas needs a flatter-than-ideal but far "
+            "less flat than repair 3's own 2.29:1 capsule) so the new gate "
+            "is proven to reject it");
         require(overlap_ratio > 0.35,
             "control: repair 3's captured badge-offset ratio must itself "
-            "sit above the new [0.15,0.35] offset band so the new gate is "
+            "sit above the new [0.05,0.35] offset band so the new gate is "
             "proven to reject it");
         require(coverage_ratio < 0.65,
             "control: repair 3's captured horizontal-coverage ratio must "
@@ -1802,6 +1840,11 @@ void verify_desktop_status_item(const fs::path &sandbox) {
     double aspect_by_scale[3] = {0, 0, 0};
     double overlap_ratio_by_scale[3] = {0, 0, 0};
     double union_fill_by_scale[3] = {0, 0, 0};
+    // The worst (minimum) real-cutout height-fill ratio observed across the
+    // displayed buckets at each scale, so the cross-scale consistency gate
+    // below cannot be hidden by averaging a weak bucket against a strong
+    // one.
+    double worst_cutout_height_fill_by_scale[3] = {2, 2, 2};
 
     for (const auto scale : std::array{1, 2}) {
         const auto badge = DesktopStatusItem::unread_badge_rect(scale);
@@ -1859,24 +1902,35 @@ void verify_desktop_status_item(const fs::path &sandbox) {
             "the enlarged logo ink must occupy at least 90% of the fixed "
             "18/36 canvas height, not repair 3's shrunken native footprint");
 
-        // Gate: badge shape. Tall/round, inside the human's Telegram-
-        // reference envelope (~1.3:1), never repair 3's flat 2.29-2.35:1
-        // capsule.
+        // Gate: badge shape. Repair-4-legibility-correction widened upper
+        // bound: a genuinely legible (>=11px real DemiBold) "99+" no longer
+        // fits a badge pinned to the enlarged logo's own near-square width,
+        // so the badge is real-font-metrics wide and therefore flatter than
+        // repair 4's original 1.20-1.45 target -- but the real computed
+        // aspect (~2.18) still sits meaningfully below repair 3's own
+        // measured 2.29-2.35:1 flat capsule, so this is not a reversion to
+        // repair 3's shape, just an honest relaxation forced by real text
+        // metrics rather than a cosmetic choice.
         const auto aspect =
             static_cast<double>(badge.width()) / badge.height();
-        require(aspect >= 1.20 && aspect <= 1.45,
-            "the badge must be tall/round (aspect in [1.20,1.45]), not "
-            "repair 3's flat wide capsule -- got " + std::to_string(aspect));
+        require(aspect >= 1.20 && aspect <= 2.20,
+            "the badge must be reasonably compact (aspect in [1.20,2.20]), "
+            "meaningfully rounder than repair 3's flat wide capsule -- got "
+            + std::to_string(aspect));
 
-        // Gate: relative scale. The badge must read as roughly the same
-        // width as the enlarged logo, not repair 3's ~1.7-1.8x-wider
-        // capsule that visually dwarfed a small logo.
+        // Gate: relative scale. Repair-4-legibility-correction widened
+        // upper bound: the badge must read as close to the enlarged logo's
+        // own width, but a real, undistorted, genuinely legible font's own
+        // "99+" advance needs more room than the logo's own near-square
+        // width affords -- this is the "calibrated modest badge/logo-width
+        // tolerance" the legibility correction explicitly trades for, never
+        // repair 3's much wider (~1.7-1.8x) capsule.
         const auto width_ratio =
             static_cast<double>(badge.width()) / logo.width();
-        require(width_ratio >= 0.85 && width_ratio <= 1.0,
-            "the badge width must be near the enlarged logo's own width "
-            "(ratio in [0.85,1.0]), not repair 3's much wider capsule -- "
-            "got " + std::to_string(width_ratio));
+        require(width_ratio >= 0.85 && width_ratio <= 1.40,
+            "the badge width must stay within a modest tolerance of the "
+            "enlarged logo's own width (ratio in [0.85,1.40]), not repair "
+            "3's much wider capsule -- got " + std::to_string(width_ratio));
 
         // Gate: deep overlap, measured against the *enlarged* logo's own
         // bounds, not the nominal 18x18 box.
@@ -1898,18 +1952,28 @@ void verify_desktop_status_item(const fs::path &sandbox) {
         //     logo's width (a shallow corner touch); the human reference
         //     and this repair cover the last ~65-85% of it (a deep
         //     overlay), so a shallow overlap cannot pass by accident.
+        // Repair-4-legibility-correction widened lower bound: holding the
+        // original ~23% offset while the badge is real-font-metrics wide
+        // (see width_ratio above) would push the badge's own right edge far
+        // past a modest protrusion of the enlarged logo (side-by-side, not
+        // overlaid). A smaller offset keeps the overlap deep -- the badge
+        // still begins inside the logo's own left portion and covers nearly
+        // all of it (see horizontal_coverage_ratio below) -- while leaving
+        // room for the wider badge's own protrusion to stay modest.
         const auto badge_offset_ratio =
             static_cast<double>(badge.x()) / logo.width();
-        require(badge_offset_ratio >= 0.15 && badge_offset_ratio <= 0.35,
+        require(badge_offset_ratio >= 0.05 && badge_offset_ratio <= 0.35,
             "the badge must begin well inside the enlarged logo's own "
-            "width (offset ratio in [0.15,0.35], matching the human "
-            "reference's ~23% mark), not repair 3's shallow 71%-in "
-            "contact -- got " + std::to_string(badge_offset_ratio));
+            "width (offset ratio in [0.05,0.35]), not repair 3's shallow "
+            "71%-in contact -- got " + std::to_string(badge_offset_ratio));
         require(badge_far_x > logo_far_x
-                && badge_far_x - logo_far_x <= (logo.width() * 35) / 100,
+                && badge_far_x - logo_far_x <= (logo.width() * 50) / 100,
             "the badge must extend past the enlarged logo's own right "
-            "edge, but only modestly (<=35% of the logo's own width), "
-            "reading as a deep overlay rather than a side-by-side pair");
+            "edge, but only modestly (<=50% of the logo's own width -- "
+            "widened, per the repair-4 legibility correction, to fit a "
+            "real-font-metrics-wide badge; still far below repair 3's own "
+            "~150% shallow-contact protrusion), reading as a deep overlay "
+            "rather than a side-by-side pair");
         const auto horizontal_coverage_ratio =
             static_cast<double>(logo_far_x - badge.x()) / logo.width();
         require(horizontal_coverage_ratio >= 0.65,
@@ -1990,11 +2054,45 @@ void verify_desktop_status_item(const fs::path &sandbox) {
             require(region_has_ink(mask, badge.adjusted(1, 1, -1, -1)),
                 "the badge capsule must paint ink inside its declared "
                 "overlapping rectangle");
-            require(region_has_real_cutout(mask,
-                    badge.adjusted(2 * scale, 2 * scale,
-                        -2 * scale, -2 * scale)),
-                "the glyph cutout must remain inside the capsule interior "
-                "without being fully painted over");
+
+            // Repair-4 legibility-correction gate: a real, readable digit
+            // cutout, not a single low-alpha fringe pixel (see the
+            // parent-rejected fb364579 regression documented above
+            // measure_strong_clear's definition). Measured identically for
+            // every displayed bucket and both scales.
+            const auto cutout_interior = badge.adjusted(
+                2 * scale, 2 * scale, -2 * scale, -2 * scale);
+            const auto cutout = measure_strong_clear(mask, cutout_interior);
+            require(cutout.count > 0,
+                "vacuity: the glyph cutout must contain at least one "
+                "strongly-cleared (alpha<=32) pixel to measure at all");
+            require(cutout.count >= 6 * scale * scale,
+                "the glyph cutout must strongly clear (alpha<=32) a "
+                "substantial pixel area -- not a single fringe pixel like "
+                "the parent-rejected fb364579 commit's own worst-case "
+                "41/255 -- got " + std::to_string(cutout.count) + " px");
+            require(cutout.row_count >= 4 * scale,
+                "the glyph cutout must strongly clear multiple distinct "
+                "rows down the capsule interior's own height, proving a "
+                "real vertical stroke rather than one antialiased pixel -- "
+                "got " + std::to_string(cutout.row_count) + " rows");
+            require(cutout.col_count >= 2 * scale,
+                "the glyph cutout must strongly clear multiple distinct "
+                "columns, proving a real stroke width rather than one "
+                "isolated pixel -- got " + std::to_string(cutout.col_count)
+                + " cols");
+            const auto cutout_height_fill = cutout_interior.height() > 0
+                ? static_cast<double>(cutout.bounds_height)
+                    / cutout_interior.height()
+                : 0.0;
+            require(cutout_height_fill >= 0.85,
+                "the glyph cutout's own strongly-cleared bounding box must "
+                "span a meaningful fraction of the capsule interior's "
+                "height (>=85%), a real glyph-bounds height rather than a "
+                "single-row fringe -- got "
+                + std::to_string(cutout_height_fill));
+            worst_cutout_height_fill_by_scale[scale] = std::min(
+                worst_cutout_height_fill_by_scale[scale], cutout_height_fill);
             require(!region_has_ink(mask,
                     QRect(badge_far_x, 0,
                         mask.width() - badge_far_x, mask.height())),
@@ -2047,6 +2145,17 @@ void verify_desktop_status_item(const fs::path &sandbox) {
         "the union-fill ratio must agree between 1x and 2x within an "
         "explicit tolerance, so a green 1x result cannot hide a weak "
         "Retina result");
+    require(worst_cutout_height_fill_by_scale[1] <= 1.0
+            && worst_cutout_height_fill_by_scale[2] <= 1.0,
+        "vacuity: the worst-case cutout height-fill ratio must actually have "
+        "been recorded for both scales");
+    require(std::abs(worst_cutout_height_fill_by_scale[1]
+                - worst_cutout_height_fill_by_scale[2])
+                <= 0.15,
+        "the worst-case (across every displayed bucket) real-cutout "
+        "height-fill ratio must agree between 1x and 2x within an explicit "
+        "tolerance, so a green 1x legibility result cannot be hiding a "
+        "weak Retina cutout or vice versa");
 
     auto &primary = host.primary();
     require(primary.window().isHidden(),

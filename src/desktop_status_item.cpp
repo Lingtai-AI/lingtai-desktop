@@ -53,36 +53,32 @@ constexpr auto kMeaningfulAlphaThreshold = 128;
 // buy ~1 extra px of width, at the cost of edge-touching ink.
 constexpr auto kLogoInkHeightBase = 17;
 
-// The badge is exactly as wide as the enlarged logo ink -- the top of the
-// human-rejected target's 0.85-1.0 "badge/logo width ratio" envelope. This
-// is also the widest the badge can be while still leaving room, at a real
-// DemiBold pixel size, for a height at or above repair 3's own 14px (see
-// kBadgeAspectRatio below): shrinking this ratio below ~0.9 forces the
-// badge shorter than repair 3 to hold the same tall/round aspect, which
-// would be a regression against "make the badge tall/round", not an
-// improvement.
-[[nodiscard]] int badge_width_base(int logo_ink_width_base) {
-    return logo_ink_width_base;
-}
-
-// Target badge aspect (width/height): 9/7 ~= 1.2857, inside the reference
-// envelope (1.25-1.45) and, combined with badge_width_base above, the
-// tallest integral aspect this canvas supports without exceeding the fixed
-// 18px height cap (solved from the real cropped-ink width: at width=18 the
-// aspect floor of 1.25 already implies height ~14.4, i.e. repair 3's own
-// 14px is the practical ceiling here, not a shortfall -- repair 4's actual
-// improvement is eliminating repair 3's 2.29:1 flat-wide shape, not adding
-// raw height room the fixed cap does not have).
-constexpr double kBadgeAspectRatio = 9.0 / 7.0;
+// Repair 4 correction (parent-rejected intermediate fb364579774e7b7d, "the
+// current 1x badge font is only 7px"): sizing the badge to exactly the
+// enlarged logo's own width (ratio 1.0) forced badge_font_pixel_size_base
+// down to 7px to fit "99+", and at 7px the digit "1"'s single-pixel-wide
+// stroke never reached a real, multi-pixel-wide clear-composition cutout --
+// the measured worst destination pixel only fell to 41/255 (an inadequate
+// ~84% reduction, one lone pixel, not a readable cutout). Shrinking
+// typography further to chase a tighter width ratio is exactly the
+// regression this correction rules out. This is the floor: the smallest
+// DemiBold pixel size measured to still produce a genuinely multi-pixel,
+// strongly-cleared "1" cutout (see the real-legibility regression in
+// tests/native_shell_test.cpp) -- at or above repair 3's own real-font
+// approach, never a nominal-box coincidence.
+constexpr auto kMinLegibleFontPixelSize = 11;
 
 // The badge's left edge lands this fraction into the *enlarged* logo's own
-// width (not the nominal 18px box), so the overlap reads as deep/Telegram-
-// style ("badge begins around 23% into logo width") rather than repair 3's
-// shallow contact-only overlap at 71%. Combined with badge_width_base
-// above (badge as wide as the logo itself), the badge covers the logo's
-// own last ~(1 - kBadgeLogoOverlapRatio) of its width -- roughly 77%, a
-// genuinely deep overlay, not merely a small corner touch.
-constexpr double kBadgeLogoOverlapRatio = 0.23;
+// width (not the nominal 18px box). Repair 4 correction: a genuinely
+// legible badge (see kMinLegibleFontPixelSize above) is real-font-metrics
+// wide rather than pinned to the logo's own width, so holding repair 4's
+// original 0.23 offset here would push the badge's own right edge far past
+// a modest protrusion of the enlarged logo. This smaller offset still reads
+// as a deep, deliberate overlap into the logo's own left portion (not
+// repair 3's shallow 71%-in contact-only touch), while leaving enough
+// budget for the wider, legible badge's own protrusion to stay modest (see
+// the deep-overlap regression in tests/native_shell_test.cpp).
+constexpr double kBadgeLogoOverlapRatio = 0.10;
 
 // How far the badge's bottom edge extends past the enlarged logo's own
 // bottom edge, at 1x: a small, deliberate protrusion ("extends only
@@ -168,27 +164,56 @@ constexpr auto kCanvasRightMarginBase = 2;
         kLogoInkHeightBase * crop.width() / static_cast<double>(crop.height())));
 }
 
-// Largest real DemiBold pixel size whose "99+" metrics -- horizontal
-// advance and tight bounding height -- fit inside the badge with at least
-// kMinBadgePaddingBase clearance on every side, searched top-down from the
-// tallest size that could conceivably fit. This makes the font size a
-// derived fact about the real, linked QFontMetrics for this badge's actual
-// dimensions, not an assumed constant.
-[[nodiscard]] int badge_font_pixel_size_base(int width_base, int height_base) {
-    for (auto px = height_base; px >= 1; --px) {
+// Largest real DemiBold pixel size, at or above the legibility floor above,
+// whose own natural "99+" metrics (horizontal advance and tight bounding
+// height, each plus kMinBadgePaddingBase clearance) still produce a badge
+// box smaller in area than the enlarged logo's own footprint -- keeping the
+// logo spatially primary (see the footprint-primacy hierarchy gate) -- so
+// the font is the largest genuinely legible size the current logo crop
+// actually affords, not a hardcoded constant that could go stale if the
+// resource ink changes. Falls back to the floor itself if even that would
+// not fit (this project's own resource crop always accepts it in practice).
+[[nodiscard]] int badge_font_pixel_size_base(int logo_area) {
+    constexpr auto kMaxCandidatePixelSize = 16;
+    for (auto px = kMaxCandidatePixelSize; px > kMinLegibleFontPixelSize;
+            --px) {
         auto font = QFont();
         font.setPixelSize(px);
         font.setWeight(QFont::DemiBold);
         const auto metrics = QFontMetrics(font);
-        const auto advance = metrics.horizontalAdvance(widest_badge_text());
-        const auto tight_height =
-            metrics.tightBoundingRect(widest_badge_text()).height();
-        if (advance + 2 * kMinBadgePaddingBase <= width_base
-                && tight_height + 2 * kMinBadgePaddingBase <= height_base) {
+        const auto width =
+            metrics.horizontalAdvance(widest_badge_text())
+                + 2 * kMinBadgePaddingBase;
+        const auto height =
+            metrics.tightBoundingRect(widest_badge_text()).height()
+                + 2 * kMinBadgePaddingBase;
+        if (width * height < logo_area) {
             return px;
         }
     }
-    return 1;
+    return kMinLegibleFontPixelSize;
+}
+
+// The real, undistorted DemiBold metrics of the widest label at the chosen
+// legible pixel size, plus kMinBadgePaddingBase clearance on every side --
+// the badge's own width and height, honestly derived from the exact font it
+// will be painted with rather than pinned to the logo's own nominal width.
+struct BadgeBoxBase {
+    int width;
+    int height;
+};
+
+[[nodiscard]] BadgeBoxBase badge_box_base(int font_pixel_size) {
+    auto font = QFont();
+    font.setPixelSize(font_pixel_size);
+    font.setWeight(QFont::DemiBold);
+    const auto metrics = QFontMetrics(font);
+    BadgeBoxBase box{};
+    box.width = metrics.horizontalAdvance(widest_badge_text())
+        + 2 * kMinBadgePaddingBase;
+    box.height = metrics.tightBoundingRect(widest_badge_text()).height()
+        + 2 * kMinBadgePaddingBase;
+    return box;
 }
 
 struct BaseGeometry {
@@ -211,15 +236,18 @@ struct BaseGeometry {
     BaseGeometry geometry{};
     geometry.logo_height = kLogoInkHeightBase;
     geometry.logo_width = logo_ink_width_base(crop);
-    geometry.badge_width = badge_width_base(geometry.logo_width);
-    geometry.badge_height = static_cast<int>(
-        std::lround(geometry.badge_width / kBadgeAspectRatio));
+    const auto logo_area = geometry.logo_width * geometry.logo_height;
+    geometry.font_pixel_size = badge_font_pixel_size_base(logo_area);
+    const auto box = badge_box_base(geometry.font_pixel_size);
+    // The badge is never narrower than the enlarged logo itself (it must
+    // still read as covering the logo's own width, not a slim tag beside
+    // it), but a genuinely legible font's own real metrics may need more.
+    geometry.badge_width = std::max(box.width, geometry.logo_width);
+    geometry.badge_height = box.height;
     geometry.badge_x = static_cast<int>(
         std::lround(kBadgeLogoOverlapRatio * geometry.logo_width));
     const auto badge_far_y = geometry.logo_height + kBadgeBottomProtrusionBase;
     geometry.badge_y = badge_far_y - geometry.badge_height;
-    geometry.font_pixel_size = badge_font_pixel_size_base(
-        geometry.badge_width, geometry.badge_height);
     return geometry;
 }
 
