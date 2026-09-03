@@ -156,6 +156,12 @@ constexpr auto kComposerOneLineHeight = 40;
 constexpr auto kComposerVisibleLines = 2;
 constexpr auto kComposerTwoLinePad = 4;
 
+// Horizontal contents margin the composer_surface QHBoxLayout applies around
+// the whole composer widget (see set_detail_width()'s width arithmetic,
+// which must subtract this on both sides in addition to composer_layout's
+// own dynamic outer margins).
+constexpr auto kComposerSurfaceHorizontalMargin = 16;
+
 [[nodiscard]] QString css_rgba(const QColor &color) {
     return QStringLiteral("rgba(%1,%2,%3,%4)")
         .arg(color.red())
@@ -1198,12 +1204,24 @@ AgentDetailView::AgentDetailView(
     runtime_footer_ = make_label(
         composer, QString(), "lingtai_selected_agent_conversation_state", 10);
     runtime_footer_->setWordWrap(false);
+    // make_label()'s default horizontal policy (Preferred) sizes the label's
+    // minimum to its current unwrapped text; a stale wider minimum from a
+    // prior selection could otherwise force composer_layout wider than the
+    // width refresh_runtime_footer_fit() elided the text to fit. Ignored
+    // keeps the label shrink-safe: the layout always wins on width, and the
+    // elided text set below is what actually renders.
+    auto runtime_footer_policy = runtime_footer_->sizePolicy();
+    runtime_footer_policy.setHorizontalPolicy(QSizePolicy::Ignored);
+    runtime_footer_->setSizePolicy(runtime_footer_policy);
+    runtime_footer_->setMinimumWidth(0);
     runtime_footer_->setAccessibleName(
         QStringLiteral("Selected Agent runtime"));
     composer_layout->addWidget(runtime_footer_);
 
     auto *composer_surface = new QHBoxLayout;
-    composer_surface->setContentsMargins(16, 0, 16, 12);
+    composer_surface->setContentsMargins(
+        kComposerSurfaceHorizontalMargin, 0,
+        kComposerSurfaceHorizontalMargin, 12);
     composer_surface->addWidget(composer);
     detail_layout->addLayout(composer_surface);
 
@@ -1492,7 +1510,14 @@ void AgentDetailView::set_detail_width(int detail_width) {
         composer_->setMaximumWidth(QWIDGETSIZE_MAX);
         composer_->layout()->setContentsMargins(outer, 10, outer, 8);
         reflow_attachment_cards(std::max(1, detail_width - 2 * outer));
-        runtime_footer_available_width_ = std::max(1, detail_width - 2 * outer);
+        // The footer label lives inside composer_layout (margins: outer on
+        // each side, set above) which itself is inside composer_surface's
+        // QHBoxLayout (margins: kComposerSurfaceHorizontalMargin on each
+        // side). Both must be subtracted from detail_width or the computed
+        // available width overshoots the label's real contents width, and a
+        // chosen elision candidate can clip instead of cleanly fitting.
+        runtime_footer_available_width_ = std::max(1,
+            detail_width - 2 * outer - 2 * kComposerSurfaceHorizontalMargin);
         refresh_runtime_footer_fit();
         if (composer_input_) {
             QListWidget *popup = nullptr;

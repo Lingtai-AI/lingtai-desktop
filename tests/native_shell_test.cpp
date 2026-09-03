@@ -3957,6 +3957,7 @@ void verify_selected_agent_runtime_footer(
     const auto *composer_widget = required_child<QWidget>(
         window, "lingtai_composer");
     const auto composer_height_wide = composer_widget->height();
+    const auto footer_height_wide = footer->height();
     window.resize(380, 480);
     QCoreApplication::processEvents();
     require(!footer->text().contains(QLatin1Char('\n')),
@@ -3972,6 +3973,45 @@ void verify_selected_agent_runtime_footer(
     require(composer_widget->height() == composer_height_wide,
         "narrowing must reflow the footer text, never grow the composer "
         "lane's height");
+    require(footer->height() == footer_height_wide,
+        "narrowing must never grow the footer label's own height either");
+    // The rightmost/context detail must yield before the model: at this
+    // width the fixture's unfittable model identifier forces the last-resort
+    // Qt::ElideRight branch of refresh_runtime_footer_fit(), so what remains
+    // visible must be a genuine prefix of the model name (plus Qt's single
+    // U+2026 ellipsis character), never the context segment and never empty.
+    require(!footer->text().isEmpty(),
+        "the narrowed footer must still show something, never go blank");
+    require(!footer->text().contains(QStringLiteral("Context")),
+        "the context detail must yield before the model at a narrow width, "
+        "not survive alongside a truncated model");
+    require(footer->text().endsWith(QChar(0x2026)),
+        "an unfittable model identifier must end in Qt's ellipsis character "
+        "once elided: got '" + footer->text().toStdString() + "'");
+    require(QString::fromStdString(long_model_name)
+                .startsWith(footer->text().chopped(1)),
+        "the elided text with its ellipsis removed must be a genuine prefix "
+        "of the model name, proving the model (not some other text) is what "
+        "was prioritized and truncated: got '"
+            + footer->text().toStdString() + "'");
+    // A regression guard against a widened elision candidate: the elided
+    // text's actual pixel advance must fit within the footer label's real,
+    // currently-laid-out contents width (its live geometry, not a
+    // recomputed guess at the composer/composer_surface margin arithmetic),
+    // or the text would visually clip instead of cleanly fitting the narrow
+    // lane.
+    require(footer->width() > 0,
+        "the footer label must have real narrowed geometry to check "
+        "against, not a zero-width stand-in");
+    require(QFontMetrics(footer->font())
+                .horizontalAdvance(footer->text())
+            <= footer->contentsRect().width(),
+        "the narrowed footer text's rendered pixel width ("
+            + std::to_string(QFontMetrics(footer->font())
+                  .horizontalAdvance(footer->text()))
+            + ") must fit the label's real contents width ("
+            + std::to_string(footer->contentsRect().width())
+            + ") or it would clip rather than cleanly elide");
     window.resize(1200, 800);
     QCoreApplication::processEvents();
 
