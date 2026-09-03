@@ -1678,13 +1678,45 @@ void verify_desktop_status_item(const fs::path &sandbox) {
         const auto badge_far_x = badge.x() + badge.width();
         const auto badge_far_y = badge.y() + badge.height();
 
+        // Direct, non-circular guard naming the actual constraint: Qt
+        // 6.11.1's Cocoa platform plugin (QCocoaSystemTrayIcon::updateIcon)
+        // caps a status-item pixmap at int(dpr * (NSStatusBar.thickness -
+        // 4)) device px and smooth-downscales anything taller. At a
+        // 22pt-thick bar (this machine) that cap is exactly 18*scale,
+        // which is also the zero-state logo's own height; at a 24pt-thick
+        // bar (a typical secondary display) it is 20*scale -- strictly
+        // above 18*scale, never below. So pinning the nonzero mask to
+        // 18*scale (never taller) stays at or under the cap on every
+        // observed thickness, and the plugin never resamples it (the
+        // opposite -- growing the mask past 18*scale -- is the real,
+        // observed regression this guards against). This assertion is
+        // independent of how the canvas size is computed below: it pins
+        // the literal height, naming the rule it protects against.
+        for (const auto thickness : std::array{22, 24}) {
+            const auto max_image_height = scale * (thickness - 4);
+            require(canvas.height() <= max_image_height,
+                "the nonzero mask height must clear "
+                "QCocoaSystemTrayIcon::updateIcon's "
+                "int(dpr * (NSStatusBar.thickness - 4)) device-px cap for "
+                "every thickness this machine or a typical secondary "
+                "display reports, so the plugin always selects it "
+                "unscaled instead of smooth-resampling a taller mask");
+        }
+        require(canvas.height() == 18 * scale,
+            "the nonzero mask height must stay pinned to exactly "
+            "18*scale -- identical to the zero-state logo's own height "
+            "-- rather than growing for the badge's protrusion, which is "
+            "what previously pushed the Cocoa plugin into smooth-"
+            "downscaling the whole icon (logo ~14.7pt instead of 18pt, "
+            "\"99+\" smaller than the human-rejected 11px design)");
         require(canvas == QSize(
-                    badge.x() + badge.width() + 2 * scale,
-                    std::max(logo_size,
-                        badge.y() + badge.height() + 1 * scale)),
+                    badge.x() + badge.width() + 2 * scale, 18 * scale),
             "the rendered nonzero canvas must be sized from the real badge "
-            "rect plus a minimal declared margin, not an independent fixed "
-            "guess");
+            "rect's horizontal protrusion plus a minimal declared right "
+            "margin, and a height pinned to the zero-state logo's own "
+            "18*scale height (safely at or under the recovered Cocoa cap "
+            "on every observed thickness) -- never an independent fixed "
+            "guess and never taller than the logo");
         require(badge.width() >= text_width + 2 * 4 * scale
                 && badge.height() >= text_height + 2 * 2 * scale,
             "the badge rectangle must fit \"99+\" with nontrivial explicit "
@@ -1693,42 +1725,74 @@ void verify_desktop_status_item(const fs::path &sandbox) {
                 && badge.y() >= 0 && badge.y() < logo_size,
             "the badge must start inside the logo's own footprint -- a "
             "genuine overlap -- rather than beside it with a wide gap");
-        require(badge_far_x > logo_size && badge_far_y > logo_size,
-            "the badge must extend past the logo's lower-right corner, "
-            "reading as an overlaid corner badge rather than an inset one");
+        require(badge_far_x > logo_size,
+            "the badge must extend past the logo's right edge, reading as "
+            "an overlaid corner badge rather than an inset one");
+        // The badge is bottom-anchored inside the pinned 18*scale canvas
+        // (never protruding past it -- that is exactly the regression the
+        // 18*scale guard above catches), so it must land exactly one
+        // declared bottom-margin row above the canvas floor, not merely
+        // "beyond the logo" as repair-2 required.
+        require(badge_far_y == logo_size - 1 * scale,
+            "the badge must be bottom-anchored inside the pinned 18/36 "
+            "canvas with exactly one clear bottom-margin row beneath it, "
+            "never protruding past the logo's own height");
         const auto right_margin = canvas.width() - badge_far_x;
         const auto bottom_margin = canvas.height() - badge_far_y;
-        require(right_margin >= 0 && right_margin <= 2 * scale
-                && bottom_margin >= 0 && bottom_margin <= 1 * scale,
-            "the outer margin beyond the badge must stay minimal so the "
-            "combined logo+badge union fills almost the whole canvas");
+        require(right_margin == 2 * scale,
+            "the outer right margin beyond the badge must stay pinned to "
+            "the declared minimal clearance so the combined logo+badge "
+            "union fills almost the whole canvas width");
+        require(bottom_margin == 1 * scale,
+            "the bottom margin beneath the bottom-anchored badge must be "
+            "exactly the declared one clear margin row, matching the "
+            "binding correction");
 
         // Everywhere in the logo's own footprint outside the badge rect
         // (expanded by a small clearance for rounded-rect antialiasing
         // bleed) must render byte-identical to the unread=0 resource: the
         // logo is drawn unscaled and unmoved, and only the overlapping
         // badge touches pixels inside its own rectangle. Because the badge
-        // is anchored at half the logo's width/height, this untouched
-        // region is the logo's whole left column (every row, not just the
-        // rows above the badge) plus its whole top band -- an L-shaped
-        // majority of the glyph's own area -- proving the logo keeps a
-        // substantial, unobscured upper-left core and stays recognizable
-        // rather than being replaced or reduced to a sliver.
+        // is anchored toward the logo's lower-right corner, this untouched
+        // region is the logo's whole left band (every row) plus its whole
+        // top band, proving the logo keeps a substantial, unobscured
+        // upper-left core and stays recognizable rather than being
+        // replaced or reduced to a sliver.
         const auto exclusion = badge.adjusted(
             -2 * scale, -2 * scale, 2 * scale, 2 * scale);
-        auto excluded_area = 0;
-        auto logo_area = 0;
+
+        // Perceptual-primacy proof: measure actual rendered ink, not
+        // bounding-box footprint (a footprint-only bound can hide a badge
+        // that overlaps mostly-transparent logo padding, or wrongly reject
+        // one that overlaps mostly-transparent badge padding). Bound how
+        // much of the *real* resource's opaque logo ink the badge's
+        // exclusion zone actually covers, against an honest, independently
+        // measured threshold: target <=40%, hard <50%, at both scales.
+        auto logo_ink_total = 0;
+        auto logo_ink_obscured = 0;
         for (auto y = 0; y != logo_size; ++y) {
             for (auto x = 0; x != logo_size; ++x) {
-                ++logo_area;
+                if (alpha_at(resource, x, y) == 0) {
+                    continue;
+                }
+                ++logo_ink_total;
                 if (exclusion.contains(x, y)) {
-                    ++excluded_area;
+                    ++logo_ink_obscured;
                 }
             }
         }
-        require(excluded_area * 2 < logo_area,
-            "the badge (plus antialiasing clearance) must not obscure "
-            "more than half of the logo's own footprint area");
+        require(logo_ink_total > 0,
+            "the zero-state logo resource must contain rendered ink to "
+            "measure primacy against");
+        require(logo_ink_obscured * 100 <= logo_ink_total * 40,
+            "the badge (plus antialiasing clearance) must obscure at most "
+            "40% of the logo's actual rendered ink -- an honest bound "
+            "measured against real resource pixels, not bounding-box "
+            "footprint -- so the logo stays perceptually primary");
+        require(logo_ink_obscured * 2 < logo_ink_total,
+            "the badge must never obscure half or more of the logo's "
+            "actual rendered ink -- a hard perceptual floor beneath the "
+            "40% target");
 
         for (const auto exact : std::array<std::size_t, 4>{1, 10, 99, 100}) {
             const auto mask = DesktopStatusItem::render_mask(exact, scale);

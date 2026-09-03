@@ -25,11 +25,15 @@ its code.
   `WA_DontShowOnScreen`. Quit uses `QCoreApplication::quit`. Closing the final
   window still quits normally; closing or opening secondary windows does not
   destroy or duplicate the item. With zero unread it uses the existing 18/36px
-  LingTai template resources. With unread it uses a deterministic 54×18 logical
-  (`108×36` Retina) template mask containing the logo and a lower-right count
-  badge sized from real font metrics plus explicit padding so `99+` cannot be
-  squeezed or clipped; counts cap visually at `99+`, while the tooltip retains
-  the exact total and unique open-Project count.
+  LingTai template resources. With unread it uses a deterministic template
+  mask pinned to that same 18/36 logical/Retina height (never taller, so the
+  platform tray plugin's status-item pixmap cap always selects it unscaled
+  instead of smooth-downscaling it) and a compact width sized from real font
+  metrics for the widest label, containing the logo unscaled at its native
+  footprint plus a bottom-anchored count badge overlapping the logo's
+  lower-right quadrant with explicit padding so `99+` cannot be squeezed or
+  clipped; counts cap visually at `99+`, while the tooltip retains the exact
+  total and unique open-Project count.
 - Application composition initializes the pinned toolkit's emoji runtime once,
   after widget styles and before the first composer is constructed. Every
   simultaneous or later `NativeShell` under that `QApplication` reuses it;

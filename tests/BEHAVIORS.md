@@ -241,10 +241,14 @@ Qt plugin path set and an 8 s watchdog.
   most-recent selection, hidden Show retaining `WA_DontShowOnScreen`, plain and
   maximized minimized restore, safe fallback to an owned shell after recent-
   shell removal, secondary-close preservation, a mask icon, exact transparent
-  18/36-pixel zero resources, deterministic 54×18/108×36 alpha-only nonzero
-  masks with a lower-right badge sized from real font metrics plus explicit
-  padding, `99+` display capping, exact aggregate tooltips, and unchanged-bucket
-  icon reuse. The separate status-item
+  18/36-pixel zero resources, deterministic alpha-only nonzero masks pinned to
+  that same 18/36-pixel height (never taller, naming and guarding the
+  platform tray plugin's status-item pixmap cap directly) with a compact,
+  formula-derived width and a bottom-anchored badge overlapping the logo's
+  lower-right quadrant, sized from real font metrics plus explicit padding,
+  measured real-pixel logo-ink-coverage bounds keeping the logo perceptually
+  primary, `99+` display capping, exact aggregate tooltips, and
+  unchanged-bucket icon reuse. The separate status-item
   Quit and final-window-close journeys each run a bounded Qt event loop and
   prove exit code 0 before their failure watchdogs can fire.
 - The focused `native_shell_unread` journey uses two canonical Projects and

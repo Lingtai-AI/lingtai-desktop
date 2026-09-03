@@ -11,7 +11,6 @@
 #include <QtWidgets/QMenu>
 #include <QtWidgets/QSystemTrayIcon>
 
-#include <algorithm>
 #include <cmath>
 #include <utility>
 
@@ -23,13 +22,17 @@ constexpr auto kStatusItemHeight = 18;
 // unmoved from the zero-state resource; only the overlapping badge grows
 // the canvas beyond it.
 constexpr auto kLogoSize = kStatusItemHeight;
-// The badge's left/top edges land this fraction across the logo's own
-// width/height (measured from the logo's own top-left origin), so the
-// badge always overlaps the logo's lower-right quadrant by construction --
-// Telegram-style, paper-plane-plus-badge -- instead of floating beside it
-// with a gap, for any font metrics the real system produces.
-constexpr auto kBadgeLogoHorizontalOverlap = 0.5;
-constexpr auto kBadgeLogoVerticalOverlap = 0.45;
+// The badge's left edge lands this fraction across the logo's own width
+// (measured from the logo's own top-left origin), so the badge always
+// overlaps the logo's lower-right quadrant by construction -- Telegram-
+// style, paper-plane-plus-badge -- instead of floating beside it with a
+// gap, for any font metrics the real system produces. Chosen (not 0.5) so
+// that, combined with the bottom-anchored badge below, real-resource ink
+// coverage of the logo stays at or under the perceptual-primacy target
+// (<=40%, hard <50%) at both 1x and 2x: measured against the actual
+// StatusItemTemplate resources, 0.5 obscures ~64% of the logo's ink, 0.71
+// obscures ~34-40%.
+constexpr auto kBadgeLogoHorizontalOverlap = 0.71;
 // DemiBold pixel size for the badge label at 1x.
 constexpr auto kBadgeFontPixelSize = 12;
 // Explicit padding around the real font-metric text box, at 1x.
@@ -39,6 +42,12 @@ constexpr auto kBadgeVerticalPadding = 2;
 // as inset rather than touching the corner; kept minimal so the combined
 // logo+badge silhouette fills almost the whole canvas.
 constexpr auto kCanvasRightMargin = 2;
+// Also doubles as the badge's bottom anchor clearance: the badge sits
+// `kCanvasBottomMargin * scale` px above the fixed kLogoSize*scale floor,
+// so the mask height never grows past the logo's own height (see
+// nonzero_canvas_size) and the platform tray plugin's status-item icon
+// cap -- int(dpr * (NSStatusBar.thickness - 4)) -- selects it unscaled
+// instead of smooth-downscaling a taller mask.
 constexpr auto kCanvasBottomMargin = 1;
 // The widest label any bucket can render; sizing the badge for this keeps
 // its rectangle identical across every nonzero bucket.
@@ -56,19 +65,23 @@ constexpr auto kCanvasBottomMargin = 1;
     return font;
 }
 
-// The nonzero-count canvas size render_mask allocates: the logo's own
-// square footprint plus the overlapping badge's protrusion (from
-// DesktopStatusItem::unread_badge_rect, the public seam) and a minimal
-// outer margin, so the combined logo+badge silhouette fills almost the
-// whole canvas by construction. Identical across every nonzero bucket
-// because the badge is always sized for the widest label.
+// The nonzero-count canvas size render_mask allocates: exactly the logo's
+// own square footprint tall (never taller -- the platform tray plugin
+// caps a status-item pixmap at int(dpr * (NSStatusBar.thickness - 4))
+// device px, which is exactly kLogoSize * scale at a 22pt-thick bar and
+// kLogoSize * scale + 2 * scale at a 24pt-thick bar, i.e. at or above
+// kLogoSize * scale on every observed thickness, so pinning the mask to
+// kLogoSize * scale keeps it safely at or under the cap everywhere;
+// growing past it forces the plugin to smooth-downscale the whole icon)
+// plus the overlapping badge's horizontal
+// protrusion (from DesktopStatusItem::unread_badge_rect, the public seam)
+// and a minimal outer right margin, so the combined logo+badge silhouette
+// fills almost the whole canvas by construction. Identical across every
+// nonzero bucket because the badge is always sized for the widest label.
 [[nodiscard]] QSize nonzero_canvas_size(int scale) {
     const auto badge = DesktopStatusItem::unread_badge_rect(scale);
-    const auto logo_size = kLogoSize * scale;
     const auto width = badge.x() + badge.width() + kCanvasRightMargin * scale;
-    const auto height = std::max(
-        logo_size, badge.y() + badge.height() + kCanvasBottomMargin * scale);
-    return QSize(width, height);
+    return QSize(width, kLogoSize * scale);
 }
 
 [[nodiscard]] QString template_resource(int scale) {
@@ -191,8 +204,13 @@ QRect DesktopStatusItem::unread_badge_rect(int scale) {
     const auto logo_size = kLogoSize * scale;
     const auto x = static_cast<int>(
         std::lround(logo_size * kBadgeLogoHorizontalOverlap));
-    const auto y = static_cast<int>(
-        std::lround(logo_size * kBadgeLogoVerticalOverlap));
+    // Bottom-anchored against the fixed logo_size floor (never against the
+    // badge's own height growing the canvas -- see nonzero_canvas_size),
+    // with exactly one kCanvasBottomMargin-px clear row beneath it, so
+    // "99+" gets the most vertical room real font metrics allow inside the
+    // mask's own fixed 18/36 height (see nonzero_canvas_size; always at or
+    // under the platform tray-icon cap) without clipping.
+    const auto y = logo_size - height - kCanvasBottomMargin * scale;
     return QRect(x, y, width, height);
 }
 

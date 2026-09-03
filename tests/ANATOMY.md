@@ -233,14 +233,19 @@ touches a real Agent or project, and none depends on a network or provider.
   directory is an injected path, not an OS or process sandbox.
 - Its focused `native_shell_status_item` journey proves one host-owned item,
   an unpublished offscreen tray, exact menu order, compiled 18/36-pixel
-  transparent zero resources, deterministic 54×18/108×36 alpha-only count
-  masks with a lower-right badge sized from real font metrics plus explicit
-  padding, exact/capped buckets and tooltips, unchanged-bucket reuse, one-shot
-  callbacks, deterministic fallback, most-recent activation, plain and
-  maximized minimized restore, safe owned-shell fallback after the recent
-  shell closes, and no duplication across a second shell. The separate
-  `native_shell_status_item_quit` and `native_shell_final_window_quit` event-loop
-  journeys prove both quit paths terminate through Qt.
+  transparent zero resources, deterministic alpha-only count masks pinned to
+  that same fixed 18/36-pixel height (never taller, guarded by a direct,
+  non-circular assertion naming the platform tray-icon pixmap cap so the
+  plugin always selects the mask unscaled) with a formula-derived, compact
+  width and a bottom-anchored badge overlapping the logo's lower-right
+  quadrant, sized from real font metrics plus explicit padding, and a
+  real-pixel logo-ink-coverage measurement keeping the logo perceptually
+  primary, exact/capped buckets and tooltips, unchanged-bucket reuse,
+  one-shot callbacks, deterministic fallback, most-recent activation, plain
+  and maximized minimized restore, safe owned-shell fallback after the
+  recent shell closes, and no duplication across a second shell. The
+  separate `native_shell_status_item_quit` and `native_shell_final_window_quit`
+  event-loop journeys prove both quit paths terminate through Qt.
 - Its focused `native_shell_unread` journey owns real-shell duplicate-Project
   roster/status coherence, active-visible-non-minimized read eligibility,
   lifecycle-neutral valid-Agent membership, invalid-route exclusion, close/
