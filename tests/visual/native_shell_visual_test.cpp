@@ -50,8 +50,9 @@ void captureSurface(
     const auto theme_label = theme == ThemeMode::dark ? "dark" : "light";
 
     lingtai::desktop::visual_test::ThemeScope theme_scope(theme);
+    lingtai::desktop::ConversationUnreadSession unread_session;
     lingtai::desktop::NativeShell shell(
-        lingtai::desktop::ui_test::defaultUiTestOptions());
+        unread_session, lingtai::desktop::ui_test::defaultUiTestOptions());
     lingtai::desktop::ui_test::showShellAt(shell, viewport);
     auto &window = static_cast<QWidget &>(shell.window());
 

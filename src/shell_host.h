@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <unordered_set>
 #include <vector>
 
 namespace lingtai::desktop {
@@ -27,6 +28,8 @@ public:
     [[nodiscard]] NativeShell &primary();
     [[nodiscard]] NativeShell &shell_at(std::size_t index);
     [[nodiscard]] std::size_t shell_count() const;
+    [[nodiscard]] std::size_t unread_total() const noexcept;
+    [[nodiscard]] std::size_t open_project_count() const noexcept;
 
     // Shows a directory picker parented to `requester`, then opens or
     // bootstraps that path in `requester` itself.
@@ -48,6 +51,7 @@ private:
     void watch_shell(NativeShell *shell);
     void show_lingtai();
     void remove_shell(NativeShell *shell);
+    void refresh_unread_presentations();
     [[nodiscard]] std::optional<std::filesystem::path> pick_project_directory(
         QWidget *parent) const;
     void open_or_bootstrap(
@@ -56,9 +60,14 @@ private:
 
     RuntimeOptions runtime_options_;
     std::filesystem::path agent_start_fallback_python_;
+    ConversationUnreadSession unread_session_;
     std::vector<std::unique_ptr<NativeShell>> shells_;
+    std::unordered_set<NativeShell *> closing_shells_;
+    NativeShell *active_shell_ = nullptr;
     NativeShell *most_recent_active_shell_ = nullptr;
     DesktopStatusItem *status_item_ = nullptr;
+    std::size_t unread_total_ = 0;
+    std::size_t open_project_count_ = 0;
     bool shutting_down_ = false;
 };
 

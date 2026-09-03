@@ -102,6 +102,7 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <memory>
 #ifdef __APPLE__
 #include <pthread/qos.h>
@@ -1299,8 +1300,11 @@ std::unique_ptr<Ui::RpWindow> make_native_window() {
 
 } // namespace
 
-NativeShell::NativeShell(RuntimeOptions runtime_options)
-: runtime_options_(runtime_options)
+NativeShell::NativeShell(
+        ConversationUnreadSession &unread_session,
+        RuntimeOptions runtime_options)
+: unread_session_(unread_session)
+, runtime_options_(runtime_options)
 , window_(make_native_window())
 , lifecycle_controller_(std::make_unique<AgentLifecycleController>()) {
     window_->setObjectName("lingtai_desktop_window");
@@ -2769,6 +2773,16 @@ void NativeShell::set_open_project_in_new_window_request_handler(
     open_project_in_new_window_request_handler_ = std::move(handler);
 }
 
+void NativeShell::set_unread_view_eligibility(
+        UnreadViewEligibility eligibility) {
+    unread_view_eligibility_ = std::move(eligibility);
+}
+
+void NativeShell::set_unread_presentation_changed_handler(
+        UnreadPresentationChangedHandler handler) {
+    unread_presentation_changed_handler_ = std::move(handler);
+}
+
 void NativeShell::set_attachment_picker(AttachmentPicker picker) {
     attachment_picker_ = std::move(picker);
 }
@@ -3520,7 +3534,6 @@ ProjectOpenOutcome NativeShell::open_project(
     agent_roster_->set_project_display_name(QString::fromStdString(
         canonical_root.filename().string()));
     reaction_store_.clear();
-    conversation_unread_.clear();
     injected_mail_journal_.reset();
     render_roster();
     auto *selection_error = window_->findChild<QLabel *>(
@@ -3544,6 +3557,9 @@ ProjectOpenOutcome NativeShell::open_project(
     // Warm the kanban board in the background so the first /kanban after
     // open does not wait on a cold disk snapshot.
     request_kanban_board(false);
+    if (unread_presentation_changed_handler_) {
+        unread_presentation_changed_handler_();
+    }
     return {
         .disposition = ProjectOpenDisposition::opened,
         .failure = ProjectPathFailure::none,
@@ -3560,6 +3576,46 @@ const Ui::RpWindow &NativeShell::window() const noexcept {
 
 const WorkspaceSelectionState &NativeShell::selection_state() const noexcept {
     return selection_state_;
+}
+
+std::optional<fs::path> NativeShell::active_project_root() const {
+    if (!selection_state_.active_project()) {
+        return std::nullopt;
+    }
+    return selection_state_.active_project()->root();
+}
+
+std::vector<std::string> NativeShell::valid_unread_agent_keys() const {
+    auto result = std::vector<std::string>{};
+    result.reserve(agents_.items.size());
+    for (const auto &item : agents_.items) {
+        if (item.role == AgentRole::human
+            || item.manifest_kind != AgentManifestKind::valid) {
+            continue;
+        }
+        result.push_back(item.directory_key.generic_string());
+    }
+    return result;
+}
+
+void NativeShell::apply_unread_snapshot(
+        const ProjectUnreadSnapshot &snapshot) {
+    if (!agent_roster_) {
+        return;
+    }
+    auto counts = std::unordered_map<std::string, int>{};
+    counts.reserve(snapshot.counts.size());
+    constexpr auto maximum = std::numeric_limits<int>::max();
+    for (const auto &[agent_key, unread] : snapshot.counts) {
+        counts.emplace(agent_key, unread > static_cast<std::size_t>(maximum)
+            ? maximum
+            : static_cast<int>(unread));
+    }
+    agent_roster_->set_unseen_counts(std::move(counts));
+}
+
+void NativeShell::refresh_unread_view_state() {
+    static_cast<void>(apply_current_unread_snapshot());
 }
 
 bool NativeShell::smoke_ready() const noexcept {
@@ -3998,18 +4054,33 @@ NativeShell::project_conversation_history(
 
 NativeShell::SelectedConversationView
 NativeShell::refresh_unseen_badges() {
+    request_mailbox_snapshot();
+    return apply_current_unread_snapshot();
+}
+
+NativeShell::SelectedConversationView
+NativeShell::apply_current_unread_snapshot() {
     if (!agent_roster_ || !selection_state_.active_project()) {
         if (agent_roster_) {
             agent_roster_->set_unseen_counts({});
         }
         return {};
     }
-    request_mailbox_snapshot();
+    const auto project_root = selection_state_.active_project()->root();
     const auto *snapshot = mailbox_snapshot_index_.current();
     const auto selected = selection_state_.selected_agent_directory_key();
-    auto counts = std::unordered_map<std::string, int>{};
     auto selected_history = SelectedConversationView();
     selected_history.snapshot_ready = snapshot != nullptr;
+    const auto valid_agent_keys = valid_unread_agent_keys();
+    const auto membership_changed =
+        last_valid_unread_agent_keys_ != valid_agent_keys;
+    last_valid_unread_agent_keys_ = valid_agent_keys;
+    const auto selected_is_viewed = unread_view_eligibility_
+        ? unread_view_eligibility_()
+        : window_->isActiveWindow()
+            && window_->isVisible()
+            && !window_->isMinimized();
+    auto model_changed = false;
     for (const auto &item : agents_.items) {
         if (item.role == AgentRole::human
             || item.manifest_kind != AgentManifestKind::valid) {
@@ -4028,28 +4099,25 @@ NativeShell::refresh_unseen_badges() {
         const auto found = snapshot->histories.find(key);
         if (found == snapshot->histories.end()) continue;
         const auto &history = found->second;
-        if (selected && *selected == item.directory_key) {
-            conversation_unread_.catch_up(key, history);
+        const auto is_selected = selected
+            && *selected == item.directory_key;
+        model_changed = unread_session_.observe(
+            project_root, key, history,
+            is_selected && selected_is_viewed) || model_changed;
+        if (is_selected) {
             selected_history.history = &history;
             const auto revision = snapshot->revisions.find(key);
             if (revision != snapshot->revisions.end()) {
                 selected_history.revision = revision->second;
             }
-            continue;
-        }
-        if (!conversation_unread_.has_cursor(key)) {
-            // First sight after attach: treat historical inbound as already
-            // read so only mail that arrives later badges the row.
-            conversation_unread_.catch_up(key, history);
-            continue;
-        }
-        const auto unseen = conversation_unread_.unseen_inbound_count(
-            key, history);
-        if (unseen > 0) {
-            counts.emplace(key, static_cast<int>(unseen));
         }
     }
-    agent_roster_->set_unseen_counts(std::move(counts));
+    apply_unread_snapshot(unread_session_.snapshot(
+        project_root, valid_agent_keys));
+    if ((model_changed || membership_changed)
+        && unread_presentation_changed_handler_) {
+        unread_presentation_changed_handler_();
+    }
     return selected_history;
 }
 

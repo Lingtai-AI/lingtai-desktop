@@ -21,8 +21,9 @@ void verify_presets_page_switch(
     const auto alpha_key = std::filesystem::path(".lingtai/alpha");
     const auto alpha_directory_key = std::filesystem::path("alpha");
 
+    lingtai::desktop::ConversationUnreadSession unread_session;
     lingtai::desktop::NativeShell shell(
-        lingtai::desktop::ui_test::defaultUiTestOptions());
+        unread_session, lingtai::desktop::ui_test::defaultUiTestOptions());
     lingtai::desktop::ui_test::showShellAt(shell, viewport);
 
     const auto outcome = lingtai::desktop::ui_test::openFixtureProject(

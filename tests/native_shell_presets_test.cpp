@@ -187,7 +187,8 @@ int main(int argc, char **argv) {
         const auto sandbox = fs::canonical(argv[1]);
         std::filesystem::current_path(sandbox);
         QApplication application(argc, argv);
-        lingtai::desktop::NativeShell shell;
+        lingtai::desktop::ConversationUnreadSession unread_session;
+        lingtai::desktop::NativeShell shell(unread_session);
         shell.show_offscreen();
         QCoreApplication::processEvents();
         verify_presets_simplified_surface(shell, sandbox);

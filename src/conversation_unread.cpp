@@ -172,29 +172,4 @@ void ConversationUnreadSession::clear() noexcept {
     projects_.clear();
 }
 
-void ConversationUnreadState::clear() noexcept {
-    cursors_.clear();
-}
-
-bool ConversationUnreadState::has_cursor(
-        const std::string &agent_key) const {
-    return cursors_.contains(agent_key);
-}
-
-void ConversationUnreadState::catch_up(
-        const std::string &agent_key,
-        const DirectConversationHistory &history) {
-    cursors_[agent_key] = tip_inbound_cursor(history);
-}
-
-std::size_t ConversationUnreadState::unseen_inbound_count(
-        const std::string &agent_key,
-        const DirectConversationHistory &history) const {
-    const auto found = cursors_.find(agent_key);
-    if (found == cursors_.end()) {
-        return 0;
-    }
-    return count_inbound_after_cursor(history, found->second);
-}
-
 } // namespace lingtai::desktop

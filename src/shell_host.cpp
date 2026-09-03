@@ -14,6 +14,8 @@
 #include <QtWidgets/QWidget>
 
 #include <algorithm>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace lingtai::desktop {
@@ -38,12 +40,14 @@ ShellHost::ShellHost(RuntimeOptions runtime_options, QObject *parent)
     if (!runtime_options_.offscreen_mode) {
         status_item_->show();
     }
+    refresh_unread_presentations();
 }
 
 ShellHost::~ShellHost() {
     // Drop owned shells without scheduling remove_shell / quit callbacks
     // against a half-destroyed host.
     shutting_down_ = true;
+    active_shell_ = nullptr;
     most_recent_active_shell_ = nullptr;
     shells_.clear();
 }
@@ -60,6 +64,14 @@ std::size_t ShellHost::shell_count() const {
     return shells_.size();
 }
 
+std::size_t ShellHost::unread_total() const noexcept {
+    return unread_total_;
+}
+
+std::size_t ShellHost::open_project_count() const noexcept {
+    return open_project_count_;
+}
+
 void ShellHost::configure_shell(NativeShell &shell) {
     shell.set_agent_start_fallback_python(agent_start_fallback_python_);
     shell.set_open_project_request_handler([this, &shell] {
@@ -68,10 +80,21 @@ void ShellHost::configure_shell(NativeShell &shell) {
     shell.set_open_project_in_new_window_request_handler([this, &shell] {
         open_project_in_new_window(shell);
     });
+    shell.set_unread_view_eligibility([this, &shell] {
+        return active_shell_ == &shell
+            && shell.window().isVisible()
+            && !shell.window().isMinimized();
+    });
+    shell.set_unread_presentation_changed_handler([this] {
+        if (!shutting_down_) {
+            refresh_unread_presentations();
+        }
+    });
 }
 
 NativeShell *ShellHost::spawn_shell() {
-    auto shell = std::make_unique<NativeShell>(runtime_options_);
+    auto shell = std::make_unique<NativeShell>(
+        unread_session_, runtime_options_);
     auto *raw = shell.get();
     configure_shell(*raw);
     shells_.push_back(std::move(shell));
@@ -87,9 +110,32 @@ void ShellHost::watch_shell(NativeShell *shell) {
         &shell->window(),
         [this, shell](not_null<QEvent *> event) {
             if (event->type() == QEvent::WindowActivate && !shutting_down_) {
+                active_shell_ = shell;
                 most_recent_active_shell_ = shell;
+                shell->refresh_unread_view_state();
+                refresh_unread_presentations();
             }
-            if (event->type() == QEvent::Close && !shutting_down_) {
+            if ((event->type() == QEvent::WindowDeactivate
+                    || event->type() == QEvent::Show
+                    || event->type() == QEvent::Hide
+                    || event->type() == QEvent::WindowStateChange)
+                && !shutting_down_
+                && !closing_shells_.contains(shell)) {
+                if ((event->type() == QEvent::WindowDeactivate
+                        || event->type() == QEvent::Hide
+                        || (event->type() == QEvent::WindowStateChange
+                            && shell->window().isMinimized()))
+                    && active_shell_ == shell) {
+                    active_shell_ = nullptr;
+                }
+                shell->refresh_unread_view_state();
+                refresh_unread_presentations();
+            }
+            if (event->type() == QEvent::Close && !shutting_down_
+                && closing_shells_.insert(shell).second) {
+                // Exclude the closing window synchronously; retain deferred
+                // destruction so Qt can finish dispatching this close event.
+                refresh_unread_presentations();
                 QTimer::singleShot(0, this, [this, shell] {
                     remove_shell(shell);
                 });
@@ -137,10 +183,65 @@ void ShellHost::remove_shell(NativeShell *shell) {
     if (most_recent_active_shell_ == shell) {
         most_recent_active_shell_ = nullptr;
     }
+    if (active_shell_ == shell) {
+        active_shell_ = nullptr;
+    }
     shells_.erase(found);
+    closing_shells_.erase(shell);
+    refresh_unread_presentations();
     if (shells_.empty()) {
         QApplication::quit();
     }
+}
+
+void ShellHost::refresh_unread_presentations() {
+    auto project_agents = std::unordered_map<std::filesystem::path,
+        std::unordered_set<std::string>>{};
+    for (const auto &owned : shells_) {
+        auto *shell = owned.get();
+        if (closing_shells_.contains(shell)) {
+            continue;
+        }
+        const auto project_root = shell->active_project_root();
+        if (!project_root) {
+            continue;
+        }
+        auto &agent_keys = project_agents[*project_root];
+        const auto shell_keys = shell->valid_unread_agent_keys();
+        agent_keys.insert(shell_keys.begin(), shell_keys.end());
+    }
+
+    auto requests = std::vector<OpenProjectUnreadRequest>{};
+    requests.reserve(project_agents.size());
+    for (const auto &[project_root, agent_keys] : project_agents) {
+        requests.push_back({
+            .canonical_project_root = project_root,
+            .valid_agent_keys = std::vector<std::string>(
+                agent_keys.begin(), agent_keys.end()),
+        });
+    }
+    for (const auto &owned : shells_) {
+        auto *shell = owned.get();
+        if (closing_shells_.contains(shell)) {
+            continue;
+        }
+        const auto project_root = shell->active_project_root();
+        if (!project_root) {
+            shell->apply_unread_snapshot({});
+            continue;
+        }
+        const auto found = project_agents.find(*project_root);
+        if (found == project_agents.end()) {
+            shell->apply_unread_snapshot({});
+            continue;
+        }
+        const auto valid_agent_keys = std::vector<std::string>(
+            found->second.begin(), found->second.end());
+        shell->apply_unread_snapshot(
+            unread_session_.snapshot(*project_root, valid_agent_keys));
+    }
+    unread_total_ = unread_session_.total_for(requests);
+    open_project_count_ = requests.size();
 }
 
 std::optional<std::filesystem::path> ShellHost::pick_project_directory(

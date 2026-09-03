@@ -558,7 +558,8 @@ void verify_dark_application_palette_inheritance(const fs::path &sandbox) {
     dark_palette.setColor(QPalette::ButtonText, button_ink);
 
     const auto palette_scope = ScopedApplicationPalette(dark_palette);
-    lingtai::desktop::NativeShell shell;
+    lingtai::desktop::ConversationUnreadSession unread_session;
+    lingtai::desktop::NativeShell shell(unread_session);
     auto &window = shell.window();
     require(st::windowBg->c == QColor(QStringLiteral("#17212b"))
             && st::windowFg->c == QColor(QStringLiteral("#f5f5f5"))
@@ -963,7 +964,8 @@ void verify_open_project_behavior(
             == recognized_root.string(),
         "project route must display the canonical root");
 
-    lingtai::desktop::NativeShell failed_shell;
+    lingtai::desktop::ConversationUnreadSession failed_unread_session;
+    lingtai::desktop::NativeShell failed_shell(failed_unread_session);
     failed_shell.show_offscreen();
     QCoreApplication::processEvents();
     auto &failed_window = failed_shell.window();
@@ -1122,6 +1124,247 @@ void verify_open_project_in_another_window(const fs::path &sandbox) {
     std::error_code cleanup_error;
     fs::remove_all(sandbox, cleanup_error);
     require(!cleanup_error, "multi-window fixtures must be removed");
+}
+
+std::string conversation_envelope_without_attachments(
+    std::string_view from,
+    std::string_view to,
+    std::string_view subject,
+    std::string_view message,
+    std::string_view timestamp_key,
+    std::string_view timestamp);
+
+void verify_session_unread_aggregate(const fs::path &sandbox) {
+    using lingtai::desktop::AgentRoster;
+    using lingtai::desktop::ProjectOpenDisposition;
+    using lingtai::desktop::RuntimeOptions;
+    using lingtai::desktop::ShellHost;
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "the unread aggregate fixture must start clean");
+
+    const auto project = sandbox / "shared-project";
+    const auto mailbox = project / ".lingtai/human/mailbox/inbox";
+    write_file(project / ".lingtai/human/.agent.json",
+        R"({"agent_id":"human-id","agent_name":"Human",)"
+        R"("address":"human","state":"active"})");
+    write_file(project / ".lingtai/alpha/.agent.json",
+        R"({"admin":{},"agent_id":"alpha-id","agent_name":"alpha",)"
+        R"("address":"alpha","state":"active"})");
+    write_file(project / ".lingtai/beta/.agent.json",
+        R"({"admin":{},"agent_id":"beta-id","agent_name":"beta",)"
+        R"("address":"beta","state":"dead"})");
+    write_file(project / ".lingtai/gamma/.agent.json",
+        R"({"admin":{},"agent_id":"gamma-id","agent_name":"gamma",)"
+        R"("address":"gamma","state":"suspended"})");
+    write_file(project / ".lingtai/invalid/.agent.json", R"({"admin":)");
+    write_file(mailbox / "20260902T120000-alpha-seed/message.json",
+        conversation_envelope_without_attachments(
+            "alpha", "human", "seed", "alpha seed", "received_at",
+            "2026-09-02T12:00:00Z"));
+    write_file(mailbox / "20260902T120001-gamma-seed/message.json",
+        conversation_envelope_without_attachments(
+            "gamma", "human", "seed", "gamma seed", "received_at",
+            "2026-09-02T12:00:01Z"));
+
+    RuntimeOptions options;
+    options.offscreen_mode = true;
+    options.ui_test_mode = true;
+    ShellHost host(options);
+    const auto tick_mailbox = [](lingtai::desktop::NativeShell &shell) {
+        auto timers = std::vector<QTimer *>();
+        for (auto *timer : shell.window().findChildren<QTimer *>()) {
+            if (timer->interval() == 1000) {
+                timers.push_back(timer);
+            }
+        }
+        require(timers.size() == 1
+                && QMetaObject::invokeMethod(
+                    timers.front(), "timeout", Qt::DirectConnection),
+            "the unread journey must invoke the one existing presentation timer");
+    };
+    auto &primary = host.primary();
+    primary.show_offscreen();
+    QEvent activate_primary(QEvent::WindowActivate);
+    QCoreApplication::sendEvent(&primary.window(), &activate_primary);
+    require(primary.open_project(project, fs::path(".lingtai/alpha"))
+            .disposition == ProjectOpenDisposition::opened,
+        "the primary unread fixture Project must open with alpha selected");
+    auto *primary_surface = required_child<QTextEdit>(
+        primary.window(), "lingtai_selected_agent_conversation");
+    require(wait_for_event_loop([&] {
+        return primary_surface->toPlainText().contains("alpha seed");
+    }, 4000), "the primary accepted mailbox snapshot must seed alpha");
+    require(host.unread_total() == 0 && host.open_project_count() == 1,
+        "first attach must seed history at zero for one unique Project");
+
+    host.open_path_in_new_window(primary, project);
+    auto &secondary = host.shell_at(1);
+    require(secondary.open_project(project, fs::path(".lingtai/beta"))
+            .disposition == ProjectOpenDisposition::opened,
+        "the duplicate Project window must select the dead but valid beta");
+    auto *secondary_surface = required_child<QTextEdit>(
+        secondary.window(), "lingtai_selected_agent_conversation");
+    require(wait_for_event_loop([&] {
+        return secondary_surface->toPlainText().contains("No messages yet");
+    }, 4000), "the duplicate window must accept its initial mailbox snapshot");
+    QEvent deactivate_primary(QEvent::WindowDeactivate);
+    QCoreApplication::sendEvent(&primary.window(), &deactivate_primary);
+    QEvent activate_secondary(QEvent::WindowActivate);
+    QCoreApplication::sendEvent(&secondary.window(), &activate_secondary);
+
+    write_file(mailbox / "20260902T120100-alpha-new/message.json",
+        conversation_envelope_without_attachments(
+            "alpha", "human", "new", "alpha background unread",
+            "received_at", "2026-09-02T12:01:00Z"));
+    write_file(mailbox / "20260902T120101-gamma-new/message.json",
+        conversation_envelope_without_attachments(
+            "gamma", "human", "new", "suspended gamma unread",
+            "received_at", "2026-09-02T12:01:01Z"));
+    write_file(mailbox / "20260902T120102-invalid/message.json",
+        conversation_envelope_without_attachments(
+            "invalid", "human", "ignored", "invalid route ignored",
+            "received_at", "2026-09-02T12:01:02Z"));
+    tick_mailbox(primary);
+    tick_mailbox(secondary);
+    auto *primary_roster = static_cast<AgentRoster *>(
+        primary.window().findChild<QWidget *>("lingtai_desktop_sidebar"));
+    auto *secondary_roster = static_cast<AgentRoster *>(
+        secondary.window().findChild<QWidget *>("lingtai_desktop_sidebar"));
+    require(primary_roster && secondary_roster,
+        "both duplicate windows must expose their real roster projections");
+    require(wait_for_event_loop([&] {
+        return host.unread_total() == 2
+            && primary_roster->unseen_count("alpha") == 1
+            && primary_roster->unseen_count("gamma") == 1
+            && secondary_roster->unseen_count("alpha") == 1
+            && secondary_roster->unseen_count("gamma") == 1;
+    }, 5000),
+        "background-selected and suspended valid Agents must aggregate once "
+        "and project coherently into duplicate rosters");
+    require(host.open_project_count() == 1
+            && primary_roster->unseen_count("invalid") == 0,
+        "duplicate Project windows must dedupe and invalid routes stay excluded");
+    click_agent(secondary, "alpha");
+    require(wait_for_event_loop([&] {
+        return host.unread_total() == 1
+            && secondary_surface->toPlainText().contains(
+                "alpha background unread")
+            && primary_roster->unseen_count("alpha") == 0
+            && secondary_roster->unseen_count("alpha") == 0
+            && primary_roster->unseen_count("gamma") == 1;
+    }, 5000),
+        "viewing alpha in either duplicate window must clear both rosters "
+        "while retaining gamma");
+
+    click_agent(secondary, "beta");
+    QEvent deactivate_secondary(QEvent::WindowDeactivate);
+    QCoreApplication::sendEvent(&secondary.window(), &deactivate_secondary);
+    QCoreApplication::sendEvent(&primary.window(), &activate_primary);
+
+    primary.window().showMinimized();
+    QCoreApplication::processEvents();
+    QCoreApplication::sendEvent(&primary.window(), &deactivate_primary);
+    QCoreApplication::sendEvent(&secondary.window(), &deactivate_secondary);
+    write_file(mailbox / "20260902T120200-alpha-minimized/message.json",
+        conversation_envelope_without_attachments(
+            "alpha", "human", "new", "alpha minimized unread",
+            "received_at", "2026-09-02T12:02:00Z"));
+    tick_mailbox(primary);
+    tick_mailbox(secondary);
+    require(wait_for_event_loop([&] {
+        return host.unread_total() == 2
+            && primary_roster->unseen_count("alpha") == 1;
+    }, 5000), "a minimized selected conversation must accrue unread");
+    primary.window().showNormal();
+    QCoreApplication::processEvents();
+    QCoreApplication::sendEvent(&primary.window(), &activate_primary);
+    require(wait_for_event_loop([&] { return host.unread_total() == 1; }, 1000),
+        "restoring and activating the selected conversation must catch up");
+
+    primary.window().hide();
+    write_file(mailbox / "20260902T120300-alpha-hidden/message.json",
+        conversation_envelope_without_attachments(
+            "alpha", "human", "new", "alpha hidden unread",
+            "received_at", "2026-09-02T12:03:00Z"));
+    tick_mailbox(primary);
+    tick_mailbox(secondary);
+    require(wait_for_event_loop([&] {
+        return host.unread_total() == 2
+            && secondary_roster->unseen_count("alpha") == 1;
+    }, 5000), "a hidden selected conversation must accrue shared unread");
+    primary.show_offscreen();
+    QCoreApplication::sendEvent(&primary.window(), &activate_primary);
+    require(wait_for_event_loop([&] { return host.unread_total() == 1; }, 1000),
+        "showing and activating the selected conversation must catch up");
+
+    const auto other = sandbox / "other-project";
+    const auto other_mailbox = other / ".lingtai/human/mailbox/inbox";
+    write_file(other / ".lingtai/human/.agent.json",
+        R"({"agent_id":"human-two","agent_name":"Human",)"
+        R"("address":"human","state":"active"})");
+    write_file(other / ".lingtai/omega/.agent.json",
+        R"({"admin":{},"agent_id":"omega-id","agent_name":"omega",)"
+        R"("address":"omega","state":"asleep"})");
+    write_file(other_mailbox / "20260902T130000-omega-seed/message.json",
+        conversation_envelope_without_attachments(
+            "omega", "human", "seed", "omega seed", "received_at",
+            "2026-09-02T13:00:00Z"));
+    host.open_path_in_new_window(secondary, other);
+    auto &third = host.shell_at(2);
+    require(third.open_project(other, fs::path(".lingtai/omega"))
+            .disposition == ProjectOpenDisposition::opened,
+        "the second unique Project must open with sleeping omega selected");
+    auto *third_surface = required_child<QTextEdit>(
+        third.window(), "lingtai_selected_agent_conversation");
+    require(wait_for_event_loop([&] {
+        return third_surface->toPlainText().contains("omega seed");
+    }, 4000), "the second Project must seed its accepted history");
+    QCoreApplication::sendEvent(&primary.window(), &activate_primary);
+    write_file(other_mailbox / "20260902T130100-omega-new/message.json",
+        conversation_envelope_without_attachments(
+            "omega", "human", "new", "omega background unread",
+            "received_at", "2026-09-02T13:01:00Z"));
+    tick_mailbox(third);
+    require(wait_for_event_loop([&] {
+        return host.unread_total() == 2 && host.open_project_count() == 2;
+    }, 5000),
+        "one process total must sum Agents across two unique open Projects");
+    third.window().close();
+    require(wait_for_event_loop([&] { return host.shell_count() == 2; }, 1000)
+            && host.open_project_count() == 1
+            && host.unread_total() == 1,
+        "closing the only window for one Project must exclude that Project");
+
+    secondary.window().close();
+    require(wait_for_event_loop([&] { return host.shell_count() == 1; }, 1000)
+            && host.open_project_count() == 1,
+        "closing one duplicate window must retain its Project");
+    require(primary.open_project(other, fs::path(".lingtai/omega"))
+            .disposition == ProjectOpenDisposition::opened,
+        "the remaining shell must rebind to the other Project");
+    require(host.open_project_count() == 1 && host.unread_total() == 1,
+        "Project rebind must synchronously exclude the old Project while "
+        "retaining the reopened Project's session unread");
+    write_file(mailbox / "20260902T120400-gamma-closed/message.json",
+        conversation_envelope_without_attachments(
+            "gamma", "human", "new", "gamma while closed", "received_at",
+            "2026-09-02T12:04:00Z"));
+    require(primary.open_project(project, fs::path(".lingtai/alpha"))
+            .disposition == ProjectOpenDisposition::opened,
+        "the old Project must reopen in the same process session");
+    require(wait_for_event_loop([&] {
+        return host.unread_total() == 2
+            && primary_roster->unseen_count("gamma") == 2;
+    }, 5000),
+        "same-session reopen must preserve the cursor and count later mail");
+
+    primary.window().close();
+    require(host.open_project_count() == 0,
+        "closing the final Project window must synchronously exclude it");
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "the unread aggregate fixture must be removed");
 }
 
 void verify_desktop_status_item(const fs::path &sandbox) {
@@ -3676,7 +3919,8 @@ void verify_composer_paste_behavior(
         "a real input-method emoji commit must preserve exact logical text");
 
     {
-        lingtai::desktop::NativeShell second_shell;
+        lingtai::desktop::ConversationUnreadSession second_unread_session;
+        lingtai::desktop::NativeShell second_shell(second_unread_session);
         second_shell.show_offscreen();
         QCoreApplication::processEvents();
         auto *second_input = static_cast<Ui::InputField *>(required_child<QObject>(
@@ -8483,7 +8727,8 @@ using lingtai::desktop::NativeShell;
 
 template<typename Fn>
 void with_offscreen_shell(Fn &&run) {
-    NativeShell shell;
+    lingtai::desktop::ConversationUnreadSession unread_session;
+    NativeShell shell(unread_session);
     shell.show_offscreen();
     QCoreApplication::processEvents();
     run(shell);
@@ -8539,6 +8784,11 @@ void run_native_shell_journey(
             verify_conversation_slash_interception(
                 shell, project_root / "u2-slash-interception-fixture");
         });
+        return;
+    }
+    if (journey == "unread") {
+        verify_session_unread_aggregate(
+            project_root / "session-unread-aggregate-fixture");
         return;
     }
     if (journey == "paste") {
@@ -8624,6 +8874,7 @@ void run_native_shell_journey(
             "setup",
             "roster",
             "conversation",
+            "unread",
             "lifecycle",
             "layout",
             "theme",
@@ -8709,7 +8960,7 @@ int main(int argc, char **argv) {
                      "       native_shell_test "
                      "--status-item-quit-only|--final-window-quit-only\n"
                      "  journeys: semantics bootstrap roster conversation "
-                     "setup lifecycle layout theme composer paste menu outgoing kanban all\n";
+                     "setup unread lifecycle layout theme composer paste menu outgoing kanban all\n";
         return 2;
     }
     try {
@@ -8722,8 +8973,9 @@ int main(int argc, char **argv) {
             "qt.qpa.fonts.warning=false;qt.qpa.keymapper.warning=false");
         QApplication application(argc, argv);
         lingtai::desktop::ui_test::applyUiTestFontDefaults();
+        lingtai::desktop::ConversationUnreadSession unread_session;
         if (responsive_sidebar_only) {
-            lingtai::desktop::NativeShell shell;
+            lingtai::desktop::NativeShell shell(unread_session);
             shell.show_offscreen();
             QCoreApplication::processEvents();
             verify_resizable_sidebar(
@@ -8732,7 +8984,7 @@ int main(int argc, char **argv) {
             return 0;
         }
         if (responsive_header_only) {
-            lingtai::desktop::NativeShell shell;
+            lingtai::desktop::NativeShell shell(unread_session);
             shell.show_offscreen();
             QCoreApplication::processEvents();
             verify_responsive_header_priority(
@@ -8741,7 +8993,7 @@ int main(int argc, char **argv) {
             return 0;
         }
         if (modern_composer_only) {
-            lingtai::desktop::NativeShell shell;
+            lingtai::desktop::NativeShell shell(unread_session);
             shell.show_offscreen();
             QCoreApplication::processEvents();
             verify_modern_composer_surface(
@@ -8750,7 +9002,7 @@ int main(int argc, char **argv) {
             return 0;
         }
         if (slash_interception_only) {
-            lingtai::desktop::NativeShell shell;
+            lingtai::desktop::NativeShell shell(unread_session);
             shell.show_offscreen();
             QCoreApplication::processEvents();
             verify_conversation_slash_interception(
@@ -8759,7 +9011,7 @@ int main(int argc, char **argv) {
             return 0;
         }
         if (compact_header_only) {
-            lingtai::desktop::NativeShell shell;
+            lingtai::desktop::NativeShell shell(unread_session);
             shell.show_offscreen();
             QCoreApplication::processEvents();
             verify_compact_header_hierarchy(
@@ -8768,7 +9020,7 @@ int main(int argc, char **argv) {
             return 0;
         }
         if (two_surface_only) {
-            lingtai::desktop::NativeShell shell;
+            lingtai::desktop::NativeShell shell(unread_session);
             shell.show_offscreen();
             QCoreApplication::processEvents();
             verify_two_surface_hierarchy(
@@ -8777,7 +9029,7 @@ int main(int argc, char **argv) {
             return 0;
         }
         if (plain_underline_only) {
-            lingtai::desktop::NativeShell shell;
+            lingtai::desktop::NativeShell shell(unread_session);
             shell.show_offscreen();
             QCoreApplication::processEvents();
             verify_plain_underline_page_tabs(
@@ -8786,7 +9038,7 @@ int main(int argc, char **argv) {
             return 0;
         }
         if (floating_composer_only) {
-            lingtai::desktop::NativeShell shell;
+            lingtai::desktop::NativeShell shell(unread_session);
             shell.show_offscreen();
             QCoreApplication::processEvents();
             verify_floating_composer_surface(
@@ -8795,7 +9047,7 @@ int main(int argc, char **argv) {
             return 0;
         }
         if (project_setup_only) {
-            lingtai::desktop::NativeShell shell;
+            lingtai::desktop::NativeShell shell(unread_session);
             shell.show_offscreen();
             QCoreApplication::processEvents();
             verify_preset_editor_model(project_root / "preset-editor-model-fixture");
@@ -8804,7 +9056,7 @@ int main(int argc, char **argv) {
             return 0;
         }
         if (setup_rerun_only) {
-            lingtai::desktop::NativeShell shell;
+            lingtai::desktop::NativeShell shell(unread_session);
             shell.show_offscreen();
             QCoreApplication::processEvents();
             verify_existing_agent_setup(
@@ -8813,7 +9065,7 @@ int main(int argc, char **argv) {
             return 0;
         }
         if (kanban_only) {
-            lingtai::desktop::NativeShell shell;
+            lingtai::desktop::NativeShell shell(unread_session);
             shell.show_offscreen();
             QCoreApplication::processEvents();
             verify_kanban_page(

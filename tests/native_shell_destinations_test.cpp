@@ -87,7 +87,8 @@ void verify_removed_activity_and_task_card_destinations(
 int main(int argc, char **argv) {
     try {
         QApplication application(argc, argv);
-        lingtai::desktop::NativeShell shell;
+        lingtai::desktop::ConversationUnreadSession unread_session;
+        lingtai::desktop::NativeShell shell(unread_session);
         shell.show_offscreen();
         QCoreApplication::processEvents();
         verify_removed_activity_and_task_card_destinations(shell);

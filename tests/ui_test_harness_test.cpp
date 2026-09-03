@@ -29,8 +29,9 @@ int main(int argc, char **argv) {
     const auto project = lingtai::desktop::ui_test::fixtureProjectRoot(
         fixtures_root, "empty");
 
+    lingtai::desktop::ConversationUnreadSession unread_session;
     lingtai::desktop::NativeShell shell(
-        lingtai::desktop::ui_test::defaultUiTestOptions());
+        unread_session, lingtai::desktop::ui_test::defaultUiTestOptions());
     lingtai::desktop::ui_test::showShellAt(
         shell, lingtai::desktop::ui_test::kNormalViewport);
 

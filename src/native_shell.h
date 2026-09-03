@@ -97,8 +97,12 @@ public:
     using AgentSetupSaveFunction = std::function<AgentSetupSaveResult(
         const AgentSetupStore &, const AgentSetupState &,
         const AgentSetupDraft &)>;
+    using UnreadViewEligibility = std::function<bool()>;
+    using UnreadPresentationChangedHandler = std::function<void()>;
 
-    explicit NativeShell(RuntimeOptions runtime_options = {});
+    explicit NativeShell(
+        ConversationUnreadSession &unread_session,
+        RuntimeOptions runtime_options = {});
     ~NativeShell();
 
     NativeShell(const NativeShell &) = delete;
@@ -109,6 +113,9 @@ public:
     void set_open_project_request_handler(OpenProjectRequestHandler handler);
     void set_open_project_in_new_window_request_handler(
         OpenProjectRequestHandler handler);
+    void set_unread_view_eligibility(UnreadViewEligibility eligibility);
+    void set_unread_presentation_changed_handler(
+        UnreadPresentationChangedHandler handler);
     void set_attachment_picker(AttachmentPicker picker);
     void set_attachment_external_action(AttachmentExternalAction action);
     // Deterministic worker seam used by the native-shell contract to hold or
@@ -139,6 +146,13 @@ public:
     [[nodiscard]] const Ui::RpWindow &window() const noexcept;
     [[nodiscard]] const WorkspaceSelectionState &selection_state()
         const noexcept;
+    [[nodiscard]] std::optional<std::filesystem::path> active_project_root()
+        const;
+    [[nodiscard]] std::vector<std::string> valid_unread_agent_keys() const;
+    void apply_unread_snapshot(const ProjectUnreadSnapshot &snapshot);
+    // Re-evaluates read eligibility from the already accepted mailbox index.
+    // Performs no fingerprint or filesystem read.
+    void refresh_unread_view_state();
 
     // True once the window, body, sidebar, and content are constructed,
     // correctly named, and actually shown offscreen. `main.cpp`'s `--smoke`
@@ -199,6 +213,7 @@ private:
         const DirectConversationHistory &authoritative,
         std::uint64_t authoritative_revision);
     [[nodiscard]] SelectedConversationView refresh_unseen_badges();
+    [[nodiscard]] SelectedConversationView apply_current_unread_snapshot();
     void render_conversation(
         std::optional<SelectedConversationView> history = std::nullopt);
     void clear_session_events_cache();
@@ -277,6 +292,7 @@ private:
         ProjectPathFailure failure,
         std::string message);
 
+    ConversationUnreadSession &unread_session_;
     WorkspaceSelectionState selection_state_;
     RuntimeOptions runtime_options_;
     std::unique_ptr<Ui::RpWindow> window_;
@@ -316,8 +332,8 @@ private:
     Ui::RpWidget *project_route_ = nullptr;
     Ui::RpWidget *open_error_surface_ = nullptr;
     AgentSnapshot agents_;
+    std::vector<std::string> last_valid_unread_agent_keys_;
     MessageReactionStore reaction_store_;
-    ConversationUnreadState conversation_unread_;
     InjectedMailJournal injected_mail_journal_;
     // One complete shared human-mailbox projection for all current Agent
     // routes. The UI thread performs only fixed-count fingerprints; the
@@ -347,6 +363,9 @@ private:
         = std::make_shared<MailboxLoadToken>();
     OpenProjectRequestHandler open_project_request_handler_;
     OpenProjectRequestHandler open_project_in_new_window_request_handler_;
+    UnreadViewEligibility unread_view_eligibility_;
+    UnreadPresentationChangedHandler
+        unread_presentation_changed_handler_;
     AttachmentPicker attachment_picker_;
     AttachmentExternalAction attachment_external_action_;
     KanbanRefreshFunction kanban_refresh_function_;

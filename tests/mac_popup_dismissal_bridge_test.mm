@@ -156,7 +156,8 @@ struct ShellContext final {
         });
     }
 
-    lingtai::desktop::NativeShell shell;
+    lingtai::desktop::ConversationUnreadSession unread_session;
+    lingtai::desktop::NativeShell shell{unread_session};
     Ui::InputField *composer = nullptr;
 };
 
@@ -478,7 +479,7 @@ void verify_second_shell(
         QApplication &application,
         ShellContext &context,
         ForceHideRequestCounter &requests) {
-    auto second = lingtai::desktop::NativeShell();
+    auto second = lingtai::desktop::NativeShell(context.unread_session);
     second.show();
     QCoreApplication::processEvents();
     required_bridge(application);
@@ -778,8 +779,11 @@ void verify_existing_escape_and_deactivation(
 void verify_two_shell_lifetime(QApplication &application) {
     required_bridge(application);
     {
-        auto first = std::make_unique<lingtai::desktop::NativeShell>();
-        auto second = std::make_unique<lingtai::desktop::NativeShell>();
+        auto unread_session = lingtai::desktop::ConversationUnreadSession();
+        auto first = std::make_unique<lingtai::desktop::NativeShell>(
+            unread_session);
+        auto second = std::make_unique<lingtai::desktop::NativeShell>(
+            unread_session);
         first->show_offscreen();
         second->show_offscreen();
         QCoreApplication::processEvents();

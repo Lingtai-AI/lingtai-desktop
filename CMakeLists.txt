@@ -940,6 +940,7 @@ set(NATIVE_SHELL_JOURNEYS
     setup
     roster
     conversation
+    unread
     lifecycle
     layout
     theme
