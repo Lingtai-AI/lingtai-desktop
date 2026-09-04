@@ -1232,11 +1232,16 @@ QPixmap empty_state_avatar(const QString &initial, int diameter) {
     return pixmap;
 }
 
-// Pale accent wash for drag-select. Soft enough to stay Slack-like on both
-// light and dark windowBg without drowning body ink.
+// Blue/azure accent wash for drag-select. The base hue is Qt's live native
+// Highlight role (the macOS selection color), read fresh on every paint, not
+// windowBgActive or any other conversation-surface token — a translucent
+// windowBgActive wash reads as a weak tint of the same teal/green family as
+// the bubbles it sits over, especially in dark mode. Coverage after
+// compositing is ~38% in light, ~53% in dark: the darker canvas needs more
+// of the accent to show through before a selection reads as unmistakable.
 [[nodiscard]] QColor text_selection_wash_color() {
-    auto wash = st::windowBgActive->c;
-    wash.setAlpha(st::windowBg->c.lightness() >= 128 ? 48 : 72);
+    auto wash = QApplication::palette().color(QPalette::Active, QPalette::Highlight);
+    wash.setAlpha(conversation_canvas_is_light() ? 97 : 136);
     return wash;
 }
 
@@ -1486,6 +1491,10 @@ ConversationSurface::ConversationSurface(QWidget *parent)
     transparent_palette.setBrush(QPalette::Window, QBrush(Qt::transparent));
     // Selection geometry is painted by paintEvent (glyph-tight). Keep Highlight
     // transparent so Qt does not fill the full message lane underneath.
+    // HighlightedText is copied by value here, so it goes stale across a live
+    // theme switch; refresh_chrome() re-applies both roles from the current
+    // ink so a later dark<->light change does not leave selected text on the
+    // wrong contrast.
     transparent_palette.setColor(QPalette::Highlight, Qt::transparent);
     transparent_palette.setColor(QPalette::HighlightedText, st::windowFg->c);
     setPalette(transparent_palette);
@@ -1922,6 +1931,15 @@ ConversationVerboseLevel ConversationSurface::cycle_verbose_level() {
 
 void ConversationSurface::refresh_chrome() {
     disarm_attachment_action();
+    // QPalette::setColor copies by value, so the constructor-time
+    // HighlightedText (and the plain-state/empty-state path, which never
+    // rebuilds the document) would otherwise keep painting selected text in
+    // the ink of whichever theme was active at construction. Re-read it here
+    // on every refresh, before the possibly-deferred rebuild below.
+    auto refreshed_palette = palette();
+    refreshed_palette.setColor(QPalette::Highlight, Qt::transparent);
+    refreshed_palette.setColor(QPalette::HighlightedText, st::windowFg->c);
+    setPalette(refreshed_palette);
     if (last_messages_.empty() || rebuild_in_progress_) {
         update();
         return;
@@ -1977,6 +1995,15 @@ void ConversationSurface::rebuild_document() {
     const auto previous = scrollbar->value();
     const auto was_at_bottom = !wheel_gesture_active_
         && previous >= scrollbar->maximum();
+
+    // document->clear() below drops every QTextCursor onto position 0, which
+    // would silently end an active drag-select on a theme refresh (the same
+    // messages are about to be reinserted, so the old offsets still apply).
+    // Restore the selection by content offset once the rebuild finishes.
+    const auto selection_before = textCursor();
+    const auto had_selection = selection_before.hasSelection();
+    const auto selection_start = selection_before.selectionStart();
+    const auto selection_end = selection_before.selectionEnd();
 
     auto *document = this->document();
     document->clear();
@@ -2387,6 +2414,19 @@ void ConversationSurface::rebuild_document() {
         }
     }
     document->documentLayout()->documentSize();
+
+    // The rebuild above reinserted the identical cached messages, so the
+    // captured offsets still address the same content; clamp defensively in
+    // case the visible window changed (e.g. a reveal_older() in the same
+    // pass) and restore rather than leaving the drag-select silently gone.
+    if (had_selection) {
+        const auto length = document->characterCount();
+        auto restored = textCursor();
+        restored.setPosition(std::clamp(selection_start, 0, length - 1));
+        restored.setPosition(
+            std::clamp(selection_end, 0, length - 1), QTextCursor::KeepAnchor);
+        setTextCursor(restored);
+    }
 
     if (was_at_bottom) {
         scroll_to_bottom();

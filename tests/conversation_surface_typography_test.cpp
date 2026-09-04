@@ -16,6 +16,7 @@
 #include <QtGui/QImage>
 #include <QtGui/QKeyEvent>
 #include <QtGui/QMouseEvent>
+#include <QtGui/QPalette>
 #include <QtGui/QPixmap>
 #include <QtGui/QTextBlock>
 #include <QtGui/QTextBlockFormat>
@@ -3142,6 +3143,442 @@ void export_production_receipt_preview(const QString &preview_path) {
     }
 }
 
+// Mirrors text_selection_wash_color()'s two theme targets. Kept as an
+// independent constant here (not shared with the production TU) so this test
+// distinguishes the actual chosen coverage from the brief's design range,
+// rather than trivially re-asserting whatever the production file defines.
+constexpr auto kLightSelectionAlpha = 97;
+constexpr auto kDarkSelectionAlpha = 136;
+
+void apply_selection_test_palette(bool dark) {
+    style::main_palette::reset();
+    if (!dark) {
+        return;
+    }
+    // The exact production night-palette values for the tokens this
+    // selection contract reads (native_shell.cpp's apply_telegram_night_
+    // palette()), not an ad hoc fixture subset: windowFg matters here
+    // because it is what HighlightedText must track after refresh_chrome().
+    set_test_palette_color("windowBg", "#17212B");
+    set_test_palette_color("windowFg", "#F5F5F5");
+    set_test_palette_color("windowBgActive", "#2B5278");
+    set_test_palette_color("historyTextInFg", "#F5F5F5");
+    set_test_palette_color("historyTextOutFg", "#E4ECF2");
+    set_test_palette_color("msgServiceFg", "#708499");
+}
+
+QColor alpha_blended(const QColor &fg, const QColor &bg, int alpha) {
+    const auto factor = alpha / 255.0;
+    const auto blend = [&](int f, int b) {
+        return int(std::lround(b + (f - b) * factor));
+    };
+    return QColor(
+        blend(fg.red(), bg.red()),
+        blend(fg.green(), bg.green()),
+        blend(fg.blue(), bg.blue()));
+}
+
+bool colors_close(const QColor &a, const QColor &b, int tolerance) {
+    return std::abs(a.red() - b.red()) <= tolerance
+        && std::abs(a.green() - b.green()) <= tolerance
+        && std::abs(a.blue() - b.blue()) <= tolerance;
+}
+
+// True when some pixel in `rect` is within `tolerance` of `color`. A region
+// scan (not a single sampled point) because the rect covers real glyph ink
+// as well as the painted wash, and which exact point lands on ink vs. wash
+// background is font-metric-dependent.
+bool region_contains_color_near(
+        const QImage &image,
+        const QRectF &rect,
+        const QColor &color,
+        int tolerance) {
+    const auto dpr = image.devicePixelRatio();
+    const auto left = std::max(0, int(std::floor(rect.left() * dpr)));
+    const auto top = std::max(0, int(std::floor(rect.top() * dpr)));
+    const auto right = std::min(
+        image.width() - 1, int(std::ceil(rect.right() * dpr)));
+    const auto bottom = std::min(
+        image.height() - 1, int(std::ceil(rect.bottom() * dpr)));
+    for (auto y = top; y <= bottom; ++y) {
+        for (auto x = left; x <= right; ++x) {
+            if (colors_close(image.pixelColor(x, y), color, tolerance)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// paint_glyph_tight_selection widens the glyph rect by 1px each side and
+// rounds its corners (radius 3) before filling it, so the outermost few
+// pixels of the geometric glyph rect are an antialiased blend toward the
+// surface background, not a solid fill. "Absence of color X" checks must
+// look only at the solid interior, or a blend pixel can transiently land
+// within tolerance of an unrelated target color by coincidence.
+QRectF interior_of(const QRectF &rect, double margin = 3.0) {
+    return rect.adjusted(margin, margin, -margin, -margin);
+}
+
+QTextCursor select_substring(ConversationSurface &surface, const QString &needle) {
+    auto cursor = surface.document()->find(needle);
+    if (!cursor.hasSelection()) {
+        throw std::runtime_error(
+            "selection fixture text '" + needle.toStdString()
+            + "' was not found in the rendered document");
+    }
+    surface.setTextCursor(cursor);
+    return cursor;
+}
+
+// Mirrors paint_glyph_tight_selection's own geometry (natural-glyph
+// cursorToX span, translated into the owning frame — or the root frame for
+// plain-state text — then into the viewport), so the test can predict
+// exactly where the wash should, and should not, land.
+QRectF selected_glyph_viewport_rect(
+        ConversationSurface &surface, const QTextCursor &selection) {
+    auto *document = surface.document();
+    const auto sel_start = selection.selectionStart();
+    const auto sel_end = selection.selectionEnd();
+    const auto block = document->findBlock(sel_start);
+    const auto *layout = block.layout();
+    const auto local_start = sel_start - block.position();
+    const auto local_end = sel_end - block.position();
+    const auto line = layout->lineForTextPosition(local_start);
+    const auto x1 = line.cursorToX(local_start);
+    const auto x2 = line.cursorToX(local_end);
+    auto *frame = document->rootFrame();
+    for (auto *candidate : document->rootFrame()->childFrames()) {
+        if (sel_start >= candidate->firstPosition()
+                && sel_start <= candidate->lastPosition()) {
+            frame = candidate;
+            break;
+        }
+    }
+    const auto frame_origin =
+        document->documentLayout()->frameBoundingRect(frame).topLeft();
+    auto rect = QRectF(
+        std::min(x1, x2), line.y(), std::abs(x2 - x1), line.height())
+        .translated(layout->position())
+        .translated(frame_origin);
+    const auto h_offset = double(surface.horizontalScrollBar()->value());
+    const auto v_offset = double(surface.verticalScrollBar()->value());
+    rect.translate(-h_offset, -v_offset);
+    return rect;
+}
+
+void flush_deferred_events() {
+    for (auto i = 0; i != 4; ++i) {
+        QCoreApplication::processEvents();
+    }
+}
+
+// The design targets are measurement ranges, not license to hard-code an
+// unmeasured hex: this asserts the chosen alpha constants actually land in
+// the brief's coverage windows, and that the live Qt/macOS Highlight role
+// this machine reports is genuinely blue/azure-hued (a real, disclosable
+// finding if some future machine's OS selection color is not).
+void verify_selection_accent_targets() {
+    if (kLightSelectionAlpha < 89 || kLightSelectionAlpha > 102) {
+        throw std::runtime_error(
+            "light-mode selection coverage must land in the ~35-40% design "
+            "target (alpha 89-102 of 255), got "
+            + std::to_string(kLightSelectionAlpha));
+    }
+    if (kDarkSelectionAlpha < 128 || kDarkSelectionAlpha > 140) {
+        throw std::runtime_error(
+            "dark-mode selection coverage must land in the ~50-55% design "
+            "target (alpha 128-140 of 255), got "
+            + std::to_string(kDarkSelectionAlpha));
+    }
+    const auto native_base =
+        QApplication::palette().color(QPalette::Active, QPalette::Highlight);
+    std::cout << "selection accent: live QPalette::Highlight = "
+              << native_base.name().toStdString()
+              << " (hue " << native_base.hue() << ")\n";
+    const struct { const char *name; QColor light; QColor dark; } surfaces[] = {
+        {"assistant/system canvas", QColor(QStringLiteral("#FFFFFF")),
+            QColor(QStringLiteral("#17212B"))},
+        {"human bubble", QColor(QStringLiteral("#EEF7F3")),
+            QColor(QStringLiteral("#2A4038"))},
+        {"fenced code surface", QColor(QStringLiteral("#E4E7EB")),
+            QColor(QStringLiteral("#242F3D"))},
+    };
+    const auto light_ink = QColor(QStringLiteral("#000000"));
+    const auto dark_ink = QColor(QStringLiteral("#F5F5F5"));
+    for (const auto &surface : surfaces) {
+        const auto light_fill =
+            alpha_blended(native_base, surface.light, kLightSelectionAlpha);
+        const auto dark_fill =
+            alpha_blended(native_base, surface.dark, kDarkSelectionAlpha);
+        std::cout << "  " << surface.name
+                  << ": light fill=" << light_fill.name().toStdString()
+                  << " contrast=" << contrast_ratio(light_ink, light_fill)
+                  << "  dark fill=" << dark_fill.name().toStdString()
+                  << " contrast=" << contrast_ratio(dark_ink, dark_fill) << "\n";
+    }
+    const auto hue = native_base.hue();
+    if (hue < 170 || hue > 260) {
+        throw std::runtime_error(
+            "the live Qt/macOS Highlight role used as the selection base "
+            "must read as blue/azure (hue in [170,260]), but this machine's "
+            "active palette returned hue " + std::to_string(hue) + " ("
+            + native_base.name().toStdString() + ")");
+    }
+}
+
+// One pass: select `needle` inside `surface`, verify the composited
+// selection wash is the new native blue/azure accent at the theme's target
+// coverage (not the superseded windowBgActive teal wash), stays glyph-tight
+// (a later word on the same row, `past_needle`, must show none of the
+// wash), and keeps selected-text ink readable against the new fill.
+void verify_selection_on_surface(
+        ConversationSurface &surface,
+        bool dark,
+        const QColor &background,
+        const QString &needle,
+        const QString &past_needle,
+        const char *surface_name) {
+    const auto cursor = select_substring(surface, needle);
+    QCoreApplication::processEvents();
+    const auto image = surface.viewport()->grab().toImage();
+    const auto glyph_rect = selected_glyph_viewport_rect(surface, cursor);
+
+    const auto native_base =
+        QApplication::palette().color(QPalette::Active, QPalette::Highlight);
+    const auto alpha = dark ? kDarkSelectionAlpha : kLightSelectionAlpha;
+    const auto expected = alpha_blended(native_base, background, alpha);
+    if (!region_contains_color_near(image, glyph_rect, expected, 3)) {
+        throw std::runtime_error(
+            std::string(surface_name) + " selection fill in "
+            + (dark ? "dark" : "light")
+            + " must composite the native accent at the target coverage "
+              "over its surface, expected a pixel near "
+            + expected.name().toStdString());
+    }
+
+    const auto old_base = dark
+        ? QColor(QStringLiteral("#2B5278"))
+        : QColor(QStringLiteral("#40A7E3"));
+    const auto old_alpha = dark ? 72 : 48;
+    const auto old_expected = alpha_blended(old_base, background, old_alpha);
+    if (region_contains_color_near(
+            image, interior_of(glyph_rect), old_expected, 3)) {
+        throw std::runtime_error(
+            std::string(surface_name) + " selection in "
+            + (dark ? "dark" : "light")
+            + " must not still composite as the superseded weak "
+              "windowBgActive teal wash");
+    }
+
+    auto past_cursor = surface.document()->find(past_needle);
+    if (!past_cursor.hasSelection()) {
+        throw std::runtime_error(
+            std::string("glyph-tight probe text was not found for ")
+            + surface_name);
+    }
+    const auto past_rect = selected_glyph_viewport_rect(surface, past_cursor);
+    if (region_contains_color_near(
+            image, interior_of(past_rect), expected, 3)) {
+        throw std::runtime_error(
+            std::string(surface_name) + " selection wash in "
+            + (dark ? "dark" : "light")
+            + " must stay glyph-tight, but it also reached a later word on "
+              "the same row past the selected glyphs");
+    }
+
+    // Read the ink Qt will actually paint (the widget's own HighlightedText
+    // role), not st::windowFg directly: that is the value refresh_chrome()
+    // is responsible for keeping current, and the two can diverge if it goes
+    // stale after a live theme switch.
+    const auto ink = surface.palette().color(QPalette::HighlightedText);
+    const auto contrast = contrast_ratio(ink, expected);
+    if (contrast < 4.5) {
+        throw std::runtime_error(
+            std::string(surface_name) + " selected-text ink in "
+            + (dark ? "dark" : "light")
+            + " must stay readable (>=4.5:1) against the new fill, got "
+            + std::to_string(contrast));
+    }
+}
+
+void verify_selection_wash_on_conversation_surfaces() {
+    for (const auto dark : {true, false}) {
+        apply_selection_test_palette(dark);
+        ConversationSurface surface;
+        surface.resize(1000, 700);
+        surface.setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        surface.show();
+
+        const std::vector<DirectConversationMessage> messages = {
+            {.id = "in-1", .outgoing = false,
+                .timestamp = "2026-08-07T18:48:52",
+                .text = "The assistant explains the plan clearly today."},
+            {.id = "out-1", .outgoing = true,
+                .timestamp = "2026-08-07T19:00:00Z",
+                .text = "Understood, proceeding now with the change."},
+            {.id = "code-1", .outgoing = false,
+                .timestamp = "2026-08-07T19:05:00Z",
+                .text = "Here is the function:\n```cpp\n"
+                        "int compute(int x) { return x + 1; }\n```"},
+        };
+        surface.set_conversation(QStringLiteral("Telegram Bot"), messages);
+        surface.document()->documentLayout()->documentSize();
+        QCoreApplication::processEvents();
+
+        const auto canvas = dark
+            ? QColor(QStringLiteral("#17212B"))
+            : QColor(QStringLiteral("#FFFFFF"));
+        const auto human_bubble = dark
+            ? QColor(QStringLiteral("#2A4038"))
+            : QColor(QStringLiteral("#EEF7F3"));
+        const auto code_surface = dark
+            ? QColor(QStringLiteral("#242F3D"))
+            : QColor(QStringLiteral("#E4E7EB"));
+
+        verify_selection_on_surface(surface, dark, canvas,
+            QStringLiteral("plan"), QStringLiteral("clearly"),
+            "assistant bubble");
+        verify_selection_on_surface(surface, dark, human_bubble,
+            QStringLiteral("proceeding"), QStringLiteral("with"),
+            "human bubble");
+        verify_selection_on_surface(surface, dark, code_surface,
+            QStringLiteral("compute"), QStringLiteral("return"),
+            "fenced code surface");
+    }
+}
+
+// "system/plain text" is the plain-state path (set_plain_state): no owning
+// message QTextFrame, so paint_glyph_tight_selection's frame lookup falls
+// back to the root frame — a genuinely different geometry branch than the
+// three per-message surfaces above — and it is painted in secondary_format()
+// service ink, the dimmest ink this surface uses.
+void verify_selection_over_plain_state_text() {
+    for (const auto dark : {true, false}) {
+        apply_selection_test_palette(dark);
+        ConversationSurface surface;
+        surface.resize(900, 300);
+        surface.show();
+        surface.set_plain_state(QStringLiteral(
+            "No agent is selected, choose one to continue exploring."));
+        QCoreApplication::processEvents();
+
+        const auto canvas = dark
+            ? QColor(QStringLiteral("#17212B"))
+            : QColor(QStringLiteral("#FFFFFF"));
+        verify_selection_on_surface(surface, dark, canvas,
+            QStringLiteral("selected"), QStringLiteral("choose"),
+            "system/plain-state text");
+    }
+}
+
+// A live theme refresh (refresh_chrome(), the same entry point native_shell
+// calls on a system palette change) must not clear an in-progress drag
+// selection, must not require the caller to resupply the conversation, and
+// must repaint the wash/ink at the new theme's target the moment it runs.
+void verify_selection_survives_live_theme_switch() {
+    apply_selection_test_palette(false);
+    ConversationSurface surface;
+    surface.resize(900, 400);
+    surface.show();
+    const std::vector<DirectConversationMessage> messages = {
+        {.id = "in-1", .outgoing = false,
+            .timestamp = "2026-08-07T18:48:52",
+            .text = "The assistant explains the plan clearly today."},
+    };
+    surface.set_conversation(QStringLiteral("Telegram Bot"), messages);
+    QCoreApplication::processEvents();
+
+    const auto initial_cursor =
+        select_substring(surface, QStringLiteral("plan clearly"));
+    const auto expected_text = initial_cursor.selectedText();
+    QCoreApplication::processEvents();
+
+    const auto verify_after_switch = [&](
+            bool dark, const QColor &canvas, int alpha) {
+        if (!surface.textCursor().hasSelection()
+                || surface.textCursor().selectedText() != expected_text) {
+            throw std::runtime_error(
+                std::string("a live theme refresh to ")
+                + (dark ? "dark" : "light")
+                + " must not lose the active drag-select, but the "
+                  "selection changed or was cleared (selectedText is now '"
+                + surface.textCursor().selectedText().toStdString() + "')");
+        }
+
+        // Positive proof the deferred rebuild actually ran (not just that
+        // nothing cleared the selection): body_format() bakes
+        // body_reading_color() into the QTextCharFormat at insertion time,
+        // so this only reads as the new theme's ink if rebuild_document()
+        // reinserted the message after the switch.
+        const auto body_runs = format_runs(
+            *surface.document(), QStringLiteral("The assistant"));
+        if (body_runs.size() != 1) {
+            throw std::runtime_error(
+                "expected exactly one body run for 'The assistant', found "
+                + std::to_string(body_runs.size()));
+        }
+        const auto body_ink = body_runs.front().foreground().color();
+        const auto expected_body_ink = dark
+            ? st::historyTextInFg->c
+            : QColor(QStringLiteral("#26282B"));
+        if (body_ink != expected_body_ink) {
+            throw std::runtime_error(
+                std::string("after a live refresh to ") + (dark ? "dark" : "light")
+                + " the message body must be reinserted with that theme's "
+                  "ink (the document must actually rebuild), expected "
+                + expected_body_ink.name().toStdString() + " got "
+                + body_ink.name().toStdString());
+        }
+
+        // QPalette::setColor copies by value: this is the direct proof that
+        // refresh_chrome() re-reads HighlightedText instead of leaving the
+        // constructor-time (now possibly wrong-theme) ink in place.
+        const auto ink = surface.palette().color(QPalette::HighlightedText);
+        if (ink != st::windowFg->c) {
+            throw std::runtime_error(
+                std::string("after a live refresh to ") + (dark ? "dark" : "light")
+                + " the widget's HighlightedText must track the current "
+                  "st::windowFg, but it is stale (" + ink.name().toStdString()
+                + " vs current " + st::windowFg->c.name().toStdString() + ")");
+        }
+
+        const auto image = surface.viewport()->grab().toImage();
+        const auto glyph_rect = selected_glyph_viewport_rect(
+            surface, surface.textCursor());
+        const auto native_base = QApplication::palette()
+            .color(QPalette::Active, QPalette::Highlight);
+        const auto expected = alpha_blended(native_base, canvas, alpha);
+        if (!region_contains_color_near(image, glyph_rect, expected, 3)) {
+            throw std::runtime_error(
+                std::string("after a live refresh to ")
+                + (dark ? "dark" : "light")
+                + " the selection wash must repaint at that theme's target "
+                  "coverage, but the expected composite was not found");
+        }
+        const auto contrast = contrast_ratio(ink, expected);
+        if (contrast < 4.5) {
+            throw std::runtime_error(
+                std::string("after a live refresh to ")
+                + (dark ? "dark" : "light")
+                + " the selected-text ink must stay readable (>=4.5:1), got "
+                + std::to_string(contrast));
+        }
+    };
+
+    apply_selection_test_palette(true);
+    surface.refresh_chrome();
+    flush_deferred_events();
+    verify_after_switch(
+        true, QColor(QStringLiteral("#17212B")), kDarkSelectionAlpha);
+
+    apply_selection_test_palette(false);
+    surface.refresh_chrome();
+    flush_deferred_events();
+    verify_after_switch(
+        false, QColor(QStringLiteral("#FFFFFF")), kLightSelectionAlpha);
+}
+
 } // namespace
 
 int run_typography_test(int argc, char **argv) {
@@ -3233,6 +3670,16 @@ int run_typography_test(int argc, char **argv) {
             std::cout << "conversation surface production receipts preview: OK\n";
             return 0;
         }
+        if (argc > 1
+                && QString::fromLocal8Bit(argv[1])
+                    == QStringLiteral("--selection-highlight-only")) {
+            verify_selection_accent_targets();
+            verify_selection_wash_on_conversation_surfaces();
+            verify_selection_over_plain_state_text();
+            verify_selection_survives_live_theme_switch();
+            std::cout << "conversation surface selection highlight: OK\n";
+            return 0;
+        }
         ConversationSurface surface;
         surface.resize(640, 480);
         verify_typography(surface, QStringLiteral("Telegram Bot"));
@@ -3251,6 +3698,10 @@ int run_typography_test(int argc, char **argv) {
         verify_revision_noop_and_incremental_append();
         verify_incremental_append_matches_clean_presentation();
         verify_unified_receipt_chip_fill();
+        verify_selection_accent_targets();
+        verify_selection_wash_on_conversation_surfaces();
+        verify_selection_over_plain_state_text();
+        verify_selection_survives_live_theme_switch();
         std::cout << "conversation surface typography: OK\n";
         return 0;
     } catch (const std::exception &error) {
