@@ -3836,7 +3836,7 @@ void verify_selection_accent_fallback_on_real_off_family_native_highlight() {
 
     for (const auto off_family_hue : {Qt::red, Qt::green}) {
         const auto off_family_native = QColor(off_family_hue);
-        auto forced_palette = QApplication::palette();
+        auto forced_palette = original_palette;
         forced_palette.setColor(
             QPalette::Active, QPalette::Highlight, off_family_native);
         QApplication::setPalette(forced_palette);
