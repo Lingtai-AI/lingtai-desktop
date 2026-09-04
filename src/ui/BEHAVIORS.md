@@ -94,7 +94,7 @@ Enabled/checked/keyboard (`agent_roster.cpp:377-395`, `184-193`):
   emitted. The Open/New Project child `QPushButton`s expose their standard Qt
   `clicked` signals, which the owner composes but does not connect
   (`agent_roster.cpp:236-252`); `NativeShell` finds them by object name and
-  wires them (`native_shell.cpp:593-603`).
+  wires them (`native_shell.cpp:1219-1230`).
 - `focus_row(key)` focuses the first enabled row whose `directory_key` equals
   `key`, or the first enabled row when no key is given; disabled rows are
   skipped (`agent_roster.cpp:398-414`).

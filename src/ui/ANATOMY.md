@@ -14,7 +14,7 @@ drives. Neither owner reads a file or derives project/Agent truth; the only
 explicit custom callback port is roster row selection. The Open/New Project
 child `QPushButton`s expose their standard Qt `clicked` signals, which
 `NativeShell` finds by object name and wires externally
-(`native_shell.cpp:593-603`). Both render only state the shell hands in, from
+(`native_shell.cpp:1219-1230`). Both render only state the shell hands in, from
 readers owned in parent `src/`: `AgentSnapshot` from
 `src/agent_projection.{h,cpp}` and `DirectConversationMessage` rows from
 `src/direct_conversation_history.{h,cpp}`.

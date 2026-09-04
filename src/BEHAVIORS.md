@@ -76,14 +76,14 @@ its code.
 
 - The palette is started once, before the window is built: if the system
   prefers dark (Qt `colorScheme()` dark/light, with a palette-lightness
-  fallback, `system_prefers_dark_palette`, `native_shell.cpp:448`), the
+  fallback, `system_prefers_dark_palette`, `native_shell.cpp:981`), the
   shell applies Telegram's canonical night palette
-  (`apply_telegram_night_palette`, `native_shell.cpp:457`); otherwise the
+  (`apply_telegram_night_palette`, `native_shell.cpp:990`); otherwise the
   default light palette is used. This honors the system appearance at
   startup.
 - The same system appearance is followed live: `QStyleHints`
   `colorSchemeChanged` (with an `ApplicationPaletteChange` event fallback)
-  reruns `apply_system_palette` (`native_shell.cpp:1105`), which resets to
+  reruns `apply_system_palette` (`native_shell.cpp:1046`), which resets to
   the default light palette and only then applies the canonical night
   palette when the system prefers dark, then publishes that completed
   `lib_ui` palette transaction exactly once. Palette subscribers therefore
@@ -91,7 +91,7 @@ its code.
   The shell also asks Agent Config, Agent Presets, and Preset Editor to
   reapply their page-owned literal QSS/QPalette chrome; the conversation is
   then re-rendered and the window and its descendant widgets repainted
-  (`refresh_system_palette`, `native_shell.cpp:2567`). No fixed user theme
+  (`refresh_system_palette`, `native_shell.cpp:2057`). No fixed user theme
   or config is mutated — the active palette is always re-derived from the
   current system appearance.
 - The Telegram visual-oracle boundary: every painted token (list field,

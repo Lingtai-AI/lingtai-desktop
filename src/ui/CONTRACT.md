@@ -20,7 +20,7 @@ below is grounded in the widget source.
   (`agent_roster.cpp:370-375`); `ConversationSurface` has no callback port and
   emits nothing. Separately, the Open/New Project child `QPushButton`s expose
   their standard Qt `clicked` signals, which `NativeShell` finds by object name
-  and wires externally (`native_shell.cpp:593-603`); the roster composes those
+  and wires externally (`native_shell.cpp:1219-1230`); the roster composes those
   buttons but connects nothing to them (`agent_roster.cpp:219-240`). This is
   still pure presentation: row selection and the two action buttons are the
   only emissions, and both stay caller-side. Selection, eligibility, and

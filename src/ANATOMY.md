@@ -349,7 +349,7 @@ they are the shell's presentation layer and own no domain reads or writes.
   `Ui::Emoji::Init()` before any composer exists and `Ui::Emoji::Clear()` when
   the application deletes it after stack-owned shells. This is glue for the
   pinned toolkit, not composer business logic
-  (`native_shell.cpp:1041-1067`, `native_shell.cpp:1153-1188`;
+  (`native_shell.cpp:958-978`, `native_shell.cpp:1067-1102`;
   stack construction order at `main.cpp:17-33`).
 - On macOS, Desktop's installed `Ui::Integration` also creates exactly one
   `MacPopupDismissalBridge` parented to the current application. The bridge
