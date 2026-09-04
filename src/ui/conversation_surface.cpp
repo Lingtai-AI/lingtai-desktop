@@ -1232,15 +1232,44 @@ QPixmap empty_state_avatar(const QString &initial, int diameter) {
     return pixmap;
 }
 
-// Blue/azure accent wash for drag-select. The base hue is Qt's live native
-// Highlight role (the macOS selection color), read fresh on every paint, not
-// windowBgActive or any other conversation-surface token — a translucent
-// windowBgActive wash reads as a weak tint of the same teal/green family as
-// the bubbles it sits over, especially in dark mode. Coverage after
-// compositing is ~38% in light, ~53% in dark: the darker canvas needs more
-// of the accent to show through before a selection reads as unmistakable.
+// A muted or off-family OS "Highlight color" preference must never leave
+// the composited selection reading as grey, or as some family other than
+// blue/azure: the product requirement is unmistakably blue/azure, not
+// whatever accent the human happened to pick in System Settings. Hue is the
+// one component inherited from the live native Highlight role, and only
+// when it already reads as blue/azure; saturation and value are always
+// normalized to a vivid baseline so the *composited* result stays clearly
+// saturated at the target coverage regardless of how muted the native
+// source is (a fully saturated source blended at ~38%/~53% coverage lands
+// near that same saturation after compositing; a source already desaturated
+// before blending would land far lower).
+constexpr auto kSelectionAccentFallbackHue = 211; // canonical system-blue hue
+constexpr auto kSelectionAccentHueBandLow = 195;
+constexpr auto kSelectionAccentHueBandHigh = 235;
+constexpr auto kSelectionAccentSaturation = 255;
+constexpr auto kSelectionAccentValue = 255;
+
+[[nodiscard]] QColor semantic_selection_accent() {
+    const auto native =
+        QApplication::palette().color(QPalette::Active, QPalette::Highlight);
+    auto hue = native.hue();
+    if (hue < kSelectionAccentHueBandLow || hue > kSelectionAccentHueBandHigh) {
+        hue = kSelectionAccentFallbackHue;
+    }
+    auto accent = QColor();
+    accent.setHsv(
+        hue, kSelectionAccentSaturation, kSelectionAccentValue);
+    return accent;
+}
+
+// Blue/azure accent wash for drag-select, not windowBgActive or any other
+// conversation-surface token — a translucent windowBgActive wash reads as a
+// weak tint of the same teal/green family as the bubbles it sits over,
+// especially in dark mode. Coverage after compositing is ~38% in light,
+// ~53% in dark: the darker canvas needs more of the accent to show through
+// before a selection reads as unmistakable.
 [[nodiscard]] QColor text_selection_wash_color() {
-    auto wash = QApplication::palette().color(QPalette::Active, QPalette::Highlight);
+    auto wash = semantic_selection_accent();
     wash.setAlpha(conversation_canvas_is_light() ? 97 : 136);
     return wash;
 }
@@ -1999,13 +2028,21 @@ void ConversationSurface::rebuild_document() {
     // document->clear() below drops every QTextCursor onto position 0, which
     // would silently end an active drag-select on a theme refresh (the same
     // messages are about to be reinserted, so the old offsets still apply).
-    // Restore the selection by content offset once the rebuild finishes.
+    // Restore the selection by content offset once the rebuild finishes, but
+    // only if the rebuild actually reproduces the identical plain-text
+    // content: a rebuild can also be triggered by a real content change (a
+    // new message arriving, older history being revealed, verbose detail
+    // toggling), and remapping the old numeric offsets onto different text
+    // would silently select content the human never chose.
+    auto *document = this->document();
     const auto selection_before = textCursor();
     const auto had_selection = selection_before.hasSelection();
     const auto selection_start = selection_before.selectionStart();
     const auto selection_end = selection_before.selectionEnd();
+    const auto plain_text_before = had_selection
+        ? document->toPlainText()
+        : QString();
 
-    auto *document = this->document();
     document->clear();
     clear_plain_state_anchor(document);
 
@@ -2415,11 +2452,13 @@ void ConversationSurface::rebuild_document() {
     }
     document->documentLayout()->documentSize();
 
-    // The rebuild above reinserted the identical cached messages, so the
-    // captured offsets still address the same content; clamp defensively in
-    // case the visible window changed (e.g. a reveal_older() in the same
-    // pass) and restore rather than leaving the drag-select silently gone.
-    if (had_selection) {
+    // Only remap the captured offsets when the rebuild reproduced the exact
+    // same plain text (a theme refresh, a resize, a reaction/timestamp
+    // repaint): those never change document text, only formatting/layout,
+    // so the old offsets still address the same content. A rebuild that
+    // changed the visible messages leaves the selection cleared instead of
+    // guessing at unrelated new text. Clamp defensively regardless.
+    if (had_selection && document->toPlainText() == plain_text_before) {
         const auto length = document->characterCount();
         auto restored = textCursor();
         restored.setPosition(std::clamp(selection_start, 0, length - 1));

@@ -3150,6 +3150,35 @@ void export_production_receipt_preview(const QString &preview_path) {
 constexpr auto kLightSelectionAlpha = 97;
 constexpr auto kDarkSelectionAlpha = 136;
 
+// Mirrors semantic_selection_accent()'s normalization exactly (same
+// constants), as an independent, directly callable pure function: the
+// production version lives in conversation_surface.cpp's anonymous
+// namespace and is not reachable from this translation unit, so equivalence
+// is by construction (same formula, same constants) rather than by linkage.
+// Taking the "native" color as a parameter (instead of always querying
+// QApplication::palette() internally) is what makes the fallback branch
+// unit-testable without depending on this machine's real OS accent color.
+constexpr auto kSelectionAccentFallbackHue = 211;
+constexpr auto kSelectionAccentHueBandLow = 195;
+constexpr auto kSelectionAccentHueBandHigh = 235;
+constexpr auto kSelectionAccentSaturation = 255;
+constexpr auto kSelectionAccentValue = 255;
+
+QColor semantic_selection_accent_from(const QColor &native) {
+    auto hue = native.hue();
+    if (hue < kSelectionAccentHueBandLow || hue > kSelectionAccentHueBandHigh) {
+        hue = kSelectionAccentFallbackHue;
+    }
+    auto accent = QColor();
+    accent.setHsv(hue, kSelectionAccentSaturation, kSelectionAccentValue);
+    return accent;
+}
+
+QColor semantic_selection_accent() {
+    return semantic_selection_accent_from(QApplication::palette()
+        .color(QPalette::Active, QPalette::Highlight));
+}
+
 void apply_selection_test_palette(bool dark) {
     style::main_palette::reset();
     if (!dark) {
@@ -3274,10 +3303,17 @@ void flush_deferred_events() {
 }
 
 // The design targets are measurement ranges, not license to hard-code an
-// unmeasured hex: this asserts the chosen alpha constants actually land in
-// the brief's coverage windows, and that the live Qt/macOS Highlight role
-// this machine reports is genuinely blue/azure-hued (a real, disclosable
-// finding if some future machine's OS selection color is not).
+// unmeasured hex. This does NOT gate on this machine's raw OS Highlight
+// color being blue — a human's accent-color preference must never be able
+// to fail the build, and the product must render blue/azure regardless of
+// it. Instead: (1) the coverage alphas land in the brief's windows; (2) the
+// normalization itself is unit-tested against synthetic native inputs, both
+// a blue one (hue passes through) and clearly-non-blue ones (falls back to
+// the canonical azure hue) — deterministic on every machine; (3) the FINAL
+// composited fill actually produced for each real conversation surface, in
+// both themes, is measured for hue/saturation/contrast, using whatever this
+// machine's live palette resolves to as input, but asserting only on the
+// normalized output.
 void verify_selection_accent_targets() {
     if (kLightSelectionAlpha < 89 || kLightSelectionAlpha > 102) {
         throw std::runtime_error(
@@ -3291,11 +3327,42 @@ void verify_selection_accent_targets() {
             "target (alpha 128-140 of 255), got "
             + std::to_string(kDarkSelectionAlpha));
     }
-    const auto native_base =
+
+    // Synthetic inputs: the normalization contract holds regardless of what
+    // this machine's actual OS accent color is.
+    const auto passthrough =
+        semantic_selection_accent_from(QColor::fromHsv(214, 150, 120));
+    if (passthrough.hue() != 214
+            || passthrough.saturation() != kSelectionAccentSaturation
+            || passthrough.value() != kSelectionAccentValue) {
+        throw std::runtime_error(
+            "a native Highlight already in the blue/azure band must keep its "
+            "hue but always normalize saturation/value to the vivid "
+            "baseline, got hue " + std::to_string(passthrough.hue())
+            + " sat " + std::to_string(passthrough.saturation())
+            + " val " + std::to_string(passthrough.value()));
+    }
+    for (const auto off_family : {Qt::red, Qt::green, Qt::yellow}) {
+        const auto fallback = semantic_selection_accent_from(QColor(off_family));
+        if (fallback.hue() != kSelectionAccentFallbackHue) {
+            throw std::runtime_error(
+                "a native Highlight outside the blue/azure band must fall "
+                "back to the canonical azure hue "
+                + std::to_string(kSelectionAccentFallbackHue) + ", got "
+                + std::to_string(fallback.hue()));
+        }
+    }
+
+    // The live-machine-dependent part: only used as *input* to the
+    // normalization below, never asserted on directly.
+    const auto native =
         QApplication::palette().color(QPalette::Active, QPalette::Highlight);
-    std::cout << "selection accent: live QPalette::Highlight = "
-              << native_base.name().toStdString()
-              << " (hue " << native_base.hue() << ")\n";
+    const auto accent = semantic_selection_accent();
+    std::cout << "selection accent: native QPalette::Highlight="
+              << native.name().toStdString() << " (hue " << native.hue()
+              << ") -> normalized accent=" << accent.name().toStdString()
+              << " (hue " << accent.hue() << ")\n";
+
     const struct { const char *name; QColor light; QColor dark; } surfaces[] = {
         {"assistant/system canvas", QColor(QStringLiteral("#FFFFFF")),
             QColor(QStringLiteral("#17212B"))},
@@ -3308,22 +3375,50 @@ void verify_selection_accent_targets() {
     const auto dark_ink = QColor(QStringLiteral("#F5F5F5"));
     for (const auto &surface : surfaces) {
         const auto light_fill =
-            alpha_blended(native_base, surface.light, kLightSelectionAlpha);
+            alpha_blended(accent, surface.light, kLightSelectionAlpha);
         const auto dark_fill =
-            alpha_blended(native_base, surface.dark, kDarkSelectionAlpha);
+            alpha_blended(accent, surface.dark, kDarkSelectionAlpha);
         std::cout << "  " << surface.name
                   << ": light fill=" << light_fill.name().toStdString()
+                  << " hue=" << light_fill.hue()
+                  << " sat=" << light_fill.saturation()
                   << " contrast=" << contrast_ratio(light_ink, light_fill)
                   << "  dark fill=" << dark_fill.name().toStdString()
+                  << " hue=" << dark_fill.hue()
+                  << " sat=" << dark_fill.saturation()
                   << " contrast=" << contrast_ratio(dark_ink, dark_fill) << "\n";
-    }
-    const auto hue = native_base.hue();
-    if (hue < 170 || hue > 260) {
-        throw std::runtime_error(
-            "the live Qt/macOS Highlight role used as the selection base "
-            "must read as blue/azure (hue in [170,260]), but this machine's "
-            "active palette returned hue " + std::to_string(hue) + " ("
-            + native_base.name().toStdString() + ")");
+        for (const auto &fill : {light_fill, dark_fill}) {
+            const auto fill_hue = fill.hue();
+            if (fill_hue < kSelectionAccentHueBandLow
+                    || fill_hue > kSelectionAccentHueBandHigh) {
+                throw std::runtime_error(
+                    std::string(surface.name)
+                    + " composited selection fill must read as blue/azure "
+                      "(hue in [195,235]), got hue "
+                    + std::to_string(fill_hue) + " (#"
+                    + fill.name().toStdString() + ")");
+            }
+            // A floor well under the ~31-93% actually measured on this
+            // machine's real palette (see the printed diagnostics above),
+            // but well above "grey": the coverage targets alone (35-40%/
+            // 50-55% of a fully-saturated source) guarantee at least this
+            // much post-blend saturation by construction.
+            if (fill.saturationF() < 0.20) {
+                throw std::runtime_error(
+                    std::string(surface.name)
+                    + " composited selection fill must be clearly "
+                      "saturated blue/azure, not blue-grey, got "
+                    + std::to_string(fill.saturationF() * 100.0)
+                    + "% saturation (#" + fill.name().toStdString() + ")");
+            }
+        }
+        if (contrast_ratio(light_ink, light_fill) < 4.5
+                || contrast_ratio(dark_ink, dark_fill) < 4.5) {
+            throw std::runtime_error(
+                std::string(surface.name)
+                + " composited selection fill must keep selected-text "
+                  "contrast >= 4.5:1 in both themes");
+        }
     }
 }
 
@@ -3344,16 +3439,15 @@ void verify_selection_on_surface(
     const auto image = surface.viewport()->grab().toImage();
     const auto glyph_rect = selected_glyph_viewport_rect(surface, cursor);
 
-    const auto native_base =
-        QApplication::palette().color(QPalette::Active, QPalette::Highlight);
+    const auto accent = semantic_selection_accent();
     const auto alpha = dark ? kDarkSelectionAlpha : kLightSelectionAlpha;
-    const auto expected = alpha_blended(native_base, background, alpha);
+    const auto expected = alpha_blended(accent, background, alpha);
     if (!region_contains_color_near(image, glyph_rect, expected, 3)) {
         throw std::runtime_error(
             std::string(surface_name) + " selection fill in "
             + (dark ? "dark" : "light")
-            + " must composite the native accent at the target coverage "
-              "over its surface, expected a pixel near "
+            + " must composite the normalized blue/azure accent at the "
+              "target coverage over its surface, expected a pixel near "
             + expected.name().toStdString());
     }
 
@@ -3385,6 +3479,28 @@ void verify_selection_on_surface(
             + (dark ? "dark" : "light")
             + " must stay glyph-tight, but it also reached a later word on "
               "the same row past the selected glyphs");
+    }
+
+    // The FINAL composited fill actually used for THIS surface/theme (not
+    // the raw OS Highlight, which region_contains_color_near above already
+    // confirmed a real rendered pixel matches) must itself read as
+    // blue/azure and clearly saturated, and never depends on this machine's
+    // OS accent-color preference: expected is built from the normalized
+    // semantic_selection_accent(), so this is deterministic on any machine.
+    if (expected.hue() < kSelectionAccentHueBandLow
+            || expected.hue() > kSelectionAccentHueBandHigh) {
+        throw std::runtime_error(
+            std::string(surface_name) + " composited selection fill in "
+            + (dark ? "dark" : "light")
+            + " must read as blue/azure (hue in [195,235]), got hue "
+            + std::to_string(expected.hue()));
+    }
+    if (expected.saturationF() < 0.20) {
+        throw std::runtime_error(
+            std::string(surface_name) + " composited selection fill in "
+            + (dark ? "dark" : "light")
+            + " must be clearly saturated, not blue-grey, got "
+            + std::to_string(expected.saturationF() * 100.0) + "% saturation");
     }
 
     // Read the ink Qt will actually paint (the widget's own HighlightedText
@@ -3546,9 +3662,8 @@ void verify_selection_survives_live_theme_switch() {
         const auto image = surface.viewport()->grab().toImage();
         const auto glyph_rect = selected_glyph_viewport_rect(
             surface, surface.textCursor());
-        const auto native_base = QApplication::palette()
-            .color(QPalette::Active, QPalette::Highlight);
-        const auto expected = alpha_blended(native_base, canvas, alpha);
+        const auto expected =
+            alpha_blended(semantic_selection_accent(), canvas, alpha);
         if (!region_contains_color_near(image, glyph_rect, expected, 3)) {
             throw std::runtime_error(
                 std::string("after a live refresh to ")
@@ -3577,6 +3692,68 @@ void verify_selection_survives_live_theme_switch() {
     flush_deferred_events();
     verify_after_switch(
         false, QColor(QStringLiteral("#FFFFFF")), kLightSelectionAlpha);
+}
+
+// rebuild_document() only remaps the captured numeric selection offsets when
+// the rebuild reproduces byte-identical plain text. A real content change
+// (a new message arriving mid-selection — set_conversation()'s plain
+// four-arg overload always calls rebuild_document(), not an incremental
+// append) must not land the old offsets on unrelated new text.
+void verify_selection_not_remapped_when_content_changes() {
+    apply_selection_test_palette(false);
+    ConversationSurface surface;
+    surface.resize(900, 500);
+    surface.show();
+
+    std::vector<DirectConversationMessage> messages = {
+        {.id = "in-1", .outgoing = false,
+            .timestamp = "2026-08-07T18:48:52",
+            .text = "The assistant explains the plan clearly today."},
+    };
+    surface.set_conversation(QStringLiteral("Telegram Bot"), messages);
+    QCoreApplication::processEvents();
+
+    const auto cursor = select_substring(surface, QStringLiteral("plan clearly"));
+    if (!cursor.hasSelection()) {
+        throw std::runtime_error(
+            "selection fixture must be active before the content change");
+    }
+    QCoreApplication::processEvents();
+
+    // A new message arrives mid-selection: a real product event (a
+    // streaming reply), not a theme refresh — the document's plain text
+    // genuinely changes.
+    messages.push_back({.id = "in-2", .outgoing = false,
+        .timestamp = "2026-08-07T18:49:10",
+        .text = "A brand new unrelated follow-up line just arrived."});
+    surface.set_conversation(QStringLiteral("Telegram Bot"), messages);
+    QCoreApplication::processEvents();
+
+    if (surface.textCursor().hasSelection()) {
+        throw std::runtime_error(
+            "when the rebuilt document's plain text actually changed, the "
+            "old numeric selection offsets must not be remapped onto "
+            "unrelated new text, but a selection is still active covering '"
+            + surface.textCursor().selectedText().toStdString() + "'");
+    }
+
+    // Same-content rebuilds (the live-switch contract above) must still
+    // work: a resize-triggered rebuild reproduces identical plain text, so
+    // a fresh selection here must survive it exactly like a theme refresh.
+    const auto resize_cursor =
+        select_substring(surface, QStringLiteral("brand new"));
+    const auto expected_text = resize_cursor.selectedText();
+    QCoreApplication::processEvents();
+    surface.resize(700, 500);
+    QCoreApplication::processEvents();
+    if (!surface.textCursor().hasSelection()
+            || surface.textCursor().selectedText() != expected_text) {
+        throw std::runtime_error(
+            "a resize-triggered rebuild reproduces identical plain text and "
+            "must still preserve an active selection, but it was lost or "
+            "changed to '" + surface.textCursor().selectedText().toStdString()
+            + "'");
+    }
 }
 
 } // namespace
@@ -3677,6 +3854,7 @@ int run_typography_test(int argc, char **argv) {
             verify_selection_wash_on_conversation_surfaces();
             verify_selection_over_plain_state_text();
             verify_selection_survives_live_theme_switch();
+            verify_selection_not_remapped_when_content_changes();
             std::cout << "conversation surface selection highlight: OK\n";
             return 0;
         }
@@ -3702,6 +3880,7 @@ int run_typography_test(int argc, char **argv) {
         verify_selection_wash_on_conversation_surfaces();
         verify_selection_over_plain_state_text();
         verify_selection_survives_live_theme_switch();
+        verify_selection_not_remapped_when_content_changes();
         std::cout << "conversation surface typography: OK\n";
         return 0;
     } catch (const std::exception &error) {
