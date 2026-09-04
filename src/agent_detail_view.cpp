@@ -1254,7 +1254,6 @@ AgentDetailView::AgentDetailView(
     detail_layout->addWidget(pages_host, 1);
 
     kanban_page_ = new KanbanPage(pages_host);
-    kanban_page_holder_ = kanban_page_;
     kanban_page_->setMinimumWidth(0);
     kanban_page_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
     pages_host_layout->addWidget(kanban_page_, 1);

@@ -1422,8 +1422,6 @@ NativeShell::NativeShell(
     detail_back_button_ = detail->findChild<QPushButton *>(
         "lingtai_agent_detail_back");
     chat_top_bar_ = detail->findChild<QWidget *>("lingtai_chat_top_bar");
-    selected_agent_key_ = detail->findChild<QLabel *>(
-        "lingtai_selected_agent_key");
     composer_ = detail->findChild<Ui::RpWidget *>("lingtai_composer");
 
     page_nav_buttons_.clear();

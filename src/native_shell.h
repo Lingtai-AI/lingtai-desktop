@@ -319,11 +319,10 @@ private:
     QPushButton *detail_back_button_ = nullptr;
     // Stable pointer to the extracted selected-Agent detail widget.
     AgentDetailView *detail_view_ = nullptr;
-    // Stable pointers to the selected-Agent chat top bar and its status label,
-    // retained so the one responsive fit measure in `recompute_layout` can
-    // elide the identity column against the actual detail width.
+    // Stable pointer to the selected-Agent chat top bar, retained so the one
+    // responsive fit measure in `recompute_layout` can elide the identity
+    // column against the actual detail width.
     QWidget *chat_top_bar_ = nullptr;
-    QLabel *selected_agent_key_ = nullptr;
     // The one bounded composer lane, retained so the same body-resize owner
     // that drives the responsive sidebar/header recomputes its width from
     // the actual detail width on every real resize.

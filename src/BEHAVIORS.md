@@ -91,7 +91,7 @@ its code.
   The shell also asks Agent Config, Agent Presets, and Preset Editor to
   reapply their page-owned literal QSS/QPalette chrome; the conversation is
   then re-rendered and the window and its descendant widgets repainted
-  (`refresh_system_palette`, `native_shell.cpp:2057`). No fixed user theme
+  (`refresh_system_palette`, `native_shell.cpp:2055`). No fixed user theme
   or config is mutated — the active palette is always re-derived from the
   current system appearance.
 - The Telegram visual-oracle boundary: every painted token (list field,

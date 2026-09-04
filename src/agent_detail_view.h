@@ -60,8 +60,6 @@ public:
         QWidget *parent = nullptr);
     ~AgentDetailView() override = default;
 
-    [[nodiscard]] AgentDetailPage page() const noexcept { return page_; }
-
     // Telegram-like secondary page switch: only one of Conversation / Presets
     // / Kanban is visible at a time.
     void set_page(AgentDetailPage page);
@@ -185,15 +183,7 @@ private:
     std::vector<QPushButton *> page_nav_buttons_;
     std::vector<QWidget *> secondary_pages_;
     QLabel *preset_summary_state_ = nullptr;
-    QWidget *kanban_page_holder_ = nullptr;
     KanbanPage *kanban_page_ = nullptr;
-
-    // Preset-scope facts labels (under the page host).
-    std::vector<QLabel *> source_facts_labels_;
-
-    // Composer slash popup object name remains stable across the extraction.
-    static constexpr const char *kSlashPopupObjectName =
-        "lingtai_slash_command_popup";
 
     // Stubs: detailed implementations move in follow-up plan steps.
     void refresh_composer_enablement(bool composer_eligible);
