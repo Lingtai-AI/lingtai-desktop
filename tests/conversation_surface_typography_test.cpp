@@ -3216,12 +3216,16 @@ bool colors_close(const QColor &a, const QColor &b, int tolerance) {
 // True when some pixel in `rect` is within `tolerance` of `color`. A region
 // scan (not a single sampled point) because the rect covers real glyph ink
 // as well as the painted wash, and which exact point lands on ink vs. wash
-// background is font-metric-dependent.
+// background is font-metric-dependent. When `out_match` is given, the first
+// matching pixel's own (real, rendered) color is written there, so a caller
+// can assert further properties (hue, saturation, ...) directly on what was
+// actually painted, not only on the predicted `color`.
 bool region_contains_color_near(
         const QImage &image,
         const QRectF &rect,
         const QColor &color,
-        int tolerance) {
+        int tolerance,
+        QColor *out_match = nullptr) {
     const auto dpr = image.devicePixelRatio();
     const auto left = std::max(0, int(std::floor(rect.left() * dpr)));
     const auto top = std::max(0, int(std::floor(rect.top() * dpr)));
@@ -3231,7 +3235,11 @@ bool region_contains_color_near(
         image.height() - 1, int(std::ceil(rect.bottom() * dpr)));
     for (auto y = top; y <= bottom; ++y) {
         for (auto x = left; x <= right; ++x) {
-            if (colors_close(image.pixelColor(x, y), color, tolerance)) {
+            const auto pixel = image.pixelColor(x, y);
+            if (colors_close(pixel, color, tolerance)) {
+                if (out_match) {
+                    *out_match = pixel;
+                }
                 return true;
             }
         }
@@ -3802,6 +3810,124 @@ void verify_selection_not_remapped_when_content_changes() {
     }
 }
 
+// verify_selection_accent_targets() proves the fallback branch's LOGIC via
+// a test-side mirror of the production formula (semantic_selection_accent_
+// from), called with a synthetic input — necessary there because this
+// machine's real OS Highlight is already blue, so no ordinary render ever
+// reaches that branch. A helper-only check is insufficient on its own: this
+// test instead forces the real, live QApplication palette's Active
+// Highlight role to an off-family hue — the exact same live state
+// production's semantic_selection_accent() reads via
+// QApplication::palette() — then renders a real ConversationSurface
+// selection and inspects the actually painted pixels. It exercises
+// production's real paint path end to end, not a re-implementation of it,
+// and fails if semantic_selection_accent() ever passed the off-family hue
+// through unnormalized.
+void verify_selection_accent_fallback_on_real_off_family_native_highlight() {
+    const auto original_palette = QApplication::palette();
+    // RAII: restores the real application palette on every exit path,
+    // including an assertion failure unwinding through this scope, so this
+    // test can never leak a forced red/green Highlight into whatever else
+    // runs in this process afterward.
+    struct PaletteRestoreGuard {
+        QPalette original;
+        ~PaletteRestoreGuard() { QApplication::setPalette(original); }
+    } restore_guard{original_palette};
+
+    for (const auto off_family_hue : {Qt::red, Qt::green}) {
+        const auto off_family_native = QColor(off_family_hue);
+        auto forced_palette = QApplication::palette();
+        forced_palette.setColor(
+            QPalette::Active, QPalette::Highlight, off_family_native);
+        QApplication::setPalette(forced_palette);
+
+        // Confirm the forced value actually reached the live application
+        // palette production reads, so a setup failure cannot masquerade as
+        // a passing (but unexercised) test.
+        const auto live_native = QApplication::palette()
+            .color(QPalette::Active, QPalette::Highlight);
+        if (live_native.hue() != off_family_native.hue()) {
+            throw std::runtime_error(
+                "test setup failed: forcing QApplication::palette()'s "
+                "Active Highlight to an off-family color did not take "
+                "effect on the live application palette (hue is "
+                + std::to_string(live_native.hue()) + ")");
+        }
+
+        apply_selection_test_palette(false);
+        ConversationSurface surface;
+        surface.resize(900, 400);
+        surface.show();
+        const std::vector<DirectConversationMessage> messages = {
+            {.id = "in-1", .outgoing = false,
+                .timestamp = "2026-08-07T18:48:52",
+                .text = "The assistant explains the plan clearly today."},
+        };
+        surface.set_conversation(QStringLiteral("Telegram Bot"), messages);
+        QCoreApplication::processEvents();
+
+        const auto cursor =
+            select_substring(surface, QStringLiteral("plan clearly"));
+        QCoreApplication::processEvents();
+        const auto image = surface.viewport()->grab().toImage();
+        const auto glyph_rect = selected_glyph_viewport_rect(surface, cursor);
+
+        const auto canvas = QColor(QStringLiteral("#FFFFFF"));
+        // semantic_selection_accent_from states the *prediction* real
+        // pixels are compared against below — the same role alpha_blended's
+        // `expected` already plays in every other pixel test in this file
+        // — but the pixels asserted on come from the real production paint
+        // of `surface`, not from calling this function again as the thing
+        // under test.
+        const auto fallback_accent =
+            semantic_selection_accent_from(off_family_native);
+        const auto expected =
+            alpha_blended(fallback_accent, canvas, kLightSelectionAlpha);
+        QColor actual_pixel;
+        if (!region_contains_color_near(
+                image, glyph_rect, expected, 3, &actual_pixel)) {
+            throw std::runtime_error(
+                "with the real QApplication Active Highlight forced to an "
+                "off-family " + off_family_native.name().toStdString()
+                + ", the actually rendered selection pixels must still "
+                  "normalize to the canonical blue/azure fallback accent "
+                  "at the target coverage; expected a pixel near "
+                + expected.name().toStdString());
+        }
+
+        // Assert directly on the real rendered pixel found above, not on
+        // the prediction: this is what fails if semantic_selection_accent()
+        // simply passed the off-family hue through unnormalized,
+        // independent of whether `expected` above was computed correctly.
+        if (actual_pixel.hue() < kSelectionAccentHueBandLow
+                || actual_pixel.hue() > kSelectionAccentHueBandHigh) {
+            throw std::runtime_error(
+                "the actual rendered selection pixel, with a forced "
+                "off-family native Highlight ("
+                + off_family_native.name().toStdString() + "), must read "
+                "as blue/azure (hue in [195,235]), but got hue "
+                + std::to_string(actual_pixel.hue()) + " (#"
+                + actual_pixel.name().toStdString() + ") — production is "
+                "not falling back away from the off-family native hue");
+        }
+        if (actual_pixel.saturationF() < 0.20) {
+            throw std::runtime_error(
+                "the actual rendered selection pixel, with a forced "
+                "off-family native Highlight, must be clearly saturated, "
+                "got " + std::to_string(actual_pixel.saturationF() * 100.0)
+                + "% saturation (#" + actual_pixel.name().toStdString() + ")");
+        }
+        const auto ink = surface.palette().color(QPalette::HighlightedText);
+        const auto contrast = contrast_ratio(ink, actual_pixel);
+        if (contrast < 4.5) {
+            throw std::runtime_error(
+                "the actual rendered selection pixel, with a forced "
+                "off-family native Highlight, must keep selected-text "
+                "contrast >= 4.5:1, got " + std::to_string(contrast));
+        }
+    }
+}
+
 } // namespace
 
 int run_typography_test(int argc, char **argv) {
@@ -3901,6 +4027,7 @@ int run_typography_test(int argc, char **argv) {
             verify_selection_over_plain_state_text();
             verify_selection_survives_live_theme_switch();
             verify_selection_not_remapped_when_content_changes();
+            verify_selection_accent_fallback_on_real_off_family_native_highlight();
             std::cout << "conversation surface selection highlight: OK\n";
             return 0;
         }
@@ -3927,6 +4054,7 @@ int run_typography_test(int argc, char **argv) {
         verify_selection_over_plain_state_text();
         verify_selection_survives_live_theme_switch();
         verify_selection_not_remapped_when_content_changes();
+        verify_selection_accent_fallback_on_real_off_family_native_highlight();
         std::cout << "conversation surface typography: OK\n";
         return 0;
     } catch (const std::exception &error) {
