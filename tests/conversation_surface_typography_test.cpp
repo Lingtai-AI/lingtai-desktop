@@ -3737,6 +3737,52 @@ void verify_selection_not_remapped_when_content_changes() {
             + surface.textCursor().selectedText().toStdString() + "'");
     }
 
+    // A second, independent regression: prepend a new EARLIER message
+    // instead of appending. The append case above happens to leave the
+    // original message's text at the same offsets, so a blind remap can
+    // coincidentally reselect the same words even though it should not have
+    // restored at all. Prepending shifts the surviving message's offsets
+    // onto a different message entirely, so a blind remap selects
+    // unmistakably unrelated content — the sharpest available proof that
+    // unrelated text must not be selected, not just that some selection
+    // happens to persist.
+    {
+        ConversationSurface prepend_surface;
+        prepend_surface.resize(900, 500);
+        prepend_surface.show();
+        std::vector<DirectConversationMessage> prepend_messages = {
+            {.id = "later", .outgoing = false,
+                .timestamp = "2026-08-07T18:48:52",
+                .text = "The assistant explains the plan clearly today."},
+        };
+        prepend_surface.set_conversation(
+            QStringLiteral("Telegram Bot"), prepend_messages);
+        QCoreApplication::processEvents();
+
+        select_substring(prepend_surface, QStringLiteral("plan clearly"));
+        QCoreApplication::processEvents();
+
+        // Same offsets in the rebuilt document now fall inside this earlier
+        // message's own text instead.
+        prepend_messages.insert(prepend_messages.begin(), {.id = "earlier",
+            .outgoing = false,
+            .timestamp = "2026-08-07T18:40:00Z",
+            .text = "An entirely different earlier message occupying "
+                    "these very offsets."});
+        prepend_surface.set_conversation(
+            QStringLiteral("Telegram Bot"), prepend_messages);
+        QCoreApplication::processEvents();
+
+        if (prepend_surface.textCursor().hasSelection()) {
+            throw std::runtime_error(
+                "prepending an earlier message must not let the old "
+                "selection offsets remap onto that unrelated new message's "
+                "text, but a selection is still active covering '"
+                + prepend_surface.textCursor().selectedText().toStdString()
+                + "'");
+        }
+    }
+
     // Same-content rebuilds (the live-switch contract above) must still
     // work: a resize-triggered rebuild reproduces identical plain text, so
     // a fresh selection here must survive it exactly like a theme refresh.
