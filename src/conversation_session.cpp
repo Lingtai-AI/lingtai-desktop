@@ -279,19 +279,6 @@ ConversationVerboseLevel cycle_conversation_verbose_level(
     return ConversationVerboseLevel::off;
 }
 
-const char *conversation_verbose_level_label(
-        ConversationVerboseLevel level) noexcept {
-    switch (level) {
-    case ConversationVerboseLevel::off:
-        return "off";
-    case ConversationVerboseLevel::thinking:
-        return "thinking";
-    case ConversationVerboseLevel::extended:
-        return "extended";
-    }
-    return "off";
-}
-
 std::string format_token_usage_footer(const SessionTokenUsage &usage) {
     if (usage.input == 0 && usage.output == 0 && usage.cached == 0) {
         return {};
@@ -373,13 +360,6 @@ std::optional<ConversationSessionEntry> parse_conversation_session_line(
         }
     }
     return entry;
-}
-
-bool conversation_session_log_present(
-        const std::filesystem::path &project_root,
-        const std::filesystem::path &agent_directory_key) noexcept {
-    return conversation_session_log_stat(project_root, agent_directory_key)
-        .present;
 }
 
 SessionLogStat conversation_session_log_stat(

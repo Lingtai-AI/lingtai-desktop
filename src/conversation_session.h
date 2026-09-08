@@ -20,9 +20,6 @@ enum class ConversationVerboseLevel {
 [[nodiscard]] ConversationVerboseLevel cycle_conversation_verbose_level(
     ConversationVerboseLevel level) noexcept;
 
-[[nodiscard]] const char *conversation_verbose_level_label(
-    ConversationVerboseLevel level) noexcept;
-
 struct SessionTokenUsage {
     std::int64_t input = 0;
     std::int64_t output = 0;
@@ -65,11 +62,6 @@ struct ConversationSessionEntry {
 // newest tail bytes and entry cap are loaded so periodic refresh stays cheap.
 // Symlinks and oversize files are rejected; partial trailing lines are ignored.
 [[nodiscard]] std::vector<ConversationSessionEntry> read_conversation_session_events(
-    const std::filesystem::path &project_root,
-    const std::filesystem::path &agent_directory_key) noexcept;
-
-// True when the selected Agent has a nonempty events.jsonl log (cheap stat).
-[[nodiscard]] bool conversation_session_log_present(
     const std::filesystem::path &project_root,
     const std::filesystem::path &agent_directory_key) noexcept;
 
