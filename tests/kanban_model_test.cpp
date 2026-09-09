@@ -29,6 +29,15 @@ void require(bool condition, const std::string &message) {
     if (!condition) throw std::runtime_error(message);
 }
 
+std::string field_value(
+        const std::vector<lingtai::desktop::KanbanField> &fields,
+        std::string_view label) {
+    for (const auto &field : fields) {
+        if (field.label == label) return field.value;
+    }
+    return {};
+}
+
 void write_file(const fs::path &path, std::string_view bytes) {
     std::error_code error;
     fs::create_directories(path.parent_path(), error);
@@ -79,10 +88,11 @@ void verify_board_reads_network_sources(const fs::path &sandbox) {
     write_file(project / ".lingtai/alpha/.agent.json",
         R"({"admin":{"orchestrator":true},"agent_id":"a001","agent_name":"alpha","nickname":"Alpha",)"
         R"("address":"alpha","state":"active","language":"en","stamina":0.8,)"
-        R"("created_at":"2026-08-01T00:00:00Z"})");
+        R"("llm":{"model":"claude-opus","provider":"anthropic",)"
+        R"("base_url":"https://api.anthropic.com/v1","api_compat":"anthropic-native",)"
+        R"("context_limit":200000},"created_at":"2026-08-01T00:00:00Z"})");
     write_file(project / ".lingtai/alpha/init.json",
-        R"({"model":"claude-opus","provider":"anthropic",)"
-        R"("mcp":{"fs":{},"browser":{}},"soul":{"delay":1.5}})");
+        R"({"mcp":{"fs":{},"browser":{}},"soul":{"delay":1.5}})");
     write_file(project / ".lingtai/alpha/.status.json",
         R"({"tokens":{"context":{"window_size":200000,"system_tokens":1200,)"
         R"("tools_tokens":800,"history_tokens":4000,"total_tokens":6000,)"
@@ -127,6 +137,13 @@ void verify_board_reads_network_sources(const fs::path &sandbox) {
         if (agent.directory_key == "alpha") alpha = &agent;
     }
     require(alpha != nullptr, "alpha is on the board");
+    require(field_value(alpha->llm_fields, "model") == "claude-opus"
+            && field_value(alpha->llm_fields, "provider") == "anthropic"
+            && field_value(alpha->llm_fields, "base_url")
+                == "https://api.anthropic.com/v1"
+            && field_value(alpha->llm_fields, "api_compat") == "anthropic-native"
+            && field_value(alpha->llm_fields, "context_limit") == "200000",
+        "runtime-published nested .agent.json llm facts fill the model inspector");
     require(alpha->display_name == "Alpha"
             && alpha->tokens.cached == 20
             && alpha->providers.size() == 1
@@ -353,6 +370,26 @@ void verify_incremental_snapshot_index(const fs::path &sandbox) {
             && require_agent(static_update.board, "alpha")->tokens.input == 10
             && require_agent(static_update.board, "alpha")->mcp_names.size() == 1,
         "one changed small source is reread without reopening growing payloads");
+
+    write_file(project / ".lingtai/alpha/.agent.json",
+        R"({"admin":{"orchestrator":true},"agent_id":"a001",)"
+        R"("agent_name":"alpha","address":"alpha","state":"active",)"
+        R"("llm":{"model":"m-runtime","provider":"runtime",)"
+        R"("base_url":"https://runtime.example/v1","api_compat":"openai",)"
+        R"("context_limit":123456}})");
+    snapshot = project_agents(*attached.attachment);
+    const auto identity_update = index.refresh(*attached.attachment, snapshot);
+    const auto *identity_alpha = require_agent(identity_update.board, "alpha");
+    require(identity_update.metrics.payload_opens == 1
+            && identity_update.metrics.full_agent_rebuilds == 0
+            && field_value(identity_alpha->llm_fields, "model") == "m-runtime"
+            && field_value(identity_alpha->llm_fields, "provider") == "runtime"
+            && field_value(identity_alpha->llm_fields, "base_url")
+                == "https://runtime.example/v1"
+            && field_value(identity_alpha->llm_fields, "api_compat") == "openai"
+            && field_value(identity_alpha->llm_fields, "context_limit") == "123456",
+        "one changed runtime identity refreshes nested LLM facts and overrides "
+        "legacy init fallbacks without reopening growing payloads");
 
     append_file(project / ".lingtai/alpha/logs/token_ledger.jsonl",
         "{\"ts\":\"2026-08-18T13:00:00Z\",\"input\":7,\"output\":3,"

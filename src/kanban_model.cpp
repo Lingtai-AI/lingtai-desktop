@@ -154,6 +154,18 @@ struct RefreshMetricsScope {
 }
 
 void overlay_init_fields(QJsonObject &raw, const QJsonObject &init) {
+    // The runtime-published identity keeps current LLM facts under
+    // `.agent.json.llm`. Project those authoritative values first; legacy flat
+    // manifest/init fields remain compatible fallbacks below.
+    if (const auto llm = raw.value("llm"); llm.isObject()) {
+        const auto llm_object = llm.toObject();
+        for (const auto *key : {"model", "provider", "base_url", "api_compat",
+                 "api_key_env", "streaming", "context_limit"}) {
+            const auto value = llm_object.value(key);
+            if (!value.isUndefined()) raw.insert(key, value);
+        }
+    }
+
     auto merged = init;
     if (const auto llm = init.value("llm"); llm.isObject()) {
         const auto llm_object = llm.toObject();

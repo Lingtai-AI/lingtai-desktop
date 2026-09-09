@@ -8577,9 +8577,11 @@ void verify_kanban_page(
     write_file(alpha / ".agent.json",
         R"({"admin":{},"agent_id":"20260712-191609-a001",)"
         R"("agent_name":"alpha","nickname":"Alpha",)"
-        R"("address":"alpha","state":"active","language":"en"})");
-    write_file(alpha / "init.json",
-        R"({"model":"claude-opus","provider":"anthropic","mcp":{"fs":{}}})");
+        R"("address":"alpha","state":"active","language":"en",)"
+        R"("llm":{"model":"claude-opus","provider":"anthropic",)"
+        R"("base_url":"https://api.anthropic.com/v1","api_compat":"anthropic-native",)"
+        R"("context_limit":200000}})");
+    write_file(alpha / "init.json", R"({"mcp":{"fs":{}}})");
     write_file(alpha / ".status.json",
         R"({"tokens":{"context":{"window_size":200000,"system_tokens":1000,)"
         R"("tools_tokens":500,"history_tokens":2500,"total_tokens":4000,)"
@@ -8734,6 +8736,22 @@ void verify_kanban_page(
     require(required_child<QLabel>(window, "lingtai_kanban_name")
                 ->text() == QStringLiteral("Alpha"),
         "the properties header must title the selected agent");
+    auto *model_grid = required_child<QWidget>(
+        window, "lingtai_kanban_model_grid");
+    const auto model_grid_mentions = [&](const QString &needle) {
+        for (auto *label : model_grid->findChildren<QLabel *>()) {
+            if (label->text() == needle) return true;
+        }
+        return false;
+    };
+    require(required_child<QLabel>(*model_grid, "lingtai_kanban_section_llm")
+                ->text() == QStringLiteral("claude-opus")
+            && model_grid_mentions(QStringLiteral("anthropic"))
+            && model_grid_mentions(QStringLiteral("https://api.anthropic.com/v1"))
+            && model_grid_mentions(QStringLiteral("anthropic-native"))
+            && model_grid_mentions(QStringLiteral("200000")),
+        "the model/runtime grid must render current nested runtime LLM facts, "
+        "not placeholder dashes");
     auto *identity = required_child<QWidget>(
         window, "lingtai_kanban_section_identity");
     require(required_child<QLabel>(*identity, "lingtai_kanban_meta")
