@@ -409,10 +409,19 @@ its code.
   spelling, Search Google, Formatting, or other rich-message rows and performs
   no asynchronous platform work for the request.
 - The paperclip asks `NativeShell` for the normal native multi-file dialog;
-  tests replace that one picker seam. Each selection re-preflights existing
-  canonical sources plus new picker paths once, preserving accepted order and
-  applying duplicate and cumulative limits across the whole draft. Cancellation
-  changes nothing. Route loss or project/Agent change clears the draft.
+  tests replace that one picker seam. A local-file URL drop anywhere in the
+  same Desktop window while its selected-Agent Conversation composer is
+  eligible is only a second input adapter: a window-scoped filter claims Copy,
+  preserves local URL order, and passes the resulting paths through the same
+  route guard and add-path entry as the picker before they reach a child text
+  editor. Non-local URLs and non-file MIME do not enter attachment selection.
+  The selected-Agent detail shows a palette-derived transient drop highlight;
+  leaving, dropping, changing page, or losing composer eligibility hides it.
+  Drop never inserts a path into composer text, changes focus/selection, or
+  sends a message. Each picker/drop addition re-preflights existing canonical
+  sources plus new paths once, preserving accepted order and applying duplicate
+  and cumulative limits across the whole draft. Picker cancellation changes
+  nothing. Route loss or project/Agent change clears the draft.
 - Pending cards form a left-aligned wrapping row above the input. A thumbnail
   reopens the accepted source without following links, requires the same
   regular-file device/inode/size facts, and rejects implausible dimensions or

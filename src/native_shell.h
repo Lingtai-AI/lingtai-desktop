@@ -243,6 +243,9 @@ private:
     void maybe_warm_kanban_cache();
     void handle_kanban_agent_selected(const std::filesystem::path &directory_key);
     void reset_composer();
+    [[nodiscard]] bool ensure_attachment_target();
+    void add_attachment_paths(
+        const std::vector<std::filesystem::path> &selected_paths);
     void handle_attachment_selection();
     void handle_attachment_action(
         const DirectConversationAttachmentRequest &request, bool reveal);

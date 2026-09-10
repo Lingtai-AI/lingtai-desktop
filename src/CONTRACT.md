@@ -250,6 +250,12 @@ coalescing, and stale-while-revalidate presentation.
    The selected-Agent composer leaves the pinned `Ui::InputField` context menu
    unhooked: lib_ui presents Qt's standard edit actions immediately, with no
    Desktop action rows, asynchronous menu deferral, or platform callback.
+   `NativeShell` also owns the one window-scoped local-file drop adapter and
+   current-route gate. Picker and drop paths converge at its add-path seam and
+   enter `AgentDetailView` only through the existing whole-draft preflight;
+   non-file MIME remains owned by the target widget. `AgentDetailView` owns only
+   the matching Conversation/composer eligibility projection and transient
+   detail-pane highlight, never URL extraction, route resolution, or send.
    On macOS the Desktop-supplied `Ui::Integration` additionally owns one
    application-lifetime native event filter and one force-hide producer.
    Qualifying native mouse-downs are classified solely by recipient

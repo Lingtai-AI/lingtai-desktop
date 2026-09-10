@@ -37,9 +37,11 @@
 #include <QtCore/QString>
 #include <QtCore/QThread>
 #include <QtCore/QTimer>
+#include <QtCore/QUrl>
 #include <QtGui/QColor>
 #include <QtGui/QContextMenuEvent>
 #include <QtGui/QDragEnterEvent>
+#include <QtGui/QDragLeaveEvent>
 #include <QtGui/QDragMoveEvent>
 #include <QtGui/QDropEvent>
 #include <QtGui/QFont>
@@ -4598,6 +4600,190 @@ void verify_composer_send_behavior(
     require(!cleanup_error, "composer fixtures must be removed");
 }
 
+void verify_window_attachment_drop(
+        lingtai::desktop::NativeShell &shell,
+        const fs::path &sandbox) {
+    auto &window = shell.window();
+    auto *detail = required_child<lingtai::desktop::AgentDetailView>(
+        window, "lingtai_agent_detail");
+    auto *surface = required_child<QTextEdit>(
+        window, "lingtai_selected_agent_conversation");
+    auto *input = required_ui_child<Ui::InputField>(
+        window, "lingtai_composer_input");
+    auto *overlay = required_child<QWidget>(
+        window, "lingtai_attachment_drop_overlay");
+    auto *status = required_child<QLabel>(
+        window, "lingtai_composer_status");
+
+    const auto project = sandbox / "project";
+    const auto outbox = project / ".lingtai/human/mailbox/outbox";
+    write_file(project / ".lingtai/human/.agent.json",
+        R"({"agent_id":"20260101-000000-h001","agent_name":"Ted",)"
+        R"("address":"human","state":"active"})");
+    write_file(project / ".lingtai/drop-agent/.agent.json",
+        R"({"admin":{},"agent_id":"20260910-000000-d001",)"
+        R"("agent_name":"drop-agent","address":"drop-agent","state":"active"})");
+    const auto first = sandbox / "first drop.txt";
+    const auto second = sandbox / "second-drop.png";
+    const auto directory = sandbox / "not-a-file";
+    write_file(first, "first\n");
+    write_file(second, "second\n");
+    fs::create_directories(directory);
+
+    const auto local_mime = [](std::initializer_list<fs::path> paths) {
+        auto mime = std::make_unique<QMimeData>();
+        auto urls = QList<QUrl>();
+        for (const auto &path : paths) {
+            urls.push_back(QUrl::fromLocalFile(
+                QString::fromStdString(path.string())));
+        }
+        mime->setUrls(urls);
+        return mime;
+    };
+
+    static_cast<void>(shell.open_project(project, std::nullopt));
+    require(!detail->attachment_drop_eligible(),
+        "a Project without a selected Agent must not accept attachment drops");
+    auto unselected_mime = local_mime({first});
+    auto unselected_enter = QDragEnterEvent(
+        window.rect().center(), Qt::CopyAction, unselected_mime.get(),
+        Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&window, &unselected_enter);
+    require(!unselected_enter.isAccepted() && !overlay->isVisible()
+            && detail->pending_attachments().empty(),
+        "a window-wide file drag must stay inert until a conversation route is available");
+
+    click_agent(shell, "drop-agent");
+    require(detail->attachment_drop_eligible(),
+        "a selected Agent with a direct route must enable window-wide attachment drop");
+    const auto original_text = QStringLiteral("Keep this draft exactly.");
+    input->setText(original_text);
+
+    auto first_mime = local_mime({first});
+    const auto surface_position = surface->viewport()->rect().center();
+    auto enter = QDragEnterEvent(
+        surface_position, Qt::CopyAction, first_mime.get(),
+        Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(surface->viewport(), &enter);
+    require(enter.isAccepted() && enter.dropAction() == Qt::CopyAction
+            && overlay->isVisible(),
+        "dragging a local file over conversation history must accept Copy and show the full-conversation overlay");
+    const auto original_window_size = window.size();
+    window.resize(original_window_size.width() - 48,
+        original_window_size.height() - 24);
+    QCoreApplication::processEvents();
+    require(overlay->geometry() == detail->rect(),
+        "the active drop overlay must continue covering the full detail after resize");
+    window.resize(original_window_size);
+    QCoreApplication::processEvents();
+    require(overlay->geometry() == detail->rect(),
+        "restoring the window size must restore the active full-detail overlay geometry");
+
+    auto move = QDragMoveEvent(
+        surface_position, Qt::CopyAction, first_mime.get(),
+        Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(surface->viewport(), &move);
+    require(move.isAccepted() && overlay->isVisible(),
+        "moving an eligible file drag across conversation history must keep the overlay active");
+
+    auto leave = QDragLeaveEvent();
+    QApplication::sendEvent(surface->viewport(), &leave);
+    require(leave.isAccepted() && !overlay->isVisible()
+            && detail->pending_attachments().empty(),
+        "leaving the window-wide target must hide feedback without mutating the draft");
+
+    auto second_enter = QDragEnterEvent(
+        surface_position, Qt::CopyAction, first_mime.get(),
+        Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(surface->viewport(), &second_enter);
+    auto first_drop = QDropEvent(
+        QPointF(surface_position), Qt::CopyAction, first_mime.get(),
+        Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(surface->viewport(), &first_drop);
+    require(second_enter.isAccepted() && first_drop.isAccepted()
+            && first_drop.dropAction() == Qt::CopyAction
+            && !overlay->isVisible(),
+        "dropping on conversation history must finish one Copy attachment input and remove feedback");
+    require(detail->pending_attachments().size() == 1
+            && detail->pending_attachments()[0].source_path == fs::canonical(first)
+            && input->getLastText() == original_text,
+        "a history-surface drop must add the shared preflight result without changing composer text");
+
+    auto mixed_mime = local_mime({first, second});
+    auto mixed_urls = mixed_mime->urls();
+    mixed_urls.push_back(QUrl(QStringLiteral("https://example.invalid/not-local")));
+    mixed_mime->setUrls(mixed_urls);
+    const auto composer_position = input->rawTextEdit()->viewport()->rect().center();
+    auto composer_enter = QDragEnterEvent(
+        composer_position, Qt::CopyAction, mixed_mime.get(),
+        Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(input->rawTextEdit()->viewport(), &composer_enter);
+    auto composer_drop = QDropEvent(
+        QPointF(composer_position), Qt::CopyAction, mixed_mime.get(),
+        Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(input->rawTextEdit()->viewport(), &composer_drop);
+    require(composer_enter.isAccepted() && composer_drop.isAccepted(),
+        "the composer editor must route file URLs to attachments before QTextEdit insertion");
+    require(detail->pending_attachments().size() == 2
+            && detail->pending_attachments()[0].source_path == fs::canonical(first)
+            && detail->pending_attachments()[1].source_path == fs::canonical(second),
+        "a repeated mixed drop must preserve order, ignore remote URLs, and share cross-add duplicate detection");
+    require(input->getLastText() == original_text,
+        "dropping files directly on the composer must never insert paths or URLs into its text");
+    require(status->text().contains(QStringLiteral("already attached")),
+        "a duplicate from a later drop must use the existing attachment rejection notice");
+    require(window.findChild<QWidget *>("lingtai_composer_attachment_card_0")
+            && window.findChild<QWidget *>("lingtai_composer_attachment_card_1"),
+        "window drops must render the exact existing ordered attachment cards");
+
+    auto remote_mime = QMimeData();
+    remote_mime.setUrls({QUrl(QStringLiteral("https://example.invalid/remote"))});
+    auto remote_enter = QDragEnterEvent(
+        window.rect().center(), Qt::CopyAction, &remote_mime,
+        Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&window, &remote_enter);
+    require(!remote_enter.isAccepted() && !overlay->isVisible()
+            && detail->pending_attachments().size() == 2,
+        "a URL drag with no local files must remain outside the attachment adapter");
+
+    detail->set_page(lingtai::desktop::AgentDetailPage::kanban);
+    auto hidden_mime = local_mime({second});
+    auto hidden_enter = QDragEnterEvent(
+        window.rect().center(), Qt::CopyAction, hidden_mime.get(),
+        Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&window, &hidden_enter);
+    require(!hidden_enter.isAccepted() && !overlay->isVisible()
+            && detail->pending_attachments().size() == 2,
+        "non-Conversation pages must never attach to the hidden composer draft");
+    detail->set_page(lingtai::desktop::AgentDetailPage::conversation);
+    require(detail->attachment_drop_eligible(),
+        "returning from Kanban must restore window-drop eligibility for the still-valid conversation");
+
+    auto directory_mime = local_mime({directory});
+    auto directory_enter = QDragEnterEvent(
+        window.rect().center(), Qt::CopyAction, directory_mime.get(),
+        Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&window, &directory_enter);
+    auto directory_drop = QDropEvent(
+        QPointF(window.rect().center()), Qt::CopyAction, directory_mime.get(),
+        Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&window, &directory_drop);
+    require(directory_enter.isAccepted() && directory_drop.isAccepted()
+            && detail->pending_attachments().size() == 2
+            && status->text().contains(QStringLiteral("regular file")),
+        "a dropped directory must flow into shared preflight and its existing typed rejection without losing valid draft attachments; enter="
+            + std::to_string(directory_enter.isAccepted())
+            + ", drop=" + std::to_string(directory_drop.isAccepted())
+            + ", count=" + std::to_string(detail->pending_attachments().size())
+            + ", status='" + status->text().toStdString() + "'");
+    require(!fs::exists(outbox),
+        "dropping attachments must never publish or send the composer draft");
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "window attachment drop fixtures must be removed");
+}
+
 void verify_composer_context_menu(
         lingtai::desktop::NativeShell &shell,
         const fs::path &sandbox) {
@@ -6074,9 +6260,34 @@ void verify_existing_agent_setup(
             "editor save must enter existing-mode Agent policy at step 2 of 3");
     };
 
+    const auto setup_drop_file = sandbox / "setup-drop.txt";
+    write_file(setup_drop_file, "setup must not accept this drop");
     const auto before = tree_snapshot(project);
     const auto env_before = read_file(env);
     submit_setup();
+    {
+        auto *setup_detail = required_child<lingtai::desktop::AgentDetailView>(
+            window, "lingtai_agent_detail");
+        auto *drop_overlay = required_child<QWidget>(
+            window, "lingtai_attachment_drop_overlay");
+        auto mime = std::make_unique<QMimeData>();
+        mime->setUrls({ QUrl::fromLocalFile(path_text(setup_drop_file)) });
+        const auto position = window.rect().center();
+        auto enter = QDragEnterEvent(
+            position, Qt::CopyAction, mime.get(), Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(&window, &enter);
+        require(!enter.isAccepted()
+                && !drop_overlay->isVisible()
+                && setup_detail->pending_attachments().empty(),
+            "the window drop adapter must ignore local files while setup hides "
+            "the selected-Agent project route");
+        auto drop = QDropEvent(
+            position, Qt::CopyAction, mime.get(), Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(&window, &drop);
+        require(!drop.isAccepted()
+                && setup_detail->pending_attachments().empty(),
+            "a setup-page file drop must not mutate the hidden conversation draft");
+    }
     require(pages->currentWidget() == preset_page
             && step_index->text() == QStringLiteral("1 of 3")
             && preset_chooser->count() == 4
@@ -9859,6 +10070,8 @@ void run_native_shell_journey(
                 shell, project_root / "runtime-footer-fixture");
             verify_composer_send_behavior(
                 shell, project_root / "commit-14-composer-fixture");
+            verify_window_attachment_drop(
+                shell, project_root / "window-attachment-drop-fixture");
             verify_conversation_slash_interception(
                 shell, project_root / "u2-slash-interception-fixture");
         });

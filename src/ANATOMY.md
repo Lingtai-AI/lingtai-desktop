@@ -60,7 +60,11 @@ Entry point and composition root:
   `set_agent_start_fallback_python` and the narrow
   `set_attachment_picker` injection used by shell tests (when unset, the
   product path opens the native dialog), plus `open_project` and the read-only
-  `window()` / `selection_state()` accessors;
+  `window()` / `selection_state()` accessors. The shell also owns one
+  per-window-scoped application event filter that adapts eligible local-file
+  URL drops from any widget in the visible selected-Agent Conversation into
+  the same route-guarded add-path seam as the picker; non-file MIME stays with
+  its target widget.
   `smoke_ready()` is real product readiness used only by `main.cpp`'s `--smoke`
   path (`native_shell.h:100`).
   `/setup` is its explicit rerun-existing mode: it loads and retains one
@@ -97,8 +101,11 @@ Entry point and composition root:
   source in the bounded smoke).
 - `agent_detail_view.{h,cpp}` — selected-Agent presentation owner. Its
   composer holds the ordered pending `AcceptedAttachment` draft, wrapping
-  cards/removal, semantic notice timer, and per-card send errors; it emits a
-  picker request but never opens a dialog, resolves a route, or publishes.
+  cards/removal, semantic notice timer, and per-card send errors. It also owns
+  the Conversation/composer eligibility projection and palette-derived,
+  resize-tracking detail-pane highlight for the shell's file-drop adapter; it
+  emits a picker request but never opens a dialog, extracts URLs, resolves a
+  route, or publishes.
 - `attachment_thumbnail.{h,cpp}` — Qt image-preview helper for composer and
   history cards: reopens the observed regular file without following links,
   revalidates identity and size, rejects implausible decode dimensions or

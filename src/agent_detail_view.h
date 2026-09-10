@@ -24,6 +24,7 @@
 
 class QPalette;
 class QPushButton;
+class QResizeEvent;
 class QGridLayout;
 class QTextEdit;
 class QTimer;
@@ -109,6 +110,10 @@ public:
     [[nodiscard]] bool has_pending_attachments() const noexcept {
         return !pending_attachments_.empty();
     }
+    [[nodiscard]] bool attachment_drop_eligible() const noexcept {
+        return page_ == AgentDetailPage::conversation && composer_eligible_;
+    }
+    void set_attachment_drop_active(bool active);
     void merge_pending_attachments(
         const std::vector<std::filesystem::path> &selected_paths);
     void remove_pending_attachment(std::size_t index);
@@ -127,6 +132,9 @@ public:
     void render_kanban(
         const KanbanBoard &board,
         const std::optional<std::filesystem::path> &selected_agent_key);
+
+protected:
+    void resizeEvent(QResizeEvent *event) override;
 
 signals:
     // Composer + slash UI actions (the shell performs the actual side-effects
@@ -172,6 +180,7 @@ private:
     QGridLayout *composer_attachment_layout_ = nullptr;
     QLabel *composer_status_ = nullptr;
     QTimer *composer_notice_timer_ = nullptr;
+    QWidget *attachment_drop_overlay_ = nullptr;
     // Persistent composer runtime footer (repurposes the former conversation-
     // state anchor; object name stays "lingtai_selected_agent_conversation_state").
     QLabel *runtime_footer_ = nullptr;

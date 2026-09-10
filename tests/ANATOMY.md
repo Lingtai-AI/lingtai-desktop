@@ -278,8 +278,14 @@ touches a real Agent or project, and none depends on a network or provider.
 - The conversation journey's composer proof owns attachment selection,
   pending cards, no-follow/revalidated bounded thumbnail fallback, warnings,
   attachment-only publication, exact indexed versus general-failure draft
-  retention, slash isolation, and target clearing. Its picker is injected, so
-  no test opens a native modal or Finder.
+  retention, slash isolation, and target clearing. Its real drag/drop suffix
+  sends local-file URL events to history, composer, and the top-level window;
+  proves Copy/overlay lifecycle, ordered picker-equivalent addition, child-text
+  interception, cross-add duplicate reuse, remote-only, Kanban, no-selection,
+  and setup-route ignore, resize-tracking overlay geometry, regular-file
+  rejection through shared preflight, preserved draft, and no implicit send.
+  Its picker is injected, so no test opens a native modal or
+  Finder.
 - Its focused `native_shell_paste` journey carries plain and rich-source
   logical text in `QMimeData`, delivers it through real Qt drag/drop events to
   the `Ui::InputField` MIME insertion path, then drives its real input-method

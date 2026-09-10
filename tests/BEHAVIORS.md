@@ -309,6 +309,15 @@ Qt plugin path set and an 8 s watchdog.
   and marking only index 1; and a general publisher failure retaining the
   draft with no false per-card error. Its event-loop-bounded replacement-timer
   assertion proves an older deadline cannot clear a newer composer notice.
+- `verify_window_attachment_drop` drives real DragEnter/Move/Leave/Drop events
+  over the history viewport, composer editor, and top-level window. It proves
+  whole-window Copy acceptance only for an eligible Conversation; transient
+  highlight lifecycle; ordered local-URL addition through the same cards and
+  cross-add duplicate notice as the picker; remote-URL exclusion; interception
+  before composer text insertion; Kanban/no-selection/setup-route ignore;
+  active-overlay geometry across a real shell resize; directory rejection by
+  shared regular-file preflight without losing the accepted draft; and zero
+  outbox publication from drop alone.
 - The focused `native_shell_paste` journey carries plain and HTML+plain source
   representations in real `QMimeData`, delivers them through real Qt
   drag/drop events to the `Ui::InputField` MIME insertion path, and asserts exact

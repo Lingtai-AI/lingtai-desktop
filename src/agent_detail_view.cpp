@@ -85,6 +85,42 @@ protected:
     }
 };
 
+class AttachmentDropOverlay final : public QWidget {
+public:
+    explicit AttachmentDropOverlay(QWidget *parent)
+        : QWidget(parent) {
+        setObjectName("lingtai_attachment_drop_overlay");
+        setAccessibleName(QStringLiteral("Drop files to attach"));
+        setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        setAttribute(Qt::WA_TranslucentBackground, true);
+        setFocusPolicy(Qt::NoFocus);
+        hide();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+
+        auto background = palette().color(QPalette::Window);
+        background.setAlpha(232);
+        auto accent = palette().color(QPalette::Highlight);
+        accent.setAlpha(220);
+        const auto panel = QRectF(rect()).adjusted(18.0, 18.0, -18.0, -18.0);
+        painter.setBrush(background);
+        painter.setPen(QPen(accent, 2.0, Qt::DashLine));
+        painter.drawRoundedRect(panel, 18.0, 18.0);
+
+        auto font = painter.font();
+        font.setPointSize(std::max(14, font.pointSize() + 2));
+        font.setWeight(QFont::DemiBold);
+        painter.setFont(font);
+        painter.setPen(palette().color(QPalette::Text));
+        painter.drawText(panel, Qt::AlignCenter,
+            QStringLiteral("Drop files to attach"));
+    }
+};
+
 QLabel *make_label(
     QWidget *parent,
     const QString &text,
@@ -1448,6 +1484,7 @@ AgentDetailView::AgentDetailView(
             });
     }
 
+    attachment_drop_overlay_ = new AttachmentDropOverlay(this);
     refresh_chrome();
 }
 
@@ -1455,6 +1492,9 @@ void AgentDetailView::set_page(AgentDetailPage page) {
     if (page_ == page) return;
     const auto previous = page_;
     page_ = page;
+    if (page_ != AgentDetailPage::conversation) {
+        set_attachment_drop_active(false);
+    }
 
     if (conversation_heading_) {
         // Kept only as a hidden object/implementation anchor for tests.
@@ -1879,8 +1919,30 @@ void AgentDetailView::render_kanban(
     }
 }
 
+void AgentDetailView::resizeEvent(QResizeEvent *event) {
+    Ui::RpWidget::resizeEvent(event);
+    if (attachment_drop_overlay_ && attachment_drop_overlay_->isVisible()) {
+        attachment_drop_overlay_->setGeometry(rect());
+        attachment_drop_overlay_->raise();
+    }
+}
+
+void AgentDetailView::set_attachment_drop_active(bool active) {
+    if (!attachment_drop_overlay_) return;
+    const auto visible = active && attachment_drop_eligible();
+    if (!visible) {
+        attachment_drop_overlay_->hide();
+        return;
+    }
+    attachment_drop_overlay_->setGeometry(rect());
+    attachment_drop_overlay_->show();
+    attachment_drop_overlay_->raise();
+    attachment_drop_overlay_->update();
+}
+
 void AgentDetailView::refresh_composer_enablement(bool composer_eligible) {
     composer_eligible_ = composer_eligible;
+    if (!composer_eligible_) set_attachment_drop_active(false);
     if (composer_input_) composer_input_->setEnabled(composer_eligible);
     if (composer_attachment_button_) {
         composer_attachment_button_->setEnabled(composer_eligible);

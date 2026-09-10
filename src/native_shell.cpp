@@ -71,6 +71,12 @@
 #include <QtGui/QKeyEvent>
 #include <QtGui/QMouseEvent>
 #include <QtCore/QEvent>
+#include <QtCore/QMimeData>
+#include <QtCore/QUrl>
+#include <QtGui/QDragEnterEvent>
+#include <QtGui/QDragLeaveEvent>
+#include <QtGui/QDragMoveEvent>
+#include <QtGui/QDropEvent>
 #include <QtGui/QFontMetrics>
 #include <QtGui/QPainter>
 #include <QtGui/QPen>
@@ -101,6 +107,7 @@
 
 #include <algorithm>
 #include <array>
+#include <functional>
 #include <limits>
 #include <memory>
 #ifdef __APPLE__
@@ -134,6 +141,109 @@ constexpr auto kMaximumRosterWidthRatio = 0.30;
 constexpr auto kRosterResizeHandleWidth = 8;
 constexpr auto kTwoColumnAvailableThreshold =
     kRosterColumnWidth + kDetailColumnMinimumWidth;
+
+// One per-window application event filter is required because the conversation
+// surface and composer contain child text widgets that may otherwise consume a
+// URL drop before the top-level window sees it. The filter remains strictly
+// scoped to widgets belonging to its own window, so multiple Desktop windows
+// cannot attach to each other's drafts.
+class WindowAttachmentDropFilter final : public QObject {
+public:
+    using Paths = std::vector<std::filesystem::path>;
+    using Eligibility = std::function<bool()>;
+    using ActiveChanged = std::function<void(bool)>;
+    using Dropped = std::function<void(Paths)>;
+
+    WindowAttachmentDropFilter(
+            QWidget *window,
+            Eligibility eligibility,
+            ActiveChanged active_changed,
+            Dropped dropped)
+        : QObject(window)
+        , window_(window)
+        , eligibility_(std::move(eligibility))
+        , active_changed_(std::move(active_changed))
+        , dropped_(std::move(dropped)) {
+        if (auto *application = QCoreApplication::instance()) {
+            application->installEventFilter(this);
+        }
+    }
+
+    ~WindowAttachmentDropFilter() override {
+        if (auto *application = QCoreApplication::instance()) {
+            application->removeEventFilter(this);
+        }
+    }
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override {
+        const auto widget = qobject_cast<QWidget *>(watched);
+        if (!widget || !window_ || widget->window() != window_) {
+            return false;
+        }
+
+        if (event->type() == QEvent::DragLeave) {
+            if (!active_) return false;
+            set_active(false);
+            event->accept();
+            return true;
+        }
+        if (event->type() != QEvent::DragEnter
+            && event->type() != QEvent::DragMove
+            && event->type() != QEvent::Drop) {
+            return false;
+        }
+
+        auto *drop = static_cast<QDropEvent *>(event);
+        auto paths = local_paths(drop->mimeData());
+        const auto eligible = eligibility_ && eligibility_();
+        const auto copy_allowed = drop->possibleActions().testFlag(Qt::CopyAction);
+        if (!eligible || paths.empty() || !copy_allowed) {
+            const auto was_active = active_;
+            set_active(false);
+            // If this drag was previously accepted as an attachment input,
+            // consume a stale terminal event rather than letting a child text
+            // editor insert file URLs after the route/page became ineligible.
+            return was_active;
+        }
+
+        drop->setDropAction(Qt::CopyAction);
+        drop->accept();
+        if (event->type() == QEvent::Drop) {
+            set_active(false);
+            if (dropped_) dropped_(std::move(paths));
+        } else {
+            set_active(true);
+        }
+        return true;
+    }
+
+private:
+    static Paths local_paths(const QMimeData *data) {
+        auto result = Paths();
+        if (!data || !data->hasUrls()) return result;
+        const auto urls = data->urls();
+        result.reserve(urls.size());
+        for (const auto &url : urls) {
+            if (!url.isLocalFile()) continue;
+            const auto path = url.toLocalFile();
+            if (!path.isEmpty()) result.emplace_back(path.toStdString());
+        }
+        return result;
+    }
+
+    void set_active(bool active) {
+        if (active_ == active) return;
+        active_ = active;
+        if (active_changed_) active_changed_(active);
+    }
+
+    QPointer<QWidget> window_;
+    Eligibility eligibility_;
+    ActiveChanged active_changed_;
+    Dropped dropped_;
+    bool active_ = false;
+};
 
 QString setup_failure_name(AgentSetupFailure failure) {
     switch (failure) {
@@ -1464,6 +1574,22 @@ NativeShell::NativeShell(
         [this](const QString &) { handle_send_message(); });
     QObject::connect(detail_view_, &AgentDetailView::attachment_selection_requested,
         [this] { handle_attachment_selection(); });
+    // Make the top-level window the fallback drop site for every ordinary child
+    // in the current Conversation; the application filter below additionally
+    // intercepts child text widgets that already accept URL drops themselves.
+    window_->setAcceptDrops(true);
+    new WindowAttachmentDropFilter(
+        window_.get(),
+        [this] {
+            return project_route_ && project_route_->isVisible()
+                && detail_view_ && detail_view_->attachment_drop_eligible();
+        },
+        [this](bool active) {
+            if (detail_view_) detail_view_->set_attachment_drop_active(active);
+        },
+        [this](std::vector<fs::path> paths) {
+            add_attachment_paths(paths);
+        });
     QObject::connect(detail_view_, &AgentDetailView::attachment_action_requested,
         [this](const DirectConversationAttachmentRequest &request, bool reveal) {
             handle_attachment_action(request, reveal);
@@ -3859,21 +3985,34 @@ void NativeShell::reset_composer() {
     }
 }
 
-void NativeShell::handle_attachment_selection() {
+bool NativeShell::ensure_attachment_target() {
     if (!detail_view_ || !selection_state_.active_project()
         || !selection_state_.selected_agent_directory_key()) {
-        return;
+        return false;
     }
     const auto route = resolve_direct_conversation_route(
         *selection_state_.active_project(), agents_,
         selection_state_.selected_agent_directory_key());
-    if (!route) {
-        detail_view_->clear_pending_attachments();
-        detail_view_->show_composer_notice(QStringLiteral(
-            "No conversation is available for this selection."),
-            ComposerNoticeKind::error);
-        return;
-    }
+    if (route) return true;
+
+    detail_view_->clear_pending_attachments();
+    detail_view_->show_composer_notice(QStringLiteral(
+        "No conversation is available for this selection."),
+        ComposerNoticeKind::error);
+    return false;
+}
+
+void NativeShell::add_attachment_paths(
+        const std::vector<fs::path> &selected_paths) {
+    if (selected_paths.empty() || !ensure_attachment_target()) return;
+    detail_view_->merge_pending_attachments(selected_paths);
+}
+
+void NativeShell::handle_attachment_selection() {
+    // Preserve the existing behavior that an unavailable conversation never
+    // opens a picker. The shared path entry rechecks after the modal dialog in
+    // case route truth changed while selection was in progress.
+    if (!ensure_attachment_target()) return;
 
     auto selected = std::vector<fs::path>();
     if (attachment_picker_) {
@@ -3887,8 +4026,7 @@ void NativeShell::handle_attachment_selection() {
             selected.emplace_back(path.toStdString());
         }
     }
-    if (selected.empty()) return;
-    detail_view_->merge_pending_attachments(selected);
+    add_attachment_paths(selected);
 }
 
 void NativeShell::handle_attachment_action(
