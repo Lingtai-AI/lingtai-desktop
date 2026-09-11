@@ -1117,6 +1117,30 @@ else()
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
+add_executable(lingtai_setup_style_test
+    tests/setup_style_test.cpp
+    src/setup_style.cpp)
+init_target(lingtai_setup_style_test)
+target_include_directories(lingtai_setup_style_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(lingtai_setup_style_test PRIVATE
+    -Wall -Wextra -Werror -pedantic
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-unused-parameter>
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-deprecated-this-capture>
+    $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-unused-parameter>)
+target_link_libraries(lingtai_setup_style_test PRIVATE
+    desktop-app::lib_ui
+    Qt6::Widgets Qt6::Gui Qt6::Core)
+add_test(NAME setup_style_idempotence
+    COMMAND lingtai_setup_style_test)
+if(APPLE)
+    set_tests_properties(setup_style_idempotence PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
+else()
+    set_tests_properties(setup_style_idempotence PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
 # CTest labels for UI testing workflow (see tests/UI_TESTING_PLAN.md).
 set(LINGTAI_UNIT_TESTS
     project_attachment
@@ -1161,6 +1185,7 @@ set(LINGTAI_UI_TESTS
     native_shell_presets
     conversation_surface_typography
     conversation_surface_scroll
+    setup_style_idempotence
     agent_detail_view
     ui_test_harness
     ui_agent_detail_pages)

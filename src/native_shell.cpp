@@ -2225,9 +2225,11 @@ void NativeShell::refresh_system_palette() {
 
     refreshing_system_palette_ = false;
 
-    // Defer the heavy conversation document rebuild until the palette storm
-    // settles. Do not also call render_conversation() here — that would rebuild
-    // twice (refresh_chrome already rebuilds with the cached rows).
+    // Defer the conversation chrome recolor until the palette storm settles.
+    // Do not also call render_conversation() here — that would be redundant
+    // and could perform a full content rebuild (a same-content call may
+    // no-op instead), on top of refresh_chrome already re-applying the
+    // cached rows' current colors.
     const auto generation = ++palette_refresh_generation_;
     QTimer::singleShot(0, window_.get(), [this, generation] {
         if (generation != palette_refresh_generation_) {

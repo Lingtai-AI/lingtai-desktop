@@ -115,6 +115,10 @@ private:
     void reflow_to_viewport();
     void rebuild_document();
     void schedule_rebuild_document();
+    // In-place counterpart to rebuild_document() for a pure chrome/palette
+    // refresh: reapplies each semantic-role-tagged run's current color
+    // without document()->clear() + reinsert. See refresh_chrome().
+    void recolor_theme_dependent_runs();
     void rebuild_empty_state();
     void rebuild_select_agent_prompt();
     void reveal_older();
@@ -170,6 +174,12 @@ private:
     // and appending into the same document.
     bool rebuild_in_progress_ = false;
     bool rebuild_scheduled_ = false;
+    // Coalesces a burst of palette-only refreshes into one deferred
+    // recolor_theme_dependent_runs() pass. Kept separate from
+    // rebuild_scheduled_ so a real content rebuild already queued by
+    // schedule_rebuild_document() is never mistaken for an already-pending
+    // recolor and dropped.
+    bool chrome_recolor_scheduled_ = false;
     // Cancels a deferred bottom pin when the human takes wheel ownership or a
     // rebuild restores a non-bottom position before the queued pass runs.
     int scroll_pin_generation_ = 0;

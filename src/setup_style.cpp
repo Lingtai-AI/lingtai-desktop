@@ -9,6 +9,7 @@
 #include <QtWidgets/QLineEdit>
 #include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QPushButton>
+#include <QtWidgets/QStyle>
 #include <QtWidgets/QStyleFactory>
 
 namespace lingtai::desktop {
@@ -160,10 +161,22 @@ QString setup_chip_css(const SetupTokens &tokens) {
             setup_color_css(tokens.border));
 }
 
+namespace {
+// A named QObject child survives setStyleSheet() wrapping widget->style() in
+// a QStyleSheetStyle proxy, unlike checking widget->style() directly.
+constexpr auto kSetupFusionStyleObjectName = "lingtai_setup_fusion_style";
+} // namespace
+
 void apply_setup_fusion(QWidget *widget) {
     if (!widget) return;
     widget->setAttribute(Qt::WA_MacShowFocusRect, false);
+    if (widget->findChild<QStyle *>(
+            kSetupFusionStyleObjectName, Qt::FindDirectChildrenOnly)) {
+        return;
+    }
     if (auto *fusion = QStyleFactory::create(QStringLiteral("Fusion"))) {
+        fusion->setObjectName(kSetupFusionStyleObjectName);
+        fusion->setParent(widget);
         widget->setStyle(fusion);
     }
 }

@@ -135,6 +135,27 @@ constexpr auto kVerboseFrameProperty = QTextFormat::UserProperty + 10;
 constexpr auto kAttachmentBlockProperty = QTextFormat::UserProperty + 11;
 constexpr auto kAttachmentMessageIdProperty = QTextFormat::UserProperty + 12;
 constexpr auto kAttachmentIndexProperty = QTextFormat::UserProperty + 13;
+// A palette-only refresh recolors existing runs in place (refresh_chrome())
+// instead of document()->clear() + reinsert. Each theme-dependent
+// QTextCharFormat below is tagged with the semantic role its color came
+// from, so the same color function can be re-read and reapplied to the
+// exact existing run without touching text, anchors, fonts, geometry, or
+// any other property. emphasized/heading/quote/(fenced-)code formats derive
+// from the body format by value (`auto format = base;`), so they inherit
+// its role tag for free and need no property of their own.
+constexpr auto kSemanticRoleProperty = QTextFormat::UserProperty + 14;
+// Inline code additionally bakes a theme-dependent background on top of the
+// inherited body-role foreground.
+constexpr auto kInlineCodeBackgroundProperty = QTextFormat::UserProperty + 15;
+
+enum class ConversationSemanticRole {
+    SenderOutgoing,
+    SenderIncoming,
+    BodyOutgoing,
+    BodyIncoming,
+    Secondary,
+    ActiveAccent,
+};
 
 // The symmetric gutter of the centered reading column for a viewport: fixed
 // 12px edge gutters until the column max, then a shared share of the excess.
@@ -210,6 +231,9 @@ QTextCharFormat sender_format(bool outgoing) {
     font.setPixelSize(15);
     font.setWeight(QFont::DemiBold);
     format.setFont(font);
+    format.setProperty(kSemanticRoleProperty, static_cast<int>(outgoing
+        ? ConversationSemanticRole::SenderOutgoing
+        : ConversationSemanticRole::SenderIncoming));
     return format;
 }
 
@@ -228,6 +252,26 @@ QColor secondary_reading_color() {
     return conversation_canvas_is_light()
         ? QColor(QStringLiteral("#8A8F98"))
         : st::msgServiceFg->c;
+}
+
+// The current color for a tagged run's semantic role, re-read fresh so a
+// chrome refresh can reapply it to the exact existing run in place.
+QColor conversation_semantic_role_color(ConversationSemanticRole role) {
+    switch (role) {
+        case ConversationSemanticRole::SenderOutgoing:
+            return st::historyTextOutFg->c;
+        case ConversationSemanticRole::SenderIncoming:
+            return st::historyTextInFg->c;
+        case ConversationSemanticRole::BodyOutgoing:
+            return body_reading_color(true);
+        case ConversationSemanticRole::BodyIncoming:
+            return body_reading_color(false);
+        case ConversationSemanticRole::Secondary:
+            return secondary_reading_color();
+        case ConversationSemanticRole::ActiveAccent:
+            return st::windowActiveTextFg->c;
+    }
+    return st::windowFg->c;
 }
 
 // Soft mint Human bubble for both themes. Light and dark are equal companions
@@ -287,6 +331,9 @@ QTextCharFormat attachment_name_format(bool outgoing, const QString &tooltip) {
     font.setWeight(QFont::DemiBold);
     format.setFont(font);
     format.setToolTip(tooltip);
+    format.setProperty(kSemanticRoleProperty, static_cast<int>(outgoing
+        ? ConversationSemanticRole::BodyOutgoing
+        : ConversationSemanticRole::BodyIncoming));
     return format;
 }
 
@@ -312,6 +359,8 @@ QTextCharFormat attachment_action_format(
     format.setAnchorHref(url.toString(QUrl::FullyEncoded));
     format.setToolTip(reveal ? QStringLiteral("Reveal this attachment in Finder")
                              : QStringLiteral("Open this attachment"));
+    format.setProperty(kSemanticRoleProperty,
+        static_cast<int>(ConversationSemanticRole::ActiveAccent));
     return format;
 }
 
@@ -385,6 +434,8 @@ QTextCharFormat secondary_format() {
     font.setPixelSize(12);
     font.setWeight(QFont::Normal);
     format.setFont(font);
+    format.setProperty(kSemanticRoleProperty,
+        static_cast<int>(ConversationSemanticRole::Secondary));
     return format;
 }
 
@@ -398,6 +449,8 @@ QTextCharFormat verbose_thinking_format() {
     font.setWeight(QFont::Normal);
     font.setItalic(true);
     format.setFont(font);
+    format.setProperty(kSemanticRoleProperty,
+        static_cast<int>(ConversationSemanticRole::BodyIncoming));
     return format;
 }
 
@@ -409,6 +462,8 @@ QTextCharFormat verbose_tool_format() {
     font.setPixelSize(12);
     font.setWeight(QFont::Normal);
     format.setFont(font);
+    format.setProperty(kSemanticRoleProperty,
+        static_cast<int>(ConversationSemanticRole::ActiveAccent));
     return format;
 }
 
@@ -690,6 +745,8 @@ QTextCharFormat message_metadata_format() {
     font.setPixelSize(13);
     font.setWeight(QFont::Normal);
     format.setFont(font);
+    format.setProperty(kSemanticRoleProperty,
+        static_cast<int>(ConversationSemanticRole::Secondary));
     return format;
 }
 
@@ -861,6 +918,9 @@ QTextCharFormat body_format(bool outgoing) {
     font.setWeight(QFont::Normal);
     font.setStyleHint(QFont::SansSerif);
     format.setFont(font);
+    format.setProperty(kSemanticRoleProperty, static_cast<int>(outgoing
+        ? ConversationSemanticRole::BodyOutgoing
+        : ConversationSemanticRole::BodyIncoming));
     return format;
 }
 
@@ -916,6 +976,7 @@ QTextCharFormat code_text_format(const QTextCharFormat &base) {
     auto format = base;
     format.setFont(code_font(base.font()));
     format.setBackground(code_surface_color());
+    format.setProperty(kInlineCodeBackgroundProperty, true);
     return format;
 }
 
@@ -1022,6 +1083,10 @@ void insert_markdown_body(
                 link_font.setUnderline(true);
                 link_format.setFont(link_font);
                 link_format.setForeground(QColor(0x1a, 0x73, 0xe8));
+                // This ink is fixed in both themes, unlike the body format it
+                // was copied from — drop the inherited role so a chrome
+                // refresh does not recolor it back to body ink.
+                link_format.clearProperty(kSemanticRoleProperty);
                 link_format.setAnchor(true);
                 link_format.setAnchorHref(
                     line.mid(close + 2, end - close - 2));
@@ -1964,7 +2029,7 @@ void ConversationSurface::refresh_chrome() {
     // HighlightedText (and the plain-state/empty-state path, which never
     // rebuilds the document) would otherwise keep painting selected text in
     // the ink of whichever theme was active at construction. Re-read it here
-    // on every refresh, before the possibly-deferred rebuild below.
+    // on every refresh, before the possibly-deferred recolor below.
     auto refreshed_palette = palette();
     refreshed_palette.setColor(QPalette::Highlight, Qt::transparent);
     refreshed_palette.setColor(QPalette::HighlightedText, st::windowFg->c);
@@ -1973,22 +2038,96 @@ void ConversationSurface::refresh_chrome() {
         update();
         return;
     }
-    last_layout_width_ = -1;
-    // Theme refreshes can arrive in a burst; coalesce into one deferred rebuild
-    // instead of synchronously laying out every message + verbose frame on the
-    // UI thread (that froze LingTai at 100% CPU).
-    if (rebuild_scheduled_) {
+    // A pure chrome/palette refresh must not document()->clear() + reinsert
+    // the message history — that drops every external QTextCursor onto
+    // position 0, and measured a plateau of retained live allocations from
+    // discarding and reinserting the whole document graph for a large
+    // history. Recolor the existing semantic-role-tagged runs in place
+    // instead (see kSemanticRoleProperty); text, anchors, resources, frames,
+    // selection, scroll, and document structure/geometry are untouched.
+    // Theme refreshes can still arrive in a burst, so coalesce into one
+    // deferred pass with a flag dedicated to this recolor — reusing
+    // rebuild_scheduled_ would risk a real content rebuild queued by
+    // schedule_rebuild_document() being mistaken for an already-pending
+    // recolor and silently dropped.
+    if (chrome_recolor_scheduled_) {
         return;
     }
-    rebuild_scheduled_ = true;
+    chrome_recolor_scheduled_ = true;
     QTimer::singleShot(0, this, [this] {
-        rebuild_scheduled_ = false;
+        chrome_recolor_scheduled_ = false;
         if (last_messages_.empty() || rebuild_in_progress_) {
             update();
             return;
         }
-        rebuild_document();
+        recolor_theme_dependent_runs();
     });
+}
+
+// Walks every block in the document — the root-level lazy-history banner
+// block and every nested message/verbose QTextFrame's blocks alike, since
+// QTextDocument::begin()/QTextBlock::next() traverse the flat block chain
+// regardless of frame nesting — and reapplies the current color for each
+// run tagged with a semantic role or the inline-code background flag.
+// Positions are collected before any mutation: mergeCharFormat never
+// inserts/removes text, so collected offsets stay valid, but mutating a
+// fragment while an iterator over the same block is still live is not a
+// risk worth taking.
+void ConversationSurface::recolor_theme_dependent_runs() {
+    struct TaggedRun final {
+        int position = 0;
+        int length = 0;
+        bool has_role = false;
+        ConversationSemanticRole role = ConversationSemanticRole::Secondary;
+        bool has_code_background = false;
+    };
+    auto *document = this->document();
+    auto runs = std::vector<TaggedRun>();
+    for (auto block = document->begin(); block.isValid();
+            block = block.next()) {
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const auto fragment = it.fragment();
+            if (!fragment.isValid()) {
+                continue;
+            }
+            const auto format = fragment.charFormat();
+            const auto has_role = format.hasProperty(kSemanticRoleProperty);
+            const auto has_code_background =
+                format.boolProperty(kInlineCodeBackgroundProperty);
+            if (!has_role && !has_code_background) {
+                continue;
+            }
+            runs.push_back({
+                fragment.position(),
+                fragment.length(),
+                has_role,
+                has_role
+                    ? static_cast<ConversationSemanticRole>(
+                        format.intProperty(kSemanticRoleProperty))
+                    : ConversationSemanticRole::Secondary,
+                has_code_background,
+            });
+        }
+    }
+    if (runs.empty()) {
+        return;
+    }
+    auto cursor = QTextCursor(document);
+    cursor.beginEditBlock();
+    for (const auto &run : runs) {
+        cursor.setPosition(run.position);
+        cursor.setPosition(run.position + run.length, QTextCursor::KeepAnchor);
+        auto delta = QTextCharFormat();
+        if (run.has_role) {
+            delta.setForeground(conversation_semantic_role_color(run.role));
+        }
+        if (run.has_code_background) {
+            delta.setBackground(code_surface_color());
+        }
+        cursor.mergeCharFormat(delta);
+    }
+    cursor.endEditBlock();
+    update();
 }
 
 int ConversationSurface::history_page_size() const noexcept {

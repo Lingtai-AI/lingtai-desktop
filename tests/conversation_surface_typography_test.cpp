@@ -3182,6 +3182,12 @@ QColor semantic_selection_accent() {
 void apply_selection_test_palette(bool dark) {
     style::main_palette::reset();
     if (!dark) {
+        // The exact production default-palette value for the same token set
+        // below the early return, so a live theme refresh's ActiveAccent
+        // (attachment actions, verbose tool ink) has a deterministic light
+        // target instead of whatever style::main_palette::reset() happens to
+        // default to.
+        set_test_palette_color("windowActiveTextFg", "#168acd");
         return;
     }
     // The exact production night-palette values for the tokens this
@@ -3194,6 +3200,7 @@ void apply_selection_test_palette(bool dark) {
     set_test_palette_color("historyTextInFg", "#F5F5F5");
     set_test_palette_color("historyTextOutFg", "#E4ECF2");
     set_test_palette_color("msgServiceFg", "#708499");
+    set_test_palette_color("windowActiveTextFg", "#6ab3f3");
 }
 
 QColor alpha_blended(const QColor &fg, const QColor &bg, int alpha) {
@@ -3597,62 +3604,277 @@ void verify_selection_over_plain_state_text() {
 }
 
 // A live theme refresh (refresh_chrome(), the same entry point native_shell
-// calls on a system palette change) must not clear an in-progress drag
-// selection, must not require the caller to resupply the conversation, and
-// must repaint the wash/ink at the new theme's target the moment it runs.
-void verify_selection_survives_live_theme_switch() {
+// calls on a system palette change) is a pure chrome/palette pass: it must
+// recolor every theme-dependent semantic run of the existing Conversation
+// QTextDocument in place, in the current theme's ink, and must never
+// document()->clear() + reinsert it. The absence of a destructive
+// clear/reinsert is guarded three independent ways: an external QTextCursor
+// retained outside the widget's own selection keeps its exact anchor/
+// position (clear() resets every outstanding cursor into the document to
+// position 0, regardless of who holds it), the document's root child
+// QTextFrame pointers and block count are compared by identity before and
+// after (a reinsert allocates new frame objects even when the counts happen
+// to match), and the human's own drag-selection and scroll position are
+// untouched. The fixture exceeds the bounded history window so the "N
+// older" banner (secondary ink) is exercised too, one row carries an
+// attachment (name/action roles) and one a `code` span (inline-code
+// background), and the toggle sequence repeats light<->dark twice so a fix
+// that only happens to work once cannot pass.
+void verify_live_theme_refresh_recolors_in_place() {
     apply_selection_test_palette(false);
     ConversationSurface surface;
     surface.resize(900, 400);
     surface.show();
-    const std::vector<DirectConversationMessage> messages = {
-        {.id = "in-1", .outgoing = false,
-            .timestamp = "2026-08-07T18:48:52",
-            .text = "The assistant explains the plan clearly today."},
-    };
+
+    QTemporaryDir temporary;
+    if (!temporary.isValid()) {
+        throw std::runtime_error(
+            "live theme refresh fixture sandbox must exist");
+    }
+    const auto attachment_path =
+        std::filesystem::path(temporary.path().toStdString()) / "report.pdf";
+    std::ofstream(attachment_path, std::ios::binary) << "Report body.\n";
+
+    // Comfortably more than the production history page size (100), so the
+    // render-time window and its lazy-history banner are part of this
+    // contract, not just the tail messages appended below.
+    constexpr auto kFillerRowCount = 106;
+    auto messages = std::vector<DirectConversationMessage>();
+    messages.reserve(kFillerRowCount + 3);
+    for (auto i = 0; i != kFillerRowCount; ++i) {
+        messages.push_back({
+            .id = "filler-" + std::to_string(i),
+            .outgoing = (i % 2) != 0,
+            .timestamp = "2026-08-07T18:00:00Z",
+            .text = "Steady filler content for row " + std::to_string(i)
+                + ".",
+        });
+    }
+    // These three land at the end so the bounded render window (the most
+    // recent rows) always shows them regardless of the exact filler count.
+    messages.push_back({
+        .id = "in-sender-header",
+        .outgoing = false,
+        .timestamp = "2026-08-07T18:00:00Z",
+        .text = "The assistant explains the plan clearly today.",
+    });
+    messages.push_back({
+        .id = "out-markdown",
+        .outgoing = true,
+        .timestamp = "2026-08-07T18:00:00Z",
+        .text = "Proceeding with `inline_code_span` and **bold** notes. "
+            "See [docs](https://example.com) for details.",
+    });
+    messages.push_back({
+        .id = "in-attachment",
+        .outgoing = false,
+        .timestamp = "2026-08-07T18:00:00Z",
+        .text = "Attaching the requested report.",
+        .attachments = {
+            projected_attachment(attachment_path, AttachmentMediaKind::file),
+        },
+    });
+
     surface.set_conversation(QStringLiteral("Telegram Bot"), messages);
     QCoreApplication::processEvents();
 
-    const auto initial_cursor =
-        select_substring(surface, QStringLiteral("plan clearly"));
-    const auto expected_text = initial_cursor.selectedText();
-    QCoreApplication::processEvents();
+    if (!surface.document()->toPlainText().contains(QStringLiteral("older"))) {
+        throw std::runtime_error(
+            "fixture must exceed the bounded history window so the "
+            "lazy-history banner (a secondary-ink run) is part of this "
+            "contract");
+    }
 
-    const auto verify_after_switch = [&](
-            bool dark, const QColor &canvas, int alpha) {
-        if (!surface.textCursor().hasSelection()
-                || surface.textCursor().selectedText() != expected_text) {
+    const auto expected_selection_text =
+        select_substring(surface, QStringLiteral("plan clearly"))
+            .selectedText();
+
+    // Independent of the widget's own selection: a QTextCursor the test
+    // holds itself, simulating some other owner of a reference into this
+    // document (e.g. a caller mid-way through reading it back).
+    const auto attachment_find =
+        surface.document()->find(QStringLiteral("report.pdf"));
+    if (!attachment_find.hasSelection()) {
+        throw std::runtime_error(
+            "attachment fixture text 'report.pdf' was not found in the "
+            "rendered document");
+    }
+    auto external_cursor = QTextCursor(surface.document());
+    external_cursor.setPosition(attachment_find.selectionStart());
+    external_cursor.setPosition(
+        attachment_find.selectionEnd(), QTextCursor::KeepAnchor);
+    const auto external_anchor = external_cursor.anchor();
+    const auto external_position = external_cursor.position();
+    const auto external_text = external_cursor.selectedText();
+
+    // The initial render already settled at the bottom (a fresh
+    // set_conversation follows the bottom), which is also where the
+    // selected/checked rows above live. An in-place recolor must leave this
+    // position bit-for-bit alone, unlike a rebuild that reflows geometry.
+    // Settle every deferred timer (bottom-pin, layout size-changed) before
+    // capturing the scroll/frame/block baselines below, so this baseline
+    // never depends on how many raw processEvents() calls happen to be
+    // enough on a given run.
+    flush_deferred_events();
+    auto *scrollbar = surface.verticalScrollBar();
+    const auto initial_scroll = scrollbar->value();
+    const auto initial_frames =
+        surface.document()->rootFrame()->childFrames();
+    const auto initial_block_count = surface.document()->blockCount();
+
+    const auto verify_document_untouched = [&] {
+        if (surface.document()->rootFrame()->childFrames() != initial_frames) {
             throw std::runtime_error(
-                std::string("a live theme refresh to ")
-                + (dark ? "dark" : "light")
-                + " must not lose the active drag-select, but the "
-                  "selection changed or was cleared (selectedText is now '"
+                "a chrome refresh must not replace the document's message/"
+                "verbose QTextFrames — a clear()+reinsert allocates new "
+                "frame objects even if the count happens to match");
+        }
+        if (surface.document()->blockCount() != initial_block_count) {
+            throw std::runtime_error(
+                "a chrome refresh must not change the document's block "
+                "count");
+        }
+        if (scrollbar->value() != initial_scroll) {
+            throw std::runtime_error(
+                "a chrome refresh must not move the scroll position");
+        }
+        if (external_cursor.anchor() != external_anchor
+                || external_cursor.position() != external_position
+                || external_cursor.selectedText() != external_text) {
+            throw std::runtime_error(
+                "a chrome refresh must not disturb an externally-retained "
+                "QTextCursor into the document — document()->clear() would "
+                "collapse it to position 0");
+        }
+        if (!surface.textCursor().hasSelection()
+                || surface.textCursor().selectedText()
+                    != expected_selection_text) {
+            throw std::runtime_error(
+                "a chrome refresh must not lose the human's active "
+                "drag-select, but the selection changed or was cleared "
+                "(selectedText is now '"
                 + surface.textCursor().selectedText().toStdString() + "')");
         }
+    };
 
-        // Positive proof the deferred rebuild actually ran (not just that
-        // nothing cleared the selection): body_format() bakes
-        // body_reading_color() into the QTextCharFormat at insertion time,
-        // so this only reads as the new theme's ink if rebuild_document()
-        // reinserted the message after the switch.
-        const auto body_runs = format_runs(
-            *surface.document(), QStringLiteral("The assistant"));
-        if (body_runs.size() != 1) {
-            throw std::runtime_error(
-                "expected exactly one body run for 'The assistant', found "
-                + std::to_string(body_runs.size()));
-        }
-        const auto body_ink = body_runs.front().foreground().color();
+    const auto verify_theme_colors = [&](
+            bool dark, const QColor &canvas, int alpha) {
+        // Positive proof the in-place recolor actually ran (not just that
+        // nothing disturbed the document): each *_format() helper bakes its
+        // color into the QTextCharFormat at insertion time, so a run only
+        // reads as the new theme's ink if refresh_chrome() re-applied it to
+        // the still-live run — rebuild_document() is never called here.
+        const auto require_single_run = [&](const QString &needle) {
+            const auto runs = format_runs(*surface.document(), needle);
+            if (runs.size() != 1) {
+                throw std::runtime_error(
+                    "expected exactly one run for '" + needle.toStdString()
+                    + "', found " + std::to_string(runs.size()));
+            }
+            return runs.front();
+        };
+        // document()->find() locates the needle anywhere within its run
+        // (not just at a fragment's start), for runs sharing a block with
+        // other text — the lazy-history banner and the attachment card.
+        const auto ink_at = [&](const QString &needle) {
+            const auto found = surface.document()->find(needle);
+            if (!found.hasSelection()) {
+                throw std::runtime_error(
+                    "expected to find '" + needle.toStdString()
+                    + "' in the rendered document");
+            }
+            return found.charFormat();
+        };
+
         const auto expected_body_ink = dark
             ? st::historyTextInFg->c
             : QColor(QStringLiteral("#26282B"));
+        const auto body_ink = require_single_run(
+            QStringLiteral("The assistant")).foreground().color();
         if (body_ink != expected_body_ink) {
             throw std::runtime_error(
-                std::string("after a live refresh to ") + (dark ? "dark" : "light")
-                + " the message body must be reinserted with that theme's "
-                  "ink (the document must actually rebuild), expected "
+                std::string("after a live refresh to ")
+                + (dark ? "dark" : "light")
+                + " the message body must carry that theme's ink, expected "
                 + expected_body_ink.name().toStdString() + " got "
                 + body_ink.name().toStdString());
+        }
+
+        const auto expected_secondary_ink = dark
+            ? st::msgServiceFg->c
+            : QColor(QStringLiteral("#8A8F98"));
+        const auto banner_ink = ink_at(QStringLiteral("older"))
+            .foreground().color();
+        if (banner_ink != expected_secondary_ink) {
+            throw std::runtime_error(
+                std::string("after a live refresh to ")
+                + (dark ? "dark" : "light")
+                + " the lazy-history banner must carry that theme's "
+                  "secondary ink, expected "
+                + expected_secondary_ink.name().toStdString() + " got "
+                + banner_ink.name().toStdString());
+        }
+
+        const auto attachment_name_ink = ink_at(QStringLiteral("report.pdf"))
+            .foreground().color();
+        if (attachment_name_ink != expected_body_ink) {
+            throw std::runtime_error(
+                std::string("after a live refresh to ")
+                + (dark ? "dark" : "light")
+                + " the attachment name must carry that theme's body ink");
+        }
+
+        const auto expected_active_ink = st::windowActiveTextFg->c;
+        const auto open_ink = ink_at(QStringLiteral("Open"))
+            .foreground().color();
+        const auto reveal_ink = ink_at(QStringLiteral("Reveal in Finder"))
+            .foreground().color();
+        if (open_ink != expected_active_ink
+                || reveal_ink != expected_active_ink) {
+            throw std::runtime_error(
+                std::string("after a live refresh to ")
+                + (dark ? "dark" : "light")
+                + " the attachment actions must carry the current "
+                  "windowActiveTextFg ink");
+        }
+
+        const auto expected_code_ink = dark
+            ? QColor(QStringLiteral("#242F3D"))
+            : QColor(QStringLiteral("#E4E7EB"));
+        const auto code_background = ink_at(QStringLiteral("inline_code_span"))
+            .background().color();
+        if (code_background != expected_code_ink) {
+            throw std::runtime_error(
+                std::string("after a live refresh to ")
+                + (dark ? "dark" : "light")
+                + " the inline code span must carry that theme's surface "
+                  "background, expected "
+                + expected_code_ink.name().toStdString() + " got "
+                + code_background.name().toStdString());
+        }
+
+        // The markdown link ink is fixed in both themes (it drops its
+        // inherited semantic role, see kSemanticRoleProperty) — a chrome
+        // refresh must leave it, and its anchor, exactly alone rather than
+        // recoloring it back to body ink.
+        const auto expected_link_ink = QColor(0x1a, 0x73, 0xe8);
+        const auto link_format = ink_at(QStringLiteral("docs"));
+        if (link_format.foreground().color() != expected_link_ink) {
+            throw std::runtime_error(
+                std::string("after a live refresh to ")
+                + (dark ? "dark" : "light")
+                + " the markdown link ink must stay fixed regardless of "
+                  "theme, expected " + expected_link_ink.name().toStdString()
+                + " got "
+                + link_format.foreground().color().name().toStdString());
+        }
+        if (link_format.anchorHref() != QStringLiteral("https://example.com")) {
+            throw std::runtime_error(
+                std::string("after a live refresh to ")
+                + (dark ? "dark" : "light")
+                + " the markdown link's anchorHref must survive the "
+                  "in-place recolor, got '"
+                + link_format.anchorHref().toStdString() + "'");
         }
 
         // QPalette::setColor copies by value: this is the direct proof that
@@ -3689,17 +3911,24 @@ void verify_selection_survives_live_theme_switch() {
         }
     };
 
-    apply_selection_test_palette(true);
-    surface.refresh_chrome();
-    flush_deferred_events();
-    verify_after_switch(
-        true, QColor(QStringLiteral("#17212B")), kDarkSelectionAlpha);
-
-    apply_selection_test_palette(false);
-    surface.refresh_chrome();
-    flush_deferred_events();
-    verify_after_switch(
-        false, QColor(QStringLiteral("#FFFFFF")), kLightSelectionAlpha);
+    struct ThemeStep final {
+        bool dark = false;
+        QColor canvas;
+        int alpha = 0;
+    };
+    const auto steps = std::vector<ThemeStep>{
+        {true, QColor(QStringLiteral("#17212B")), kDarkSelectionAlpha},
+        {false, QColor(QStringLiteral("#FFFFFF")), kLightSelectionAlpha},
+        {true, QColor(QStringLiteral("#17212B")), kDarkSelectionAlpha},
+        {false, QColor(QStringLiteral("#FFFFFF")), kLightSelectionAlpha},
+    };
+    for (const auto &step : steps) {
+        apply_selection_test_palette(step.dark);
+        surface.refresh_chrome();
+        flush_deferred_events();
+        verify_document_untouched();
+        verify_theme_colors(step.dark, step.canvas, step.alpha);
+    }
 }
 
 // rebuild_document() only remaps the captured numeric selection offsets when
@@ -4025,7 +4254,7 @@ int run_typography_test(int argc, char **argv) {
             verify_selection_accent_targets();
             verify_selection_wash_on_conversation_surfaces();
             verify_selection_over_plain_state_text();
-            verify_selection_survives_live_theme_switch();
+            verify_live_theme_refresh_recolors_in_place();
             verify_selection_not_remapped_when_content_changes();
             verify_selection_accent_fallback_on_real_off_family_native_highlight();
             std::cout << "conversation surface selection highlight: OK\n";
@@ -4052,7 +4281,7 @@ int run_typography_test(int argc, char **argv) {
         verify_selection_accent_targets();
         verify_selection_wash_on_conversation_surfaces();
         verify_selection_over_plain_state_text();
-        verify_selection_survives_live_theme_switch();
+        verify_live_theme_refresh_recolors_in_place();
         verify_selection_not_remapped_when_content_changes();
         verify_selection_accent_fallback_on_real_off_family_native_highlight();
         std::cout << "conversation surface typography: OK\n";
