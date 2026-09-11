@@ -1217,7 +1217,18 @@ bool PresetEditorModel::save_commit(PresetEditorCommit &result) const {
         const auto env = json_string(result.document.value(QLatin1String("manifest"))
             .toObject().value(QLatin1String("llm")).toObject()
             .value(QLatin1String("api_key_env")));
-        write_env_value(env_file_path(lingtai_global_dir()), env, result.api_key);
+        if (!write_env_value(env_file_path(lingtai_global_dir()), env, result.api_key)) {
+            // The saved preset JSON is already on disk: surface a partial
+            // save without rolling it back. The message stays bounded and
+            // free of the env var name, file path, key material, and native
+            // error details; an empty target is an invariant failure and
+            // must not silently succeed either.
+            result.ok = false;
+            result.error = QStringLiteral(
+                "Preset saved, but the API key could not be written to the "
+                "environment file.");
+            return false;
+        }
     }
     return true;
 }

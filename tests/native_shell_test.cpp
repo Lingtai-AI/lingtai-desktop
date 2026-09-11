@@ -9460,26 +9460,67 @@ void verify_conversation_slash_interception(
         "raw /btw must write the TUI .inquiry human source and question");
     require(status->text() == QStringLiteral("Inquiry sent: side question"),
         "raw /btw must report the TUI inquiry-sent status");
+    submit_command(QStringLiteral("/btw unique-followup-question-7f3a"));
+    require(status->text() == QStringLiteral(
+            "An inquiry is already pending; the new request was not queued "
+            "or written."),
+        "a second raw /btw while an inquiry is pending must report the "
+        "one-at-a-time pending status");
+    require(!status->text().contains(QStringLiteral("unique-followup-question-7f3a")),
+        "the pending status must never echo the raw /btw question");
+    require(read_file(target / ".inquiry") == "human\nside question",
+        "a pending inquiry must keep the original .inquiry bytes");
     submit_command(QStringLiteral("/insights"));
     require(read_file(target / ".inquiry") == "human\nside question",
         "a pending inquiry must remain a one-at-a-time no-op");
-    require(status->text() == QStringLiteral("Requesting insight..."),
-        "raw /insights must still report the TUI insight-sent status");
+    require(status->text() == QStringLiteral(
+            "An inquiry is already pending; the new request was not queued "
+            "or written."),
+        "raw /insights while an inquiry is pending must report the "
+        "one-at-a-time pending status, not the insight-sent string");
     std::error_code inquiry_error;
     fs::remove(target / ".inquiry", inquiry_error);
     submit_command(QStringLiteral("/insights"));
     require(read_file(target / ".inquiry").rfind("insight\n", 0) == 0,
         "raw /insights must write the TUI insight inquiry after the slot clears");
+    require(status->text() == QStringLiteral("Requesting insight..."),
+        "raw /insights must report the TUI insight-sent status");
     submit_command(QStringLiteral("/molt"));
     require(read_file(target / ".prompt")
             == "[system] molt immediately",
         "raw /molt must write the TUI English mandatory molt prompt");
     require(status->text() == QStringLiteral("Molt command sent."),
         "raw /molt must report the TUI molt-sent status");
+    require(fs::remove(target / ".prompt"),
+        "the slash fixture must clear the molt prompt leaf");
+    fs::create_directories(target / ".prompt");
+    submit_command(QStringLiteral("/molt"));
+    require(fs::is_directory(target / ".prompt"),
+        "a failed raw /molt must leave the colliding .prompt leaf untouched");
+    require(status->text() == QStringLiteral(
+            "Could not confirm the local request write."),
+        "raw /molt with a failed local write must report the bounded "
+        "unconfirmed-write status without a path or native details");
+    std::error_code prompt_collision_error;
+    fs::remove_all(target / ".prompt", prompt_collision_error);
+    require(!prompt_collision_error,
+        "the slash fixture must clear the .prompt collision");
     submit_command(QStringLiteral("/export other"));
     require(status->text()
             == QStringLiteral("[system] Usage: /export — or — /export recipe"),
         "raw /export with an unknown argument must show the TUI usage line");
+    fs::create_directories(target / ".prompt");
+    submit_command(QStringLiteral("/export recipe"));
+    require(fs::is_directory(target / ".prompt"),
+        "a failed raw /export must leave the colliding .prompt leaf untouched");
+    require(status->text() == QStringLiteral(
+            "Could not confirm the local request write."),
+        "raw /export with a failed local write must report the bounded "
+        "unconfirmed-write status");
+    std::error_code export_collision_error;
+    fs::remove_all(target / ".prompt", export_collision_error);
+    require(!export_collision_error,
+        "the slash fixture must clear the export .prompt collision");
     submit_command(QStringLiteral("/export recipe"));
     require(read_file(target / ".prompt").find("lingtai-recipe")
             != std::string::npos,
@@ -9706,6 +9747,207 @@ void verify_preset_editor_model(const fs::path &sandbox) {
             && providers.contains(QStringLiteral("codex-pool"))
             && providers.contains(QStringLiteral("claude-code")),
         "provider picker includes every TUI builtin, not only the cycle subset");
+}
+
+// `save_commit` must surface a failed API-key environment write as a partial
+// save: the already-written preset JSON stays on disk, `wrote_disk` stays
+// true, `ok` flips false, and the bounded error names no secret, path, env
+// var, or native detail. An empty `api_key_env` target is an invariant
+// failure, never a silent success, and a JSON-open failure must stop before
+// any environment write.
+void verify_preset_editor_save_commit(const fs::path &sandbox) {
+    using lingtai::desktop::PresetEditorLoadRequest;
+    using lingtai::desktop::PresetEditorModel;
+    using lingtai::desktop::PresetEditorPage;
+    using lingtai::desktop::lingtai_global_dir;
+
+    const auto kPartialSaveError = QStringLiteral(
+        "Preset saved, but the API key could not be written to the "
+        "environment file.");
+    const auto kJsonWriteError =
+        QStringLiteral("failed to write saved preset");
+    const auto global = sandbox / "save-commit-global";
+    {
+        std::error_code cleanup_error;
+        fs::remove_all(global, cleanup_error);
+        require(!cleanup_error, "save_commit fixture must start clean");
+    }
+    fs::create_directories(global / "presets/saved");
+    write_file(global / "presets/saved/router.json", R"({
+  "name": "router",
+  "description": {"summary": "Router preset", "tier": "1"},
+  "manifest": {
+    "llm": {"provider": "openrouter", "model": "openai/gpt-test"},
+    "capabilities": {"system": {}}
+  }
+})");
+    write_file(global / "presets/saved/blocked.json", R"({
+  "name": "blocked",
+  "description": {"summary": "Blocked preset", "tier": "1"},
+  "manifest": {
+    "llm": {"provider": "openrouter", "model": "openai/gpt-test"},
+    "capabilities": {"system": {}}
+  }
+})");
+
+    const auto previous_global = qgetenv("LINGTAI_TUI_DIR");
+    qputenv("LINGTAI_TUI_DIR", QByteArray::fromStdString(global.string()));
+    require(lingtai_global_dir() == QString::fromStdString(global.string()),
+        "save_commit fixtures must run against the injected global dir");
+
+    const auto request_for = [&](const char *file, const QString &name,
+            const QString &summary) {
+        return PresetEditorLoadRequest{
+            QString::fromStdString(
+                (global / "presets/saved" / file).string()),
+            name,
+            summary,
+            QStringLiteral("saved"),
+            false,
+            {name},
+        };
+    };
+
+    PresetEditorModel model;
+    model.load(request_for("router.json", QStringLiteral("router"),
+        QStringLiteral("Router preset")));
+    require(model.loaded_from_disk() && model.uses_api_key_field(),
+        "the router fixture must load from disk as an API-key preset");
+    model.set_api_key(QStringLiteral("dummy-router-api-key-1"));
+    auto committed = model.commit({QStringLiteral("router")});
+    require(committed.ok && committed.api_key_set,
+        "a valid API-key commit must be logically successful");
+    const auto env_name = committed.document
+        .value(QStringLiteral("manifest")).toObject()
+        .value(QStringLiteral("llm")).toObject()
+        .value(QStringLiteral("api_key_env")).toString();
+    require(env_name == QStringLiteral("OPENROUTER_1_API_KEY"),
+        "commit must stamp the deterministic auto env var name");
+
+    const auto saved_json_parses = [&] {
+        QJsonParseError parse_error;
+        const auto document = QJsonDocument::fromJson(
+            QByteArray::fromStdString(read_file(
+                global / "presets/saved/router.json")), &parse_error);
+        return parse_error.error == QJsonParseError::NoError
+            && document.isObject()
+            && document.object().value(QStringLiteral("manifest")).toObject()
+                .value(QStringLiteral("llm")).toObject()
+                .value(QStringLiteral("provider")).toString()
+                == QStringLiteral("openrouter");
+    };
+
+    // Writable happy path: JSON and the intended environment entry both
+    // land and success state is unchanged.
+    require(model.save_commit(committed) && committed.ok && committed.wrote_disk,
+        "the writable happy path must save the preset and the API key");
+    require(saved_json_parses(), "the happy path must write parseable JSON");
+    require(read_file(global / ".env")
+                == (env_name + QStringLiteral("=dummy-router-api-key-1\n")).toStdString(),
+        "the happy path must write the committed key under the stamped name");
+
+    // Deterministic .env directory collision: replace the happy-path file
+    // with a directory so opening the environment file fails without
+    // depending on permission bits.
+    require(fs::remove(global / ".env"),
+        "the save_commit fixture must clear the happy-path .env file");
+    fs::create_directories(global / ".env");
+    committed = model.commit({QStringLiteral("router")});
+    require(!model.save_commit(committed),
+        "an environment directory collision must fail the save");
+    require(!committed.ok,
+        "a partial save must flip ok to false");
+    require(committed.wrote_disk,
+        "a partial save must keep wrote_disk true with the JSON retained");
+    require(committed.error == kPartialSaveError,
+        "a partial save must report the exact bounded safe error");
+    require(saved_json_parses(),
+        "a partial save must leave the already-written JSON parseable");
+
+    // Defensive direct-result contract: an otherwise-valid commit result
+    // whose api_key_env target was emptied must not silently succeed. This
+    // is not a naturally produced valid commit() path; it guards the
+    // invariant that an empty target surfaces the helper failure.
+    auto empty_target = model.commit({QStringLiteral("router")});
+    require(empty_target.ok && empty_target.api_key_set,
+        "the empty-target fixture must start from a valid commit");
+    auto manifest = empty_target.document.value(QStringLiteral("manifest")).toObject();
+    auto llm = manifest.value(QStringLiteral("llm")).toObject();
+    llm.insert(QStringLiteral("api_key_env"), QString());
+    manifest.insert(QStringLiteral("llm"), llm);
+    empty_target.document.insert(QStringLiteral("manifest"), manifest);
+    require(!model.save_commit(empty_target),
+        "an empty api_key_env target must not silently succeed");
+    require(!empty_target.ok && empty_target.wrote_disk
+            && empty_target.error == kPartialSaveError,
+        "the empty-target invariant failure must surface as a partial save");
+
+    // Deterministic JSON-open failure: a directory collision at the saved
+    // preset path must fail before the environment write runs.
+    std::error_code env_collision_error;
+    fs::remove_all(global / ".env", env_collision_error);
+    require(!env_collision_error,
+        "the save_commit fixture must clear the .env collision");
+    PresetEditorModel blocked_model;
+    blocked_model.load(request_for("blocked.json", QStringLiteral("blocked"),
+        QStringLiteral("Blocked preset")));
+    blocked_model.set_api_key(QStringLiteral("dummy-blocked-api-key-1"));
+    auto blocked = blocked_model.commit({QStringLiteral("blocked")});
+    require(fs::remove(global / "presets/saved/blocked.json"),
+        "the save_commit fixture must clear the loaded blocked preset file");
+    fs::create_directories(global / "presets/saved/blocked.json");
+    require(!blocked_model.save_commit(blocked),
+        "a JSON path collision must fail the save");
+    require(!blocked.ok && !blocked.wrote_disk
+            && blocked.error == kJsonWriteError,
+        "a JSON-open failure must keep the existing generic error and "
+        "wrote_disk false");
+    require(!fs::exists(global / ".env"),
+        "a JSON-open failure must not run the environment write");
+
+    // Page/signal integration: the visible error must carry the partial-save
+    // text and `saved` must not fire on failure, exactly once on success.
+    PresetEditorPage page;
+    page.load(request_for("router.json", QStringLiteral("router"),
+        QStringLiteral("Router preset")));
+    page.model().set_api_key(QStringLiteral("dummy-page-api-key-9"));
+    auto saved_count = 0;
+    QObject::connect(&page, &PresetEditorPage::saved, &page,
+        [&saved_count](const QString &) { ++saved_count; });
+    auto *save = page.findChild<QPushButton *>(
+        "lingtai_setup_edit_preset_save");
+    auto *error = page.findChild<QLabel *>(
+        "lingtai_setup_edit_preset_error");
+    require(save != nullptr && error != nullptr,
+        "the preset editor page must expose its save button and error label");
+    page.show();
+    QCoreApplication::processEvents();
+
+    fs::create_directories(global / ".env");
+    save->click();
+    QCoreApplication::processEvents();
+    require(error->isVisible() && error->text() == kPartialSaveError,
+        "an environment write failure must show the bounded partial-save "
+        "error on the page");
+    require(saved_count == 0,
+        "an environment write failure must suppress the saved signal");
+
+    std::error_code page_env_error;
+    fs::remove_all(global / ".env", page_env_error);
+    require(!page_env_error,
+        "the page fixture must clear the .env collision");
+    save->click();
+    QCoreApplication::processEvents();
+    require(saved_count == 1,
+        "the happy path must emit saved exactly once");
+    require(error->isHidden(),
+        "the happy path must hide the page error");
+    require(read_file(global / ".env").find("dummy-page-api-key-9")
+            != std::string::npos,
+        "the page happy path must write the entered API key");
+    page.hide();
+
+    qputenv("LINGTAI_TUI_DIR", previous_global);
 }
 
 void verify_project_setup_wizard_contract(lingtai::desktop::NativeShell &shell) {
@@ -10156,6 +10398,8 @@ void run_native_shell_journey(
                 shell, project_root / "kanban-page-fixture");
             verify_preset_editor_model(
                 project_root / "preset-editor-model-fixture");
+            verify_preset_editor_save_commit(
+                project_root / "preset-editor-model-fixture");
             verify_project_setup_wizard_contract(shell);
         });
         return;
@@ -10344,6 +10588,8 @@ int main(int argc, char **argv) {
             shell.show_offscreen();
             QCoreApplication::processEvents();
             verify_preset_editor_model(project_root / "preset-editor-model-fixture");
+            verify_preset_editor_save_commit(
+                project_root / "preset-editor-model-fixture");
             verify_project_setup_wizard_contract(shell);
             std::cout << "native shell behavior: OK\n";
             return 0;

@@ -85,6 +85,21 @@ void verify_prompt_and_inquiry(const fs::path &sandbox) {
     require(write_agent_prompt(attachment, "never-existed", "x")
             == AgentPromptWriteResult::failed_local,
         "a missing Agent directory must fail rather than be created");
+    require(write_agent_inquiry(attachment, "never-existed", "human", "q")
+            == AgentPromptWriteResult::failed_local,
+        "an inquiry to a missing Agent directory must fail rather than be created");
+
+    write_file(project / ".lingtai/gamma/.agent.json", R"({"admin":{}})");
+    write_file(project / ".lingtai/gamma/.inquiry.taken", "insight\nolder question");
+    const auto taken = write_agent_inquiry(
+        attachment, "gamma", "human", "newer question");
+    require(taken == AgentPromptWriteResult::already_pending,
+        ".inquiry.taken must be a one-at-a-time no-op");
+    require(!fs::exists(project / ".lingtai/gamma/.inquiry"),
+        ".inquiry.taken must not be replaced by a new .inquiry");
+    require(read_file(project / ".lingtai/gamma/.inquiry.taken")
+            == "insight\nolder question",
+        ".inquiry.taken bytes must be preserved");
 }
 
 void verify_molt_language_and_export(const fs::path &sandbox) {

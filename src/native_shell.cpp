@@ -4440,6 +4440,32 @@ void NativeShell::handle_agent_selection(const fs::path &directory_key) {
     }
 }
 
+namespace {
+
+// Maps one local prompt/inquiry write outcome to the single-line composer
+// status. `written_text` is the exact current success string, preserved
+// byte-for-byte. The pending/failure lines never echo command arguments and
+// never claim a specific cause, remote delivery state, or the absence of
+// partial bytes: `already_pending` is the TUI one-at-a-time no-op and
+// `failed_local` only means Desktop could not confirm a successful local
+// write.
+QString prompt_write_status_text(
+        AgentPromptWriteResult result, const QString &written_text) {
+    switch (result) {
+    case AgentPromptWriteResult::already_pending:
+        return QStringLiteral(
+            "An inquiry is already pending; the new request was not queued "
+            "or written.");
+    case AgentPromptWriteResult::failed_local:
+        return QStringLiteral("Could not confirm the local request write.");
+    case AgentPromptWriteResult::written:
+        break;
+    }
+    return written_text;
+}
+
+} // namespace
+
 bool NativeShell::handle_prompt_command(
         const std::string &name, const std::string &args) {
     auto *status = window_->findChild<QLabel *>("lingtai_composer_status");
@@ -4479,25 +4505,30 @@ bool NativeShell::handle_prompt_command(
         return true;
     }
     if (name == "btw") {
-        static_cast<void>(write_agent_inquiry(attachment, key, "human", args));
-        status->setText(QStringLiteral("Inquiry sent: %1")
-            .arg(QString::fromStdString(args)));
+        const auto outcome = write_agent_inquiry(attachment, key, "human", args);
+        status->setText(prompt_write_status_text(outcome,
+            QStringLiteral("Inquiry sent: %1")
+                .arg(QString::fromStdString(args))));
         return true;
     }
     if (name == "insights") {
-        static_cast<void>(write_insight_inquiry(attachment, key));
-        status->setText(QStringLiteral("Requesting insight..."));
+        const auto outcome = write_insight_inquiry(attachment, key);
+        status->setText(prompt_write_status_text(outcome,
+            QStringLiteral("Requesting insight...")));
         return true;
     }
     if (name == "molt") {
-        static_cast<void>(write_molt_prompt(attachment, key));
-        status->setText(QStringLiteral("Molt command sent."));
+        const auto outcome = write_molt_prompt(attachment, key);
+        status->setText(prompt_write_status_text(outcome,
+            QStringLiteral("Molt command sent.")));
         return true;
     }
     if (name == "export") {
-        static_cast<void>(write_export_recipe_prompt(attachment, key));
-        status->setText(QStringLiteral(
-            "[system] Asked the orchestrator to start the recipe export flow."));
+        const auto outcome = write_export_recipe_prompt(attachment, key);
+        status->setText(prompt_write_status_text(outcome,
+            QStringLiteral(
+                "[system] Asked the orchestrator to start the recipe "
+                "export flow.")));
         return true;
     }
     const auto goal = write_agent_goal_request(attachment, key, args);
