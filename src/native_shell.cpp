@@ -1236,13 +1236,19 @@ std::unique_ptr<Ui::RpWindow> make_native_window() {
 
 } // namespace
 
+void NativeShell::apply_process_palette() {
+    apply_system_palette();
+}
+
 NativeShell::NativeShell(
         ConversationUnreadSession &unread_session,
-        RuntimeOptions runtime_options)
+        RuntimeOptions runtime_options,
+        bool owns_process_appearance)
 : unread_session_(unread_session)
 , runtime_options_(runtime_options)
 , window_(make_native_window())
-, lifecycle_controller_(std::make_unique<AgentLifecycleController>()) {
+, lifecycle_controller_(std::make_unique<AgentLifecycleController>())
+, owns_process_appearance_(owns_process_appearance) {
     window_->setObjectName("lingtai_desktop_window");
     window_->setTitle(QString());
     window_->setWindowTitle(QStringLiteral("LingTai Desktop"));
@@ -2114,20 +2120,22 @@ NativeShell::NativeShell(
             recompute_layout(size.width());
         }, layout_lifetime_);
 
-    QObject::connect(
-        QGuiApplication::styleHints(),
-        &QStyleHints::colorSchemeChanged,
-        window_.get(),
-        [this] { refresh_system_palette(); });
-    base::install_event_filter(
-        window_.get(),
-        qGuiApp,
-        [this](not_null<QEvent *> event) {
-            if (event->type() == QEvent::ApplicationPaletteChange) {
-                refresh_system_palette();
-            }
-            return base::EventFilterResult::Continue;
-        });
+    if (owns_process_appearance_) {
+        QObject::connect(
+            QGuiApplication::styleHints(),
+            &QStyleHints::colorSchemeChanged,
+            window_.get(),
+            [this] { refresh_system_palette(); });
+        base::install_event_filter(
+            window_.get(),
+            qGuiApp,
+            [this](not_null<QEvent *> event) {
+                if (event->type() == QEvent::ApplicationPaletteChange) {
+                    refresh_system_palette();
+                }
+                return base::EventFilterResult::Continue;
+            });
+    }
 
     auto *titlebar = [&]() -> Ui::Platform::TitleWidget * {
         for (auto *child : window_->findChildren<QWidget *>(
@@ -2179,14 +2187,22 @@ NativeShell::~NativeShell() {
 }
 
 void NativeShell::refresh_system_palette() {
-    // setPalette / style updates emit ApplicationPaletteChange, which would
-    // re-enter here and stack full conversation rebuilds (100% CPU freeze).
+    // The standalone-shell fallback owns one complete transaction. Hosted
+    // shells are refreshed synchronously by ShellHost and never enter here.
     if (refreshing_system_palette_) {
         return;
     }
     refreshing_system_palette_ = true;
+    apply_process_palette();
+    refresh_appearance_chrome();
+    refresh_native_appearance_background();
+    if (window_) {
+        window_->update();
+    }
+    refreshing_system_palette_ = false;
+}
 
-    apply_system_palette();
+void NativeShell::refresh_appearance_chrome() {
     apply_titlebar_brand_palette(window_.get());
     apply_project_setup_palette(setup_route_);
     if (auto *page = window_->findChild<AgentConfigPage *>()) {
@@ -2210,7 +2226,6 @@ void NativeShell::refresh_system_palette() {
         auto palette = window_->palette();
         palette.setColor(QPalette::Window, st::windowBg->c);
         window_->setPalette(palette);
-        ApplyNativeWindowBackground(window_.get(), st::windowBg->c);
     }
     if (auto *startup_heading = window_->findChild<QLabel *>(
             "lingtai_startup_heading")) {
@@ -2223,25 +2238,17 @@ void NativeShell::refresh_system_palette() {
         apply_slash_popup_palette(popup);
     }
 
-    refreshing_system_palette_ = false;
+    if (detail_view_) {
+        // Preserve the memory repair: recolor semantic runs in place, but do it
+        // inside the frozen host transaction instead of a second zero timer.
+        detail_view_->refresh_chrome(true);
+    }
+}
 
-    // Defer the conversation chrome recolor until the palette storm settles.
-    // Do not also call render_conversation() here — that would be redundant
-    // and could perform a full content rebuild (a same-content call may
-    // no-op instead), on top of refresh_chrome already re-applying the
-    // cached rows' current colors.
-    const auto generation = ++palette_refresh_generation_;
-    QTimer::singleShot(0, window_.get(), [this, generation] {
-        if (generation != palette_refresh_generation_) {
-            return;
-        }
-        if (detail_view_) {
-            detail_view_->refresh_chrome();
-        }
-        if (window_) {
-            window_->update();
-        }
-    });
+void NativeShell::refresh_native_appearance_background() {
+    if (window_) {
+        ApplyNativeWindowBackground(window_.get(), st::windowBg->c);
+    }
 }
 
 void NativeShell::show() {

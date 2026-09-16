@@ -276,7 +276,20 @@ and worker-acceptance owners above.
    re-derives visible routes from C1 truth, and proposes transitions
    through the model. Its window factory also establishes the pinned toolkit's
    application-lifetime prerequisites before `AgentDetailView` can construct
-   the composer. It also owns the composer-local dispatch after calling
+   the composer. `ShellHost` is also the sole process-appearance owner for
+   hosted windows. It observes system-scheme and application-palette changes,
+   coalesces each burst before any visible mutation, freezes the currently
+   visible windows whose updates were enabled, applies the process palette
+   exactly once, refreshes every hosted shell synchronously, applies native
+   window backgrounds last, then restores updates and requests one repaint per
+   frozen window. A hosted `NativeShell` must not install a competing process
+   appearance listener; the default standalone shell retains one complete
+   self-owned fallback transaction but does not claim the host's multi-window
+   atomicity. The hosted synchronous path must preserve the existing
+   `ConversationSurface` strategy: invalidate stale deferred recolors and
+   recolor theme-dependent semantic runs in place, never clear or rebuild the
+   `QTextDocument` or conversation history. `NativeShell` also owns the
+   composer-local dispatch after calling
    `parse_slash_command` on raw text: every parsed command terminates locally
    before `send_direct_mail`. `/sleep`, `/suspend`, `/cpr`, `/clear`, and
    `/refresh` dispatch only through the owned `AgentLifecycleController`.

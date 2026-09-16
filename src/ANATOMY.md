@@ -22,7 +22,8 @@ Entry point and composition root:
 - `shell_host.{h,cpp}` — owns all native windows, the one process-session
   `ConversationUnreadSession`, the one `DesktopStatusItem`, active/read-
   eligible and most-recent-active window selection, unique-open-Project unread
-  aggregation, directory-picker routing, and the fallback kernel interpreter.
+  aggregation, directory-picker routing, the fallback kernel interpreter, and
+  the one coalesced process appearance transaction for every hosted shell.
   Final-window close still exits the application; the status item does not make
   Desktop resident.
 - `desktop_status_item.{h,cpp}` — the narrow Qt adapter that owns one
@@ -276,6 +277,25 @@ keeps the parent summary):
 
 - `main.cpp` → `NativeShell`: composes it, sets the two injectables, shows it;
   in smoke mode consumes `smoke_ready()` and emits the ordered markers.
+- `ShellHost` owns hosted appearance as a process-level transaction: it alone
+  observes system-scheme/application-palette changes (installed once in its
+  constructor, `shell_host.cpp:66-80`) and coalesces each burst before a
+  visible mutation (`schedule_appearance_refresh`, `shell_host.cpp:322-334`).
+  The transaction freezes visible update-enabled
+  windows (`ScopedWindowUpdateFreeze`, `shell_host.cpp:31-58`), invokes the
+  private `NativeShell::apply_process_palette()` phase once, synchronously
+  runs `refresh_appearance_chrome()` for every hosted shell, applies each
+  native background last, restores updates, and requests one repaint
+  (`apply_appearance_refresh`, `shell_host.cpp:336-367`; the two per-window
+  phases, `native_shell.cpp:2205-2252`). Shells spawned by the host disable
+  their own process listener; a standalone `NativeShell` keeps the default
+  self-owned complete fallback (`refresh_system_palette`,
+  `native_shell.cpp:2189-2203`).
+- The hosted `NativeShell` to `AgentDetailView` to `ConversationSurface`
+  synchronous chrome path (`ConversationSurface::refresh_chrome(bool)`,
+  `conversation_surface.cpp:2017-2070`) advances the generation guarding
+  deferred recolors and updates existing semantic runs in place; it never
+  clears or rebuilds the `QTextDocument` or conversation history.
 - `NativeShell` → readers/owners: the shell is the sole caller of
   `project_agents`, `resolve_direct_conversation_route`,
   `parse_slash_command`, the shared mailbox fingerprint/snapshot projection,

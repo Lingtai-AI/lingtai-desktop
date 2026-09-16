@@ -5,6 +5,7 @@
 
 #include <QtCore/QObject>
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -52,6 +53,8 @@ private:
     void show_lingtai();
     void remove_shell(NativeShell *shell);
     void refresh_unread_presentations();
+    void schedule_appearance_refresh();
+    void apply_appearance_refresh();
     [[nodiscard]] std::optional<std::filesystem::path> pick_project_directory(
         QWidget *parent) const;
     void open_or_bootstrap(
@@ -68,6 +71,9 @@ private:
     DesktopStatusItem *status_item_ = nullptr;
     std::size_t unread_total_ = 0;
     std::size_t open_project_count_ = 0;
+    std::uint64_t appearance_request_generation_ = 0;
+    bool appearance_refresh_scheduled_ = false;
+    bool appearance_refreshing_ = false;
     bool shutting_down_ = false;
 };
 
