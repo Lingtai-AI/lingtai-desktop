@@ -14,6 +14,7 @@
 
 #include "styles/palette.h"
 #include "ui/UiTestFonts.h"
+#include "ui/style/style_core.h"
 #include "ui/platform/mac/ui_window_title_mac.h"
 #include "ui/rp_widget.h"
 #include "ui/widgets/buttons.h"
@@ -1091,6 +1092,66 @@ void verify_open_project_behavior(
     std::error_code cleanup_error;
     fs::remove_all(sandbox, cleanup_error);
     require(!cleanup_error, "focused fixtures must be removed");
+}
+
+// A host-owned appearance burst must remain latent until one event-loop
+// transaction, publish the process-global palette exactly once, and leave every
+// owned window on the same final palette when that transaction completes.
+void verify_process_owned_atomic_appearance(const fs::path &sandbox) {
+    using lingtai::desktop::RuntimeOptions;
+    using lingtai::desktop::ShellHost;
+
+    std::error_code cleanup_error;
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "the atomic-appearance fixture must start clean");
+
+    RuntimeOptions options;
+    options.offscreen_mode = true;
+    options.ui_test_mode = true;
+    ShellHost host(options);
+    auto &primary = host.primary();
+    primary.show_offscreen();
+    QCoreApplication::processEvents();
+
+    const auto secondary_root = sandbox / "window-b";
+    write_file(secondary_root / ".lingtai/beta/.agent.json", R"({"admin":{}})");
+    host.open_path_in_new_window(primary, secondary_root);
+    QCoreApplication::processEvents();
+    require(host.shell_count() == 2,
+        "the atomic-appearance fixture must own two shell windows");
+    auto &secondary = host.shell_at(1);
+
+    auto palette_notifications = 0;
+    auto palette_lifetime = rpl::lifetime();
+    style::PaletteChanged() | rpl::on_next([&] {
+        ++palette_notifications;
+    }, palette_lifetime);
+
+    auto *style_hints = QGuiApplication::styleHints();
+    const auto original_scheme = style_hints->colorScheme();
+    style_hints->setColorScheme(Qt::ColorScheme::Dark);
+    style_hints->setColorScheme(Qt::ColorScheme::Light);
+    style_hints->setColorScheme(Qt::ColorScheme::Dark);
+    require(palette_notifications == 0,
+        "an appearance burst must not publish a partial palette before the "
+        "host transaction runs");
+
+    QCoreApplication::processEvents();
+    require(palette_notifications == 1,
+        "one host appearance transaction must publish the global palette "
+        "exactly once across every window");
+    require(st::windowBg->c == QColor("#17212b"),
+        "the coalesced appearance transaction must apply the final dark scheme");
+    require(primary.window().palette().color(QPalette::Window) == st::windowBg->c
+            && secondary.window().palette().color(QPalette::Window)
+                == st::windowBg->c,
+        "every host-owned window must converge on the same final palette in "
+        "the transaction turn");
+
+    style_hints->setColorScheme(original_scheme);
+    QCoreApplication::processEvents();
+    fs::remove_all(sandbox, cleanup_error);
+    require(!cleanup_error, "the atomic-appearance fixture must be removed");
 }
 
 // Folder menu "Open Project in Another Window" must keep the requester on its
@@ -7759,7 +7820,6 @@ void verify_telegram_theme_reset(
     const auto switch_and_assert = [&](Qt::ColorScheme scheme) {
         style_hints->setColorScheme(scheme);
         QCoreApplication::processEvents();
-        QCoreApplication::processEvents();
         assert_live_widget_colors(scheme);
     };
     composer_input->setText(QStringLiteral("Theme probe"));
@@ -10131,6 +10191,8 @@ void run_native_shell_journey(
         return;
     }
     if (journey == "theme") {
+        verify_process_owned_atomic_appearance(
+            project_root / "commit-appearance-transaction-fixture");
         with_offscreen_shell([&](NativeShell &shell) {
             verify_telegram_theme_reset(
                 shell, project_root / "commit-31-theme-reset-fixture");

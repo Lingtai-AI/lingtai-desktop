@@ -238,6 +238,18 @@ keeps the parent summary):
 
 - `main.cpp` → `NativeShell`: composes it, sets the two injectables, shows it;
   in smoke mode consumes `smoke_ready()` and emits the ordered markers.
+- `ShellHost` owns hosted appearance as a process-level transaction: it alone
+  observes system-scheme/application-palette changes and coalesces each burst
+  before a visible mutation. The transaction freezes visible update-enabled
+  windows, invokes the private `NativeShell::apply_process_palette()` phase
+  once, synchronously runs `refresh_appearance_chrome()` for every hosted
+  shell, applies each native background last, restores updates, and requests
+  one repaint. Shells spawned by the host disable their own process listener;
+  a standalone `NativeShell` keeps the default self-owned complete fallback.
+- The hosted `NativeShell` to `AgentDetailView` to `ConversationSurface`
+  synchronous chrome path advances the generation guarding deferred recolors
+  and updates existing semantic runs in place; it never clears or rebuilds the
+  `QTextDocument` or conversation history.
 - `NativeShell` → readers/owners: the shell is the sole caller of
   `project_agents`, `resolve_direct_conversation_route`,
   `parse_slash_command`, the shared mailbox fingerprint/snapshot projection,

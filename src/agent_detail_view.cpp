@@ -1768,7 +1768,7 @@ void AgentDetailView::scroll_conversation_to_bottom() {
     }
 }
 
-void AgentDetailView::refresh_chrome() {
+void AgentDetailView::refresh_chrome(bool immediate_conversation_recolor) {
     const auto bg = st::windowBg->c;
     // QScrollArea viewports paint QPalette::Base. After a dark→light switch
     // the detail viewport can keep the old application Base while surfaces
@@ -1820,7 +1820,7 @@ void AgentDetailView::refresh_chrome() {
         kanban_page_->apply_chrome();
     }
     if (conversation_surface_) {
-        conversation_surface_->refresh_chrome();
+        conversation_surface_->refresh_chrome(immediate_conversation_recolor);
     }
     refresh_conversation_detail_button();
 }

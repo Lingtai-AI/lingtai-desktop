@@ -2023,7 +2023,7 @@ ConversationVerboseLevel ConversationSurface::cycle_verbose_level() {
     return verbose_level_;
 }
 
-void ConversationSurface::refresh_chrome() {
+void ConversationSurface::refresh_chrome(bool immediate_recolor) {
     disarm_attachment_action();
     // QPalette::setColor copies by value, so the constructor-time
     // HighlightedText (and the plain-state/empty-state path, which never
@@ -2034,6 +2034,19 @@ void ConversationSurface::refresh_chrome() {
     refreshed_palette.setColor(QPalette::Highlight, Qt::transparent);
     refreshed_palette.setColor(QPalette::HighlightedText, st::windowFg->c);
     setPalette(refreshed_palette);
+
+    if (immediate_recolor) {
+        // Invalidate any older zero-timer recolor before performing the same
+        // memory-safe in-place walk inside the frozen process transaction.
+        ++chrome_recolor_generation_;
+        chrome_recolor_scheduled_ = false;
+        if (last_messages_.empty() || rebuild_in_progress_) {
+            update();
+        } else {
+            recolor_theme_dependent_runs();
+        }
+        return;
+    }
     if (last_messages_.empty() || rebuild_in_progress_) {
         update();
         return;
@@ -2045,16 +2058,17 @@ void ConversationSurface::refresh_chrome() {
     // history. Recolor the existing semantic-role-tagged runs in place
     // instead (see kSemanticRoleProperty); text, anchors, resources, frames,
     // selection, scroll, and document structure/geometry are untouched.
-    // Theme refreshes can still arrive in a burst, so coalesce into one
-    // deferred pass with a flag dedicated to this recolor — reusing
-    // rebuild_scheduled_ would risk a real content rebuild queued by
-    // schedule_rebuild_document() being mistaken for an already-pending
-    // recolor and silently dropped.
+    // Non-host callers may still arrive in a burst, so retain the local
+    // coalescing fallback without sharing it with content rebuild scheduling.
     if (chrome_recolor_scheduled_) {
         return;
     }
     chrome_recolor_scheduled_ = true;
-    QTimer::singleShot(0, this, [this] {
+    const auto generation = ++chrome_recolor_generation_;
+    QTimer::singleShot(0, this, [this, generation] {
+        if (generation != chrome_recolor_generation_) {
+            return;
+        }
         chrome_recolor_scheduled_ = false;
         if (last_messages_.empty() || rebuild_in_progress_) {
             update();
