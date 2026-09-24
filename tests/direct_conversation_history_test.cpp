@@ -203,6 +203,105 @@ void verify_exact_direct_membership(const fs::path &sandbox) {
         "well-formed mail for another conversation is absent, not an error");
 }
 
+// A kernel `email.reply` may spell either endpoint as its absolute working
+// directory instead of its bare manifest address. Only this project's exact
+// `.lingtai/<directory key>` names a participant, keyed by directory rather
+// than address; every other spelling stays another conversation's
+// well-formed mail, and the identity, one-recipient, and no-CC guards hold.
+void verify_absolute_working_directory_endpoints(const fs::path &sandbox) {
+    std::error_code error;
+    fs::create_directories(mailbox_of(sandbox / "absolute-endpoints"), error);
+    require(!error, "absolute-endpoint mailbox must be created");
+    // Production routes anchor on the canonical root, and so do these paths.
+    const auto project = fs::canonical(sandbox / "absolute-endpoints", error);
+    require(!error, "absolute-endpoint project must canonicalize");
+    const auto mailbox = mailbox_of(project);
+    const auto lingtai = project / ".lingtai";
+    const auto human = (lingtai / "human").string();
+    const auto agent = (lingtai / "telegram-bot").string();
+    const auto codex = (lingtai / "codex").string();
+    const auto shadow = fs::path(project.string() + "-shadow") / ".lingtai";
+    const auto nested = project / "nested" / ".lingtai";
+    const auto other = project.parent_path() / "other-project" / ".lingtai";
+    const auto entry = [&](std::string_view folder, std::string_view id,
+            std::string_view minute, std::string_view from,
+            std::string_view to, std::string_view identity = "") {
+        write_file(mailbox / std::string(folder) / std::string(id)
+                / "message.json",
+            envelope(from, to, "Reply", id,
+                folder == "sent" ? "sent_at" : "received_at",
+                "2026-09-24T20:" + std::string(minute) + ":00Z", identity));
+    };
+    entry("inbox", "absolute-both", "01", agent, human,
+        "20260712-191609-d0c8");
+    entry("inbox", "absolute-recipient", "02", "telegram-bot", human);
+    entry("inbox", "absolute-sender", "03", agent, "human");
+    entry("sent", "absolute-outgoing", "04", human, agent);
+    entry("inbox", "sibling-agent", "05", codex, human);
+    entry("inbox", "prefix-agent", "06", agent + "-2", human);
+    entry("inbox", "prefix-human", "07", agent, human + "-desk");
+    entry("inbox", "prefix-project", "08",
+        (shadow / "telegram-bot").string(), (shadow / "human").string());
+    entry("inbox", "nested-agent", "09", agent + "/mailbox", human);
+    entry("inbox", "nested-project", "10",
+        (nested / "telegram-bot").string(), (nested / "human").string());
+    entry("inbox", "other-project", "11",
+        (other / "telegram-bot").string(), (other / "human").string());
+    entry("inbox", "relative-spelling", "12",
+        ".lingtai/telegram-bot", ".lingtai/human");
+    entry("inbox", "traversal-spelling", "13", codex + "/../telegram-bot",
+        human);
+    entry("inbox", "wrong-identity", "14", agent, human,
+        "some-other-agent-id");
+    entry("sent", "outgoing-sibling", "15", human, codex);
+    write_file(mailbox / "inbox" / "copied" / "message.json",
+        R"({"from":")" + agent + R"(","to":[")" + human + R"("],"cc":[")"
+            + codex + R"("],"message":"copied",)"
+            R"("received_at":"2026-09-24T20:16:00Z"})");
+    write_file(mailbox / "inbox" / "group" / "message.json",
+        R"({"from":")" + agent + R"(","to":[")" + human
+            + R"(","human"],"message":"group",)"
+            R"("received_at":"2026-09-24T20:17:00Z"})");
+
+    const auto history = read_direct_conversation(route_for(project));
+    require(ids_of(history) == std::vector<std::string>{
+                "absolute-both", "absolute-recipient", "absolute-sender",
+                "absolute-outgoing"},
+        "an exact same-project absolute working directory names either "
+        "endpoint in both directions; sibling, prefixed, nested, "
+        "other-project, relative, traversal, wrong-identity, copied, and "
+        "group spellings never join the conversation");
+    require(history.skipped == 0,
+        "another conversation's absolute spelling is absent, not an error");
+    require(!history.messages[0].outgoing && !history.messages[1].outgoing
+            && !history.messages[2].outgoing && history.messages[3].outgoing,
+        "absolute replies are incoming and an absolute human send is outgoing");
+    require(history.messages[0].text == "absolute-both",
+        "an absolute reply renders its own message");
+
+    // With addresses unlike their directory keys, the bare spellings drop out
+    // and exactly the all-absolute rows remain: absolute endpoints are keyed
+    // by working directory, never by address.
+    auto renamed = route_for(project);
+    renamed.human_address = "mail/operator-desk";
+    renamed.target_address = "mail/telegram-post";
+    require(ids_of(read_direct_conversation(renamed))
+            == std::vector<std::string>{"absolute-both", "absolute-outgoing"},
+        "an absolute endpoint names its participant's directory key, never "
+        "its current address");
+
+    // Lexical cleaning only: a `.` component, a doubled separator, and a
+    // trailing separator still spell the same exact working directories.
+    entry("inbox", "absolute-cleaned", "18",
+        lingtai.string() + "/./telegram-bot/",
+        project.string() + "//.lingtai/human/");
+    require(ids_of(read_direct_conversation(route_for(project)))
+            == std::vector<std::string>{
+                "absolute-both", "absolute-recipient", "absolute-sender",
+                "absolute-outgoing", "absolute-cleaned"},
+        "a cleaned absolute spelling names the same working directory");
+}
+
 // The kernel moves outbox/<id> to sent/<id>, so the same ID can be observed
 // twice; sent is the one that renders. Both folders must also keep ordering on
 // their own stamps -- `deliver_at` while pending, `sent_at` once moved -- so a
@@ -703,6 +802,7 @@ int main(int argc, char **argv) {
 
         verify_incoming_and_outgoing_pair(sandbox);
         verify_exact_direct_membership(sandbox);
+        verify_absolute_working_directory_endpoints(sandbox);
         verify_outbox_and_sent_collapse(sandbox);
         verify_attachment_projection_and_current_entry_rooting(sandbox);
         verify_bad_attachments_preserve_messages_and_stay_contained(sandbox);

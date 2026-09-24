@@ -204,6 +204,12 @@ its code.
   that ID retires the pending copy and presents the authoritative metadata
   without duplication. Project-open/invalidation clears the projection;
   selection changes cannot expose another route's rows.
+- Direct-conversation mailbox projection includes a kernel `email.reply`
+  when either endpoint uses that participant's exact same-project absolute
+  `.lingtai/<directory key>` working directory rather than its bare manifest
+  address. It still requires one recipient, no CC, and a matching incoming
+  `identity.agent_id` when present; sibling, nested, and other-project paths
+  never join the selected Agent's conversation.
 - Roster state label: `Roster unavailable` when the scan is not complete,
   `No Agents found — scan complete`, or `N Agent(s) — scan complete`.
 
