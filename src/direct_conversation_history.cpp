@@ -129,21 +129,55 @@ enum class Membership { incoming, outgoing, absent };
     return envelope;
 }
 
-// Membership is exactly envelope based: one sender, one recipient, no CC. An
-// incoming entry that names its sender identity must name the selected Agent;
-// one that names none falls back to the exact address.
+// A kernel reply may spell an endpoint as its absolute working directory
+// instead of its bare manifest address. That spelling names a participant
+// only as this project's exact `.lingtai/<directory key>`: `.` components and
+// redundant or trailing separators are cleaned lexically, while a relative or
+// `..` spelling, another project, and a sibling, prefixed, or nested
+// directory never name it. Nothing here touches the filesystem.
+[[nodiscard]] bool names_working_directory(
+        const std::string &endpoint,
+        const fs::path &project_root,
+        const fs::path &directory_key) {
+    const auto spelled = fs::path(endpoint);
+    if (!spelled.is_absolute() || !posix::safe_leaf(directory_key))
+        return false;
+    for (const auto &part : spelled) {
+        if (part == "..") return false;
+    }
+    auto cleaned = spelled.lexically_normal();
+    if (!cleaned.has_filename()) cleaned = cleaned.parent_path();
+    return cleaned
+        == (project_root / ".lingtai" / directory_key).lexically_normal();
+}
+
+// Membership is exactly envelope based: one sender, one recipient, no CC,
+// each endpoint naming its participant by the exact bare manifest address or
+// by that participant's exact working directory. An incoming entry that
+// names its sender identity must name the selected Agent; one that names
+// none falls back to the exact endpoints.
 [[nodiscard]] Membership membership_of(
         const Envelope &envelope, const DirectConversationRoute &route) {
     if (envelope.carbon_copied || !envelope.sole_recipient)
         return Membership::absent;
     const auto &to = *envelope.sole_recipient;
-    if (envelope.from == route.target_address && to == route.human_address) {
+    const auto names_target = [&](const std::string &endpoint) {
+        return endpoint == route.target_address
+            || names_working_directory(
+                endpoint, route.project_root, route.target_directory_key);
+    };
+    const auto names_human = [&](const std::string &endpoint) {
+        return endpoint == route.human_address
+            || names_working_directory(
+                endpoint, route.project_root, route.human_directory_key);
+    };
+    if (names_target(envelope.from) && names_human(to)) {
         return !envelope.identity_agent_id
                 || *envelope.identity_agent_id
                     == route.target_agent_id
             ? Membership::incoming : Membership::absent;
     }
-    if (envelope.from == route.human_address && to == route.target_address)
+    if (names_human(envelope.from) && names_target(to))
         return Membership::outgoing;
     return Membership::absent;
 }

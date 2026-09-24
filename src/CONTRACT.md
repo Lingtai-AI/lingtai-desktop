@@ -61,7 +61,14 @@ Reads (no writes, no durable state):
 - `read_direct_conversation(route)` → `DirectConversationHistory`
   (`direct_conversation_history.h`) — text rows plus ordered, descriptor-
   validated attachment metadata (including device/inode identity and current
-  mailbox folder) and independent attachment-skip accounting.
+  mailbox folder) and independent attachment-skip accounting. A row has one
+  sender, exactly one recipient, and no CC. Each endpoint names its route
+  participant only by the exact bare manifest address or by that
+  participant's same-project absolute `.lingtai/<directory key>` working
+  directory, compared lexically against the canonical root after removing
+  `.` components and redundant or trailing separators; a relative, `..`,
+  sibling, prefixed, nested, or other-project spelling never does. A present
+  incoming sender `identity.agent_id` must be the target's.
 - `direct_mailbox_fingerprint(request)` → `DirectMailboxFingerprint` and
   `read_direct_mailbox_snapshot(request)` → `DirectMailboxSnapshot`
   (`direct_conversation_history.h`) — respectively a fixed-count folder

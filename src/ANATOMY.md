@@ -173,7 +173,10 @@ Domain readers/projections (stateless, read-only, one source each):
 - `direct_conversation_history.{h,cpp}` — the descriptor-safe mailbox
   projection owner: `direct_mailbox_fingerprint` observes only the mailbox
   and three fixed folder leaves; `read_direct_mailbox_snapshot` scans each
-  entry once and classifies it across every current Agent route; and
+  entry once and classifies it across every current Agent route through one
+  filesystem-free envelope membership rule (bare manifest addresses or exact
+  same-project absolute `.lingtai/<directory key>` working directories,
+  mirroring the TUI mail-route acceptance); and
   `DirectMailboxSnapshotIndex` owns deterministic single-flight, generation,
   stale-result, in-scan-change, stable per-history revisions, and exact
   worker-classified append lineage decisions. Accepted snapshots are shared
