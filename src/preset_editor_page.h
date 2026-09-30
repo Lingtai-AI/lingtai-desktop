@@ -1,5 +1,6 @@
 #pragma once
 
+#include "codex_model_catalog.h"
 #include "preset_editor_model.h"
 
 #include <QtWidgets/QWidget>
@@ -33,14 +34,21 @@ signals:
 
 private:
     void rebuild_from_model();
+    // Populates model_combo_/model_edit_ from model_.model_options() alone.
+    // preserve_custom_mode keeps whatever the user is currently doing (the
+    // explicit Custom row plus in-progress free-text) instead of resetting
+    // it; a background catalog refresh must never discard that draft.
+    void populate_model_options(bool preserve_custom_mode);
     void sync_conditional_rows();
     void pull_text_fields();
     void on_save();
     void on_manage_credential();
+    void on_codex_catalog_updated(const QVector<CodexModelOption> &options);
     void changeEvent(QEvent *event) override;
 
     PresetEditorModel model_;
     QStringList existing_names_;
+    CodexModelCatalogFetcher *codex_catalog_fetcher_ = nullptr;
 
     QLineEdit *name_ = nullptr;
     QLineEdit *summary_ = nullptr;

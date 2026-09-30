@@ -1,5 +1,7 @@
 #pragma once
 
+#include "codex_model_catalog.h"
+
 #include <QtCore/QJsonObject>
 #include <QtCore/QString>
 #include <QtCore/QStringList>
@@ -11,6 +13,16 @@ struct PresetRegionOption {
     QString label;
     QString url;
     QString env;
+};
+
+// One model-picker row: `slug` is what is persisted (`manifest.llm.model`);
+// `label` is only ever shown. For every non-Codex provider label == slug,
+// matching the picker's pre-existing flat text list exactly. For Codex/
+// Codex pool, `label` is the upstream catalog's own `display_name`, and an
+// empty `slug` marks the trailing explicit "type a custom id" row.
+struct PresetModelOption {
+    QString slug;
+    QString label;
 };
 
 struct CodexAccount {
@@ -106,8 +118,14 @@ public:
     [[nodiscard]] bool uses_api_key_field() const;
 
     [[nodiscard]] QStringList provider_options() const;
-    [[nodiscard]] QStringList model_options() const;
+    [[nodiscard]] QVector<PresetModelOption> model_options() const;
     [[nodiscard]] bool model_has_picker() const;
+    // Replaces only the per-instance Codex/Codex-pool suggestion list (public
+    // catalog metadata, never proof of account entitlement). It touches no
+    // other field: name/summary/provider/model/dirty edits are unaffected,
+    // so a background refresh can call this without disturbing an in-progress
+    // edit. Non-Codex providers ignore this list entirely.
+    void set_codex_model_suggestions(const QVector<CodexModelOption> &options);
     [[nodiscard]] QStringList thinking_options() const;
     [[nodiscard]] QVector<PresetRegionOption> region_options() const;
     [[nodiscard]] int selected_region_index() const;
@@ -144,6 +162,7 @@ private:
     QString existing_api_key_;
     bool api_key_set_ = false;
     QString region_env_before_adopt_;
+    QVector<CodexModelOption> codex_model_suggestions_;
 };
 
 [[nodiscard]] QString lingtai_global_dir();

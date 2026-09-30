@@ -216,6 +216,7 @@ add_library(lingtai_desktop_native_shell STATIC
     src/shell_host.cpp
     src/agent_detail_view.cpp
     src/preset_catalog_presentation.cpp
+    src/codex_model_catalog.cpp
     src/preset_editor_model.cpp
     src/preset_editor_page.cpp
     src/agent_presets_page.cpp
@@ -576,6 +577,36 @@ target_compile_options(lingtai_preset_catalog_test PRIVATE
 target_link_libraries(lingtai_preset_catalog_test PRIVATE
     lingtai_desktop_preset_catalog Qt6::Core)
 
+# The public Codex model-picker catalog helper: pure parse/cache/fallback
+# plus the small async fetcher. Compiled directly into its own test
+# executable (no dedicated library target, matching the crl_integration.cpp
+# precedent) so this stays a Qt-Network-only unit, never linking lib_ui.
+add_executable(lingtai_codex_model_catalog_test
+    tests/codex_model_catalog_test.cpp
+    src/codex_model_catalog.cpp)
+init_target(lingtai_codex_model_catalog_test)
+target_include_directories(lingtai_codex_model_catalog_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(lingtai_codex_model_catalog_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_codex_model_catalog_test PRIVATE
+    Qt6::Core Qt6::Network)
+
+# PresetEditorModel is Qt-Core-only; its test compiles it (and the catalog
+# helper it consumes) directly rather than pulling in the whole
+# lingtai_desktop_native_shell GUI library.
+add_executable(lingtai_preset_editor_model_test
+    tests/preset_editor_model_test.cpp
+    src/preset_editor_model.cpp
+    src/codex_model_catalog.cpp)
+init_target(lingtai_preset_editor_model_test)
+target_include_directories(lingtai_preset_editor_model_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_compile_options(lingtai_preset_editor_model_test PRIVATE
+    -Wall -Wextra -Werror -pedantic)
+target_link_libraries(lingtai_preset_editor_model_test PRIVATE
+    Qt6::Core Qt6::Network)
+
 add_executable(lingtai_project_creation_test
     tests/project_creation_test.cpp)
 init_target(lingtai_project_creation_test)
@@ -610,6 +641,36 @@ if(APPLE)
         ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
 else()
     set_tests_properties(agent_detail_view PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
+# PresetEditorPage: the one widget-level test for the public Codex
+# model-picker seam. Never calls show(); widget-local hide()/isHidden()
+# state (see agent_detail_view_test's precedent) is what this exercises.
+add_executable(lingtai_preset_editor_page_test
+    tests/preset_editor_page_test.cpp
+    src/crl_integration.cpp)
+init_target(lingtai_preset_editor_page_test)
+target_compile_options(lingtai_preset_editor_page_test PRIVATE
+    -Wall -Wextra -Werror -pedantic
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-unused-parameter>
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-deprecated-this-capture>
+    $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-unused-parameter>
+    $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-Wno-deprecated-this-capture>)
+target_include_directories(lingtai_preset_editor_page_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(lingtai_preset_editor_page_test PRIVATE
+    lingtai_desktop_native_shell
+    desktop-app::lib_ui
+    Qt6::Widgets Qt6::Gui Qt6::Core Qt6::Network)
+add_test(NAME preset_editor_page
+    COMMAND lingtai_preset_editor_page_test
+        "${CMAKE_CURRENT_BINARY_DIR}/preset-editor-page-fixture")
+if(APPLE)
+    set_tests_properties(preset_editor_page PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
+else()
+    set_tests_properties(preset_editor_page PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
@@ -848,6 +909,12 @@ add_test(NAME agent_setup_store
 add_test(NAME preset_catalog
     COMMAND lingtai_preset_catalog_test
         "${CMAKE_CURRENT_BINARY_DIR}/preset-catalog-fixture")
+add_test(NAME codex_model_catalog
+    COMMAND lingtai_codex_model_catalog_test
+        "${CMAKE_CURRENT_BINARY_DIR}/codex-model-catalog-fixture")
+add_test(NAME preset_editor_model
+    COMMAND lingtai_preset_editor_model_test
+        "${CMAKE_CURRENT_BINARY_DIR}/preset-editor-model-fixture")
 add_test(NAME project_creation
     COMMAND lingtai_project_creation_test
         "${CMAKE_CURRENT_BINARY_DIR}/project-creation-fixture")
