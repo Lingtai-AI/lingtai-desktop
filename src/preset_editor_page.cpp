@@ -523,7 +523,20 @@ PresetEditorPage::PresetEditorPage(QWidget *parent)
     });
     connect(model_combo_, &QComboBox::activated, this, [this](int index) {
         if (rebuilding_ || index < 0) return;
-        model_.set_model(model_combo_->itemText(index).trimmed());
+        // itemData is always the slug; itemText is only ever a label (equal
+        // to the slug for non-Codex providers, the catalog's own
+        // display_name for Codex/Codex pool). Never read itemText as a value.
+        const auto slug = model_combo_->itemData(index).toString();
+        if (slug.isEmpty()) {
+            // The explicit "Custom…" row: reveal the free-text field instead
+            // of persisting the row's label.
+            model_edit_->setText(model_.model());
+            model_edit_->setVisible(true);
+            model_edit_->setFocus();
+            return;
+        }
+        model_edit_->setVisible(false);
+        model_.set_model(slug);
         sync_conditional_rows();
     });
     connect(model_edit_, &QLineEdit::editingFinished, this, [this] {
@@ -568,6 +581,15 @@ PresetEditorPage::PresetEditorPage(QWidget *parent)
         model_.set_base_url(value);
         rebuild_from_model();
     });
+
+    // Parent-owned: destroying this page aborts and releases any in-flight
+    // reply. Started once per Setup/preset-editor entry from load(); its
+    // result only ever replaces the Codex suggestion list (see
+    // on_codex_catalog_updated), never other page/model state.
+    codex_catalog_fetcher_ = new CodexModelCatalogFetcher(lingtai_global_dir(), this);
+    connect(codex_catalog_fetcher_, &CodexModelCatalogFetcher::catalog_updated,
+        this, &PresetEditorPage::on_codex_catalog_updated);
+
     apply_chrome();
 }
 
@@ -577,6 +599,17 @@ void PresetEditorPage::load(const PresetEditorLoadRequest &request) {
     error_->hide();
     error_->clear();
     rebuild_from_model();
+    // Bounded async refresh of the public Codex suggestion list only; no
+    // OAuth/API-key request and no gate on this page's Save action.
+    codex_catalog_fetcher_->refresh_async();
+}
+
+void PresetEditorPage::on_codex_catalog_updated(const QVector<CodexModelOption> &options) {
+    model_.set_codex_model_suggestions(options);
+    if (!model_.is_codex_thinking_provider()) return;
+    // Refresh only the Codex model options; never rebuild the whole form or
+    // touch name/summary/provider/base URL/other in-progress, unsaved edits.
+    populate_model_options(/*preserve_custom_mode=*/true);
 }
 
 void PresetEditorPage::refresh_credentials() {
@@ -588,10 +621,16 @@ void PresetEditorPage::pull_text_fields() {
     model_.set_summary(summary_->text().trimmed());
     model_.set_extra(QStringLiteral("gains"), gains_->text());
     model_.set_extra(QStringLiteral("loses"), losses_->text());
-    if (model_combo_->isVisible()) {
-        model_.set_model(model_combo_->currentText().trimmed());
-    } else {
+    // isHidden() (this widget's own explicit flag), not isVisible(): this can
+    // run while the page itself is a backgrounded/hidden ancestor, and
+    // isVisible() is false for every descendant in that case regardless of
+    // which of these two fields is actually the logically active one.
+    if (!model_edit_->isHidden()) {
         model_.set_model(model_edit_->text().trimmed());
+    } else if (!model_combo_->isHidden()) {
+        // itemData is the slug; currentText() would be the display label for
+        // Codex rows and must never be persisted.
+        model_.set_model(model_combo_->currentData().toString());
     }
     model_.set_base_url(base_url_->text().trimmed());
     if (api_key_->isModified()) {
@@ -599,10 +638,59 @@ void PresetEditorPage::pull_text_fields() {
     }
 }
 
+void PresetEditorPage::populate_model_options(bool preserve_custom_mode) {
+    const auto picker = model_.model_has_picker();
+    // isHidden() (this widget's own explicit flag), not isVisible(): a
+    // background catalog refresh can land while this whole page is a
+    // backgrounded/hidden ancestor, and isVisible() would then be false for
+    // every descendant regardless of custom-mode state, silently discarding
+    // an in-progress custom draft below.
+    const auto custom_mode = preserve_custom_mode && !model_edit_->isHidden();
+    model_combo_->setVisible(picker);
+    if (!picker) {
+        model_edit_->setVisible(true);
+        if (!preserve_custom_mode) model_edit_->setText(model_.model());
+        return;
+    }
+
+    const QSignalBlocker block_model(model_combo_);
+    model_combo_->clear();
+    auto selected_index = -1;
+    auto sentinel_index = -1;
+    for (const auto &option : model_.model_options()) {
+        model_combo_->addItem(option.label, option.slug);
+        const auto row = model_combo_->count() - 1;
+        if (option.slug.isEmpty()) {
+            sentinel_index = row;
+        } else if (!custom_mode && selected_index < 0 && option.slug == model_.model()) {
+            selected_index = row;
+        }
+    }
+
+    if (custom_mode) {
+        // Preserve the user's in-progress free-text entry: keep the edit
+        // field untouched and just re-point the combo at "Custom…".
+        if (sentinel_index >= 0) model_combo_->setCurrentIndex(sentinel_index);
+        model_edit_->setVisible(true);
+    } else if (selected_index >= 0) {
+        model_combo_->setCurrentIndex(selected_index);
+        model_edit_->setVisible(false);
+    } else if (sentinel_index >= 0) {
+        // Codex only, nothing chosen yet: offer the explicit custom row with
+        // an empty field instead of silently adopting the first suggestion.
+        model_combo_->setCurrentIndex(sentinel_index);
+        model_edit_->setVisible(true);
+        model_edit_->clear();
+    } else {
+        // Non-Codex with no exact match: Qt's post-population default
+        // (index 0) stands, matching this picker's prior behavior.
+        model_edit_->setVisible(false);
+    }
+}
+
 void PresetEditorPage::rebuild_from_model() {
     rebuilding_ = true;
     const QSignalBlocker block_provider(provider_);
-    const QSignalBlocker block_model(model_combo_);
     name_->setText(model_.name());
     summary_->setText(model_.summary());
     tier_->set_value(model_.tier());
@@ -620,16 +708,7 @@ void PresetEditorPage::rebuild_from_model() {
     }
     if (provider_index >= 0) provider_->setCurrentIndex(provider_index);
 
-    const auto picker = model_.model_has_picker();
-    model_combo_->setVisible(picker);
-    model_edit_->setVisible(!picker);
-    if (picker) {
-        model_combo_->clear();
-        model_combo_->addItems(model_.model_options());
-        model_combo_->setCurrentText(model_.model());
-    } else {
-        model_edit_->setText(model_.model());
-    }
+    populate_model_options(/*preserve_custom_mode=*/false);
 
     service_tier_->set_value(model_.service_tier());
     const auto thinking_options = model_.thinking_options();

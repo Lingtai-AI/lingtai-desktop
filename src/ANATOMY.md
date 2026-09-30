@@ -142,6 +142,39 @@ Domain models (pure, Qt-light state/derivation owners):
   saved/template catalog loader. It accepts an injected global root, returns
   exact `PresetEntry` source paths in TUI-equivalent order, treats missing
   directories as empty, types directory-read failure, and never writes.
+- `codex_model_catalog.{h,cpp}` — the small, per-owner public Codex
+  model-picker catalog helper consumed only by `PresetEditorModel`/
+  `PresetEditorPage`. `parse_codex_model_catalog` is a pure parser over the
+  fixed upstream `models[]` JSON: it keeps only entries whose `display_name`
+  starts with the exact case-sensitive prefix `GPT`, deduplicates by `slug`,
+  and ignores every other field (generation, visibility, account
+  entitlement) — presence here is a public suggestion only, never proof an
+  account may use the model. `default_codex_model_catalog` is the compiled-in
+  offline fallback; `codex_model_cache_path` / `read_codex_model_cache` /
+  `write_codex_model_cache` own one last-good cache file under the existing
+  injected Desktop global root (`<global>/cache/codex-models.json`), and
+  `seed_codex_model_catalog` returns that cache when present, else the
+  fallback, and is never empty. `read_codex_model_cache` bounds its read to
+  the same ~2 MiB cap used for network fetches (checked both by file size and
+  by the actual bytes read), failing open to empty rather than reading an
+  unbounded file. `write_codex_model_cache` rejects an empty or invalid
+  options list outright (round-tripped through `parse_codex_model_catalog`
+  and required to match exactly) and writes via `QSaveFile`'s atomic
+  temp-file-plus-commit, with no direct-write fallback, so a rejected or
+  failed write always leaves the previous last-good cache byte-identical.
+  `CodexModelCatalogFetcher` is the one parent-owned `QObject` async piece:
+  one bounded (~5 s timeout, overridable only via the test/local
+  `set_timeout_ms` seam; ~2 MiB response cap) `QNetworkAccessManager` GET per
+  `refresh_async()` call, with an injectable source URL as its own
+  test/local seam. Its timeout is bound to the exact in-flight reply via a
+  `QPointer`, so a stale timer from a superseded `refresh_async()` call can
+  never abort a newer, unrelated, still-in-flight request. Any failure
+  (network error, timeout, oversize response, malformed/empty body) fails
+  open — neither the cache nor the caller's existing suggestions are
+  touched — and only a successful parse updates the cache and emits
+  `catalog_updated`. It performs no OAuth/API-key request and holds no
+  global mutable catalog state; each owner constructs and parents its own
+  instance.
 - `posix_descriptor_primitives.{h,cpp}` — `posix_internal` seam: move-only
   descriptor/directory-stream ownership, shared read flags, `safe_leaf`, and
   one-leaf-at-a-time no-follow `openat`-based opens. Internal; links nothing;

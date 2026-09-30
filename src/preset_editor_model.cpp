@@ -6,6 +6,7 @@
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonParseError>
 #include <QtCore/QProcessEnvironment>
+#include <QtCore/QSet>
 #include <QtCore/QTextStream>
 
 #include <algorithm>
@@ -52,14 +53,9 @@ const std::map<QString, QStringList> &provider_models() {
             QStringLiteral("mistralai/mistral-nemotron"),
             QStringLiteral("microsoft/phi-4-mini-instruct"),
         }},
-        {QStringLiteral("codex"), {
-            QStringLiteral("gpt-5.6-sol"), QStringLiteral("gpt-5.6-terra"),
-            QStringLiteral("gpt-5.6-luna"), QStringLiteral("gpt-5.5"),
-        }},
-        {QStringLiteral("codex-pool"), {
-            QStringLiteral("gpt-5.6-sol"), QStringLiteral("gpt-5.6-terra"),
-            QStringLiteral("gpt-5.6-luna"), QStringLiteral("gpt-5.5"),
-        }},
+        // codex / codex-pool are deliberately absent here: their options come
+        // from the per-instance public catalog suggestion list instead (see
+        // PresetEditorModel::model_options()), never this static map.
         {QStringLiteral("claude-code"), {
             QStringLiteral("opus"), QStringLiteral("fable"),
             QStringLiteral("sonnet"), QStringLiteral("haiku"),
@@ -553,6 +549,11 @@ void PresetEditorModel::load(const PresetEditorLoadRequest &request) {
     existing_api_key_.clear();
     api_key_set_ = false;
     region_env_before_adopt_.clear();
+    // Seeded synchronously from the last-good cache (or the compiled-in
+    // fallback) so the picker is never empty; the owning page starts an
+    // asynchronous refresh separately and replaces this via
+    // set_codex_model_suggestions() when/if it succeeds.
+    codex_model_suggestions_ = seed_codex_model_catalog(lingtai_global_dir());
 
     auto ok = false;
     auto root = load_json_file(source_path_, &ok);
@@ -904,19 +905,55 @@ QStringList PresetEditorModel::provider_options() const {
     return options;
 }
 
-QStringList PresetEditorModel::model_options() const {
+QVector<PresetModelOption> PresetEditorModel::model_options() const {
+    if (is_codex_thinking_provider()) {
+        // Public suggestions only (see codex_model_catalog.h): filtered by
+        // display_name prefix alone, never by generation/visibility/
+        // entitlement, and never proof the bound account can use them.
+        auto options = QVector<PresetModelOption>();
+        auto seen = QSet<QString>();
+        const auto current = model();
+        if (!current.isEmpty()) {
+            const auto found = std::find_if(codex_model_suggestions_.begin(),
+                codex_model_suggestions_.end(), [&](const CodexModelOption &option) {
+                    return option.slug == current;
+                });
+            const auto label = found != codex_model_suggestions_.end()
+                ? found->display_name : current;
+            options.push_back(PresetModelOption{current, label});
+            seen.insert(current);
+        }
+        for (const auto &option : codex_model_suggestions_) {
+            if (seen.contains(option.slug)) continue;
+            seen.insert(option.slug);
+            options.push_back(PresetModelOption{option.slug, option.display_name});
+        }
+        // Explicit free-entry row: an empty slug never collides with a real
+        // suggestion (validate() requires a non-empty model to save).
+        options.push_back(PresetModelOption{QString(), QStringLiteral("Custom…")});
+        return options;
+    }
     const auto found = provider_models().find(provider());
     if (found == provider_models().end()) return {};
-    auto options = found->second;
+    auto list = found->second;
     const auto current = model();
-    if (!current.isEmpty() && !options.contains(current)) {
-        options.push_front(current);
+    if (!current.isEmpty() && !list.contains(current)) {
+        list.push_front(current);
+    }
+    auto options = QVector<PresetModelOption>();
+    options.reserve(list.size());
+    for (const auto &slug : list) {
+        options.push_back(PresetModelOption{slug, slug});
     }
     return options;
 }
 
 bool PresetEditorModel::model_has_picker() const {
-    return provider_models().contains(provider());
+    return is_codex_thinking_provider() || provider_models().contains(provider());
+}
+
+void PresetEditorModel::set_codex_model_suggestions(const QVector<CodexModelOption> &options) {
+    codex_model_suggestions_ = options;
 }
 
 QStringList PresetEditorModel::thinking_options() const {
@@ -1010,15 +1047,27 @@ void PresetEditorModel::apply_provider_defaults(
         const QString &old_provider, const QString &new_provider) {
     Q_UNUSED(old_provider);
     remove_llm_key(QStringLiteral("thinking"));
-    const auto models = provider_models().find(new_provider);
-    if (models != provider_models().end() && !models->second.isEmpty()) {
-        if (!models->second.contains(model())) {
-            set_model(models->second.front());
+    const auto new_family = credential_family(new_provider);
+    if (new_family == QLatin1String("codex_single")
+            || new_family == QLatin1String("codex_pool")) {
+        const auto has_current = std::any_of(codex_model_suggestions_.begin(),
+            codex_model_suggestions_.end(), [&](const CodexModelOption &option) {
+                return option.slug == model();
+            });
+        if (!has_current && !codex_model_suggestions_.isEmpty()) {
+            set_model(codex_model_suggestions_.front().slug);
         }
     } else {
-        const auto fallback = provider_default_model().find(new_provider);
-        if (fallback != provider_default_model().end()) {
-            set_model(fallback->second);
+        const auto models = provider_models().find(new_provider);
+        if (models != provider_models().end() && !models->second.isEmpty()) {
+            if (!models->second.contains(model())) {
+                set_model(models->second.front());
+            }
+        } else {
+            const auto fallback = provider_default_model().find(new_provider);
+            if (fallback != provider_default_model().end()) {
+                set_model(fallback->second);
+            }
         }
     }
     if (const auto url = default_base_url_for(new_provider)) {

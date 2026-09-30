@@ -133,6 +133,35 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
 - `tests/preset_catalog_test.cpp` — `preset_catalog`; injected global-root
   saved/template discovery, validation/skips, canonical ordering, exact facts,
   missing-directory behavior, typed scan failure, normalization, and no-write.
+- `tests/codex_model_catalog_test.cpp` — `codex_model_catalog`; the public
+  Codex model-picker catalog helper: exact case-sensitive `GPT`-prefix
+  filtering (by display_name alone, proven independent of slug shape), slug
+  dedup, verbatim trailing-padding `display_name` preservation, fail-open-
+  to-empty on malformed/empty/non-array-`models` bodies, a direct guard test
+  that invalid/empty writes are rejected with the cache left byte-identical,
+  last-good cache round-trip and corrupted-cache recovery under an injected
+  root, cache-over-fallback seed precedence, and — against a real local
+  loopback `QTcpServer` and a real Qt event loop, never a live endpoint —
+  fetch success, HTTP-error/malformed/empty/oversize fail-open, timeout and
+  recovery, destroy-while-connected safety, and the regression proving a
+  superseded request's stale timeout can never abort the request that
+  superseded it.
+- `tests/preset_editor_page_test.cpp` — `preset_editor_page`; the widget
+  itself, never shown (a hidden container ancestor stands in for a
+  backgrounded setup page): an in-progress custom model-id draft and other
+  edited fields survive a background catalog refresh, Save persists the
+  typed slug/custom id never a label, a relabeling refresh keeps the same
+  slug selected, and a non-Codex provider's model list is unaffected by a
+  Codex catalog refresh.
+- `tests/preset_editor_model_test.cpp` — `preset_editor_model`; Codex/Codex-
+  pool model-option composition (current-plus-suggestions-plus-explicit-
+  custom row, no duplicate slug, correct label selection), proof that a
+  simulated background suggestion refresh changes only the suggestion list
+  and never the working document, name/summary edits, or the already-
+  selected/custom model id, slug-only persistence through `commit()`, switch-
+  into-Codex default-only-when-unset parity with every other provider,
+  unchanged non-Codex option shape, and `load()` seeding from an injected
+  `LINGTAI_TUI_DIR` last-good cache.
 - `tests/project_creation_test.cpp` — `project_creation`; project inputs,
   destination contents, exact custom Comment bytes, fixture-derived bounded
   Desktop adaptations for all three languages with injected clock/location,

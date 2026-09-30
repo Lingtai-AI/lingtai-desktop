@@ -161,6 +161,42 @@ touches a real Agent or project, and none depends on a network or provider.
 - `tests/preset_catalog_test.cpp` — `preset_catalog` ctest. Hermetic
   saved/template library facts, skip rules, canonical order, missing-directory
   success, typed directory-read failure, ref normalization, and no-write.
+- `tests/codex_model_catalog_test.cpp` — `codex_model_catalog` ctest. The
+  public Codex model-picker catalog helper: parse filtering by exact
+  case-sensitive `GPT` `display_name` prefix (including a leading-space
+  exclusion and an arbitrary-slug/gpt-looking-slug pair proving the filter
+  is by display_name alone, never slug shape), dedup by slug, byte-exact
+  trailing-padding `display_name` preservation, malformed/empty-body/missing-
+  `models` fail-open-to-empty, a direct guard test that empty/blank-slug/
+  non-GPT-label/duplicate-slug writes are rejected and leave the cache
+  byte-identical, last-good cache round-trip under an injected root,
+  corrupted-cache fail-open, cache-over-offline-fallback seeding precedence,
+  and — against a real local loopback `QTcpServer` driving a real Qt event
+  loop (never a live/external endpoint; `QNetworkProxy::NoProxy` forced) —
+  fetch success updating the signal and cache, HTTP-error/malformed/empty/
+  oversize-body fail-open with the cache left untouched, timeout followed by
+  a successful recovery refresh, destroy-while-a-connection-is-live safety,
+  and the stale-timer-never-aborts-a-superseding-refresh regression (a
+  `refresh_async()` that supersedes an unanswered one must not have its own
+  request killed by the first call's now-irrelevant timeout).
+- `tests/preset_editor_page_test.cpp` — `preset_editor_page` ctest. The
+  widget level, constructed inside a hidden container and never shown
+  (matching `agent_detail_view_test`'s convention): a background catalog
+  refresh landing while the page is a hidden ancestor must not clear an
+  in-progress custom model-id draft or any other field being edited, and
+  Save must persist that typed slug/custom id, never a display label; a
+  refresh that only relabels an already-selected suggestion must keep that
+  exact slug selected; a non-Codex provider's model list (items, itemData,
+  and count) must be byte-for-byte unchanged by a Codex catalog refresh.
+- `tests/preset_editor_model_test.cpp` — `preset_editor_model` ctest. The
+  Codex/Codex-pool model-option composition rules (current-model-plus-
+  suggestions-plus-explicit-custom-row, no duplicate slug, catalog label used
+  only when it actually matches), a simulated background suggestion refresh
+  proving every other field and the already-selected/custom model id survive
+  untouched, slug-only persistence into the committed document, switch-into-
+  Codex default-only-when-unset parity with other providers, unchanged non-
+  Codex option shape, and `load()` seeding its per-instance suggestions from
+  an injected `LINGTAI_TUI_DIR` last-good cache.
 - `tests/project_creation_test.cpp` — `project_creation` ctest. Exact project
   shape and stable de-duplicated setup policy, saved/template controlled
   manifest projection, legacy/provider-matched capability normalization,
@@ -386,6 +422,9 @@ no fixture); the test itself creates and removes its sandbox within that root
 | `direct_mail_publisher_test.cpp` | `lingtai_direct_mail_publisher_test` | `direct_mail_publisher` | `direct-mail-publisher-fixture` |
 | `agent_preset_summary_test.cpp` | `lingtai_agent_preset_summary_test` | `agent_preset_summary` | `agent-preset-summary-fixture` |
 | `agent_setup_store_test.cpp` | `lingtai_agent_setup_store_test` | `agent_setup_store` | `agent-setup-store-fixture` |
+| `codex_model_catalog_test.cpp` | `lingtai_codex_model_catalog_test` | `codex_model_catalog` | `codex-model-catalog-fixture` |
+| `preset_editor_page_test.cpp` | `lingtai_preset_editor_page_test` | `preset_editor_page` | `preset-editor-page-fixture` |
+| `preset_editor_model_test.cpp` | `lingtai_preset_editor_model_test` | `preset_editor_model` | `preset-editor-model-fixture` |
 | `project_creation_test.cpp` | `lingtai_project_creation_test` | `project_creation` | `project-creation-fixture` |
 | `agent_sleep_test.cpp` | `lingtai_agent_sleep_test` | `agent_sleep` | `agent-sleep-fixture` |
 | `agent_lifecycle_test.cpp` | `lingtai_agent_lifecycle_test` | `agent_lifecycle` | `agent-lifecycle-fixture` |

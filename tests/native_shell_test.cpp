@@ -9736,11 +9736,26 @@ void verify_preset_editor_model(const fs::path &sandbox) {
     require(model.base_url() == QStringLiteral("https://api.deepseek.com")
             && model.model() == QStringLiteral("deepseek-v4-pro"),
         "DeepSeek adopts its first region URL and default model");
+    // Pin an explicit, isolated Codex suggestion fixture before switching
+    // back to Codex: the shared fakeHOME's last-good Codex cache is legitimately
+    // populated by a real upstream fetch elsewhere in this same test binary
+    // (a PresetEditorPage's async refresh), so this provider-switch
+    // assertion must not depend on that cache's live/ambient content or
+    // order. Neither slug here is the compiled-in offline fallback
+    // (`gpt-5.6-*`) or a real upstream id, so a pass here proves this
+    // explicit fixture — not ambient cache, not the default fallback — is
+    // what drove the result.
+    model.set_codex_model_suggestions({
+        {QStringLiteral("gpt-6-fixture-primary"), QStringLiteral("GPT-6 Fixture Primary")},
+        {QStringLiteral("gpt-6-fixture-secondary"), QStringLiteral("GPT-6 Fixture Secondary")},
+    });
     model.set_provider(QStringLiteral("codex"));
     require(model.base_url()
                 == QStringLiteral("https://chatgpt.com/backend-api/codex")
-            && model.model() == QStringLiteral("gpt-5.6-sol"),
-        "Codex restores the ChatGPT backend URL instead of keeping DeepSeek's");
+            && model.model() == QStringLiteral("gpt-6-fixture-primary"),
+        "Codex restores the ChatGPT backend URL instead of keeping DeepSeek's, "
+        "and re-defaults to the first entry of its own explicitly seeded "
+        "suggestion fixture, never whatever the shared cache happens to hold");
     const auto providers = model.provider_options();
     require(providers.contains(QStringLiteral("gemini"))
             && providers.contains(QStringLiteral("kimi"))

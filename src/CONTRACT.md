@@ -85,6 +85,21 @@ Reads (no writes, no durable state):
   (`preset_catalog.h`) — bounded read-only saved/template discovery under the
   injected Desktop global root; missing directories are empty and directory
   read failure is typed. It writes and bootstraps nothing.
+- `parse_codex_model_catalog`, `default_codex_model_catalog`,
+  `read_codex_model_cache`, `seed_codex_model_catalog`
+  (`codex_model_catalog.h`) — pure, Qt-Core-only reads: filtered/deduplicated
+  parse of the fixed public Codex catalog JSON, the compiled-in offline
+  fallback, and the last-good cache under the injected global root, bounded
+  to the same ~2 MiB cap as a network fetch. None writes except
+  `write_codex_model_cache`, which only ever replaces that one cache file,
+  atomically (`QSaveFile`, no direct-write fallback), and only after
+  rejecting an empty or invalid options list — a rejected or failed write
+  always leaves the previous cache byte-identical. `CodexModelCatalogFetcher`
+  is the sole async orchestrator (`codex_model_catalog.h`); its timeout binds
+  to the exact in-flight reply, so a superseded `refresh_async()` call's
+  stale timer can never abort a newer request. Only `PresetEditorModel`/
+  `PresetEditorPage` consume this seam, and only for Codex/Codex-pool model
+  suggestions.
 - `KanbanSnapshotIndex::refresh(attachment, snapshot, force)` →
   `KanbanRefreshResult` (`kanban_model.h`) — the session-only complete-board
   owner. Cold/forced reads may rebuild; unchanged refreshes perform fixed
@@ -221,7 +236,13 @@ coalescing, and stale-while-revalidate presentation.
 1. **One source of ownership per behavior.** Roster truth lives only in
    `WorkspaceSelectionState` + the sole `agents_` snapshot; conversation rows
    only in the `direct_conversation_history` shared projection/index;
-   Presets only in `read_agent_preset_summary`. No second owner exists.
+   Presets only in `read_agent_preset_summary`. No second owner exists. The
+   public Codex model-picker suggestion list is owned only by
+   `codex_model_catalog`'s parse/cache/fallback functions and
+   `CodexModelCatalogFetcher`; each `PresetEditorModel` instance holds its own
+   copy (no global mutable catalog), and that list is a suggestion set only —
+   it is never treated as proof an account may use a listed model, never
+   gates Save, and never overrides an already-selected or custom model id.
 2. **Readers read.** Every project-tree reader opens its source one no-follow
    leaf at a time through `posix_internal`, bounds the actual read, and never
    writes. Attachment selection instead canonicalizes an arbitrary caller-
@@ -322,6 +343,31 @@ paths and names are in [`../ANATOMY.md`](../ANATOMY.md) and `CMakeLists.txt`:
 - `tests/agent_preset_summary_test.cpp` — `agent_preset_summary`.
 - `tests/agent_setup_store_test.cpp` — `agent_setup_store`.
 - `tests/preset_catalog_test.cpp` — `preset_catalog`.
+- `tests/codex_model_catalog_test.cpp` — `codex_model_catalog`; offline parse
+  filtering/dedup/case-sensitivity (including a leading-space exclusion and
+  an arbitrary-slug/gpt-looking-slug pair proving filtering is by
+  display_name alone), malformed/empty-body fail-open, cache round-trip and
+  corruption fail-open, a direct guard test proving empty/blank-slug/
+  non-GPT-label/duplicate-slug writes are rejected with the cache left
+  byte-identical, cache-over-fallback seeding, and — against a real local
+  loopback `QTcpServer` driving a real Qt event loop, never a live
+  endpoint — fetch success (signal + cache write), HTTP-error/malformed/
+  empty/oversize fail-open, timeout-then-recovery, destroy-while-connected,
+  and the stale-timer-never-aborts-a-superseding-request regression.
+- `tests/preset_editor_page_test.cpp` — `preset_editor_page`; the widget
+  level, never calling `show()`: an in-progress custom model-id draft (and
+  other untouched form fields) survives a background catalog refresh that
+  lands while the page is a hidden ancestor, and Save persists that typed
+  slug/custom id, never a display label; a refresh that relabels an
+  already-selected suggestion keeps the same slug selection; a non-Codex
+  provider's model list is unchanged by a Codex catalog refresh.
+- `tests/preset_editor_model_test.cpp` — `preset_editor_model`; Codex/Codex-
+  pool model-option composition (current-plus-suggestions-plus-explicit-
+  custom-row, no duplication, label/slug separation), a background suggestion
+  refresh preserving every other field and the already-selected/custom model
+  id, slug-only (never display-label) persistence on commit, switch-into-
+  Codex defaulting only when unset, unchanged non-Codex option shape, and
+  `load()` seeding suggestions from an injected `LINGTAI_TUI_DIR` cache.
 - `tests/agent_sleep_test.cpp` — `agent_sleep`.
 - `tests/kanban_model_test.cpp` — `kanban_model`.
 - `tests/posix_descriptor_primitives_test.cpp` — `posix_descriptor_primitives`.
