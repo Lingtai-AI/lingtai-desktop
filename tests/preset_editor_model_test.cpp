@@ -1,11 +1,14 @@
 #include "preset_editor_model.h"
 
 #include <QtCore/QByteArray>
+#include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
 #include <QtCore/QString>
 #include <QtCore/QVector>
 
 #include <filesystem>
+#include <fstream>
+#include <initializer_list>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -19,6 +22,14 @@ using lingtai::desktop::PresetModelOption;
 
 void require(bool condition, const std::string &message) {
     if (!condition) throw std::runtime_error(message);
+}
+
+void write_json_fixture(const fs::path &path, const std::string &text) {
+    fs::create_directories(path.parent_path());
+    std::ofstream file(path);
+    require(file.good(), "fixture JSON must open for writing");
+    file << text;
+    require(file.good(), "fixture JSON must be written");
 }
 
 const PresetModelOption *find_option(
@@ -205,6 +216,90 @@ void test_load_seeds_suggestions_from_injected_cache(const fs::path &fixture) {
         "load() must seed its per-instance suggestions from the injected last-good cache");
 }
 
+void test_load_preserves_json_values_and_document_snapshot(const fs::path &fixture) {
+    const auto source = fixture / "presets" / "arbitrary.json";
+    const std::string json = R"({
+        "name":"arbitrary",
+        "description":{"summary":"Preserve values","private":{"enabled":true,"count":7,"ratio":1.25,"nullable":null},"items":["alpha",false,3]},
+        "manifest":{"llm":{"provider":"openai","model":"gpt-6-alpha"},"untouched":[{"k":"v"}]},
+        "extension":{"flag":false,"value":null,"number":9223372036854775807}
+    })";
+    write_json_fixture(source, json);
+
+    auto request = codex_request();
+    request.path = QString::fromStdString(source.string());
+    PresetEditorModel model;
+    model.load(request);
+    const auto expected = QJsonDocument::fromJson(QByteArray::fromStdString(json)).object();
+    require(model.loaded_from_disk() && model.document() == expected,
+        "load() must retain parsed values of every JSON type and untouched nested fields");
+
+    const auto before = model.document();
+    auto snapshot = before;
+    auto extension = snapshot.value(QStringLiteral("extension")).toObject();
+    extension.insert(QStringLiteral("flag"), true);
+    snapshot.insert(QStringLiteral("extension"), extension);
+    require(model.document() == before && !model.has_semantic_edits(),
+        "editing a nested document snapshot must not change the working or original document");
+
+    auto missing = codex_request();
+    missing.path = QString::fromStdString((fixture / "presets" / "missing.json").string());
+    PresetEditorModel fallback;
+    fallback.load(missing);
+    const QJsonObject expected_fallback{
+        {QStringLiteral("name"), missing.name},
+        {QStringLiteral("description"), QJsonObject{
+            {QStringLiteral("summary"), missing.summary},
+        }},
+        {QStringLiteral("manifest"), QJsonObject{
+            {QStringLiteral("llm"), QJsonObject{}},
+        }},
+    };
+    require(!fallback.loaded_from_disk() && fallback.document() == expected_fallback,
+        "load() must preserve the existing fallback JSON document");
+
+    const auto unnamed_source = fixture / "presets" / "unnamed.json";
+    write_json_fixture(unnamed_source,
+        R"({"description":{"summary":"Unnamed"},"manifest":{"llm":{}}})");
+    PresetEditorLoadRequest unnamed_request;
+    unnamed_request.path = QString::fromStdString(unnamed_source.string());
+    PresetEditorModel unnamed;
+    unnamed.load(unnamed_request);
+    require(unnamed.name().isEmpty() && !unnamed.has_semantic_edits(),
+        "the missing-name snapshot must keep the loaded model semantically unchanged");
+}
+
+void test_loaded_commit_does_not_mutate_working_or_original(const fs::path &fixture) {
+    const auto json = R"({"name":"copy-check","description":{"summary":"Fixture"},"manifest":{"llm":{"provider":"openai","model":"initial"}}})";
+    for (const auto is_template : {false, true}) {
+        const auto source = fixture / (is_template ? "template.json" : "saved.json");
+        write_json_fixture(source, json);
+        auto request = codex_request();
+        request.path = QString::fromStdString(source.string());
+        request.is_template = is_template;
+
+        PresetEditorModel model;
+        model.load(request);
+        const auto original_name = model.original_name();
+        model.set_model(QStringLiteral("edited"));
+        const auto working_before_commit = model.document();
+        require(model.has_semantic_edits(), "the model edit must be detected before commit");
+
+        const auto committed = model.commit({});
+        require(committed.ok && committed.document.value(QStringLiteral("manifest")).toObject()
+                .value(QStringLiteral("llm")).toObject().value(QStringLiteral("model")).toString()
+                == QStringLiteral("edited"),
+            "commit() must return the edited document");
+        require(model.document() == working_before_commit
+                && model.original_name() == original_name && model.has_semantic_edits(),
+            "commit normalization and template naming must not mutate working/original state");
+        if (is_template) {
+            require(committed.name != original_name,
+                "an edited template commit must keep its saved-preset naming behavior");
+        }
+    }
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -233,6 +328,8 @@ int main(int argc, char **argv) {
         test_switch_to_codex_defaults_only_when_unset();
         test_non_codex_model_options_unchanged_shape();
         test_load_seeds_suggestions_from_injected_cache(fixture);
+        test_load_preserves_json_values_and_document_snapshot(fixture);
+        test_loaded_commit_does_not_mutate_working_or_original(fixture);
 
         if (previous_global.isNull()) {
             qunsetenv("LINGTAI_TUI_DIR");

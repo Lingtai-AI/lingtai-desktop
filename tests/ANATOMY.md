@@ -196,7 +196,14 @@ touches a real Agent or project, and none depends on a network or provider.
   untouched, slug-only persistence into the committed document, switch-into-
   Codex default-only-when-unset parity with other providers, unchanged non-
   Codex option shape, and `load()` seeding its per-instance suggestions from
-  an injected `LINGTAI_TUI_DIR` last-good cache.
+  an injected `LINGTAI_TUI_DIR` last-good cache. New
+  `test_load_preserves_json_values_and_document_snapshot` coverage
+  (`tests/preset_editor_model_test.cpp:219`) keeps nested arbitrary
+  bool/null/array/number values and independent original/working snapshots,
+  including missing-file fallback and missing-name state; new
+  `test_loaded_commit_does_not_mutate_working_or_original` coverage
+  (`tests/preset_editor_model_test.cpp:272`) checks that saved/template commit
+  normalization leaves both snapshots intact.
 - `tests/project_creation_test.cpp` — `project_creation` ctest. Exact project
   shape and stable de-duplicated setup policy, saved/template controlled
   manifest projection, legacy/provider-matched capability normalization,

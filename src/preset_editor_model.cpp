@@ -16,10 +16,6 @@
 namespace lingtai::desktop {
 namespace {
 
-QJsonObject clone_object(const QJsonObject &object) {
-    return QJsonDocument::fromJson(QJsonDocument(object).toJson()).object();
-}
-
 QString json_string(const QJsonValue &value) {
     return value.isString() ? value.toString() : QString();
 }
@@ -583,13 +579,13 @@ void PresetEditorModel::load(const PresetEditorLoadRequest &request) {
             {QStringLiteral("summary"), request.summary},
         });
     }
-    original_ = clone_object(root);
-    working_ = clone_object(root);
+    original_ = root;
+    working_ = root;
     original_name_ = name();
     if (original_name_.isEmpty()) {
         original_name_ = request.name;
         set_name(request.name);
-        original_ = clone_object(working_);
+        original_ = working_;
     }
     if (!is_template_) {
         existing_api_key_ = read_env_value(
@@ -1222,7 +1218,7 @@ PresetEditorCommit PresetEditorModel::commit(const QStringList &existing_names) 
         result.error = QStringLiteral("invalid preset name: ") + name_error;
         return result;
     }
-    auto committed = clone_object(working_);
+    auto committed = working_;
     if (is_template_ && (has_semantic_edits() || api_key_set_)) {
         if (name() == original_name_) {
             const auto auto_name = auto_saved_preset_name(original_name_, existing_names);
