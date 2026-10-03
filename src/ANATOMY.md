@@ -399,3 +399,9 @@ they are the shell's presentation layer and own no domain reads or writes.
   enumerates existing native popup windows only while handling a qualifying
   native mouse-down; `lib_ui` remains the sole owner of popup-tree closure and
   deferred deletion.
+
+`preset_editor_model.{h,cpp}` owns `manifest.llm.codex_allow_credits` as a
+strict opt-in boolean (missing is off). `preset_editor_page.{h,cpp}` renders
+the Off/On row only for single-account Codex, with a billing explanation;
+provider changes clear the choice. The existing preset save and project/Agent
+setup paths carry the same LLM mapping to the kernel.

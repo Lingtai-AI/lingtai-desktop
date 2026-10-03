@@ -205,6 +205,28 @@ void test_load_seeds_suggestions_from_injected_cache(const fs::path &fixture) {
         "load() must seed its per-instance suggestions from the injected last-good cache");
 }
 
+void test_codex_credits_default_off_and_preserve_explicit_opt_in() {
+    PresetEditorModel model;
+    model.load(codex_request());
+    model.set_provider(QStringLiteral("codex"));
+    require(!model.codex_allow_credits(), "existing presets default to credits off");
+    model.set_codex_allow_credits(true);
+    auto commit = model.commit({});
+    require(commit.ok, "credit-enabled preset commits");
+    auto llm = commit.document.value(QStringLiteral("manifest")).toObject().value(QStringLiteral("llm")).toObject();
+    require(llm.value(QStringLiteral("codex_allow_credits")).isBool()
+        && llm.value(QStringLiteral("codex_allow_credits")).toBool(), "opt-in persists as a JSON boolean");
+    model.set_codex_allow_credits(false);
+    commit = model.commit({});
+    require(!commit.document.value(QStringLiteral("manifest")).toObject().value(QStringLiteral("llm")).toObject()
+        .contains(QStringLiteral("codex_allow_credits")), "off uses the omission default");
+    model.set_codex_allow_credits(true);
+    model.set_provider(QStringLiteral("openai"));
+    require(!model.codex_allow_credits(), "other providers cannot opt in");
+    model.set_provider(QStringLiteral("codex"));
+    require(!model.codex_allow_credits(), "returning to Codex requires a new opt-in");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -226,6 +248,7 @@ int main(int argc, char **argv) {
             QByteArray::fromStdString((fixture / "default-global").string()));
 
         test_model_options_include_current_suggestions_and_custom_row();
+        test_codex_credits_default_off_and_preserve_explicit_opt_in();
         test_current_model_matching_suggestion_does_not_duplicate();
         test_codex_pool_shares_same_suggestions();
         test_set_codex_model_suggestions_preserves_other_state();

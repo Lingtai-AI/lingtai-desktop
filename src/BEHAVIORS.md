@@ -526,3 +526,14 @@ the process-level smoke-order and persistence contract is
 offscreen). The macOS native recipient, synchronous hide/click-through, event
 matrix, submenu/deletion, and one-bridge behavior is anchored separately by
 `tests/mac_popup_dismissal_bridge_test.mm` (`mac_popup_dismissal` ctest).
+
+## Codex paid-credit preset choice
+
+The Codex preset editor shows Off/On choices for paid credits and starts Off
+when the field is absent. Clicking On saves boolean
+`manifest.llm.codex_allow_credits: true`; loading that saved preset preserves
+On. Other providers hide the row and clear the choice. Switching back to Codex
+therefore starts Off again. The explanatory note says that On allows requests
+after included usage runs out and that OpenAI controls billing.
+Guards: `tests/preset_editor_model_test.cpp` and
+`tests/preset_editor_page_test.cpp`.

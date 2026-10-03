@@ -358,6 +358,17 @@ PresetEditorPage::PresetEditorPage(QWidget *parent)
     service_tier_row_ = make_field_block(body, QStringLiteral("Service tier"), service_tier_);
     layout->addWidget(service_tier_row_);
 
+    codex_credits_ = new ChoiceStrip(body, "lingtai_setup_edit_preset_codex_credits");
+    codex_credits_->set_options(
+        {QStringLiteral("Off"), QStringLiteral("On")},
+        {QStringLiteral("off"), QStringLiteral("on")});
+    codex_credits_row_ = make_field_block(body, QStringLiteral("Use paid Codex credits"),
+        codex_credits_);
+    codex_credits_row_->layout()->addWidget(make_label(body,
+        QStringLiteral("Allow requests after included usage runs out. OpenAI controls billing."),
+        "lingtai_setup_edit_preset_codex_credits_note", 12, QFont::Normal, muted_css(body)));
+    layout->addWidget(codex_credits_row_);
+
     thinking_ = new ChoiceStrip(body, "lingtai_setup_edit_preset_thinking");
     thinking_row_ = make_field_block(body, QStringLiteral("Reasoning effort"), thinking_);
     layout->addWidget(thinking_row_);
@@ -563,6 +574,9 @@ PresetEditorPage::PresetEditorPage(QWidget *parent)
     thinking_->set_changed([this](const QString &value) {
         if (!rebuilding_) model_.set_thinking(value);
     });
+    codex_credits_->set_changed([this](const QString &value) {
+        if (!rebuilding_) model_.set_codex_allow_credits(value == QLatin1String("on"));
+    });
     api_compat_->set_changed([this](const QString &value) {
         if (rebuilding_) return;
         model_.set_api_compat(value);
@@ -711,6 +725,8 @@ void PresetEditorPage::rebuild_from_model() {
     populate_model_options(/*preserve_custom_mode=*/false);
 
     service_tier_->set_value(model_.service_tier());
+    codex_credits_->set_value(model_.codex_allow_credits()
+        ? QStringLiteral("on") : QStringLiteral("off"));
     const auto thinking_options = model_.thinking_options();
     auto thinking_labels = QStringList();
     for (const auto &option : thinking_options) {
@@ -771,7 +787,7 @@ void PresetEditorPage::rebuild_from_model() {
     sync_conditional_rows();
     // Reasoning effort (and regions) recreate buttons on each rebuild; re-tint
     // every strip so idle chips match Service tier / API under the live theme.
-    for (auto *strip : {tier_, service_tier_, thinking_, api_compat_,
+    for (auto *strip : {tier_, service_tier_, codex_credits_, thinking_, api_compat_,
             wire_api_, transport_, regions_}) {
         if (strip) {
             strip->apply_chrome();
@@ -780,6 +796,7 @@ void PresetEditorPage::rebuild_from_model() {
 }
 
 void PresetEditorPage::sync_conditional_rows() {
+    codex_credits_row_->setVisible(model_.is_codex_provider());
     service_tier_row_->setVisible(model_.service_tier_visible());
     thinking_row_->setVisible(model_.thinking_visible());
     wire_api_row_->setVisible(model_.wire_api_visible());
@@ -885,7 +902,7 @@ void PresetEditorPage::apply_chrome() {
     apply_setup_secondary_button(findChild<QPushButton *>(
         "lingtai_setup_edit_preset_cancel"), tokens);
     apply_setup_primary_button(save_);
-    for (auto *strip : {tier_, service_tier_, thinking_, api_compat_,
+    for (auto *strip : {tier_, service_tier_, codex_credits_, thinking_, api_compat_,
             wire_api_, transport_, regions_}) {
         if (strip) {
             strip->apply_chrome();

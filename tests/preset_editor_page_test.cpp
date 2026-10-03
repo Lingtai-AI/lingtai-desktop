@@ -17,6 +17,7 @@
 #include <QtCore/QString>
 #include <QtCore/QStringList>
 #include <QtCore/QUrl>
+#include <QtGui/QPixmap>
 #include <QtNetwork/QHostAddress>
 #include <QtNetwork/QNetworkProxy>
 #include <QtNetwork/QTcpServer>
@@ -300,6 +301,52 @@ void test_non_codex_provider_unaffected_by_refresh(const fs::path &fixture) {
     }
 }
 
+void test_codex_credits_control_saves_reloads_and_hides(const fs::path &fixture) {
+    const auto global = fixture_global(fixture, "credits");
+    qputenv("LINGTAI_TUI_DIR", global.toUtf8());
+    const auto path = write_initial_preset(global, "credit-preset", "codex", "gpt-6-sol");
+    PresetEditorPage page;
+    auto *fetcher = page.findChild<CodexModelCatalogFetcher *>();
+    fetcher->set_source_url(QUrl(QStringLiteral("http://127.0.0.1:1/models.json")));
+    PresetEditorLoadRequest request;
+    request.path = path;
+    request.name = QStringLiteral("credit-preset");
+    request.source = QStringLiteral("saved");
+    page.load(request);
+    auto *credits = page.findChild<QWidget *>("lingtai_setup_edit_preset_codex_credits");
+    require(credits != nullptr, "credits control exists");
+    const auto buttons = credits->findChildren<QPushButton *>();
+    require(buttons.size() == 2 && buttons[0]->isChecked(), "credits initially off");
+    require(!credits->parentWidget()->isHidden(), "Codex credits row is shown");
+    buttons[1]->click();
+    page.findChild<QPushButton *>("lingtai_setup_edit_preset_save")->click();
+    QFile saved(path);
+    require(saved.open(QIODevice::ReadOnly), "saved preset readable");
+    const auto llm = QJsonDocument::fromJson(saved.readAll()).object()
+        .value(QStringLiteral("manifest")).toObject().value(QStringLiteral("llm")).toObject();
+    require(llm.value(QStringLiteral("codex_allow_credits")).isBool()
+        && llm.value(QStringLiteral("codex_allow_credits")).toBool(), "clicking On saves explicit true");
+    saved.close();
+    page.load(request);
+    require(buttons[1]->isChecked(), "saved credit choice reloads");
+    if (const auto artifacts = QString::fromUtf8(qgetenv("ARTIFACTS_DIR")); !artifacts.isEmpty()) {
+        page.resize(760, 1000);
+        const auto visual = QDir(artifacts).filePath(QStringLiteral("visual"));
+        QDir().mkpath(visual);
+        require(page.grab().save(QDir(visual).filePath(QStringLiteral("codex-credits-on.png"))),
+            "credit preset screenshot must be saved for visual inspection");
+    }
+    auto *provider = page.findChild<QComboBox *>("lingtai_setup_edit_preset_provider");
+    const auto other_provider = provider->findData(QStringLiteral("minimax"));
+    require(other_provider >= 0, "another provider is available");
+    provider->setCurrentIndex(other_provider);
+    emit provider->activated(provider->currentIndex());
+    require(credits->parentWidget()->isHidden(), "other providers hide credits");
+    provider->setCurrentIndex(provider->findData(QStringLiteral("codex")));
+    emit provider->activated(provider->currentIndex());
+    require(buttons[0]->isChecked(), "switching back to Codex resets credits off");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -332,6 +379,7 @@ int main(int argc, char **argv) {
         test_custom_draft_preserved_across_hidden_refresh_and_saves_slug(fixture);
         test_relabel_preserves_selection(fixture);
         test_non_codex_provider_unaffected_by_refresh(fixture);
+        test_codex_credits_control_saves_reloads_and_hides(fixture);
 
         fs::remove_all(fixture, cleanup_error);
         std::cout << "preset_editor_page_test: OK\n";

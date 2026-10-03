@@ -102,3 +102,9 @@ Copyright 2026 LingTai contributors.
 
 LingTai Desktop is licensed under GNU GPL version 3 with the OpenSSL exception
 in [LICENSE](LICENSE).
+
+For Codex presets, **Use paid Codex credits** defaults to Off. Turn it On to
+allow requests after your ChatGPT plan's included usage runs out. This saves
+`manifest.llm.codex_allow_credits: true` and requires a kernel that supports
+that setting. OpenAI controls credit eligibility and billing; this local
+request gate cannot guarantee zero charges when usage changes during a request.

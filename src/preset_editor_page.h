@@ -60,6 +60,8 @@ private:
     QLineEdit *model_edit_ = nullptr;
     QWidget *service_tier_row_ = nullptr;
     ChoiceStrip *service_tier_ = nullptr;
+    QWidget *codex_credits_row_ = nullptr;
+    ChoiceStrip *codex_credits_ = nullptr;
     QWidget *thinking_row_ = nullptr;
     ChoiceStrip *thinking_ = nullptr;
     ChoiceStrip *api_compat_ = nullptr;
