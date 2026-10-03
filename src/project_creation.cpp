@@ -195,19 +195,23 @@ bool valid_agent_leaf(std::string_view name) {
     });
 }
 
-std::optional<QJsonObject> load_preset(const fs::path &path) {
-    const auto bytes = read_absolute_regular(path, kMaximumJsonBytes);
-    if (!bytes) return std::nullopt;
+std::optional<QJsonObject> parse_object(std::string_view bytes) {
     QJsonParseError error;
     const auto document = QJsonDocument::fromJson(
-        QByteArray(bytes->data(), static_cast<qsizetype>(bytes->size())),
-        &error);
+        QByteArray(bytes.data(), static_cast<qsizetype>(bytes.size())), &error);
     if (error.error != QJsonParseError::NoError || !document.isObject()) {
         return std::nullopt;
     }
-    const auto root = document.object();
-    const auto name = root.value("name");
-    const auto manifest = root.value("manifest");
+    return document.object();
+}
+
+std::optional<QJsonObject> load_preset(const fs::path &path) {
+    const auto bytes = read_absolute_regular(path, kMaximumJsonBytes);
+    if (!bytes) return std::nullopt;
+    const auto root = parse_object(*bytes);
+    if (!root) return std::nullopt;
+    const auto name = root->value("name");
+    const auto manifest = root->value("manifest");
     if (!name.isString() || name.toString().trimmed().isEmpty()
             || !manifest.isObject()) {
         return std::nullopt;
@@ -246,16 +250,6 @@ void propagate_provider_api_key_env(
         values["api_key_env"] = api_key_env;
         capability.value() = values;
     }
-}
-
-std::optional<QJsonObject> parse_object(std::string_view bytes) {
-    QJsonParseError error;
-    const auto document = QJsonDocument::fromJson(
-        QByteArray(bytes.data(), static_cast<qsizetype>(bytes.size())), &error);
-    if (error.error != QJsonParseError::NoError || !document.isObject()) {
-        return std::nullopt;
-    }
-    return document.object();
 }
 
 bool write_all(int fd, std::string_view bytes) {
