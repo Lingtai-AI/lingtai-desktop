@@ -218,7 +218,11 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
 - `tests/conversation_surface_scroll_test.cpp` —
   `conversation_surface_scroll` (the dedicated real-Qt viewport-wheel and
   gesture-aware bottom-follow contract on `ConversationSurface`, without the
-  shell or composer lifecycle).
+  shell or composer lifecycle). Its refresh comparison regression
+  (`tests/conversation_surface_scroll_test.cpp:114-173`) covers the unchanged
+  no-op, session-only and core-content rebuilds with history preservation,
+  identity-change rebuild with history reset, and verbosity rebuild after
+  conversation reapplication.
 - `tests/test_native_shell.py` — `native_shell` (process persistence and
   smoke-order via the built smoke executable).
 - `tests/test_repository_contract.py` — manual `python3 -m unittest

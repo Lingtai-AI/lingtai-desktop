@@ -88,8 +88,15 @@ Public ports (`src/ui/conversation_surface.h:26-37`):
 - `set_conversation(QString them, vector<DirectConversationMessage> messages)` —
   the data input; `them` is the caller-chosen presentation name for incoming
   rows. Replaces the document from the existing direct rows in their accepted
-  order; an identical refresh is a no-op that preserves scroll, selection, and
-  focus (`conversation_surface.cpp:147-157`).
+  order. A call is a no-op when presentation identity, core content, session
+  events, and rendered verbosity are unchanged. On rebuild, the history window
+  resets only when core content changed and the refresh is not same-identity
+  and nonshrinking (`conversation_surface.cpp:1762-1815`). Session-only and
+  verbosity-only rebuilds, plus same-identity nonshrinking refreshes, retain
+  the window; identity changes and same-identity shrinks reset it. Reapplying
+  this setter after `cycle_verbose_level()` renders the new level; the cycle
+  method itself changes the level and emits its signal
+  (`conversation_surface.cpp:2010-2015`).
 - `set_plain_state(QString text)` — one plain centered state for the
   selection/no-route/empty cases (`conversation_surface.cpp:113-127`).
 - `attachment_action_requested(request, reveal)` — presentation-only signal
