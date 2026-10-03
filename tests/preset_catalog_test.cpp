@@ -1,4 +1,5 @@
 #include "preset_catalog.h"
+#include "preset_catalog_presentation.h"
 
 #include <QtCore/QString>
 
@@ -47,7 +48,8 @@ int main(int argc, char **argv) {
         write_file(global / "presets/saved/zeta.json", R"({
           "name":"zeta",
           "description":{"summary":"Zeta saved","tier":"5"},
-          "manifest":{"llm":{"provider":"z","model":"z1"}}
+          "manifest":{"llm":{"provider":"z","model":"z1"},
+            "capabilities":{"vision":true,"tools":{"functions":["read"]}}}
         })");
         write_file(global / "presets/saved/alpha.json", R"({
           "name":"alpha",
@@ -65,7 +67,8 @@ int main(int argc, char **argv) {
         })");
         write_file(global / "presets/templates/future.json", R"({
           "name":"future","description":{"summary":"Future template"},
-          "manifest":{"llm":{"provider":"future","model":"f1"}}
+          "manifest":{"llm":{"provider":"future","model":"f1"},
+            "capabilities":{"vision":false,"tools":{}}}
         })");
         write_file(global / "presets/saved/_kernel_meta.json",
             R"({"name":"metadata-must-not-appear"})");
@@ -102,6 +105,80 @@ int main(int argc, char **argv) {
                 && loaded.presets[2].tier == "1"
                 && loaded.presets[2].source == "template",
             "structured template description and tier must survive loading");
+
+        const auto rows = lingtai::desktop::build_preset_catalog_rows(loaded.presets);
+        require(rows.size() == 5
+                && rows[0].entry.name == "alpha"
+                && rows[1].entry.name == "zeta"
+                && rows[2].entry.name == "minimax"
+                && rows[3].entry.name == "codex"
+                && rows[4].entry.name == "future",
+            "catalog rows must keep saved and canonical template ordering");
+        require(rows[0].entry.description == "Alpha legacy"
+                && rows[0].entry.tier == "2"
+                && rows[0].entry.source == "saved"
+                && rows[0].entry.path == loaded.presets[0].path
+                && rows[0].summary == QStringLiteral("Alpha legacy")
+                && rows[0].provider == QStringLiteral("a")
+                && rows[0].model == QStringLiteral("a1")
+                && rows[0].provider_model == QStringLiteral("a · a1")
+                && !rows[0].has_vision && !rows[0].has_tools
+                && !rows[0].is_template,
+            "saved row fields and provider/model facts must be preserved");
+        require(rows[1].summary == QStringLiteral("Zeta saved")
+                && rows[1].provider_model == QStringLiteral("z · z1")
+                && rows[1].has_vision && rows[1].has_tools
+                && !rows[1].is_template,
+            "manifest summary, provider/model, and populated capabilities must project");
+        require(rows[2].summary == QStringLiteral("MiniMax template")
+                && rows[2].provider_model == QStringLiteral("minimax · m2")
+                && rows[2].is_template,
+            "structured template fields must project");
+        require(rows[4].summary == QStringLiteral("Future template")
+                && !rows[4].has_vision && !rows[4].has_tools
+                && rows[4].is_template,
+            "false and empty-object capabilities must remain disabled");
+
+        write_file(fixture / "not-a-directory", "fixture file");
+        const auto fallback_rows =
+            lingtai::desktop::build_preset_catalog_rows({
+                {"malformed", "Malformed fallback", "3", "saved",
+                    (global / "presets/saved/malformed.json").string()},
+                {"unreadable", "Unreadable fallback", "4", "saved",
+                    (fixture / "not-a-directory/unreadable.json").string()},
+            });
+        require(fallback_rows.size() == 2
+                && fallback_rows[0].summary == QStringLiteral("Malformed fallback")
+                && fallback_rows[0].provider_model
+                    == QStringLiteral("Malformed fallback")
+                && fallback_rows[1].summary == QStringLiteral("Unreadable fallback")
+                && fallback_rows[1].provider_model
+                    == QStringLiteral("Unreadable fallback")
+                && fallback_rows[0].provider.isEmpty()
+                && fallback_rows[1].model.isEmpty(),
+            "malformed and unreadable manifests must retain entry summary fallback");
+
+        const auto refs = std::vector<std::string>{
+            (global / "presets/templates/codex.json").string(),
+            (global / "presets/saved/zeta.json").string(),
+            (fixture / "missing-allowed.json").string(),
+            (global / "presets/saved/alpha.json").string(),
+        };
+        const auto ref_rows =
+            lingtai::desktop::build_preset_catalog_rows_from_refs(refs);
+        require(ref_rows.size() == refs.size()
+                && ref_rows[0].entry.name == "codex"
+                && ref_rows[1].entry.name == "zeta"
+                && ref_rows[2].entry.name == "missing-allowed"
+                && ref_rows[3].entry.name == "alpha",
+            "ref rows must preserve published input order");
+        require(ref_rows[0].is_template
+                && ref_rows[0].provider_model == QStringLiteral("codex · gpt")
+                && !ref_rows[1].is_template
+                && ref_rows[1].has_vision && ref_rows[1].has_tools
+                && ref_rows[2].summary.isEmpty()
+                && ref_rows[2].provider_model.isEmpty(),
+            "ref rows must share manifest facts and retain missing-ref fallback");
         const auto after_count = std::distance(
             fs::recursive_directory_iterator(global),
             fs::recursive_directory_iterator());

@@ -89,6 +89,18 @@ QString format_provider_model(const QString &provider, const QString &model) {
     return provider + QStringLiteral(" · ") + model;
 }
 
+PresetCatalogRow make_preset_catalog_row(const PresetEntry &entry) {
+    PresetCatalogRow row{entry, {}, {}, {}, {}, false, false, false};
+    row.is_template = QString::fromStdString(entry.source)
+        .compare(QStringLiteral("template"), Qt::CaseInsensitive) == 0;
+    apply_manifest_facts(row);
+    row.provider_model = format_provider_model(row.provider, row.model);
+    if (row.provider_model.isEmpty()) {
+        row.provider_model = row.summary;
+    }
+    return row;
+}
+
 } // namespace
 
 std::vector<PresetCatalogRow> build_preset_catalog_rows(
@@ -96,15 +108,7 @@ std::vector<PresetCatalogRow> build_preset_catalog_rows(
     auto rows = std::vector<PresetCatalogRow>();
     rows.reserve(presets.size());
     for (const auto &entry : presets) {
-        PresetCatalogRow row{entry, {}, {}, {}, {}, false, false, false};
-        row.is_template = QString::fromStdString(entry.source)
-            .compare(QStringLiteral("template"), Qt::CaseInsensitive) == 0;
-        apply_manifest_facts(row);
-        row.provider_model = format_provider_model(row.provider, row.model);
-        if (row.provider_model.isEmpty()) {
-            row.provider_model = row.summary;
-        }
-        rows.push_back(std::move(row));
+        rows.push_back(make_preset_catalog_row(entry));
     }
     std::stable_sort(rows.begin(), rows.end(),
         [](const PresetCatalogRow &left, const PresetCatalogRow &right) {
@@ -133,15 +137,7 @@ std::vector<PresetCatalogRow> build_preset_catalog_rows_from_refs(
     auto rows = std::vector<PresetCatalogRow>();
     rows.reserve(entries.size());
     for (const auto &entry : entries) {
-        PresetCatalogRow row{entry, {}, {}, {}, {}, false, false, false};
-        row.is_template = QString::fromStdString(entry.source)
-            .compare(QStringLiteral("template"), Qt::CaseInsensitive) == 0;
-        apply_manifest_facts(row);
-        row.provider_model = format_provider_model(row.provider, row.model);
-        if (row.provider_model.isEmpty()) {
-            row.provider_model = row.summary;
-        }
-        rows.push_back(std::move(row));
+        rows.push_back(make_preset_catalog_row(entry));
     }
     return rows;
 }
