@@ -83,7 +83,6 @@ public:
 private:
     void paintEvent(QPaintEvent *event) override;
     void update_narrow_mode();
-    void update_state_label(const AgentSnapshot &snapshot);
 
     QLabel *roster_heading_ = nullptr;
     QLabel *roster_state_ = nullptr;

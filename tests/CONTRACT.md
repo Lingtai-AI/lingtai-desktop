@@ -201,7 +201,10 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   membership/lifecycle filtering, rebind/close/reopen, and coherent roster plus
   tooltip projection. Its status-item journeys own the one-per-process/menu/
   icon-renderer/show/quit/final-window-lifetime contract without requiring or
-  publishing a real offscreen system tray item.
+  publishing a real offscreen system tray item. Its
+  `verify_persistent_roster_shell` regression (`tests/native_shell_test.cpp:6975`)
+  locks the complete mixed-roster count (2) and blank status for complete
+  human-only/empty and unavailable nonempty snapshots.
 - The `native_shell_menu` journey owns the production composer context-menu
   proof. It must preserve the immediate standard menu and functional edit
   actions without spelling/Search rows, async deferral, platform callbacks, or

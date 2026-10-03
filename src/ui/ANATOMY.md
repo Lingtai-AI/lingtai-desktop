@@ -38,9 +38,10 @@ Public ports (`src/ui/agent_roster.h:30-47`):
 
 - `set_rows(AgentSnapshot, optional<path> selected_key)` — the single data input;
   accepts an already-produced `AgentSnapshot` plus the caller-chosen selected
-  directory key. Rebuilds rows only when the visible (human-omitted) model
-  changed; an unchanged refresh updates only checked states
-  (`agent_roster.cpp:325-396`).
+  directory key. Each call projects incoming visible rows once and reuses that
+  projection for the status label and existing row-change comparison. Rows
+  rebuild only when that visible model changes; an unchanged refresh updates
+  checked states and status while keeping the row tree (`agent_roster.cpp:1465`).
 - `set_row_click_handler(RowClickHandler)` — the only explicit custom callback
   port; `RowClickHandler` is `std::function<void(const std::filesystem::path &)>`
   (`agent_roster.h:32`). Each enabled row's `clicked` signal forwards its
