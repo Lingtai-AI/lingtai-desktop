@@ -184,6 +184,9 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
 - `tests/kanban_model_test.cpp` — `kanban_model`; complete-board parity plus
   deterministic payload/cursor/daemon incrementality counters and rebuild
   generation-race/capture-incapability liveness seams.
+- The `native_shell_kanban` page checks cover valid refresh/molt boundaries
+  with repeated events and label deduplication, plus invalid adjacent
+  timestamps at the left, right, and middle positions.
 - `tests/native_shell_test.cpp` — split `native_shell_<journey>` tests (links the shell +
   `lib_ui` + `crl_integration.cpp`; the real-Qt layer), including the focused
   synthetic existing-Agent setup rerun, no-TUI New Project, literal bare/home-

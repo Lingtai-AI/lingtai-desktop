@@ -202,6 +202,11 @@ retain that pointer across snapshot acceptance.
 `KanbanSnapshotIndex` is the corresponding Kanban source/index owner;
 `NativeShell` alone owns its low-priority worker, generation acceptance,
 coalescing, and stale-while-revalidate presentation.
+`KanbanPage` owns the private separator-label pass over adjacent event
+timestamps. A pair is skipped when either endpoint is invalid; valid
+boundaries retain the existing refresh/molt comparison priority and label
+deduplication. This remains presentation behavior outside the source-index
+and worker-acceptance owners above.
 
 ## Adapters
 

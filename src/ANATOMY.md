@@ -229,6 +229,8 @@ Domain readers/projections (stateless, read-only, one source each):
   board composition, and deterministic payload/open metrics/test hook.
 - `kanban_page.{h,cpp}` — Kanban presentation, including cold loading and
   nonblocking warm updating/stale status without clearing a complete board.
+  The page owns the private adjacent-time separator classification used for
+  refresh/molt boundary labels.
 
 Direct-operation/side-effect owners (the only writers/launchers):
 
