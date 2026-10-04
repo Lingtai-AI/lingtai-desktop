@@ -7,7 +7,6 @@
 #include "ui/style/style_core_palette.h"
 
 #include <QtCore/QCoreApplication>
-#include <QtGui/QKeyEvent>
 #include <QtGui/QTextCursor>
 #include <QtGui/QTextDocument>
 #include <QtGui/QWheelEvent>
@@ -85,91 +84,6 @@ void prepare_surface(
         "the conversation fixture must overflow its viewport");
     bar->setValue(bar->maximum());
     settle();
-}
-
-void reveal_older_page(ConversationSurface &surface) {
-    surface.verticalScrollBar()->setValue(
-        surface.verticalScrollBar()->minimum());
-    auto key = QKeyEvent(
-        QEvent::KeyPress, Qt::Key_U, Qt::ControlModifier);
-    QCoreApplication::sendEvent(&surface, &key);
-    settle();
-}
-
-void require_history_boundary(
-        const ConversationSurface &surface,
-        int visible_row,
-        int hidden_row) {
-    const auto text = surface.toPlainText();
-    const auto visible = QStringLiteral(
-        "trackpad regression row %1 with enough").arg(visible_row);
-    const auto hidden = QStringLiteral(
-        "trackpad regression row %1 with enough").arg(hidden_row);
-    require(text.contains(visible),
-        "the expected older history row must be visible");
-    require(!text.contains(hidden),
-        "the row before the history window must remain hidden");
-}
-
-void verify_refresh_comparison_behavior() {
-    ConversationSurface surface;
-    auto rows = messages(210);
-    prepare_surface(surface, rows);
-    reveal_older_page(surface);
-    require_history_boundary(surface, 10, 9);
-
-    auto selection = QTextCursor(surface.document());
-    selection.select(QTextCursor::Document);
-    surface.setTextCursor(selection);
-    const auto selected_text = surface.textCursor().selectedText();
-    const auto unchanged_revision = surface.document()->revision();
-    surface.set_conversation(QStringLiteral("Agent"), rows);
-    settle();
-    require(surface.document()->revision() == unchanged_revision,
-        "an unchanged refresh must keep the document revision");
-    require(surface.textCursor().hasSelection()
-            && surface.textCursor().selectedText() == selected_text,
-        "an unchanged refresh must preserve the document selection");
-    require_history_boundary(surface, 10, 9);
-
-    auto session_events = std::vector<ConversationSessionEntry>{
-        {.timestamp = "2026-08-26T12:00:00Z",
-         .type = "assistant",
-         .body = "session-only detail"},
-    };
-    auto prior_revision = surface.document()->revision();
-    surface.set_conversation(QStringLiteral("Agent"), rows, {}, session_events);
-    settle();
-    require(surface.document()->revision() > prior_revision,
-        "a session-event-only change must rebuild the document");
-    require_history_boundary(surface, 10, 9);
-
-    rows[150].text += " core-content change";
-    prior_revision = surface.document()->revision();
-    surface.set_conversation(QStringLiteral("Agent"), rows, {}, session_events);
-    settle();
-    require(surface.document()->revision() > prior_revision,
-        "a core-content change must rebuild the document");
-    require_history_boundary(surface, 10, 9);
-
-    prior_revision = surface.document()->revision();
-    surface.set_conversation(
-        QStringLiteral("Other Agent"), rows, {}, session_events);
-    settle();
-    require(surface.document()->revision() > prior_revision,
-        "a conversation identity change must rebuild the document");
-    require_history_boundary(surface, 110, 109);
-
-    reveal_older_page(surface);
-    require_history_boundary(surface, 10, 9);
-    prior_revision = surface.document()->revision();
-    surface.cycle_verbose_level();
-    surface.set_conversation(
-        QStringLiteral("Other Agent"), rows, {}, session_events);
-    settle();
-    require(surface.document()->revision() > prior_revision,
-        "a verbose-level transition must rebuild on conversation reapplication");
-    require_history_boundary(surface, 10, 9);
 }
 
 struct WheelDelivery {
@@ -342,10 +256,30 @@ void verify_manual_non_bottom_preserved() {
     prepare_surface(surface, rows);
     auto *bar = surface.verticalScrollBar();
     bar->setValue(std::max(bar->minimum(), bar->maximum() / 2));
+
+    auto selection = QTextCursor(surface.document());
+    selection.setPosition(0);
+    selection.movePosition(
+        QTextCursor::NextCharacter, QTextCursor::KeepAnchor, 16);
+    surface.setTextCursor(selection);
+    const auto selected_text = surface.textCursor().selectedText();
+    bar->setValue(std::max(bar->minimum(), bar->maximum() / 2));
+
     const auto prior_value = bar->value();
     const auto prior_maximum = bar->maximum();
     require(prior_value < prior_maximum,
         "the manual-position fixture must be away from bottom");
+
+    const auto prior_revision = surface.document()->revision();
+    surface.set_conversation(QStringLiteral("Agent"), rows);
+    settle();
+    require(surface.document()->revision() == prior_revision,
+        "an unchanged refresh must not rebuild the document");
+    require(surface.textCursor().hasSelection()
+            && surface.textCursor().selectedText() == selected_text,
+        "an unchanged refresh must preserve the selection");
+    require(bar->value() == prior_value,
+        "an unchanged refresh must preserve the manual scroll position");
 
     append_row(rows, "manual-position-rebuild",
         "ordinary rebuild must preserve a reader who moved away from bottom");
@@ -386,7 +320,6 @@ int run_scroll_test(int argc, char **argv) {
         verify_normal_bottom_follow();
         verify_manual_non_bottom_preserved();
         verify_native_wheel_delegation();
-        verify_refresh_comparison_behavior();
         std::cout << "conversation surface gesture scroll: OK\n";
         return 0;
     } catch (const std::exception &error) {

@@ -102,6 +102,6 @@ below is grounded in the widget source.
   scrollbar value unchanged. `ScrollEnd` releases gesture ownership without
   jumping, and the event then continues through native `QTextEdit` handling.
   The focused surface test covers queued-pin cancellation, gesture ownership,
-  bottom-follow, manual-position preservation, and native wheel delegation
-  (`tests/conversation_surface_scroll_test.cpp:204-376`). An unchanged roster
+  bottom-follow, manual-position preservation, and native wheel delegation.
+  An unchanged roster
   refresh preserves scroll by not rebuilding the row tree.

@@ -380,13 +380,11 @@ touches a real Agent or project, and none depends on a network or provider.
   real `QWheelEvent`s to the viewport, and proves zero-delta queued-pin
   cancellation, tiny-update and momentum ownership, non-jumping `ScrollEnd`,
   ordinary bottom-follow, manual non-bottom preservation, and delegation to
-  native `QTextEdit` wheel movement. Its `verify_refresh_comparison_behavior`
-  regression (`tests/conversation_surface_scroll_test.cpp:114-173`) proves an
-  unchanged refresh keeps document revision, selection, and revealed history;
-  session-only and core-content rebuilds retain revealed history; an identity
-  change rebuilds and resets the history window; and verbosity rebuilds when
-  the conversation is reapplied after cycling. It does not construct
-  `AgentDetailView` or `NativeShell` and takes no fixture root.
+  native `QTextEdit` wheel movement. Its manual-position case verifies that an
+  unchanged refresh preserves document revision, selection, and scroll, and a
+  subsequent core-content rebuild preserves the manually chosen scroll
+  position. It does not construct `AgentDetailView` or `NativeShell` and takes
+  no fixture root.
 
 ### 4. Process-level smoke/persistence
 
