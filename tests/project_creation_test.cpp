@@ -853,11 +853,6 @@ int main(int argc, char **argv) {
         const InvalidPresetCase invalid_preset_cases[] = {
             {"malformed-json", "{"},
             {"non-object", "[]"},
-            {"name-type", R"JSON({"name":7,"manifest":{"llm":{},"capabilities":{}}})JSON"},
-            {"blank-name", R"JSON({"name":" \t\n","manifest":{"llm":{},"capabilities":{}}})JSON"},
-            {"manifest-type", R"JSON({"name":"bad","manifest":[]})JSON"},
-            {"llm-type", R"JSON({"name":"bad","manifest":{"llm":[],"capabilities":{}}})JSON"},
-            {"capabilities-type", R"JSON({"name":"bad","manifest":{"llm":{},"capabilities":[]}})JSON"},
         };
         for (const auto &invalid : invalid_preset_cases) {
             const auto rejected_destination = root

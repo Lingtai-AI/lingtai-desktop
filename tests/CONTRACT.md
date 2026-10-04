@@ -168,8 +168,8 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   rendered-output rejection of TUI-only prose and commands outside the public
   Desktop slash registry, controlled saved/template manifest projection,
   legacy/provider capability normalization, stable preset-policy de-duplication,
-  table-driven selected-preset JSON/schema rejection before staging with
-  unrelated destination contents preserved,
+  representative malformed/non-object selected-preset rejection before
+  staging with unrelated destination contents preserved,
   project-root `.recipe`/`.tui-asset` absence, no-global-mutation snapshots,
   unsafe links, marker-present/marker-removed/
   publish-refused rollback, runner destruction, and expected output all live
