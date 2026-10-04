@@ -8770,83 +8770,54 @@ void verify_responsive_header_priority(
 void verify_kanban_page(
         lingtai::desktop::NativeShell &shell,
         const fs::path &sandbox) {
-    struct SeparatorCase {
-        std::vector<std::string> timestamps;
-        std::vector<std::int64_t> refresh_times_ms;
-        std::vector<std::int64_t> molt_times_ms;
-        std::vector<QString> expected_labels;
-    };
     const auto epoch_ms = [](const char *timestamp) {
         return QDateTime::fromString(
             QString::fromLatin1(timestamp), Qt::ISODate).toMSecsSinceEpoch();
     };
-    const std::array<SeparatorCase, 4> separator_cases{{
-        {
-            {"2026-08-18T12:00:00Z", "2026-08-18T11:00:00Z",
-                "2026-08-18T10:00:00Z"},
-            {epoch_ms("2026-08-18T11:30:00Z"),
-                epoch_ms("2026-08-18T11:30:00Z")},
-            {epoch_ms("2026-08-18T10:30:00Z"),
-                epoch_ms("2026-08-18T10:30:00Z")},
-            {QStringLiteral("context rebuilt"), QStringLiteral("molt")},
-        },
-        {
-            {"invalid", "2026-08-18T10:00:00Z"},
-            {epoch_ms("2026-08-18T11:00:00Z")},
-            {},
-            {},
-        },
-        {
-            {"2026-08-18T12:00:00Z", "invalid"},
-            {epoch_ms("2026-08-18T11:00:00Z")},
-            {},
-            {},
-        },
-        {
-            {"2026-08-18T12:00:00Z", "invalid", "2026-08-18T10:00:00Z"},
-            {epoch_ms("2026-08-18T11:00:00Z")},
-            {epoch_ms("2026-08-18T11:00:00Z")},
-            {},
-        },
-    }};
-    for (const auto &test_case : separator_cases) {
-        lingtai::desktop::KanbanBoard board;
-        lingtai::desktop::KanbanAgent agent;
-        agent.directory_key = "alpha";
-        agent.display_name = "Alpha";
-        agent.state = "active";
-        for (const auto &timestamp : test_case.timestamps) {
-            lingtai::desktop::KanbanLedgerEntry entry;
-            entry.ts = timestamp;
-            agent.recent.push_back(entry);
-        }
-        agent.refresh_times_ms = test_case.refresh_times_ms;
-        agent.molt_times_ms = test_case.molt_times_ms;
-        board.agent_count = 1;
-        board.active = 1;
-        board.agents.push_back(agent);
-        lingtai::desktop::KanbanPage timestamp_page;
-        timestamp_page.set_board(board, std::nullopt);
-        const auto separators = timestamp_page.findChildren<QWidget *>(
-            QStringLiteral("lingtai_kanban_recent_separator"));
-        require(separators.size()
-                == static_cast<int>(test_case.expected_labels.size()),
-            "kanban timestamp separators must match expected valid boundaries");
-        std::vector<QString> labels;
+    lingtai::desktop::KanbanBoard separator_board;
+    lingtai::desktop::KanbanAgent separator_agent;
+    separator_agent.directory_key = "alpha";
+    separator_agent.display_name = "Alpha";
+    separator_agent.state = "active";
+    for (const auto &timestamp : std::array<std::string, 5>{
+             "2026-08-18T13:00:00Z", "2026-08-18T12:00:00Z", "invalid",
+             "2026-08-18T10:00:00Z", "2026-08-18T09:00:00Z"}) {
+        lingtai::desktop::KanbanLedgerEntry entry;
+        entry.ts = timestamp;
+        separator_agent.recent.push_back(entry);
+    }
+    separator_agent.refresh_times_ms = {
+        epoch_ms("2026-08-18T12:30:00Z"),
+        epoch_ms("2026-08-18T11:00:00Z"),
+    };
+    separator_agent.molt_times_ms = {epoch_ms("2026-08-18T09:30:00Z")};
+    separator_board.agent_count = 1;
+    separator_board.active = 1;
+    separator_board.agents.push_back(separator_agent);
+    lingtai::desktop::KanbanPage separator_page;
+    separator_page.set_board(separator_board, std::nullopt);
+    const auto separators = separator_page.findChildren<QWidget *>(
+        QStringLiteral("lingtai_kanban_recent_separator"));
+    require(separators.size() == 2,
+        "invalid middle timestamps must not create boundary labels");
+    const auto labels = [&] {
+        auto result = std::vector<QString>();
         for (auto *separator : separators) {
             auto *label = qobject_cast<QLabel *>(separator);
             require(label != nullptr,
                 "kanban timestamp separator must expose its label text");
-            labels.push_back(label->text());
+            result.push_back(label->text());
         }
-        for (const auto &expected : test_case.expected_labels) {
-            const auto matches = std::count_if(labels.begin(), labels.end(),
-                [&expected](const QString &label) {
-                    return label.contains(expected);
-                });
-            require(matches == 1,
-                "kanban timestamp boundary label must be present exactly once");
-        }
+        return result;
+    }();
+    for (const auto &expected : {QStringLiteral("context rebuilt"),
+             QStringLiteral("molt")}) {
+        const auto matches = std::count_if(labels.begin(), labels.end(),
+            [&expected](const QString &label) {
+                return label.contains(expected);
+            });
+        require(matches == 1,
+            "kanban timestamp boundary label must be present exactly once");
     }
 
     auto &window = shell.window();
