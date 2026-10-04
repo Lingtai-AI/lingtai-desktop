@@ -161,12 +161,9 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   selected/custom model id, slug-only persistence through `commit()`, switch-
   into-Codex default-only-when-unset parity with every other provider,
   unchanged non-Codex option shape, and `load()` seeding from an injected
-  `LINGTAI_TUI_DIR` last-good cache. The load snapshot regression preserves
-  nested arbitrary bool/null/array/number values, separates original and
-  working snapshots, and covers missing-file/name states
-  (`tests/preset_editor_model_test.cpp:219`). The commit regression checks that
-  saved/template normalization leaves both snapshots unchanged
-  (`tests/preset_editor_model_test.cpp:272`).
+  `LINGTAI_TUI_DIR` last-good cache. The commit check verifies that editing a
+  nested document snapshot and calling `commit()` leave the model's working
+  document and original name unchanged.
 - `tests/project_creation_test.cpp` — `project_creation`; project inputs,
   destination contents, exact custom Comment bytes, fixture-derived bounded
   Desktop adaptations for all three languages with injected clock/location,
