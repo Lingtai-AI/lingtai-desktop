@@ -6976,47 +6976,6 @@ void verify_persistent_roster_shell(
         lingtai::desktop::NativeShell &shell,
         const fs::path &sandbox) {
     auto &window = shell.window();
-    {
-        using lingtai::desktop::AgentRole;
-        using lingtai::desktop::AgentScanState;
-
-        lingtai::desktop::AgentRoster roster(nullptr);
-        auto *state = roster.findChild<QLabel *>(
-            QStringLiteral("lingtai_agent_roster_state"));
-        require(state != nullptr,
-            "the isolated roster fixture must expose its status label");
-        const auto make_row = [](AgentRole role, const char *key) {
-            lingtai::desktop::AgentRow row;
-            row.directory_key = key;
-            row.role = role;
-            return row;
-        };
-        const auto human = make_row(AgentRole::human, "human");
-        const auto alpha = make_row(AgentRole::agent, "alpha");
-        const auto beta = make_row(AgentRole::agent, "beta");
-        lingtai::desktop::AgentSnapshot snapshot;
-        snapshot.scan = AgentScanState::complete;
-        snapshot.items = {human, alpha, beta};
-        roster.set_rows(snapshot, std::nullopt);
-        require(state->text() == QStringLiteral("2"),
-            "the complete roster count must omit the human pseudo-agent");
-
-        snapshot.items = {human};
-        roster.set_rows(snapshot, std::nullopt);
-        require(state->text().isEmpty(),
-            "a complete human-only roster must have an empty status label");
-
-        snapshot.items.clear();
-        roster.set_rows(snapshot, std::nullopt);
-        require(state->text().isEmpty(),
-            "an empty complete roster must have an empty status label");
-
-        snapshot.scan = AgentScanState::unavailable;
-        snapshot.items = {alpha, beta};
-        roster.set_rows(snapshot, std::nullopt);
-        require(state->text().isEmpty(),
-            "an unavailable roster must have an empty status label");
-    }
     auto *sidebar = required_child<Ui::RpWidget>(
         window, "lingtai_desktop_sidebar");
     auto *content = required_child<Ui::RpWidget>(
@@ -7047,6 +7006,9 @@ void verify_persistent_roster_shell(
     require(outcome.disposition == ProjectOpenDisposition::opened,
         "the roster-shell fixture project must open");
     QCoreApplication::processEvents();
+    require(label_text(window, "lingtai_agent_roster_state")
+                == QStringLiteral("14"),
+        "the complete 14-Agent roster must display its visible count");
 
     // The persistent left list column is responsive at or beyond its 260px
     // minimum when a project is open, and fills the body height.

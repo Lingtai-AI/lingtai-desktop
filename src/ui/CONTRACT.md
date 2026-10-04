@@ -67,10 +67,9 @@ below is grounded in the widget source.
 - **Selection.** Rows are checkable and the checked state is caller-driven on
   every refresh (`agent_roster.cpp:360-361`, `298-309`).
 - **Roster status.** The status label uses incoming visible rows, omitting the
-  human pseudo-agent. Coverage locks a count of 2 for a complete snapshot with
-  a human plus two Agents, blank status for complete human-only or empty
-  snapshots, and blank status for an unavailable nonempty snapshot
-  (`agent_roster.cpp:1465`; `tests/native_shell_test.cpp:6975`).
+  human pseudo-agent. The real shell projection displays a count of 14 for its
+  complete 14-Agent fixture (`agent_roster.cpp:1465`;
+  `tests/native_shell_test.cpp:7009`).
 - **Copy/selection (conversation).** The surface is `setReadOnly(true)` with
   undo disabled (`conversation_surface.cpp:100-101`) but stays a plain
   `QTextEdit`; `paintEvent` delegates to `QTextEdit::paintEvent` so native

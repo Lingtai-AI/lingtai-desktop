@@ -268,9 +268,9 @@ touches a real Agent or project, and none depends on a network or provider.
   `commit-N-...-fixture` trees the test itself creates. The working
   directory is an injected path, not an OS or process sandbox.
 - Its `verify_persistent_roster_shell` regression
-  (`tests/native_shell_test.cpp:6975`) locks status count 2 for a complete
-  human-plus-two-Agent snapshot, and blank status for complete human-only,
-  empty, or unavailable nonempty snapshots.
+  (`tests/native_shell_test.cpp:7009`) checks the visible count of 14 on the
+  real 14-Agent roster-shell projection; selection, refresh, and scroll
+  continuity remain in that same journey.
 - Its focused `native_shell_status_item` journey proves one host-owned item,
   an unpublished offscreen tray, exact menu order, compiled 18/36-pixel
   transparent zero resources, deterministic alpha-only count masks pinned to

@@ -202,9 +202,9 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   tooltip projection. Its status-item journeys own the one-per-process/menu/
   icon-renderer/show/quit/final-window-lifetime contract without requiring or
   publishing a real offscreen system tray item. Its
-  `verify_persistent_roster_shell` regression (`tests/native_shell_test.cpp:6975`)
-  locks the complete mixed-roster count (2) and blank status for complete
-  human-only/empty and unavailable nonempty snapshots.
+  `verify_persistent_roster_shell` regression (`tests/native_shell_test.cpp:7009`)
+  checks the visible count of 14 against the real roster-shell projection
+  while preserving the journey's selection, refresh, and scroll coverage.
 - The `native_shell_menu` journey owns the production composer context-menu
   proof. It must preserve the immediate standard menu and functional edit
   actions without spelling/Search rows, async deferral, platform callbacks, or
