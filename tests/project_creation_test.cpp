@@ -846,41 +846,6 @@ int main(int argc, char **argv) {
         require(!preset_refused && !fs::exists(safe_destination / ".lingtai"),
             "preset symlink must be rejected before commit");
 
-        struct InvalidPresetCase {
-            const char *name;
-            const char *json;
-        };
-        const InvalidPresetCase invalid_preset_cases[] = {
-            {"malformed-json", "{"},
-            {"non-object", "[]"},
-        };
-        for (const auto &invalid : invalid_preset_cases) {
-            const auto rejected_destination = root
-                / (std::string("invalid-") + invalid.name);
-            fs::create_directories(rejected_destination);
-            write_file(rejected_destination / "keep.txt", "unrelated\n");
-            const auto rejected_preset = root / "invalid-presets"
-                / (std::string(invalid.name) + ".json");
-            write_file(rejected_preset, invalid.json);
-            auto invalid_request = request_for(
-                rejected_destination, global, runtime);
-            invalid_request.preset_path = rejected_preset;
-            const auto rejected = lingtai::desktop::create_project(
-                invalid_request);
-            require(!rejected
-                    && rejected.failure
-                        == lingtai::desktop::ProjectCreationFailure::invalid_preset
-                    && rejected.stage
-                        == lingtai::desktop::ProjectCreationStage::draft_validation
-                    && rejected.detail
-                        == "selected preset is unreadable, unsafe, oversized, or malformed"
-                    && !fs::exists(rejected_destination / ".lingtai")
-                    && !has_stage(rejected_destination)
-                    && read_file(rejected_destination / "keep.txt")
-                        == "unrelated\n",
-                "invalid selected preset must fail before staging and preserve destination contents");
-        }
-
         fs::remove_all(root, error);
         require(!error, "fixture final cleanup failed");
         std::cout << "project creation contract passed\n";

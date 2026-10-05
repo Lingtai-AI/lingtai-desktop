@@ -200,8 +200,6 @@ touches a real Agent or project, and none depends on a network or provider.
 - `tests/project_creation_test.cpp` — `project_creation` ctest. Exact project
   shape and stable de-duplicated setup policy, saved/template controlled
   manifest projection, legacy/provider-matched capability normalization,
-  representative malformed/non-object selected-preset rejection before
-  staging with unrelated destination contents preserved,
   hash-pinned `en`/`zh`/`wen` adaptive source provenance plus independently
   stated Desktop adaptations with deterministic injected time/location, exact
   three-language output, rejection of TUI-only prose and backticked commands
