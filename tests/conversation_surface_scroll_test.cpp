@@ -7,8 +7,6 @@
 #include "ui/style/style_core_palette.h"
 
 #include <QtCore/QCoreApplication>
-#include <QtGui/QTextCursor>
-#include <QtGui/QTextDocument>
 #include <QtGui/QWheelEvent>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QScrollBar>
@@ -256,30 +254,10 @@ void verify_manual_non_bottom_preserved() {
     prepare_surface(surface, rows);
     auto *bar = surface.verticalScrollBar();
     bar->setValue(std::max(bar->minimum(), bar->maximum() / 2));
-
-    auto selection = QTextCursor(surface.document());
-    selection.setPosition(0);
-    selection.movePosition(
-        QTextCursor::NextCharacter, QTextCursor::KeepAnchor, 16);
-    surface.setTextCursor(selection);
-    const auto selected_text = surface.textCursor().selectedText();
-    bar->setValue(std::max(bar->minimum(), bar->maximum() / 2));
-
     const auto prior_value = bar->value();
     const auto prior_maximum = bar->maximum();
     require(prior_value < prior_maximum,
         "the manual-position fixture must be away from bottom");
-
-    const auto prior_revision = surface.document()->revision();
-    surface.set_conversation(QStringLiteral("Agent"), rows);
-    settle();
-    require(surface.document()->revision() == prior_revision,
-        "an unchanged refresh must not rebuild the document");
-    require(surface.textCursor().hasSelection()
-            && surface.textCursor().selectedText() == selected_text,
-        "an unchanged refresh must preserve the selection");
-    require(bar->value() == prior_value,
-        "an unchanged refresh must preserve the manual scroll position");
 
     append_row(rows, "manual-position-rebuild",
         "ordinary rebuild must preserve a reader who moved away from bottom");

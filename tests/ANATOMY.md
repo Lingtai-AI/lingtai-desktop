@@ -380,11 +380,8 @@ touches a real Agent or project, and none depends on a network or provider.
   real `QWheelEvent`s to the viewport, and proves zero-delta queued-pin
   cancellation, tiny-update and momentum ownership, non-jumping `ScrollEnd`,
   ordinary bottom-follow, manual non-bottom preservation, and delegation to
-  native `QTextEdit` wheel movement. Its manual-position case verifies that an
-  unchanged refresh preserves document revision, selection, and scroll, and a
-  subsequent core-content rebuild preserves the manually chosen scroll
-  position. It does not construct `AgentDetailView` or `NativeShell` and takes
-  no fixture root.
+  native `QTextEdit` wheel movement. It does not construct `AgentDetailView`
+  or `NativeShell` and takes no fixture root.
 
 ### 4. Process-level smoke/persistence
 

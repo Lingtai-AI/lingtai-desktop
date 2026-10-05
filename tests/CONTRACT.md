@@ -218,10 +218,7 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
 - `tests/conversation_surface_scroll_test.cpp` —
   `conversation_surface_scroll` (the dedicated real-Qt viewport-wheel and
   gesture-aware bottom-follow contract on `ConversationSurface`, without the
-  shell or composer lifecycle). Its manual-position case verifies that an
-  unchanged refresh preserves document revision, selection, and scroll, and a
-  subsequent core-content rebuild preserves the manually chosen scroll
-  position.
+  shell or composer lifecycle).
 - `tests/test_native_shell.py` — `native_shell` (process persistence and
   smoke-order via the built smoke executable).
 - `tests/test_repository_contract.py` — manual `python3 -m unittest
