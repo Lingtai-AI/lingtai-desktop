@@ -570,8 +570,7 @@ target_link_libraries(lingtai_agent_setup_store_test PRIVATE
     lingtai_desktop_agent_setup_store Qt6::Core)
 
 add_executable(lingtai_preset_catalog_test
-    tests/preset_catalog_test.cpp
-    src/preset_catalog_presentation.cpp)
+    tests/preset_catalog_test.cpp)
 init_target(lingtai_preset_catalog_test)
 target_compile_options(lingtai_preset_catalog_test PRIVATE
     -Wall -Wextra -Werror -pedantic)

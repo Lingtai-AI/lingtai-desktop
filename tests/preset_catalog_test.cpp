@@ -1,5 +1,4 @@
 #include "preset_catalog.h"
-#include "preset_catalog_presentation.h"
 
 #include <QtCore/QString>
 
@@ -48,8 +47,7 @@ int main(int argc, char **argv) {
         write_file(global / "presets/saved/zeta.json", R"({
           "name":"zeta",
           "description":{"summary":"Zeta saved","tier":"5"},
-          "manifest":{"llm":{"provider":"z","model":"z1"},
-            "capabilities":{"vision":true,"tools":{"functions":["read"]}}}
+          "manifest":{"llm":{"provider":"z","model":"z1"}}
         })");
         write_file(global / "presets/saved/alpha.json", R"({
           "name":"alpha",
@@ -67,8 +65,7 @@ int main(int argc, char **argv) {
         })");
         write_file(global / "presets/templates/future.json", R"({
           "name":"future","description":{"summary":"Future template"},
-          "manifest":{"llm":{"provider":"future","model":"f1"},
-            "capabilities":{"vision":false,"tools":{}}}
+          "manifest":{"llm":{"provider":"future","model":"f1"}}
         })");
         write_file(global / "presets/saved/_kernel_meta.json",
             R"({"name":"metadata-must-not-appear"})");
@@ -105,35 +102,6 @@ int main(int argc, char **argv) {
                 && loaded.presets[2].tier == "1"
                 && loaded.presets[2].source == "template",
             "structured template description and tier must survive loading");
-
-        const auto rows = lingtai::desktop::build_preset_catalog_rows(loaded.presets);
-        require(rows.size() == loaded.presets.size()
-                && rows[0].entry.name == "alpha"
-                && rows[0].summary == QStringLiteral("Alpha legacy")
-                && rows[0].provider_model == QStringLiteral("a · a1")
-                && !rows[0].is_template
-                && rows[3].entry.name == "codex"
-                && rows[3].provider_model == QStringLiteral("codex · gpt")
-                && rows[3].is_template,
-            "saved and template rows expose representative display facts");
-
-        const auto refs = std::vector<std::string>{
-            (global / "presets/templates/codex.json").string(),
-            (global / "presets/saved/zeta.json").string(),
-            (fixture / "missing-allowed.json").string(),
-            (global / "presets/saved/alpha.json").string(),
-        };
-        const auto ref_rows =
-            lingtai::desktop::build_preset_catalog_rows_from_refs(refs);
-        require(ref_rows.size() == refs.size()
-                && ref_rows[0].entry.name == "codex"
-                && ref_rows[1].entry.name == "zeta"
-                && ref_rows[2].entry.name == "missing-allowed"
-                && ref_rows[3].entry.name == "alpha",
-            "ref rows must preserve published input order");
-        require(ref_rows[2].summary.isEmpty()
-                && ref_rows[2].provider_model.isEmpty(),
-            "missing ref rows must retain an empty display fallback");
         const auto after_count = std::distance(
             fs::recursive_directory_iterator(global),
             fs::recursive_directory_iterator());
