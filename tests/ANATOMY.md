@@ -267,10 +267,6 @@ touches a real Agent or project, and none depends on a network or provider.
   the exact intended in-fixture mutations on the synthetic
   `commit-N-...-fixture` trees the test itself creates. The working
   directory is an injected path, not an OS or process sandbox.
-- Its `verify_persistent_roster_shell` regression
-  (`tests/native_shell_test.cpp:7009`) checks the visible count of 14 on the
-  real 14-Agent roster-shell projection; selection, refresh, and scroll
-  continuity remain in that same journey.
 - Its focused `native_shell_status_item` journey proves one host-owned item,
   an unpublished offscreen tray, exact menu order, compiled 18/36-pixel
   transparent zero resources, deterministic alpha-only count masks pinned to

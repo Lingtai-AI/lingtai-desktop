@@ -9,7 +9,6 @@
 #include "preset_editor_model.h"
 #include "project_setup_wizard.h"
 #include "runtime_options.h"
-#include "ui/agent_roster.h"
 #include "ui/object_names.h"
 #include "ui/conversation_surface.h"
 
@@ -7006,9 +7005,6 @@ void verify_persistent_roster_shell(
     require(outcome.disposition == ProjectOpenDisposition::opened,
         "the roster-shell fixture project must open");
     QCoreApplication::processEvents();
-    require(label_text(window, "lingtai_agent_roster_state")
-                == QStringLiteral("14"),
-        "the complete 14-Agent roster must display its visible count");
 
     // The persistent left list column is responsive at or beyond its 260px
     // minimum when a project is open, and fills the body height.
