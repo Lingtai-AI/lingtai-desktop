@@ -196,9 +196,7 @@ touches a real Agent or project, and none depends on a network or provider.
   untouched, slug-only persistence into the committed document, switch-into-
   Codex default-only-when-unset parity with other providers, unchanged non-
   Codex option shape, and `load()` seeding its per-instance suggestions from
-  an injected `LINGTAI_TUI_DIR` last-good cache. The commit check also verifies
-  that editing a nested document snapshot and calling `commit()` leave the
-  model's working document and original name unchanged.
+  an injected `LINGTAI_TUI_DIR` last-good cache.
 - `tests/project_creation_test.cpp` — `project_creation` ctest. Exact project
   shape and stable de-duplicated setup policy, saved/template controlled
   manifest projection, legacy/provider-matched capability normalization,

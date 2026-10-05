@@ -161,9 +161,7 @@ target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
   selected/custom model id, slug-only persistence through `commit()`, switch-
   into-Codex default-only-when-unset parity with every other provider,
   unchanged non-Codex option shape, and `load()` seeding from an injected
-  `LINGTAI_TUI_DIR` last-good cache. The commit check verifies that editing a
-  nested document snapshot and calling `commit()` leave the model's working
-  document and original name unchanged.
+  `LINGTAI_TUI_DIR` last-good cache.
 - `tests/project_creation_test.cpp` — `project_creation`; project inputs,
   destination contents, exact custom Comment bytes, fixture-derived bounded
   Desktop adaptations for all three languages with injected clock/location,
