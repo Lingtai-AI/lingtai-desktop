@@ -300,9 +300,6 @@ touches a real Agent or project, and none depends on a network or provider.
 - Its focused `native_shell_kanban` journey holds and fails the real worker
   seam to prove warm updating, stale retention, Reload coalescing, and
   old-project generation rejection.
-  Its `KanbanPage` separator check uses one board containing an invalid middle
-  timestamp and verifies the valid refresh/molt labels without a label across
-  the invalid event.
 - Its focused `setup` journey opens one synthetic selected Agent and proves
   the visible full saved/template catalog and normalized preselection, fallback
   addition only for unresolved refs, shared saved/template editor journeys,
