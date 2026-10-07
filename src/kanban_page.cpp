@@ -655,14 +655,13 @@ void add_separator_label(
 void mark_boundary_times(
         std::map<int, std::vector<QString>> &out,
         const std::vector<QDateTime> &parsed,
-        const std::vector<char> &ok,
         const std::vector<std::int64_t> &times_ms,
         const QString &label) {
     for (const auto ms : times_ms) {
         const auto boundary = QDateTime::fromMSecsSinceEpoch(ms, QTimeZone::utc());
         for (int i = 0; i + 1 < static_cast<int>(parsed.size()); ++i) {
-            if (!ok[static_cast<std::size_t>(i)]
-                    || !ok[static_cast<std::size_t>(i + 1)]) {
+            if (!parsed[static_cast<std::size_t>(i)].isValid()
+                    || !parsed[static_cast<std::size_t>(i + 1)].isValid()) {
                 continue;
             }
             if (parsed[static_cast<std::size_t>(i)] >= boundary
@@ -686,7 +685,6 @@ std::map<int, std::vector<QString>> ledger_separator_labels(
         }
     }
     std::vector<QDateTime> parsed(entries.size());
-    std::vector<char> ok(entries.size(), 0);
     for (std::size_t i = 0; i < entries.size(); ++i) {
         auto ts = QDateTime::fromString(
             QString::fromStdString(entries[i].ts), Qt::ISODateWithMs);
@@ -696,11 +694,10 @@ std::map<int, std::vector<QString>> ledger_separator_labels(
         }
         if (!ts.isValid()) continue;
         parsed[i] = ts.toUTC();
-        ok[i] = 1;
     }
-    mark_boundary_times(out, parsed, ok, refresh_times_ms,
+    mark_boundary_times(out, parsed, refresh_times_ms,
         QStringLiteral("context rebuilt"));
-    mark_boundary_times(out, parsed, ok, molt_times_ms,
+    mark_boundary_times(out, parsed, molt_times_ms,
         QStringLiteral("molt"));
     return out;
 }
