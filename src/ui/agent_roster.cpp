@@ -1462,18 +1462,14 @@ int AgentRoster::unseen_count(const std::string &agent_key) const noexcept {
     return canvas_->unseen_count(agent_key);
 }
 
-void AgentRoster::update_state_label(const AgentSnapshot &snapshot) {
+void AgentRoster::set_rows(
+        const AgentSnapshot &snapshot,
+        const std::optional<std::filesystem::path> &selected_key) {
     const auto visible = visible_rows(snapshot);
     roster_state_->setText(snapshot.scan == AgentScanState::complete
             && !visible.empty()
         ? QStringLiteral("%1").arg(visible.size())
         : QString());
-}
-
-void AgentRoster::set_rows(
-        const AgentSnapshot &snapshot,
-        const std::optional<std::filesystem::path> &selected_key) {
-    update_state_label(snapshot);
 
     // The visible model is unchanged when every row's identity, facts, and
     // diagnostic match what is already shown. In that case only the selected
@@ -1481,7 +1477,6 @@ void AgentRoster::set_rows(
     // one-second projection refresh preserves scroll, focus, and row identity.
     // The comparison covers the visible set (the human pseudo-agent omitted),
     // so a human-only projection change never churns the real rows.
-    const auto visible = visible_rows(snapshot);
     const auto shown = visible_rows(visible_snapshot_);
     const auto rows_match = visible.size() == shown.size();
     auto model_unchanged = rows_match;

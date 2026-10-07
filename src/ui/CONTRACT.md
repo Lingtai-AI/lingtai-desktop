@@ -33,8 +33,10 @@ below is grounded in the widget source.
   text (`path_text`, `agent_roster.cpp:28-33`); the conversation surface
   touches the filesystem never. No `QFile`, no `QProcess`, no descriptor walk.
 - **No project/Agent truth derivation.** The roster never reruns
-  `project_agents`; it consumes the snapshot as given and compares only the
-  caller's fields to detect an unchanged model (`agent_roster.cpp:320-337`).
+  `project_agents`; it projects only the caller's snapshot into visible rows.
+  That incoming projection feeds the status label and row-change comparison;
+  the last accepted snapshot remains separate for change detection
+  (`agent_roster.cpp:1465`).
   `AgentRowButton`'s enabled/disabled state mirrors the already-projected
   `manifest_kind == valid` (`agent_roster.cpp:362`) — it is display enablement,
   not eligibility evaluation.
@@ -64,6 +66,10 @@ below is grounded in the widget source.
   `QTextEdit` accessibility (`conversation_surface.cpp:98-111`).
 - **Selection.** Rows are checkable and the checked state is caller-driven on
   every refresh (`agent_roster.cpp:360-361`, `298-309`).
+- **Roster status.** The status label uses incoming visible rows, omitting the
+  human pseudo-agent. The real shell projection displays a count of 14 for its
+  complete 14-Agent fixture (`agent_roster.cpp:1465`;
+  `tests/native_shell_test.cpp:7009`).
 - **Copy/selection (conversation).** The surface is `setReadOnly(true)` with
   undo disabled (`conversation_surface.cpp:100-101`) but stays a plain
   `QTextEdit`; `paintEvent` delegates to `QTextEdit::paintEvent` so native
