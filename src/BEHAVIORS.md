@@ -76,24 +76,40 @@ its code.
 
 - The palette is started once, before the window is built: if the system
   prefers dark (Qt `colorScheme()` dark/light, with a palette-lightness
-  fallback, `system_prefers_dark_palette`, `native_shell.cpp:981`), the
+  fallback, `system_prefers_dark_palette`, `native_shell.cpp:1091`), the
   shell applies Telegram's canonical night palette
-  (`apply_telegram_night_palette`, `native_shell.cpp:990`); otherwise the
+  (`apply_telegram_night_palette`, `native_shell.cpp:1100`); otherwise the
   default light palette is used. This honors the system appearance at
   startup.
-- The same system appearance is followed live: `QStyleHints`
-  `colorSchemeChanged` (with an `ApplicationPaletteChange` event fallback)
-  reruns `apply_system_palette` (`native_shell.cpp:1046`), which resets to
-  the default light palette and only then applies the canonical night
-  palette when the system prefers dark, then publishes that completed
-  `lib_ui` palette transaction exactly once. Palette subscribers therefore
-  rewrite stored inner control colors only after every token is final.
-  The shell also asks Agent Config, Agent Presets, and Preset Editor to
-  reapply their page-owned literal QSS/QPalette chrome; the conversation is
-  then re-rendered and the window and its descendant widgets repainted
-  (`refresh_system_palette`, `native_shell.cpp:2055`). No fixed user theme
-  or config is mutated — the active palette is always re-derived from the
-  current system appearance.
+- The same system appearance is followed live, but ownership is
+  `ShellHost`'s, not any individual window's: it alone installs the
+  `QStyleHints` `colorSchemeChanged` listener and an
+  `ApplicationPaletteChange` event-filter fallback once, in its constructor
+  (`shell_host.cpp:66-80`), and coalesces every burst before a visible
+  mutation (`schedule_appearance_refresh`, `shell_host.cpp:322`). Applying
+  that transaction (`apply_appearance_refresh`, `shell_host.cpp:336`) freezes
+  every currently visible, update-enabled window
+  (`ScopedWindowUpdateFreeze`, `shell_host.cpp:31`); it then applies the
+  process palette exactly once through `NativeShell::apply_process_palette`
+  (`native_shell.cpp:1239`), which reruns `apply_system_palette`
+  (`native_shell.cpp:1156`): this resets to the default light palette and
+  only then applies the canonical night palette when the system prefers
+  dark, then publishes that completed `lib_ui` palette transaction exactly
+  once. Palette subscribers therefore rewrite stored inner control colors
+  only after every token is final. It then runs `refresh_appearance_chrome`
+  (`native_shell.cpp:2205`) synchronously for every hosted shell — Agent
+  Config, Agent Presets, and Preset Editor reapply their page-owned literal
+  QSS/QPalette chrome, and the selected-Agent conversation recolors its
+  existing semantic runs in place (`ConversationSurface::refresh_chrome`,
+  `conversation_surface.cpp:2017`) without clearing or rebuilding the
+  `QTextDocument` or conversation history, and applies each native window
+  background last (`refresh_native_appearance_background`,
+  `native_shell.cpp:2248`). Releasing the freeze re-enables updates and
+  requests one repaint per frozen window. A shell spawned by the host
+  disables its own process listener; a standalone `NativeShell` keeps the
+  complete self-owned fallback (`refresh_system_palette`,
+  `native_shell.cpp:2189`). No fixed user theme or config is mutated — the
+  active palette is always re-derived from the current system appearance.
 - The Telegram visual-oracle boundary: every painted token (list field,
   hover, selected rows, bubbles, button states, separators) comes from the
   shared `lib_ui` palette (`st::windowBgOver`, `st::dialogsBgActive`,

@@ -75,7 +75,7 @@ public:
         const std::vector<ConversationSessionEntry> &session_events);
 
     // Re-apply theme-dependent char formats after palette changes.
-    void refresh_chrome();
+    void refresh_chrome(bool immediate_recolor = false);
 
     // One plain centered state for the selection/no-route/empty cases.
     void set_plain_state(const QString &text);
@@ -175,6 +175,7 @@ private:
     // schedule_rebuild_document() is never mistaken for an already-pending
     // recolor and dropped.
     bool chrome_recolor_scheduled_ = false;
+    std::uint64_t chrome_recolor_generation_ = 0;
     // Cancels a deferred bottom pin when the human takes wheel ownership or a
     // rebuild restores a non-bottom position before the queued pass runs.
     int scroll_pin_generation_ = 0;

@@ -57,6 +57,7 @@ namespace lingtai::desktop {
 
 class KanbanPage;
 class AgentDetailView;
+class ShellHost;
 struct DirectMailPublishedMessage;
 
 enum class ProjectOpenDisposition {
@@ -102,7 +103,8 @@ public:
 
     explicit NativeShell(
         ConversationUnreadSession &unread_session,
-        RuntimeOptions runtime_options = {});
+        RuntimeOptions runtime_options = {},
+        bool owns_process_appearance = true);
     ~NativeShell();
 
     NativeShell(const NativeShell &) = delete;
@@ -227,9 +229,14 @@ private:
         std::uint64_t generation,
         std::vector<ConversationSessionEntry> entries);
     void handle_conversation_verbose_changed(ConversationVerboseLevel level);
-    // Reapplies the generated light or canonical Telegram Night palette after
-    // the host appearance changes, then refreshes palette-backed descendants.
+    friend class ShellHost;
+    static void apply_process_palette();
+
+    // Standalone-shell fallback. ShellHost owns the process transaction in the
+    // application and calls the two synchronous per-window phases directly.
     void refresh_system_palette();
+    void refresh_appearance_chrome();
+    void refresh_native_appearance_background();
     void render_agent_preset_summary();
     void render_kanban();
     // Starts or reuses an off-UI-thread board read. When a warm cache exists
@@ -482,10 +489,10 @@ private:
     std::uint64_t receipts_history_revision_ = 0;
     std::uint64_t seen_injected_revision_ = 0;
 
-    // Appearance/palette storms re-enter through ApplicationPaletteChange while
-    // setPalette runs; never nest a second refresh or a sync conversation rebuild.
+    // Standalone palette changes can re-enter through ApplicationPaletteChange;
+    // hosted shells leave process appearance ownership to ShellHost.
+    bool owns_process_appearance_ = true;
     bool refreshing_system_palette_ = false;
-    std::uint64_t palette_refresh_generation_ = 0;
 };
 
 } // namespace lingtai::desktop
