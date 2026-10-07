@@ -85,12 +85,23 @@ below is grounded in the widget source.
   document change disarms the action while preserving native text selection.
   Message text is inserted literally and never interpreted as markup
   (`conversation_surface.cpp:201-210`).
-- **Scroll.** An identical conversation refresh is a no-op
-  (`conversation_surface.cpp:147-157`); a changed refresh follows the bottom
-  only if the human was already there and no phase-bearing wheel gesture or
-  momentum is active, else preserves the prior position. Every viewport wheel
-  event first cancels a queued delayed pin, including a zero/tiny delta that
-  leaves the integer scrollbar value unchanged. `ScrollEnd` releases gesture
-  ownership without jumping, and the event then continues through native
-  `QTextEdit` handling. An unchanged roster refresh preserves scroll by not
-  rebuilding the row tree.
+- **Conversation refresh/history.** `set_conversation` returns without
+  rebuilding when core content, session events, and rendered verbosity match
+  (`conversation_surface.cpp:1762-1772`). On rebuild, the history window resets
+  only when core content changed and the refresh is not same-identity and
+  nonshrinking (`conversation_surface.cpp:1774-1807`): session-only and
+  verbosity-only rebuilds, plus same-identity nonshrinking refreshes, retain
+  it; identity changes and same-identity shrinks reset it. Reapply the
+  conversation after `cycle_verbose_level()` to render the new level; the
+  cycle itself changes the level and emits its signal
+  (`conversation_surface.cpp:2010-2015`).
+- **Scroll.** A document rebuild follows the bottom only if the human was
+  already there and no phase-bearing wheel gesture or momentum is active; else
+  it preserves the prior position. Every viewport wheel event first cancels a
+  queued delayed pin, including a zero/tiny delta that leaves the integer
+  scrollbar value unchanged. `ScrollEnd` releases gesture ownership without
+  jumping, and the event then continues through native `QTextEdit` handling.
+  The focused surface test covers queued-pin cancellation, gesture ownership,
+  bottom-follow, manual-position preservation, and native wheel delegation.
+  An unchanged roster
+  refresh preserves scroll by not rebuilding the row tree.

@@ -1759,27 +1759,18 @@ bool ConversationSurface::same_session_events(
     return true;
 }
 
-bool ConversationSurface::same_content(
-        const std::vector<DirectConversationMessage> &messages,
-        const std::unordered_map<std::string, MessageReactions> &reactions,
-        const std::vector<ConversationSessionEntry> &session_events)
-        const {
-    return same_core_content(messages, reactions)
-        && same_session_events(session_events);
-}
-
 void ConversationSurface::set_conversation(
         const QString &them,
         const std::vector<DirectConversationMessage> &messages,
         const std::unordered_map<std::string, MessageReactions> &reactions,
         const std::vector<ConversationSessionEntry> &session_events) {
-    if (them == them_ && same_content(messages, reactions, session_events)
+    const auto core_unchanged = them == them_
+        && same_core_content(messages, reactions);
+    if (core_unchanged && same_session_events(session_events)
             && verbose_level_ == last_rendered_verbose_level_) {
         return;
     }
     disarm_attachment_action();
-    const auto core_unchanged = them == them_
-        && same_core_content(messages, reactions);
     const auto same_conversation_nonshrinking = !last_messages_.empty()
         && them == them_
         && messages.size() >= last_messages_.size();

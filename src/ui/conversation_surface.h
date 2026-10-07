@@ -137,11 +137,6 @@ private:
         const std::unordered_map<std::string, MessageReactions> &reactions) const;
     [[nodiscard]] bool same_session_events(
         const std::vector<ConversationSessionEntry> &session_events) const;
-    [[nodiscard]] bool same_content(
-        const std::vector<DirectConversationMessage> &messages,
-        const std::unordered_map<std::string, MessageReactions> &reactions,
-        const std::vector<ConversationSessionEntry> &session_events) const;
-
     // The render-time history window reveals the cached rows in fixed pages:
     // initially only the chronological tail is materialized and each reveal
     // brings in one more page of older rows.
