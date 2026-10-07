@@ -261,7 +261,7 @@ struct ParsedStatus { bool valid = false; AgentRuntimeFacts facts; };
     return std::string_view(bytes).substr(first, last - first);
 }
 
-enum class DecimalParseState { valid, invalid, nonfinite };
+enum class DecimalParseState { valid, invalid };
 struct ParsedDecimal { DecimalParseState state; double value = 0.0; };
 
 [[nodiscard]] bool ascii_digit(char value) {
@@ -271,18 +271,6 @@ struct ParsedDecimal { DecimalParseState state; double value = 0.0; };
 // A minimal, locale-independent decimal/exponent parser: exactly the current
 // heartbeat number, not a general locale-aware or exotic-literal reader.
 [[nodiscard]] ParsedDecimal parse_decimal(std::string_view token) {
-    auto lower = std::string(token);
-    std::ranges::transform(lower, lower.begin(), [](char value) {
-        return value >= 'A' && value <= 'Z'
-            ? static_cast<char>(value + ('a' - 'A')) : value;
-    });
-    if (lower == "nan" || lower == "+nan" || lower == "-nan"
-        || lower == "inf" || lower == "+inf" || lower == "-inf"
-        || lower == "infinity" || lower == "+infinity"
-        || lower == "-infinity") {
-        return {DecimalParseState::nonfinite, 0.0};
-    }
-
     auto index = std::size_t{0};
     if (index < token.size() && (token[index] == '+' || token[index] == '-')) {
         ++index;
