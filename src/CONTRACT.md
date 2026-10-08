@@ -418,3 +418,14 @@ Behavior-level anchors, not a second contract suite, live in
 - The contract is normative: if implementation and this contract disagree,
   treat the implementation as defective unless an authorized change updates
   both together.
+
+## Codex credit opt-in
+
+The preset editor displays **Use paid Codex credits** only for the native
+single-account Codex provider. Missing, false, or malformed values display Off.
+Choosing On persists JSON boolean `true` in `manifest.llm.codex_allow_credits`;
+Off omits it. Switching to another provider clears the choice, so switching
+back requires a fresh opt-in. Loading an explicitly enabled saved preset
+preserves its choice. This editor does not probe or change billing: the kernel
+uses the option to admit requests after included usage is exhausted, and
+OpenAI decides charges. The same field is shared with the terminal editor.

@@ -712,6 +712,21 @@ void PresetEditorModel::set_service_tier(const QString &value) {
     set_llm_string(QStringLiteral("service_tier"), QStringLiteral("fast"));
 }
 
+bool PresetEditorModel::codex_allow_credits() const {
+    return is_codex_provider()
+        && llm().value(QLatin1String("codex_allow_credits")).toBool(false);
+}
+
+void PresetEditorModel::set_codex_allow_credits(bool allow) {
+    auto object = llm();
+    if (is_codex_provider() && allow) {
+        object.insert(QStringLiteral("codex_allow_credits"), true);
+    } else {
+        object.remove(QStringLiteral("codex_allow_credits"));
+    }
+    put_llm(object);
+}
+
 QString PresetEditorModel::thinking() const {
     if (is_codex_thinking_provider()) {
         const auto value = llm_string(QStringLiteral("thinking"));
@@ -1090,6 +1105,10 @@ void PresetEditorModel::normalize_for_commit(QJsonObject &root) const {
     auto llm_object = manifest.value(QLatin1String("llm")).toObject();
     const auto provider_name = json_string(llm_object.value(QLatin1String("provider")));
     const auto family = credential_family(provider_name);
+    if (family != QLatin1String("codex_single")
+            || !llm_object.value(QLatin1String("codex_allow_credits")).toBool(false)) {
+        llm_object.remove(QStringLiteral("codex_allow_credits"));
+    }
     if (family != QLatin1String("codex_single")
             || json_string(llm_object.value(QLatin1String("service_tier")))
                 != QLatin1String("fast")) {

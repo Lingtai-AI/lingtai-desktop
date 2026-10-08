@@ -83,6 +83,9 @@ public:
     [[nodiscard]] QString service_tier() const;
     void set_service_tier(const QString &tier);
 
+    [[nodiscard]] bool codex_allow_credits() const;
+    void set_codex_allow_credits(bool allow);
+
     [[nodiscard]] QString thinking() const;
     void set_thinking(const QString &effort);
 

@@ -115,3 +115,8 @@ Add `objectName` when introducing:
 - dynamic lists whose items tests must target
 
 Skip static decorative labels unless tests must assert their text.
+
+| Object name | Purpose |
+| --- | --- |
+| `lingtai_setup_edit_preset_codex_credits` | Codex-only paid-credit Off/On choices |
+| `lingtai_setup_edit_preset_codex_credits_note` | Included-usage and billing explanation |
