@@ -67,9 +67,8 @@ below is grounded in the widget source.
 - **Selection.** Rows are checkable and the checked state is caller-driven on
   every refresh (`agent_roster.cpp:360-361`, `298-309`).
 - **Roster status.** The status label uses incoming visible rows, omitting the
-  human pseudo-agent. The real shell projection displays a count of 14 for its
-  complete 14-Agent fixture (`agent_roster.cpp:1465`;
-  `tests/native_shell_test.cpp:7009`).
+  human pseudo-agent (`agent_roster.cpp:1465`). The former 14-Agent synthetic
+  shell fixture is retired; no current automated roster-count proof is claimed.
 - **Copy/selection (conversation).** The surface is `setReadOnly(true)` with
   undo disabled (`conversation_surface.cpp:100-101`) but stays a plain
   `QTextEdit`; `paintEvent` delegates to `QTextEdit::paintEvent` so native
@@ -107,7 +106,8 @@ below is grounded in the widget source.
   queued delayed pin, including a zero/tiny delta that leaves the integer
   scrollbar value unchanged. `ScrollEnd` releases gesture ownership without
   jumping, and the event then continues through native `QTextEdit` handling.
-  The focused surface test covers queued-pin cancellation, gesture ownership,
-  bottom-follow, manual-position preservation, and native wheel delegation.
+  The focused surface test has been retired; queued-pin cancellation, gesture
+  ownership, bottom-follow, manual-position preservation, and native wheel
+  delegation no longer have that automated proof.
   An unchanged roster
   refresh preserves scroll by not rebuilding the row tree.

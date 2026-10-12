@@ -1,36 +1,17 @@
 # `tests/` contract
 
-This is the contract for the owned `tests/` surface: the normative evidence
-rules an agent must follow before adding, changing, or deleting any test
-here. It complements the repository map
-[`../ANATOMY.md`](../ANATOMY.md) (structure), the structural inventory
-[`tests/ANATOMY.md`](ANATOMY.md), the current proven behavior
-[`tests/BEHAVIORS.md`](BEHAVIORS.md), and the source ownership rules
-[`../src/CONTRACT.md`](../src/CONTRACT.md). Anatomy answers what runs here;
-this file answers what evidence is worth keeping and how new behavior must
-prove itself.
+This file governs the remaining automated test surface. Exact target/command
+registration is in [`ANATOMY.md`](ANATOMY.md), `CMakeLists.txt`, and
+[`../AGENTS.md`](../AGENTS.md). Production contracts in
+[`../src/CONTRACT.md`](../src/CONTRACT.md) are unchanged by test retirement.
 
-## Two kinds of contract
-
-`tests/` holds two kinds of proof with two different lifecycles, and they
-must never be confused:
-
-- **Repository/static contracts** — `tests/test_repository_contract.py`,
-  `tests/test_desktop_status_item_contract.py`,
-  `tests/test_app_archive.py`, `tests/test_macos_packaging.py`,
-  `tests/test_desktop_user_cli.py`, `tests/test_desktop_support_update.py`, and
-  the compile-time guards and `static_assert`s inside the unit tests. These
-  pin provenance, enforce build edges (a Qt-free consumer stays Qt-free), and
-  pin `noexcept`/exact return types. They protect the shape of the build and
-  the API, not user behavior; they change only when the pinned inputs or the
-  public API change.
-- **User behavior** — everything the domain unit tests, the real-Qt
-  `native_shell_behavior`, and the process smoke actually exercise: what a
-  reader projects, what a writer writes, what the shell composes and shows.
-  A behavioral change to the product must land with its corresponding proof
-  in the same change; a repository contract does not follow that rule.
-  `slash_command_test.cpp` is the pure classification proof: it pins the raw
-  leading-slash and first-ASCII-space boundary without asserting later dispatch.
+The remaining wire tests use actual filesystem operations under disposable
+injected roots. The process smoke launches the built App, not a fake UI.
+The repository gate protects pinned inputs and tracked-artifact hygiene.
+The separately invoked `agent_lifecycle_real_smoke.cpp` is real-kernel manual
+acceptance: it requires explicit operator authorization, an existing configured
+runtime, and disposable HOME/project paths. It must not become an unattended
+ctest or a claim of provider/UI acceptance.
 
 ## Evidence rules
 
@@ -55,17 +36,12 @@ must never be confused:
    row, no write, and no read-through. This rule governs that family of
    tests, not every test in `tests/`: pure-seam tests (descriptor
    primitives, containment) bind to their own exact fixture shapes instead.
-   The `direct_conversation_route_test` deliberately uses distinct fixture
-   vocabulary (`operator-1`/`worker-dir`, distinct addresses and `agent_id`s)
-   so that identity can never be assumed.
-   (`direct_conversation_route_test.cpp:41-47`.)
 4. **Fixtures owned under temporary/injected roots.** Every domain test takes
    its sandbox from ctest, rebuilds a synthetic tree inside it, and removes
    it at the end. Never point a test at a real `.lingtai` project, a real
    Agent, a home-directory path, or any developer-owned directory. The
-   Qt-aware tests use the CMake-created `native-shell-no-write-fixture` as
-   their working directory and the smoke executable as a subprocess
-   argument; both are injected roots, never real user data.
+   process smoke uses the built App executable; wire tests receive injected
+   fixture roots. Neither is proof of an OS-level sandbox.
    Clipboard-sensitive macOS tests must not write the Cocoa host clipboard.
    If a full shell cannot run with an offscreen platform clipboard, carry the
    MIME source deterministically and drive the real editor input-method path,
@@ -74,7 +50,7 @@ must never be confused:
    temporarily replace a test window control's target/action with a harmless
    counter; it must restore the original target/action before teardown and
    must never operate the installed LingTai App or another process.
-5. **No real Agent/project mutation.** A test must never start a real kernel,
+5. **No real Agent/project mutation in unattended tests.** A ctest must never start a real kernel,
    open a real Agent's mailbox, sleep a real Agent, or mutate a real
    registry/settings file. All reads and writes happen on fixture trees built
    and torn down by the test itself, and the exact byte/type image
@@ -83,19 +59,18 @@ must never be confused:
    writes stay under the injected fixture trees by dependency/path
    injection; the snapshot is not an OS/process sandbox and makes no claim
    about arbitrary unobserved outside paths.
-6. **No network/provider dependence.** A test must pass offline, with no
+6. **No network/provider dependence in unattended tests.** A ctest must pass offline, with no
    provider, model, API key, or live service. Every source is a fixture file;
    the only "live" fact allowed is wall-clock time where the production
    contract itself is time-relative (heartbeat liveness, sleep observation),
    and even there the fixtures are pinned clearly on either side of the
-   threshold with margins (`agent_projection_test.cpp:267-273`).
+   threshold with margins.
 7. **No redundant matrix/implementation-shape assertions.** Do not assert the
    implementation's shape (internal field names, parse order, helper
    signatures) as if it were a contract, and do not add a second test that
-   re-proves a boundary an existing test already proves. One row matrix per
-   projection (`test_role_matrix`, `test_presence_matrix`,
-   `test_status_matrix`) is the retained ceiling; a further matrix that would
-   not catch a realistic bug is redundant. A test that asserts only
+   re-proves a boundary an existing test already proves. The former role,
+   presence, and status matrices are retired, not a template for rebuilding
+   parallel suites; a matrix that cannot catch a realistic bug is redundant. A test that asserts only
    implementation shape will break on a legitimate refactor and should be
    deleted, not fixed.
 8. **Delete tests that cannot catch a realistic important bug.** Any test
@@ -106,210 +81,24 @@ must never be confused:
    target). Prefer deleting such a test to maintaining it; prefer not adding
    it in the first place.
 
-## Contract tests
+## Current registration and retirement
 
-Each owned library target has exactly one focused CMake/ctest contract; the
-target names, fixtures, and `-Wall -Wextra -Werror -pedantic` flags are in
-[`tests/ANATOMY.md`](ANATOMY.md) and `CMakeLists.txt`:
+Only `direct_conversation_history`, `direct_mail_publisher`, and `native_shell`
+are registered with ctest. The repository gate and real-kernel lifecycle target
+are listed in `ANATOMY.md`. A production library need not retain a separate
+implementation-mirroring suite merely to fill an inventory row.
 
-- `tests/posix_descriptor_primitives_test.cpp` — `posix_descriptor_primitives`.
-- `tests/project_attachment_test.cpp` — `project_attachment`.
-- `tests/attachment_selection_test.cpp` — `attachment_selection`.
-- `tests/workspace_selection_test.cpp` — `workspace_selection`.
-- `tests/conversation_unread_test.cpp` — `conversation_unread`; pure
-  process-session first-observation, monotonic/stale-observation, membership,
-  duplicate-Project, reopen, cursor-ordering, and saturating-total evidence.
-- `tests/agent_projection_test.cpp` — `agent_projection`.
-- `tests/direct_conversation_route_test.cpp` — `direct_conversation_route`.
-- `tests/direct_conversation_history_test.cpp` — `direct_conversation_history`.
-- `tests/direct_conversation_attachment_actions_test.cpp` —
-  `direct_conversation_attachment_actions`; fresh current-entry-relative
-  no-follow identity revalidation and fail-closed mutation matrix.
-- `tests/direct_mail_publisher_test.cpp` — `direct_mail_publisher`.
-- `tests/agent_preset_summary_test.cpp` — `agent_preset_summary`.
-- `tests/agent_setup_store_test.cpp` — `agent_setup_store`; bounded load,
-  owned-field preservation, TUI preset/peer-orchestrator parity, external
-  configured-env merge, and atomic rollback/no-mutation failure evidence.
-- `tests/preset_catalog_test.cpp` — `preset_catalog`; injected global-root
-  saved/template discovery, validation/skips, canonical ordering, exact facts,
-  missing-directory behavior, typed scan failure, normalization, and no-write.
-- `tests/codex_model_catalog_test.cpp` — `codex_model_catalog`; the public
-  Codex model-picker catalog helper: exact case-sensitive `GPT`-prefix
-  filtering (by display_name alone, proven independent of slug shape), slug
-  dedup, verbatim trailing-padding `display_name` preservation, fail-open-
-  to-empty on malformed/empty/non-array-`models` bodies, a direct guard test
-  that invalid/empty writes are rejected with the cache left byte-identical,
-  last-good cache round-trip and corrupted-cache recovery under an injected
-  root, cache-over-fallback seed precedence, and — against a real local
-  loopback `QTcpServer` and a real Qt event loop, never a live endpoint —
-  fetch success, HTTP-error/malformed/empty/oversize fail-open, timeout and
-  recovery, destroy-while-connected safety, and the regression proving a
-  superseded request's stale timeout can never abort the request that
-  superseded it.
-- `tests/preset_editor_page_test.cpp` — `preset_editor_page`; the widget
-  itself, never shown (a hidden container ancestor stands in for a
-  backgrounded setup page): an in-progress custom model-id draft and other
-  edited fields survive a background catalog refresh, Save persists the
-  typed slug/custom id never a label, a relabeling refresh keeps the same
-  slug selected, and a non-Codex provider's model list is unaffected by a
-  Codex catalog refresh.
-- `tests/preset_editor_model_test.cpp` — `preset_editor_model`; Codex/Codex-
-  pool model-option composition (current-plus-suggestions-plus-explicit-
-  custom row, no duplicate slug, correct label selection), proof that a
-  simulated background suggestion refresh changes only the suggestion list
-  and never the working document, name/summary edits, or the already-
-  selected/custom model id, slug-only persistence through `commit()`, switch-
-  into-Codex default-only-when-unset parity with every other provider,
-  unchanged non-Codex option shape, and `load()` seeding from an injected
-  `LINGTAI_TUI_DIR` last-good cache.
-- `tests/project_creation_test.cpp` — `project_creation`; project inputs,
-  destination contents, exact custom Comment bytes, fixture-derived bounded
-  Desktop adaptations for all three languages with injected clock/location,
-  rendered-output rejection of TUI-only prose and commands outside the public
-  Desktop slash registry, controlled saved/template manifest projection,
-  legacy/provider capability normalization, stable preset-policy de-duplication,
-  project-root `.recipe`/`.tui-asset` absence, no-global-mutation snapshots,
-  unsafe links, marker-present/marker-removed/
-  publish-refused rollback, runner destruction, and expected output all live
-  below injected fixture roots.
-- `tests/test_project_creation_source_contract.py` — static assertion that the
-  production creation owner uses descriptor primitives, contains no path
-  recursive `remove_all` call, network/global guidance boundary, or impossible
-  Desktop guidance, and that all seven pinned adaptive fixtures retain their
-  recorded SHA-256 values.
-- `tests/agent_sleep_test.cpp` — `agent_sleep`.
-- `tests/agent_lifecycle_test.cpp` — `agent_lifecycle`; the complete
-  Desktop-owned lifecycle component contract with injected process, launcher,
-  and clock adapters.
-- `tests/kanban_model_test.cpp` — `kanban_model`; complete-board parity plus
-  deterministic payload/cursor/daemon incrementality counters and rebuild
-  generation-race/capture-incapability liveness seams.
-- `tests/native_shell_test.cpp` — split `native_shell_<journey>` tests (links the shell +
-  `lib_ui` + `crl_integration.cpp`; the real-Qt layer), including the focused
-  synthetic existing-Agent setup rerun, no-TUI New Project, literal bare/home-
-  child and terminal-separator destinations committed through real destination
-  editors and Review Create buttons, exact fake-HOME normalization, visible
-  draft-preserving creation rejection/retry (without claiming native picker,
-  literal system Command-V, or packaged-App submission),
-  `native_shell_paste`, and `native_shell_lifecycle` journeys. Lifecycle UI
-  coverage includes nonblocking delivery and stale-generation suppression. The
-  paste journey delivers logical text through a real MIME-carrying Qt event,
-  then proves exact Unicode editor state, emoji input-method formatting,
-  ordinary Send, and two-shell runtime sharing without accessing `QClipboard`.
-  Its `native_shell_unread` journey owns shared-session multi-Project and
-  duplicate-window aggregation, active-visible-non-minimized read eligibility,
-  membership/lifecycle filtering, rebind/close/reopen, and coherent roster plus
-  tooltip projection. Its status-item journeys own the one-per-process/menu/
-  icon-renderer/show/quit/final-window-lifetime contract without requiring or
-  publishing a real offscreen system tray item.
-- The `native_shell_menu` journey owns the production composer context-menu
-  proof. It must preserve the immediate standard menu and functional edit
-  actions without spelling/Search rows, async deferral, platform callbacks, or
-  new popup dismissal/focus/grab behavior.
-- `tests/mac_popup_dismissal_bridge_test.mm` — `mac_popup_dismissal`; the
-  macOS-only semantic owner for native recipient-window classification,
-  synchronous force-hide/click-through ordering, non-consumption, event-type
-  boundaries, popup-tree lifetime, and one process bridge. Direct synthesized
-  Qt mouse events are retained only as a boundary guard proving they do not
-  traverse the native filter.
-- `tests/conversation_surface_typography_test.cpp` —
-  `conversation_surface_typography` (the dedicated widget/document typography
-  contract on the real `ConversationSurface`).
-- `tests/conversation_surface_scroll_test.cpp` —
-  `conversation_surface_scroll` (the dedicated real-Qt viewport-wheel and
-  gesture-aware bottom-follow contract on `ConversationSurface`, without the
-  shell or composer lifecycle).
-- `tests/test_native_shell.py` — `native_shell` (process persistence and
-  smoke-order via the built smoke executable).
-- `tests/test_repository_contract.py` — manual `python3 -m unittest
-  tests.test_repository_contract`; the canonical product-version,
-  pinned-provenance, and tracked-artifact repository contract.
-- `tests/test_macos_packaging.py` — manual `python3 -m unittest
-  tests.test_macos_packaging`; the offline package-production and independent
-  per-slice verification boundary contract, including publication races and
-  rollback for the optional DMG experiment.
-- `tests/test_app_archive.py` — manual `python3 -m unittest
-  tests.test_app_archive`; the primary portable-App producer and independent
-  verifier contract, including exact App/manifest facts, archive-declared
-  regular/directory/symlink modes independent of caller umask, internal links,
-  streaming digests, fail-closed mode restoration, incremental hostile-member/
-  resource rejection, bounded cleanup, and no-clobber publication races.
-- `tests/test_desktop_user_cli.py` — manual `python3 -m unittest
-  tests.test_desktop_user_cli`; the deterministic fake-HOME contract for fixed
-  official GitHub App release discovery/download, cached confirmed offers, and
-  the App archive transaction, plus canonical support manifest/state/pending
-  models, final fresh-install generation layout, stable pre-import launcher, and
-  local N-to-N+1 transaction. The support proof includes hostile file kinds,
-  exact sets/modes/hashes/links, semantic last-good/high-water/failed hash closure,
-  prepublication anti-rollback/failed-target/argv policy, exact-byte import, and
-  enforced isolated no-write/network/process/native/frame/early-exit self-test.
-  Its wrapper-owned terminal marker cannot be forged by inherited `os.write` or
-  `posix.write`, candidate `__main__` replacement, partial/extra bytes, or descriptor
-  close, while clean exact `True`, exception, timeout, and sticky denied-event
-  dispositions remain explicit. Focused matrices cover ordinary and journaled
-  fresh-install boundaries; payload/manifest/generation/current TOCTOU wedges;
-  canonical absolute-launcher staging for bare, alternate, default, retry, and
-  argument-looking argv0 forms; exact stable-launcher replay and executor/hash
-  identity; command substitution rejection; mutation-independent
-  last-good recovery; authenticated rollback at each durable boundary; exact
-  one-shot explicit retry; numbered tag/version coherence; App receipt owner/type/
-  link/mode/size/canonical-byte validation; post-current exact-pointer restoration;
-  concurrent App-current replacement; support-independent App-only uninstall,
-  doctor, and full support preflight. Injected transport/platform/
-  clock/TTY/prompt boundaries keep every response and App action offline and
-  deterministic; explicit App pairs and the injected local support transaction
-  remain covered. App-specific legacy matrices use the explicit one-shot skip
-  seam so their transport assertions stay scoped to the App plane.
-- `tests/test_desktop_support_update.py` — manual `python3 -m unittest
-  tests.test_desktop_support_update`; the dedicated fake-HOME/fake-transport
-  Phase 3 owner. It proves latest/exact official support discovery, exact stable
-  metadata/repository/tag/manifest/two-payload route and byte binding, hostile
-  case/path/duplicate/redirect/JSON/length/SHA refusal, complete-validation-before-
-  publication, independent exact cache/cadence/decline and restoration, including
-  post-publication-read and post-final-check substitution on both prior-present and
-  prior-absent branches. The selected threat contract calls this a cooperative private transaction namespace; arbitrary uncooperative same-UID replacement inside that namespace is outside the supported threat model. Canonical is the canonical arbitrary-racer boundary, and preserved canonical-racer diagnostics are not ordinary updater-owned residue.
-  Tests bind prior bytes and identity to one descriptor read, prove post-`mkdtemp`
-  chmod failure and both stage readback failures clean the private namespace, and
-  ensure initially absent publication never depends on unlinking a flat
-  support-root stage. The final exchange is the publication linearization point;
-  its immediately following support-directory fsync is the transaction
-  commit/durability boundary. Pre-commit fsync failure attempts exact prior-state
-  recovery while preserving intervening racers, whereas post-commit cleanup fsync
-  failure leaves the new canonical cache and emits one bounded committed
-  diagnostic. Mutation after the exchange is later external canonical mutation
-  for snapshot semantics even while failure before commit triggers recovery. A
-  simultaneous primary error remains primary even when cleanup also fails. The
-  tests bind the real final atomic exchange as the publication operation, prove
-  that an exact retained prior inode is restored without
-  deleting/overwriting the racer, prove that an initially absent-cache racer is
-  atomically returned to canonical, and force canonical to disappear after
-  restoration identity capture so bounded exclusive-link recovery restores the
-  prior. They assert exact inode/bytes/mode/link counts, displaced-racer leaves,
-  and complete staged-residue cleanup, all
-  default-No/n/no/invalid/y/yes plus non-TTY/offline behavior, failed-target
-  no-auto-retry, explicit support-before-App reporting, local-pair bypass,
-  deterministic release production, and full official stage→pending→canonical
-  reexec→bootstrap commit with App identity unchanged.
-  Publication/refusal tests assert complete before/after trees, and support-only
-  tests additionally retain App versions/receipts/current/bundle bytes and inode
-  identities exactly. Evidence is valid only when shared-parent metadata,
-  racer-owned leaves, outside trees, both managed planes, and the launcher remain
-  byte/type/mode/identity identical except for the authorized transaction.
+Retirement deliberately gives up broad domain/failure matrices, hidden-widget
+and synthetic-shell interactions, visual snapshots, native popup event tables,
+static-source shape assertions, and injected installer/package transactions.
+Do not claim those proofs from the remaining smoke tests. Existing `BEHAVIORS.md`
+files contain historical proof anchors, not current registration or new
+validation receipts.
 
 ## Maintenance
 
-- Keep the ctest names, the fixture paths, and this inventory aligned with
-  `CMakeLists.txt`; a test whose ctest name or fixture moved out of sync is a
-  contract violation even if it still passes.
-- A new owned behavior must land as: one authentic RED, the implementation,
-  and one final directly corresponding test bound to its exact selected
-  candidate (for selected-Agent/project behavior) under an injected fixture
-  root — matching the standing UI-phase rule. No test may be added that
-  duplicates an existing proof layer or that would not catch a realistic
-  important bug.
-- Repository/static contracts change only with the pinned inputs or the
-  public API they guard; user-behavior tests change with the behavior they
-  prove, in the same commit.
-- The contract is normative: if a test and this contract disagree about what
-  is provable (e.g. a test claiming real terminal bytes), treat the test as
-  defective unless an authorized change updates both together.
+Keep registration, fixture argv, labels, and commands aligned with CMake.
+Retained tests must continue to fail loudly on failed semantic assertions.
+New behavior still needs authentic focused evidence; retiring low-signal tests
+is not a blanket claim that tests are pointless. No mock may stand in for a
+required native/manual acceptance result.

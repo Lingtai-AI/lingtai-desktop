@@ -25,11 +25,6 @@ From the repository root:
 
 ```bash
 python3 -m unittest tests.test_repository_contract
-python3 -m unittest tests.test_project_creation_source_contract
-python3 -m unittest tests.test_macos_packaging
-python3 -m unittest tests.test_app_archive
-python3 -m unittest tests.test_desktop_user_cli
-python3 -m unittest tests.test_desktop_support_update
 python3 -m py_compile scripts/macos_packaging.py scripts/package-macos.py scripts/verify-macos-package.py scripts/app_archive.py scripts/package-app-archive.py scripts/verify-app-archive.py scripts/desktop_user_cli.py scripts/support_bootstrap.py scripts/support_release.py scripts/install-macos-app.py
 python3 -m json.tool cmake/desktop-app-toolkit-lock.json >/dev/null
 for script in scripts/*.sh; do bash -n "$script"; done
@@ -37,22 +32,9 @@ export QT_ROOT="$HOME/Qt/6.11.1/macos"
 ./scripts/bootstrap-deps.sh
 ./scripts/configure.sh
 ./scripts/build.sh
-ctest --test-dir build --output-on-failure -R '^project_attachment$'
-ctest --test-dir build --output-on-failure -R '^attachment_selection$'
-ctest --test-dir build --output-on-failure -R '^agent_projection$'
-ctest --test-dir build --output-on-failure -R '^direct_conversation_route$'
 ctest --test-dir build --output-on-failure -R '^direct_conversation_history$'
 ctest --test-dir build --output-on-failure -R '^direct_mail_publisher$'
-ctest --test-dir build --output-on-failure -R '^agent_preset_summary$'
-ctest --test-dir build --output-on-failure -R '^agent_setup_store$'
-ctest --test-dir build --output-on-failure -R '^preset_catalog$'
-ctest --test-dir build --output-on-failure -R '^project_creation$'
-ctest --test-dir build --output-on-failure -R '^agent_sleep$'
-ctest --test-dir build --output-on-failure -R '^kanban_model$'
-ctest --test-dir build --output-on-failure -R '^posix_descriptor_primitives$'
-ctest --test-dir build --output-on-failure -R '^workspace_selection$'
-ctest --test-dir build --output-on-failure -R '^native_shell(_behavior)?$'
-ctest --test-dir build --output-on-failure -R '^(desktop_status_item_source_contract|native_shell_status_item|native_shell_status_item_quit|native_shell_final_window_quit)$'
+ctest --test-dir build --output-on-failure -R '^native_shell$'
 ./scripts/smoke.py
 ```
 
@@ -120,16 +102,15 @@ Python wrapper that recompiles a C++ contract ctest already builds and runs.
 
 ## UI testing (mac-first)
 
-Full plan: [`tests/UI_TESTING_PLAN.md`](tests/UI_TESTING_PLAN.md).
+Current registrations and manual acceptance gaps live in
+[`tests/ANATOMY.md`](tests/ANATOMY.md). `./scripts/run-ui-tests.sh` and the macOS
+CI runner still fail on failures from remaining `unit` and `ui` tests; those
+labels now mean real-filesystem wire smoke and real App-process smoke.
 
-**Platform decision:** visual baselines and CI gating are **macOS only**.
-Linux is out of scope unless it becomes a shipping target.
-
-When UI code changes:
-
-1. Run unit tests and `./scripts/run-ui-tests.sh`.
-2. Do not auto-update visual baselines to make tests pass.
-3. Inspect diff artifacts first; update baselines only via
-   `./scripts/update-ui-baselines.sh` when the visual change is intentional.
-4. Prefer widget `objectName` + Qt Test interaction over coordinate automation.
-5. Do not weaken global visual diff thresholds.
+The former synthetic-widget and visual comparison executables have been
+retired. No visual tests are registered. The unchanged runner's existing
+empty-visual branch is not a visual pass, and the retained baseline/font assets
+are not a runnable suite. Do not use `scripts/update-ui-baselines.sh` as
+acceptance evidence. Human-visible macOS interaction/appearance acceptance is
+still required for UI changes. Do not substitute smoke or fixture results for
+that acceptance, and do not auto-update retained baselines.

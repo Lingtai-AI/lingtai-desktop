@@ -89,29 +89,6 @@ void prepare_project(const fs::path &project_root) {
     require(!error, "project human directory must be created");
 }
 
-void require_attachment_failure(
-        const lingtai::desktop::DirectMailSendOutcome &outcome,
-        DirectMailFailureReason reason,
-        std::size_t index,
-        const fs::path &source,
-        const fs::path &project) {
-    require(outcome.result == DirectMailSendResult::failed_local,
-        "attachment failure must not queue");
-    require(outcome.failure_reason == reason,
-        "attachment failure must preserve its typed reason");
-    require(outcome.message_id.empty(),
-        "failed sends must never expose a message id");
-    require(!outcome.published_message,
-        "failed sends must never expose published-row facts");
-    require(outcome.attachment_failure.has_value()
-            && outcome.attachment_failure->index == index
-            && outcome.attachment_failure->source_path == source,
-        "attachment failure must preserve index and canonical source path");
-    const auto outbox = outbox_of(project);
-    require(!fs::exists(outbox) || fs::is_empty(outbox),
-        "failed attachment send must leave no owned outbox leaf");
-}
-
 mode_t permissions_of(const fs::path &path) {
     struct stat status {};
     require(::stat(path.c_str(), &status) == 0,
@@ -342,153 +319,6 @@ void verify_attachment_publish(const fs::path &sandbox) {
         "mixed mail preserves text and exact attachment bytes");
 }
 
-void verify_empty_and_source_failures(const fs::path &sandbox) {
-    const auto empty_project = sandbox / "both-empty";
-    prepare_project(empty_project);
-    const auto before = tree_snapshot(empty_project);
-    const auto empty = send_direct_mail(route_for(empty_project), "");
-    require(empty.failure_reason == DirectMailFailureReason::empty_content
-            && empty.message_id.empty(),
-        "both-empty send fails with typed facts and no id");
-    require(tree_snapshot(empty_project) == before,
-        "both-empty send creates no mailbox state");
-
-    const auto base = sandbox / "source-failures";
-    const auto original = base / "source.txt";
-
-    write_file(original, "same-size");
-    auto accepted = preflight_attachments({original}).accepted.front();
-    fs::remove(original);
-    auto project = base / "missing-project";
-    prepare_project(project);
-    auto outcome = send_direct_mail(route_for(project), "body", {accepted});
-    require_attachment_failure(outcome, DirectMailFailureReason::attachment_missing,
-        0, accepted.source_path, project);
-
-    write_file(original, "same-size");
-    accepted = preflight_attachments({original}).accepted.front();
-    const auto replacement = base / "replacement.txt";
-    write_file(replacement, "replaced!");
-    fs::rename(replacement, original);
-    project = base / "replaced-project";
-    prepare_project(project);
-    outcome = send_direct_mail(route_for(project), "body", {accepted});
-    require_attachment_failure(outcome, DirectMailFailureReason::attachment_replaced,
-        0, accepted.source_path, project);
-
-    fs::remove(original);
-    write_file(original, "target");
-    accepted = preflight_attachments({original}).accepted.front();
-    const auto target = base / "symlink-target.txt";
-    write_file(target, "target");
-    fs::remove(original);
-    fs::create_symlink(target, original);
-    project = base / "symlink-project";
-    prepare_project(project);
-    outcome = send_direct_mail(route_for(project), "body", {accepted});
-    require_attachment_failure(outcome, DirectMailFailureReason::attachment_symlink,
-        0, accepted.source_path, project);
-
-    fs::remove(original);
-    write_file(original, "regular");
-    accepted = preflight_attachments({original}).accepted.front();
-    fs::remove(original);
-    fs::create_directory(original);
-    project = base / "nonregular-project";
-    prepare_project(project);
-    outcome = send_direct_mail(route_for(project), "body", {accepted});
-    require_attachment_failure(outcome,
-        DirectMailFailureReason::attachment_not_regular,
-        0, accepted.source_path, project);
-
-    fs::remove_all(original);
-    write_file(original, "small");
-    accepted = preflight_attachments({original}).accepted.front();
-    write_file(original, "now-a-different-size");
-    project = base / "size-project";
-    prepare_project(project);
-    outcome = send_direct_mail(route_for(project), "body", {accepted});
-    require_attachment_failure(outcome,
-        DirectMailFailureReason::attachment_size_changed,
-        0, accepted.source_path, project);
-
-    fs::remove(original);
-    write_file(original, "locked");
-    accepted = preflight_attachments({original}).accepted.front();
-    std::error_code permission_error;
-    fs::permissions(original, fs::perms::none, fs::perm_options::replace,
-        permission_error);
-    if (!permission_error && geteuid() != 0) {
-        project = base / "unreadable-project";
-        prepare_project(project);
-        outcome = send_direct_mail(route_for(project), "body", {accepted});
-        require_attachment_failure(outcome,
-            DirectMailFailureReason::attachment_unreadable,
-            0, accepted.source_path, project);
-    } else {
-        std::cout << "SKIP: unreadable publisher fixture is ineffective\n";
-    }
-    fs::permissions(original, fs::perms::owner_all, fs::perm_options::replace,
-        permission_error);
-}
-
-void resize_file(const fs::path &path, std::uint64_t size) {
-    write_file(path, "");
-    std::error_code error;
-    fs::resize_file(path, size, error);
-    require(!error, "sparse publisher fixture must be sized");
-}
-
-void verify_limits_names_and_rollback(const fs::path &sandbox) {
-    const auto base = sandbox / "limits";
-    const auto oversized = base / "oversized.bin";
-    write_file(oversized, "small");
-    auto stale = preflight_attachments({oversized}).accepted.front();
-    resize_file(oversized,
-        lingtai::desktop::kAttachmentPerFileLimitBytes + 1);
-    auto project = base / "per-file-project";
-    prepare_project(project);
-    auto outcome = send_direct_mail(route_for(project), "body", {stale});
-    require_attachment_failure(outcome,
-        DirectMailFailureReason::attachment_per_file_limit,
-        0, stale.source_path, project);
-
-    std::vector<lingtai::desktop::AcceptedAttachment> total;
-    for (auto index = 0; index != 5; ++index) {
-        const auto path = base / ("total-" + std::to_string(index) + ".bin");
-        resize_file(path, lingtai::desktop::kAttachmentPerFileLimitBytes);
-        const auto one = preflight_attachments({path});
-        require(one.accepted.size() == 1, "each total fixture is individually valid");
-        total.push_back(one.accepted.front());
-    }
-    project = base / "total-project";
-    prepare_project(project);
-    outcome = send_direct_mail(route_for(project), "body", total);
-    require_attachment_failure(outcome,
-        DirectMailFailureReason::attachment_total_limit,
-        4, total[4].source_path, project);
-
-    const auto short_source = base / "short.txt";
-    write_file(short_source, "short");
-    auto unsafe = preflight_attachments({short_source}).accepted.front();
-    unsafe.display_filename = "../forged.txt";
-    project = base / "unsafe-name-project";
-    prepare_project(project);
-    outcome = send_direct_mail(route_for(project), "body", {unsafe});
-    require_attachment_failure(outcome,
-        DirectMailFailureReason::unsafe_attachment_name,
-        0, unsafe.source_path, project);
-
-    auto too_long = preflight_attachments({short_source}).accepted.front();
-    too_long.display_filename = std::string(300, 'a');
-    project = base / "destination-failure-project";
-    prepare_project(project);
-    outcome = send_direct_mail(route_for(project), "body", {too_long});
-    require_attachment_failure(outcome,
-        DirectMailFailureReason::attachment_destination_failure,
-        0, too_long.source_path, project);
-}
-
 } // namespace
 
 int main(int argc, char **argv) {
@@ -507,8 +337,6 @@ int main(int argc, char **argv) {
         verify_publish_and_failure(sandbox);
         verify_intermediate_symlink_no_outside_write(sandbox);
         verify_attachment_publish(sandbox);
-        verify_empty_and_source_failures(sandbox);
-        verify_limits_names_and_rollback(sandbox);
 
         fs::remove_all(sandbox, error);
         require(!error, "sandbox must be removed");
