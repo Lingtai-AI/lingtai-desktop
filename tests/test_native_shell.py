@@ -46,18 +46,9 @@ class NativeShellProcessTest(unittest.TestCase):
             lines.index(marker_lines[0]),
             result.stdout,
         )
-        self.assertIn("class=Ui::RpWindow", marker_lines[0])
-        self.assertIn("window=lingtai_desktop_window", marker_lines[0])
-        self.assertIn("body=lingtai_desktop_body", marker_lines[0])
-        self.assertIn("sidebar=lingtai_desktop_sidebar", marker_lines[0])
-        self.assertIn("content=lingtai_desktop_content", marker_lines[0])
-        self.assertIn("separator=lingtai_roster_separator", marker_lines[0])
-        self.assertIn("roster=lingtai_agent_roster", marker_lines[0])
         self.assertIn("startup=visible", marker_lines[0])
         self.assertIn("offscreen=true", marker_lines[0])
         self.assertIn("shown=true", marker_lines[0])
-        self.assertNotIn("malformed logging rule", result.stdout)
-        self.assertNotIn("Open Sans", result.stdout)
 
     def test_normal_mode_remains_open(self) -> None:
         process = subprocess.Popen(

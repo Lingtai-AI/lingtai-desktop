@@ -11,7 +11,8 @@ and one-leaf-per-walk filesystem access). The split is enforced by CMake link
 edges, not by convention: the readers link only what they need, and the shell
 is the only owner that links them all together. See the repository map
 [`../ANATOMY.md`](../ANATOMY.md) for the top-level build graph and the
-`tests/` contracts; this file descends into the `src/` folder itself.
+[`tests/ANATOMY.md`](../tests/ANATOMY.md) for the current smoke inventory;
+this file descends into the `src/` folder itself.
 
 ## Components
 

@@ -349,63 +349,24 @@ and worker-acceptance owners above.
 
 ## Contract tests
 
-Each owned library target has one focused CMake/ctest contract; the fixture
-paths and names are in [`../ANATOMY.md`](../ANATOMY.md) and `CMakeLists.txt`:
+Current executable registration lives in [`../tests/ANATOMY.md`](../tests/ANATOMY.md)
+and `CMakeLists.txt`, rather than one suite per production library:
 
-- `tests/agent_projection_test.cpp` — `agent_projection`.
-- `tests/direct_conversation_route_test.cpp` — `direct_conversation_route`.
-- `tests/direct_conversation_history_test.cpp` — `direct_conversation_history`.
-- `tests/direct_conversation_attachment_actions_test.cpp` —
-  `direct_conversation_attachment_actions`.
-- `tests/direct_mail_publisher_test.cpp` — `direct_mail_publisher`.
-- `tests/agent_preset_summary_test.cpp` — `agent_preset_summary`.
-- `tests/agent_setup_store_test.cpp` — `agent_setup_store`.
-- `tests/preset_catalog_test.cpp` — `preset_catalog`.
-- `tests/codex_model_catalog_test.cpp` — `codex_model_catalog`; offline parse
-  filtering/dedup/case-sensitivity (including a leading-space exclusion and
-  an arbitrary-slug/gpt-looking-slug pair proving filtering is by
-  display_name alone), malformed/empty-body fail-open, cache round-trip and
-  corruption fail-open, a direct guard test proving empty/blank-slug/
-  non-GPT-label/duplicate-slug writes are rejected with the cache left
-  byte-identical, cache-over-fallback seeding, and — against a real local
-  loopback `QTcpServer` driving a real Qt event loop, never a live
-  endpoint — fetch success (signal + cache write), HTTP-error/malformed/
-  empty/oversize fail-open, timeout-then-recovery, destroy-while-connected,
-  and the stale-timer-never-aborts-a-superseding-request regression.
-- `tests/preset_editor_page_test.cpp` — `preset_editor_page`; the widget
-  level, never calling `show()`: an in-progress custom model-id draft (and
-  other untouched form fields) survives a background catalog refresh that
-  lands while the page is a hidden ancestor, and Save persists that typed
-  slug/custom id, never a display label; a refresh that relabels an
-  already-selected suggestion keeps the same slug selection; a non-Codex
-  provider's model list is unchanged by a Codex catalog refresh.
-- `tests/preset_editor_model_test.cpp` — `preset_editor_model`; Codex/Codex-
-  pool model-option composition (current-plus-suggestions-plus-explicit-
-  custom-row, no duplication, label/slug separation), a background suggestion
-  refresh preserving every other field and the already-selected/custom model
-  id, slug-only (never display-label) persistence on commit, switch-into-
-  Codex defaulting only when unset, unchanged non-Codex option shape, and
-  `load()` seeding suggestions from an injected `LINGTAI_TUI_DIR` cache.
-- `tests/agent_sleep_test.cpp` — `agent_sleep`.
-- `tests/kanban_model_test.cpp` — `kanban_model`.
-- `tests/posix_descriptor_primitives_test.cpp` — `posix_descriptor_primitives`.
-- `tests/workspace_selection_test.cpp` — `workspace_selection`.
-- `tests/conversation_unread_test.cpp` — `conversation_unread`.
-- `tests/project_attachment_test.cpp` — `project_attachment`.
-- `tests/attachment_selection_test.cpp` — `attachment_selection`.
-- `tests/native_shell_test.cpp` — `native_shell_behavior` (links the shell +
-  `lib_ui` + `crl_integration.cpp`), including the focused status-item,
-  status-item-Quit, and final-window-Quit journeys.
-- `tests/test_desktop_status_item_contract.py` — static status-item source,
-  packaging, and prohibited-behavior contract.
-- `tests/mac_popup_dismissal_bridge_test.mm` — `mac_popup_dismissal` on macOS;
-  the focused Cocoa recipient-identity and click-through contract for the
-  application-owned bridge and Desktop Integration stream.
-- `tests/test_native_shell.py` — `native_shell` (process persistence and
-  smoke-order, via the smoke executable).
+- `tests/direct_conversation_history_test.cpp` — `direct_conversation_history`:
+  incoming/outgoing wire rows, selected identity, duplicate outbox/sent collapse,
+  no writes, and intermediate-symlink read refusal under injected roots.
+- `tests/direct_mail_publisher_test.cpp` — `direct_mail_publisher`: exact text
+  envelope, distinct leaf publication, blocked/symlinked outbox refusal, and
+  real attachment copies under injected roots.
+- `tests/test_native_shell.py` — `native_shell`: real subprocess smoke marker
+  order/exit and normal-mode persistence, not widget interaction acceptance.
+- `tests/agent_lifecycle_real_smoke.cpp` — `lingtai_agent_lifecycle_real_smoke`:
+  manual real-kernel lifecycle acceptance under a disposable HOME/project.
 
-Behavior-level anchors, not a second contract suite, live in
-[`src/BEHAVIORS.md`](BEHAVIORS.md).
+The retired per-library, synthetic-shell, hidden-widget, native-event, and
+source-shape suites are no longer runnable proofs. Production ownership rules
+above are unchanged; smoke does not cover their former matrices. Historical
+behavior anchors in `BEHAVIORS.md` are not the current target inventory.
 
 ## Maintenance
 

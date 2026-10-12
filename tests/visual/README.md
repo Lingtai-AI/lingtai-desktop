@@ -1,26 +1,10 @@
-# Visual snapshot tests
+# Retained visual baseline data
 
-macOS-only PNG baselines live under `baselines/macos/{light,dark}/`.
+The visual comparison executable and helpers have been retired. No `visual`
+ctests are registered. Baseline PNGs under `baselines/macos/{light,dark}/` are
+left untouched; their presence is not a runnable visual gate.
 
-Failure outputs go to `artifacts/visual/` (gitignored).
-
-To retain `actual.png`, `diff.png`, and comparison metadata for passing
-snapshots during manual inspection, set `WRITE_UI_ARTIFACTS=1` and optionally
-point `ARTIFACTS_DIR` at the desired artifact root.
-
-Baseline updates are explicit only:
-
-```bash
-./scripts/update-ui-baselines.sh
-```
-
-Implementation: `VisualTestUtils.*`, `VisualSnapshotHarness.h`.
-
-Baselines live under `baselines/macos/{light,dark}/` as `<snapshot>-<viewport>.png`.
-Failure outputs go to `artifacts/visual/<test-name>/` (gitignored).
-
-Baseline updates are explicit only:
-
-```bash
-./scripts/update-ui-baselines.sh
-```
+Runner and baseline-update scripts remain unchanged, but their empty visual
+selection produces no appearance evidence. Human-visible macOS acceptance is
+required; do not update these assets to manufacture a passing result. See
+[`../ANATOMY.md`](../ANATOMY.md) for the active smoke inventory.

@@ -1,5 +1,11 @@
 # Mac-first UI testing plan
 
+> **Registration retirement:** The widget/visual executables and helpers
+> described below have been retired. This retained plan is not the current
+> runnable inventory or proof of visual acceptance. See
+> [`ANATOMY.md`](ANATOMY.md) for remaining smoke targets and explicit native gaps.
+> CI/runner failure semantics and baseline/font assets are unchanged.
+
 This document records the agreed plan for automated UI testing in
 `lingtai-desktop`. It is the source of truth for future agents and contributors.
 

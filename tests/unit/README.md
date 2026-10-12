@@ -1,11 +1,10 @@
-# Unit tests
+# Wire smoke tests
 
-Pure logic tests with no QWidget interaction live here once migrated from the
-top-level `tests/` directory.
-
-Today most unit targets still sit beside this folder (e.g.
-`tests/kanban_model_test.cpp`). CTest labels them `unit`; filter with:
+The remaining `unit` label selects real-filesystem mail read/publication tests
+in the top-level `tests/` directory, not broad domain matrices:
 
 ```bash
-ctest -L unit --output-on-failure
+ctest --test-dir build -L unit --output-on-failure
 ```
+
+See [`../ANATOMY.md`](../ANATOMY.md) for exact targets, injected roots and limits.

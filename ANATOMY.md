@@ -172,26 +172,20 @@ details.
 
 ## Owned tests (`tests/`)
 
-Each C++ contract executable maps to one ctest name (declared in
-`CMakeLists.txt`): `project_attachment`, `attachment_selection`, `agent_projection`,
-`direct_conversation_route`, `direct_conversation_history`,
-`direct_mail_publisher`,
-`agent_preset_summary`, `agent_setup_store`, `agent_signal`, `agent_sleep`,
-`agent_process`, `agent_launch`, `agent_lifecycle`,
-`posix_descriptor_primitives`,
-`workspace_selection`, `native_shell_behavior`, the focused
-`native_shell_status_item`, `native_shell_status_item_quit`, and
-`native_shell_final_window_quit` journeys, plus the Python gates
-`native_shell` (process persistence + smoke-order, `tests/test_native_shell.py`),
-`test_repository_contract.py` (pinned toolkit provenance + tracked-artifact
-guard), `test_desktop_status_item_contract.py` (status-item source and
-packaging prohibitions), `test_app_archive.py` (portable archive production, independent safe
-extraction, exact manifest/App binding, and publication races), and
-`test_macos_packaging.py` (optional DMG mode, naming, path, and manifest
-contract), `test_desktop_user_cli.py` (App lifecycle and stable/local support
-transaction), and `test_desktop_support_update.py` (official support transport,
-cache/consent/sequencing, producer, and stage-to-bootstrap commit). Route
-into `tests/ANATOMY.md` for the per-test contract mapping.
+The deliberately small automated surface is `native_shell` (real App-process
+startup marker order and persistence), `direct_conversation_history` (real-file
+mailbox wire/read isolation), and `direct_mail_publisher` (real-file outbox
+publication and attachment copies). CMake keeps the wire tests labeled `unit`
+and the subprocess test labeled `ui` for the existing runner entry points.
+`tests/test_repository_contract.py` remains the manual/CI provenance gate.
+`lingtai_agent_lifecycle_real_smoke` remains a manually invoked, real-kernel
+acceptance target, not an unattended ctest.
+
+Route into [`tests/ANATOMY.md`](tests/ANATOMY.md) for exact commands and limits.
+The former synthetic UI, visual, domain-matrix, static-source, and injected
+installer/package suites have been retired, not replaced by smoke-equivalent
+coverage. Behavior documents retain historical proof anchors; they must not be
+read as a current executable inventory.
 
 ## Kernel artifacts Desktop reads
 

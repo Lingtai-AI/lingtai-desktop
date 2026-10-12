@@ -1,19 +1,7 @@
-# Functional UI tests
+# Retired functional-widget apparatus
 
-New Qt widget interaction tests belong here.
-
-Existing journey tests (`tests/native_shell_test.cpp`, etc.) remain at the
-top level until migrated; they are labeled `ui` in CTest.
-
-Shared helpers:
-
-- `object_names.h` — canonical `lingtai_*` identifiers for `findChild`
-- `UiTestUtils.h` — viewports, widget lookup, theme helpers
-- `UiTestHarness.h` — load fixture → show shell → open project (Phase 4)
-- `standardViewports()` — compact / normal / wide sizes (Phase 6)
-
-Registry: `OBJECT_NAMES.md`
-
-Functional tests in this directory:
-
-- `agent_detail_pages_test.cpp` — Presets page switch + `/presets` slash at all viewports
+The shared widget lookup/theme/fixture helpers and page-interaction suites in
+this directory have been retired. The `ui` label now selects only the real
+App subprocess startup/persistence smoke, `native_shell`; it does not imply
+functional widget acceptance. `OBJECT_NAMES.md` is retained reference material,
+not an executable registry. See [`../ANATOMY.md`](../ANATOMY.md).
