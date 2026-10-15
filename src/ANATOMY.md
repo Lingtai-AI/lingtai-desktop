@@ -23,8 +23,10 @@ Entry point and composition root:
 - `shell_host.{h,cpp}` — owns all native windows, the one process-session
   `ConversationUnreadSession`, the one `DesktopStatusItem`, active/read-
   eligible and most-recent-active window selection, unique-open-Project unread
-  aggregation, directory-picker routing, the fallback kernel interpreter, and
-  the one coalesced process appearance transaction for every hosted shell.
+  aggregation, the process Dock badge mirror of that same total (injectable
+  sink, none offscreen), directory-picker routing, the fallback kernel
+  interpreter, and the one coalesced process appearance transaction for every
+  hosted shell.
   Final-window close still exits the application; the status item does not make
   Desktop resident.
 - `desktop_status_item.{h,cpp}` — the narrow Qt adapter that owns one

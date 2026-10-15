@@ -271,8 +271,12 @@ and worker-acceptance owners above.
 4. **The shell composes.** `ShellHost` owns the process unread session and all
    shells. It derives the unique currently-open Project set from canonical
    shell state, unions valid non-human Agent keys, owns active-window read
-   eligibility, and refreshes both rosters and the single status item from the
-   same model. `NativeShell` composes the widgets, native dialogs, and timer,
+   eligibility, and refreshes both rosters, the single status item, and the
+   process Dock badge from the same model. The Dock badge receives the same
+   total saturated to `qint64` (never the status glyph's 99+ cap), starts and
+   tears down at 0, skips unchanged counts, and is published only through an
+   injected sink or, outside offscreen mode, the GUI-thread `qGuiApp`
+   instance. `NativeShell` composes the widgets, native dialogs, and timer,
    re-derives visible routes from C1 truth, and proposes transitions
    through the model. Its window factory also establishes the pinned toolkit's
    application-lifetime prerequisites before `AgentDetailView` can construct

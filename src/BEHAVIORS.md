@@ -351,6 +351,9 @@ its code.
 
 ### Session unread
 
+- The macOS Dock badge shows the same exact numeric total as the status item
+  (no 99+ cap), is cleared at startup and host teardown, and is never touched
+  in offscreen mode.
 - One memory-only `ConversationUnreadSession` is shared by every Desktop
   window. The first accepted history for a canonical Project/Agent pair seeds
   at zero; later inbound rows count, while outgoing rows and reaction receipts

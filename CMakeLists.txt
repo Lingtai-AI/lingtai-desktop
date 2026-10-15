@@ -530,6 +530,17 @@ set_target_properties(lingtai_desktop_smoke PROPERTIES
 target_link_libraries(lingtai_desktop_smoke PRIVATE
     lingtai_desktop_native_shell
     desktop-app::lib_ui)
+add_executable(lingtai_dock_badge_test
+    tests/dock_badge_test.cpp
+    src/crl_integration.cpp)
+init_target(lingtai_dock_badge_test)
+target_compile_options(lingtai_dock_badge_test PRIVATE
+    -Wall -Wextra -Werror -pedantic
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-unused-parameter>
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-deprecated-this-capture>)
+target_link_libraries(lingtai_dock_badge_test PRIVATE
+    lingtai_desktop_native_shell
+    desktop-app::lib_ui)
 
 enable_testing()
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -548,4 +559,9 @@ add_test(NAME native_shell
 # subprocess smoke tests. Real-kernel lifecycle acceptance remains manual.
 set_tests_properties(direct_conversation_history direct_mail_publisher
     PROPERTIES LABELS "unit")
-set_tests_properties(native_shell PROPERTIES LABELS "ui")
+add_test(NAME dock_badge
+    COMMAND lingtai_dock_badge_test
+        "${CMAKE_CURRENT_BINARY_DIR}/dock-badge-fixture")
+set_tests_properties(native_shell dock_badge PROPERTIES LABELS "ui")
+set_tests_properties(dock_badge PROPERTIES ENVIRONMENT
+    "QT_QPA_PLATFORM=$<IF:$<PLATFORM_ID:Darwin>,cocoa,offscreen>")

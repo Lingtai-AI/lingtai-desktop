@@ -8,6 +8,7 @@ related_files:
   - tests/test_native_shell.py
   - tests/direct_conversation_history_test.cpp
   - tests/direct_mail_publisher_test.cpp
+  - tests/dock_badge_test.cpp
   - tests/agent_lifecycle_real_smoke.cpp
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
@@ -33,6 +34,7 @@ must not be mistaken for current runnable registration.
 | `test_native_shell.py` | App target `lingtai_desktop_smoke`; ctest `native_shell`, label `ui` | Launch actual built App: ordered ready/full-target markers, zero exit, constructed/shown startup, and normal-mode persistence. No widget-name or cosmetic-log assertions. |
 | `direct_conversation_history_test.cpp` | `lingtai_direct_conversation_history_test`; ctest `direct_conversation_history`, label `unit` | Real mailbox files: incoming/outgoing text and order, exact selected identity, scalar recipient, unrelated mail exclusion, outbox/sent duplicate collapse, no writes and intermediate-symlink read refusal. |
 | `direct_mail_publisher_test.cpp` | `lingtai_direct_mail_publisher_test`; ctest `direct_mail_publisher`, label `unit` | Actual outbox leaf/envelope publication, successive-send no-clobber, unrelated-byte preservation, blocked/symlinked outbox refusal, attachment-only/mixed mail with real private copies and future sent paths. |
+| `dock_badge_test.cpp` | `lingtai_dock_badge_test`; ctest `dock_badge`, label `ui` | Offscreen `ShellHost` with an injected sink (never the OS Dock): initial 0, no repeat at the zero baseline, two real inbound rows publish 2, teardown forces 0, and >99/`size_t` max conversion stays numeric/saturated. |
 | `test_repository_contract.py` | manual/CI `python3 -m unittest tests.test_repository_contract` | Canonical product version, pinned dependency provenance, tracked-artifact hygiene; retained because unchanged CI explicitly invokes it. |
 | `agent_lifecycle_real_smoke.cpp` | `lingtai_agent_lifecycle_real_smoke`; manual only | Production controller, process adapter and detached launcher against disposable real-kernel Agents: creation/attach/setup, start, sleep, suspend, CPR, clear, refresh, aggregate failure and cleanup. |
 
@@ -54,10 +56,11 @@ export QT_ROOT="$HOME/Qt/6.11.1/macos"
 ./scripts/configure.sh
 cmake --build build --parallel 8 --target \
   lingtai_desktop_smoke lingtai_direct_conversation_history_test \
-  lingtai_direct_mail_publisher_test lingtai_agent_lifecycle_real_smoke
+  lingtai_direct_mail_publisher_test lingtai_dock_badge_test \
+  lingtai_agent_lifecycle_real_smoke
 python3 -m unittest tests.test_repository_contract
 ctest --test-dir build --output-on-failure \
-  -R '^(native_shell|direct_conversation_history|direct_mail_publisher)$'
+  -R '^(native_shell|direct_conversation_history|direct_mail_publisher|dock_badge)$'
 ```
 
 `./scripts/smoke.py` remains an unchanged convenience wrapper around the same

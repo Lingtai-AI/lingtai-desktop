@@ -35,6 +35,7 @@ export QT_ROOT="$HOME/Qt/6.11.1/macos"
 ctest --test-dir build --output-on-failure -R '^direct_conversation_history$'
 ctest --test-dir build --output-on-failure -R '^direct_mail_publisher$'
 ctest --test-dir build --output-on-failure -R '^native_shell$'
+ctest --test-dir build --output-on-failure -R '^dock_badge$'
 ./scripts/smoke.py
 ```
 

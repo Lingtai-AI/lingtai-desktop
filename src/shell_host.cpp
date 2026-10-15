@@ -16,6 +16,7 @@
 #include <QtWidgets/QWidget>
 
 #include <algorithm>
+#include <limits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -59,10 +60,32 @@ private:
 
 } // namespace
 
+qint64 dock_badge_number(std::size_t unread_total) noexcept {
+    constexpr auto max_badge = std::numeric_limits<qint64>::max();
+    return unread_total > static_cast<std::size_t>(max_badge)
+        ? max_badge
+        : static_cast<qint64>(unread_total);
+}
+
 ShellHost::ShellHost(RuntimeOptions runtime_options, QObject *parent)
+: ShellHost(std::move(runtime_options), DockBadgeSink(), parent) {
+}
+
+ShellHost::ShellHost(
+        RuntimeOptions runtime_options,
+        DockBadgeSink dock_badge_sink,
+        QObject *parent)
 : QObject(parent)
 , runtime_options_(std::move(runtime_options))
-, agent_start_fallback_python_(default_fallback_python()) {
+, agent_start_fallback_python_(default_fallback_python())
+, dock_badge_sink_(std::move(dock_badge_sink)) {
+    if (!dock_badge_sink_ && !runtime_options_.offscreen_mode) {
+        dock_badge_sink_ = [](qint64 number) {
+            if (auto *application = qGuiApp) {
+                application->setBadgeNumber(number);
+            }
+        };
+    }
     QObject::connect(
         QGuiApplication::styleHints(),
         &QStyleHints::colorSchemeChanged,
@@ -97,6 +120,9 @@ ShellHost::~ShellHost() {
     active_shell_ = nullptr;
     most_recent_active_shell_ = nullptr;
     shells_.clear();
+    // Always leave the process Dock badge cleared.
+    published_dock_badge_.reset();
+    publish_dock_badge(0);
 }
 
 NativeShell &ShellHost::primary() {
@@ -292,6 +318,15 @@ void ShellHost::refresh_unread_presentations() {
     if (status_item_) {
         status_item_->set_unread_count(unread_total_, open_project_count_);
     }
+    publish_dock_badge(dock_badge_number(unread_total_));
+}
+
+void ShellHost::publish_dock_badge(qint64 number) {
+    if (!dock_badge_sink_ || published_dock_badge_ == number) {
+        return;
+    }
+    published_dock_badge_ = number;
+    dock_badge_sink_(number);
 }
 
 std::optional<std::filesystem::path> ShellHost::pick_project_directory(
