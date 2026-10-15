@@ -143,8 +143,11 @@ its code.
   row click is the sole selection entry point (`handle_agent_selection`);
   only rows whose manifest is `valid` are selectable, and any other click
   shows `lingtai_agent_selection_error`.
-- Selecting an Agent clears the composer and the pending sleep/start
-  attachment draft/errors, and pending sleep/start observations, resets to the conversation page,
+- Selecting an Agent stashes the previous target's unsent composer draft
+  (text, cursor, attachments) under its canonical project root + Agent key and
+  restores the new target's own draft (same-target reselection keeps typing),
+  clears notices and
+  pending sleep/start observations, resets to the conversation page,
   recomputes the layout, and focuses the composer when visible/enabled.
 - The detail title is the manifest `nickname`, else `agent_name`, else the
   directory key; the subtitle shows the key (when it differs) plus

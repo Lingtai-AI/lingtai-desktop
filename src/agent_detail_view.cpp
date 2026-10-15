@@ -36,6 +36,7 @@
 #include <QtGui/QPalette>
 #include <QtGui/QResizeEvent>
 #include <QtGui/QTextBlock>
+#include <QtGui/QTextCursor>
 #include <QtGui/QTextDocument>
 #include <QtWidgets/QFrame>
 #include <QtWidgets/QGridLayout>
@@ -2006,6 +2007,39 @@ void AgentDetailView::clear_pending_attachments() {
     attachment_errors_.clear();
     rebuild_attachment_cards();
     refresh_composer_enablement(composer_eligible_);
+}
+
+ComposerDraft AgentDetailView::export_composer_draft() const {
+    auto draft = ComposerDraft();
+    if (composer_input_) {
+        draft.text = composer_input_->getTextWithTags();
+        const auto cursor = composer_input_->textCursor();
+        draft.cursor_anchor = cursor.anchor();
+        draft.cursor_position = cursor.position();
+    }
+    draft.attachment_paths.reserve(pending_attachments_.size());
+    for (const auto &attachment : pending_attachments_) {
+        draft.attachment_paths.push_back(attachment.source_path);
+    }
+    return draft;
+}
+
+// Attachments re-enter only through the ordinary preflight/merge, so a path
+// that vanished or changed since it was stashed surfaces the usual notice.
+void AgentDetailView::restore_composer_draft(const ComposerDraft &draft) {
+    clear_pending_attachments();
+    if (composer_input_) {
+        composer_input_->setTextWithTags(
+            draft.text, Ui::InputField::HistoryAction::Clear);
+        auto cursor = composer_input_->textCursor();
+        const auto end = std::max(0,
+            composer_input_->rawTextEdit()->document()->characterCount() - 1);
+        cursor.setPosition(std::clamp(draft.cursor_anchor, 0, end));
+        cursor.setPosition(std::clamp(draft.cursor_position, 0, end),
+            QTextCursor::KeepAnchor);
+        composer_input_->setTextCursor(cursor);
+    }
+    merge_pending_attachments(draft.attachment_paths);
 }
 
 void AgentDetailView::clear_attachment_errors() {

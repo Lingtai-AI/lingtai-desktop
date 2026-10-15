@@ -379,9 +379,15 @@ they are the shell's presentation layer and own no domain reads or writes.
   Integration, its application-owned `MacPopupDismissalBridge` is installed
   once and every simultaneous or later shell shares it. A host-provided
   foreign `Ui::Integration` prevents Desktop from installing either object.
-- `AgentDetailView` holds the session-only attachment draft and errors for the
-  currently selected target. Project/Agent changes and route loss clear it;
-  it is never persisted or shared across targets. It also owns the composer's
+- `AgentDetailView` holds the live session-only composer draft (tagged text,
+  cursor, attachments) and errors for the currently selected target and can
+  export/restore it. `NativeShell` owns the per-target store keyed by
+  canonical project root + Agent directory key: a selection boundary or route
+  loss stashes the previous key's unsent draft, and the target's own draft is
+  restored (attachments only through the existing preflight). Same-key
+  reselection and refreshes never reset typing; an empty stash deletes the
+  entry; a queued send discards only the sent key. Absent/stopped Agents are
+  never pruned. Drafts are never persisted or shared across targets. It also owns the composer's
   persistent runtime footer (`AgentDetailView::set_runtime_footer`): a
   `model · Context used / window (pct)` line fed by `NativeShell::render_roster`
   from the same projected `AgentRow` on every accepted roster refresh,

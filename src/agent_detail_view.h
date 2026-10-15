@@ -118,6 +118,10 @@ public:
         const std::vector<std::filesystem::path> &selected_paths);
     void remove_pending_attachment(std::size_t index);
     void clear_pending_attachments();
+    // Session-only draft transfer for the shell's per-Agent store. Restore
+    // replaces the composer without carrying another target's undo history.
+    [[nodiscard]] ComposerDraft export_composer_draft() const;
+    void restore_composer_draft(const ComposerDraft &draft);
     void clear_attachment_errors();
     void mark_attachment_error(std::size_t index, const QString &message);
     void show_composer_notice(

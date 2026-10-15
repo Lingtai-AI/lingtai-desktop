@@ -36,6 +36,7 @@ ctest --test-dir build --output-on-failure -R '^direct_conversation_history$'
 ctest --test-dir build --output-on-failure -R '^direct_mail_publisher$'
 ctest --test-dir build --output-on-failure -R '^native_shell$'
 ctest --test-dir build --output-on-failure -R '^dock_badge$'
+ctest --test-dir build --output-on-failure -R '^composer_draft$'
 ./scripts/smoke.py
 ```
 

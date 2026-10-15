@@ -3045,6 +3045,9 @@ ProjectOpenOutcome NativeShell::open_project(
         canonical_root.filename().string()));
     reaction_store_.clear();
     injected_mail_journal_.reset();
+    // Before the render: a draft restore's preflight notice must survive the
+    // composer reset rather than be cleared after the render restored it.
+    reset_composer();
     render_roster();
     auto *selection_error = window_->findChild<QLabel *>(
         "lingtai_agent_selection_error");
@@ -3055,7 +3058,6 @@ ProjectOpenOutcome NativeShell::open_project(
     open_error->setText(QString());
     open_error->setAccessibleName(QString());
     open_error_surface_->hide();
-    reset_composer();
     invalidate_kanban_cache();
     if (auto *start_status = window_->findChild<QLabel *>(
             "lingtai_selected_agent_start_status")) {
@@ -3874,10 +3876,10 @@ void NativeShell::render_conversation(
         *selection_state_.active_project(), agents_,
         selection_state_.selected_agent_directory_key());
     const bool route_available = route.has_value();
+    sync_composer_draft_target(route_available);
     if (!route_available) {
         conversation_history_projection_.reset();
         conversation_render_key_.reset();
-        detail_view_->clear_pending_attachments();
         DirectConversationHistory empty;
         detail_view_->render_conversation(
             QString(), empty,
@@ -3974,24 +3976,56 @@ void NativeShell::render_conversation(
     conversation_render_key_ = render_key;
 }
 
-// Called only when the selected target actually changes (a fresh project open
-// or a successful Agent selection), never on an ordinary conversation
-// refresh, so a just-set receipt is never wiped by its own refresh.
+// Called only on a selection boundary (a project open, an Agent selection,
+// or Back), never on an ordinary conversation refresh, so a just-set receipt
+// is never wiped by its own refresh. The unsent draft moves with its target.
 void NativeShell::reset_composer() {
     invalidate_session_events_cache();
     if (auto *input = static_cast<Ui::InputField *>(
             window_->findChild<QObject *>("lingtai_composer_input"))) {
-        input->clear();
+        if (!detail_view_) input->clear();
         input->setPlaceholder(rpl::single(QStringLiteral("Message…")));
     }
     hide_slash_command_popup(window_.get());
     if (detail_view_) {
-        detail_view_->clear_pending_attachments();
         detail_view_->clear_composer_notice();
+        sync_composer_draft_target();
     } else if (auto *status = window_->findChild<QLabel *>(
             "lingtai_composer_status")) {
         status->clear();
     }
+}
+
+// The previous key is explicit state, so whichever selection mutation or
+// render reaches here first still stashes the old draft under its own target.
+void NativeShell::sync_composer_draft_target(bool route_available) {
+    if (!detail_view_) return;
+    auto key = std::optional<ComposerDraftKey>();
+    if (route_available && selection_state_.active_project()
+            && selection_state_.selected_agent_directory_key()) {
+        key = ComposerDraftKey{selection_state_.active_project()->root(),
+            *selection_state_.selected_agent_directory_key()};
+    }
+    if (key == composer_draft_key_) return;
+    if (composer_draft_key_) {
+        auto draft = detail_view_->export_composer_draft();
+        if (draft.empty()) {
+            composer_drafts_.erase(*composer_draft_key_);
+        } else {
+            composer_drafts_.insert_or_assign(
+                *composer_draft_key_, std::move(draft));
+        }
+    }
+    composer_draft_key_ = key;
+    auto restored = ComposerDraft();
+    if (key) {
+        if (const auto found = composer_drafts_.find(*key);
+                found != composer_drafts_.end()) {
+            restored = std::move(found->second);
+            composer_drafts_.erase(found);
+        }
+    }
+    detail_view_->restore_composer_draft(restored);
 }
 
 bool NativeShell::ensure_attachment_target() {
@@ -4004,7 +4038,7 @@ bool NativeShell::ensure_attachment_target() {
         selection_state_.selected_agent_directory_key());
     if (route) return true;
 
-    detail_view_->clear_pending_attachments();
+    sync_composer_draft_target(/*route_available=*/false);
     detail_view_->show_composer_notice(QStringLiteral(
         "No conversation is available for this selection."),
         ComposerNoticeKind::error);
@@ -4375,6 +4409,9 @@ void NativeShell::handle_send_message() {
         }
         input->clear();
         if (detail_view_) detail_view_->clear_pending_attachments();
+        composer_drafts_.erase(ComposerDraftKey{
+            selection_state_.active_project()->root(),
+            *selection_state_.selected_agent_directory_key()});
         if (!outcome.message_id.empty()) {
             reaction_store_.set_receipt(
                 outcome.message_id, ReceiptStage::received);

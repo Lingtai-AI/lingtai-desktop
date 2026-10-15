@@ -37,9 +37,11 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 class QLabel;
@@ -77,6 +79,20 @@ enum class AgentDetailPage {
     conversation,
     presets,
     kanban,
+};
+
+// One unsent composer draft as exported for the shell's session-only
+// per-Agent store: tagged text, cursor/selection, and the attachment source
+// paths, which a restore re-admits only through the existing preflight.
+struct ComposerDraft final {
+    TextWithTags text;
+    int cursor_anchor = 0;
+    int cursor_position = 0;
+    std::vector<std::filesystem::path> attachment_paths;
+
+    [[nodiscard]] bool empty() const noexcept {
+        return text.text.isEmpty() && attachment_paths.empty();
+    }
 };
 
 // C5-owned native composition. C1's WorkspaceSelectionState remains the only
@@ -250,6 +266,10 @@ private:
     void maybe_warm_kanban_cache();
     void handle_kanban_agent_selected(const std::filesystem::path &directory_key);
     void reset_composer();
+    // Moves the live composer to the currently selected route's draft key:
+    // stashes the previous key's unsent draft and restores the new one. A
+    // same-key call is a no-op, so reselection never resets ongoing typing.
+    void sync_composer_draft_target(bool route_available = true);
     [[nodiscard]] bool ensure_attachment_target();
     void add_attachment_paths(
         const std::vector<std::filesystem::path> &selected_paths);
@@ -387,6 +407,13 @@ private:
     // The one current selection-generation epoch, bumped on every real
     // project open, successful Agent selection, and Back/selection clear.
     std::uint64_t selection_generation_ = 0;
+    // Session-only unsent composer drafts keyed by canonical project root +
+    // Agent directory key. The live composer belongs to `composer_draft_key_`
+    // and is never also cached, so a sent or cleared draft cannot resurrect.
+    using ComposerDraftKey =
+        std::pair<std::filesystem::path, std::filesystem::path>;
+    std::optional<ComposerDraftKey> composer_draft_key_;
+    std::map<ComposerDraftKey, ComposerDraft> composer_drafts_;
     // One serial worker for Desktop-owned preset discovery and the bounded
     // first-project creation transaction.
     std::unique_ptr<ProjectCreationRunner> creation_runner_;

@@ -318,7 +318,7 @@ and worker-acceptance owners above.
    authoritative and must not receive a competing Desktop bridge.
 5. **UI widgets do not absorb domain/business behavior.** `AgentRoster`
    renders rows and reports clicks; `ConversationSurface` renders rows and
-   paints bubbles; `AgentDetailView` owns only the composer draft,
+   paints bubbles; `AgentDetailView` owns only the live composer draft,
    presentation, thumbnail attempts, and transient/persistent feedback.
    NativeShell still owns picker orchestration, route resolution, publication,
    and the injectable external Open/Reveal action. These widgets hold only

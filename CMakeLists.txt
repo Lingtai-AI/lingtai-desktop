@@ -541,6 +541,17 @@ target_compile_options(lingtai_dock_badge_test PRIVATE
 target_link_libraries(lingtai_dock_badge_test PRIVATE
     lingtai_desktop_native_shell
     desktop-app::lib_ui)
+add_executable(lingtai_composer_draft_test
+    tests/composer_draft_test.cpp
+    src/crl_integration.cpp)
+init_target(lingtai_composer_draft_test)
+target_compile_options(lingtai_composer_draft_test PRIVATE
+    -Wall -Wextra -Werror -pedantic
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-unused-parameter>
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-deprecated-this-capture>)
+target_link_libraries(lingtai_composer_draft_test PRIVATE
+    lingtai_desktop_native_shell
+    desktop-app::lib_ui)
 
 enable_testing()
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -562,6 +573,9 @@ set_tests_properties(direct_conversation_history direct_mail_publisher
 add_test(NAME dock_badge
     COMMAND lingtai_dock_badge_test
         "${CMAKE_CURRENT_BINARY_DIR}/dock-badge-fixture")
-set_tests_properties(native_shell dock_badge PROPERTIES LABELS "ui")
-set_tests_properties(dock_badge PROPERTIES ENVIRONMENT
+add_test(NAME composer_draft
+    COMMAND lingtai_composer_draft_test
+        "${CMAKE_CURRENT_BINARY_DIR}/composer-draft-fixture")
+set_tests_properties(native_shell dock_badge composer_draft PROPERTIES LABELS "ui")
+set_tests_properties(dock_badge composer_draft PROPERTIES ENVIRONMENT
     "QT_QPA_PLATFORM=$<IF:$<PLATFORM_ID:Darwin>,cocoa,offscreen>")
