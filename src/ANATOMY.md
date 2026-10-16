@@ -241,7 +241,8 @@ Direct-operation/side-effect owners (the only writers/launchers):
 - `direct_mail_publisher.{h,cpp}` — `send_direct_mail`: revalidates accepted
   local-file identity/size/limits, exclusively creates one human
   `outbox/<id>` leaf, privately copies optional attachments, and publishes the
-  temp-then-renamed `message.json` last; success returns only the stamped
+  temp-then-renamed `message.json` last, including an absolute human return
+  route derived from the canonical project root and checked human key; success returns only the stamped
   message and descriptor-established copied-file facts needed for immediate
   session presentation, while failures roll back that owned leaf.
 - `agent_signal.{h,cpp}` — descriptor-relative/no-follow fixed-content
