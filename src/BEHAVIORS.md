@@ -397,6 +397,14 @@ its code.
   local failures remain distinct typed rejections carrying the rejected input.
   Preflight performs no write or copy, catches failures at its public boundary,
   and does not authorize publication.
+- Every newly published envelope carries `_return_route` with exactly
+  `address` (canonical project root + `.lingtai` + checked human key) and
+  `sender_agent_id` (accepted human id, or empty when absent), for both text
+  and attachment mail. `from` and display identity retain their existing values.
+  No new canonicalization follows links after the existing no-follow directory
+  walk. This supplies the strict kernel reply address even across projects with
+  identical short names; old route-less bare-human mail still requires an
+  explicit absolute send address and is not rewritten.
 - `send_direct_mail` keeps the two-argument text-only call and exact envelope
   (no `attachments` field). With accepted attachments it permits empty text,
   reopens each canonical source read-only/no-follow, checks regular-file

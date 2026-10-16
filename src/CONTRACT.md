@@ -121,6 +121,12 @@ bounded side-effect scope):
   (`direct_mail_publisher.h`) — one atomic human `outbox/<id>` leaf, with
   typed local failure facts and, only on success, the exact published
   id/timestamp/body plus descriptor-established copied-attachment metadata.
+  The envelope includes exactly two `_return_route` fields: `address` is the
+  absolute human workdir under the accepted canonical project root and checked
+  human directory key; `sender_agent_id` is the accepted human id or `""` when
+  absent. The publisher does not infer an id or a reply path from the display
+  address. The existing no-follow directory walk gates publication. Same short
+  human/Agent names in another project grant no return-routing authority.
 - `request_agent_sleep(attachment, key)` → `AgentSleepRequestResult`,
   plus `capture_agent_sleep_event_baseline` / `observe_agent_sleep_received`
   (`agent_sleep.h`) — one `.sleep` marker.

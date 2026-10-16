@@ -501,7 +501,7 @@ init_target(lingtai_direct_mail_publisher_test)
 target_compile_options(lingtai_direct_mail_publisher_test PRIVATE
     -Wall -Wextra -Werror -pedantic)
 target_link_libraries(lingtai_direct_mail_publisher_test PRIVATE
-    lingtai_desktop_mail_publisher)
+    lingtai_desktop_mail_publisher Qt6::Core)
 add_executable(lingtai_agent_lifecycle_real_smoke
     tests/agent_lifecycle_real_smoke.cpp)
 init_target(lingtai_agent_lifecycle_real_smoke)

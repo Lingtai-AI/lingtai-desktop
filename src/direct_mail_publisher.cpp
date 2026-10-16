@@ -123,6 +123,15 @@ struct PreparedAttachment {
     payload["id"] = QString::fromStdString(stamp.directory_id);
     payload["_mailbox_id"] = QString::fromStdString(stamp.directory_id);
     payload["from"] = QString::fromStdString(route.human_address);
+    // The accepted root is canonical; send_direct_mail has opened these
+    // components without following links. Do not resolve identity.address
+    // or canonicalize this path again through a newly introduced symlink.
+    payload["_return_route"] = QJsonObject{
+        {"address", QString::fromStdString(
+            (route.project_root / ".lingtai" / route.human_directory_key).string())},
+        {"sender_agent_id", QString::fromStdString(
+            route.human_identity.agent_id.value_or(""))},
+    };
     payload["to"] = QJsonArray{QString::fromStdString(route.target_address)};
     payload["cc"] = QJsonArray{};
     payload["subject"] = QString();
@@ -385,7 +394,8 @@ DirectMailSendOutcome send_direct_mail(
     }
     try {
         const auto &key = route.human_directory_key;
-        if (key.empty() || key.has_root_path() || !key.parent_path().empty()
+        if (!route.project_root.is_absolute()
+            || key.empty() || key.has_root_path() || !key.parent_path().empty()
             || key == "." || key == "..") {
             return failure(DirectMailFailureReason::unsafe_route);
         }

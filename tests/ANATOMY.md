@@ -8,6 +8,7 @@ related_files:
   - tests/test_native_shell.py
   - tests/direct_conversation_history_test.cpp
   - tests/direct_mail_publisher_test.cpp
+  - tests/direct_mail_kernel_bridge.py
   - tests/dock_badge_test.cpp
   - tests/composer_draft_test.cpp
   - tests/agent_lifecycle_real_smoke.cpp
@@ -111,3 +112,33 @@ They are retained data, not active test apparatus. Human-visible macOS
 interaction/appearance, native clipboard/picker/tray/quit behavior, packaged-App
 acceptance, live-provider behavior, and installer/support transaction acceptance
 remain separate unfulfilled gates until an acceptance owner supplies receipts.
+
+## Explicit offline Desktop → kernel reply bridge
+
+`direct_mail_publisher` additionally parses real published JSON to verify the
+exact absolute return route, missing/real human ids, attachments, and two
+projects sharing human/Agent short names. Its `--bridge-fixtures` mode leaves
+only its disposable producer fixtures for the manual bridge below.
+
+Run with an existing absolute Python interpreter and an explicit clean kernel
+source checkout pinned to `9506b210ac57264e849bc1c505b44d480f2761fe`:
+
+```bash
+"$KERNEL_PYTHON" tests/direct_mail_kernel_bridge.py \
+  --kernel-source "$KERNEL_SOURCE" \
+  --publisher "$BUILD_DIR/lingtai_direct_mail_publisher_test" \
+  --sandbox "$NEW_DISPOSABLE_SANDBOX"
+```
+
+The harness verifies the source commit/cleanliness and imported module paths;
+its JSON receipt reports the exact commit and interpreter (package metadata
+version is informational and may describe an installed distribution). It calls
+real C++ `send_direct_mail`, then real `PosixFilesystemMailAdapter` one-shot
+pseudo-outbox pickup/serialization and `EmailManager.handle(action="reply")`.
+The producer payload is not patched or reconstructed. The only replacement is
+a recording final mail transport; real mailman threads are joined with a
+bounded timeout. It verifies unchanged route/payload, moved attachment bytes,
+exact per-project human destination, and old route-less rejection before
+`_send`. No Agent/provider/App starts and no actual delivery occurs. This is
+manual offline integration evidence, separate from ctest and installed-App or
+UI acceptance. No dependency installation is part of this command.

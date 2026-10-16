@@ -1,6 +1,10 @@
 #include "direct_mail_publisher.h"
 #include "attachment_selection.h"
 
+#include <QtCore/QJsonDocument>
+#include <QtCore/QJsonObject>
+#include <QtCore/QJsonArray>
+
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -319,6 +323,35 @@ void verify_attachment_publish(const fs::path &sandbox) {
         "mixed mail preserves text and exact attachment bytes");
 }
 
+// These same real producer files are consumed unchanged by the optional
+// pinned-kernel bridge. Two projects deliberately share both short names.
+void verify_return_routes(const fs::path &sandbox) {
+    const auto source = sandbox / "selection.txt";
+    write_file(source, "bridge attachment bytes");
+    const auto selection = preflight_attachments({source});
+    require(selection.accepted.size() == 1, "bridge attachment accepted");
+    for (const auto &name : {"project-a", "project-b"}) {
+        const auto project = fs::canonical(sandbox) / name;
+        prepare_project(project);
+        auto route = route_for(project);
+        if (std::string(name) == "project-a") route.human_identity.agent_id.reset();
+        const auto sent = send_direct_mail(route, "reply to this human", selection.accepted);
+        require(sent.result == DirectMailSendResult::queued, "bridge mail queued");
+        const auto bytes = read_file(outbox_of(project) / sent.message_id / "message.json");
+        const auto payload = QJsonDocument::fromJson(QByteArray::fromStdString(bytes)).object();
+        const auto rr = payload.value("_return_route").toObject();
+        require(rr.size() == 2
+                && rr.value("address").toString().toStdString()
+                    == (project / ".lingtai" / "human").string()
+                && rr.value("sender_agent_id").toString().toStdString()
+                    == route.human_identity.agent_id.value_or(""),
+            "published _return_route must contain exact absolute human workdir and real-or-empty id");
+        require(payload.value("from").toString() == "human"
+                && payload.value("attachments").toArray().size() == 1,
+            "return route preserves display sender and attachment envelope");
+    }
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -334,6 +367,8 @@ int main(int argc, char **argv) {
         fs::create_directories(sandbox, error);
         require(!error, "sandbox must be created");
 
+        verify_return_routes(sandbox);
+        if (argc == 3 && std::string(argv[2]) == "--bridge-fixtures") return 0;
         verify_publish_and_failure(sandbox);
         verify_intermediate_symlink_no_outside_write(sandbox);
         verify_attachment_publish(sandbox);
