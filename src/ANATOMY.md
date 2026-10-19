@@ -431,3 +431,14 @@ they are the shell's presentation layer and own no domain reads or writes.
   enumerates existing native popup windows only while handling a qualifying
   native mouse-down; `lib_ui` remains the sole owner of popup-tree closure and
   deferred deletion.
+
+## Conversation reading position
+
+`NativeShell` owns one session-only reading-state map keyed by canonical project
+root and Agent directory key. It tracks the presented target separately from
+selection truth, exporting that old document before replacement. Empty/loading
+frames do not replace a saved anchor. `AgentDetailView::conversation_surface()`
+is the narrow presentation port. `ConversationSurface` exports message id,
+within-message text offset, viewport Y, oldest materialized message id, and
+bottom-follow intent; it materializes saved history before restoring. No disk
+state or second conversation widget is introduced.

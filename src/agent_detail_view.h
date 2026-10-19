@@ -72,6 +72,8 @@ public:
     // Re-apply widget-level chrome (palettes / borders) after theme changes.
     void refresh_chrome(bool immediate_conversation_recolor = false);
 
+    [[nodiscard]] ConversationSurface *conversation_surface() const { return conversation_surface_; }
+
     // Conversation UI (read-only surface + composer enablement).
     void render_conversation(
         const QString &them,

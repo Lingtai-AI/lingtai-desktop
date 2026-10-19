@@ -11,6 +11,7 @@ related_files:
   - tests/direct_mail_kernel_bridge.py
   - tests/dock_badge_test.cpp
   - tests/composer_draft_test.cpp
+  - tests/reading_position_test.cpp
   - tests/agent_lifecycle_real_smoke.cpp
 maintenance: |
   Keep related_files as repo-relative paths to real files. Include neighboring
@@ -142,3 +143,14 @@ exact per-project human destination, and old route-less rejection before
 `_send`. No Agent/provider/App starts and no actual delivery occurs. This is
 manual offline integration evidence, separate from ctest and installed-App or
 UI acceptance. No dependency installation is part of this command.
+
+## Reading-position regression
+
+`reading_position_test.cpp` / `lingtai_reading_position_test` / CTest
+`reading_position` (label `ui`, offscreen, 30-second timeout) constructs the real
+`ShellHost` and `ConversationSurface` with disposable mailbox files. It asserts
+unique message text and cursor viewport Y through middle/bottom, different
+Agent, short/empty, inactive append, revealed older page, same-Agent refresh,
+duplicate presentation name, cross-project, and rapid queued route changes.
+Run `ctest --test-dir build --output-on-failure -R '^reading_position$'`.
+This is reading-state behavior proof, not visible interaction acceptance.

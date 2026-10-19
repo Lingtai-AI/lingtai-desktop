@@ -83,8 +83,8 @@ ctest or a claim of provider/UI acceptance.
 
 ## Current registration and retirement
 
-Only `direct_conversation_history`, `direct_mail_publisher`, and `native_shell`
-are registered with ctest. The repository gate and real-kernel lifecycle target
+`direct_conversation_history`, `direct_mail_publisher`, `native_shell`,
+`dock_badge`, `composer_draft`, and `reading_position` are registered with ctest. The repository gate and real-kernel lifecycle target
 are listed in `ANATOMY.md`. A production library need not retain a separate
 implementation-mirroring suite merely to fill an inventory row.
 

@@ -3843,6 +3843,24 @@ void NativeShell::render_conversation(
 
     const bool selection_present = selection_state_.active_project()
         && selection_state_.selected_agent_directory_key();
+    auto *surface = detail_view_->conversation_surface();
+    const auto target = selection_present
+        ? std::optional<ComposerDraftKey>(ComposerDraftKey{
+            selection_state_.active_project()->root(),
+            *selection_state_.selected_agent_directory_key()})
+        : std::nullopt;
+    if (surface && reading_document_ready_ && reading_target_) {
+        if (const auto state = surface->reading_state()) {
+            reading_states_.insert_or_assign(*reading_target_, *state);
+        }
+    }
+    if (target != reading_target_) {
+        reading_target_ = target;
+        reading_document_ready_ = false;
+        if (surface) surface->set_reading_target(target
+            ? path_text(target->first) + QChar(0) + path_text(target->second)
+            : QString());
+    }
 
     auto main_agent_name = QString();
     for (const auto &item : agents_.items) {
@@ -3973,6 +3991,14 @@ void NativeShell::render_conversation(
             .reactions = reaction_store_.revision(),
             .session_events = session_events_revision_,
         });
+    if (surface && selected_view->snapshot_ready) {
+        const auto saved = reading_states_.find(*reading_target_);
+        surface->restore_reading_state(saved != reading_states_.end()
+            ? saved->second : ConversationReadingState());
+        reading_document_ready_ = true;
+    } else {
+        reading_document_ready_ = false;
+    }
     conversation_render_key_ = render_key;
 }
 

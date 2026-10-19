@@ -14,6 +14,7 @@
 #include "project_setup_wizard.h"
 #include "runtime_options.h"
 #include "ui/agent_roster.h"
+#include "ui/conversation_surface.h"
 #include "workspace_selection.h"
 
 // Vendored composer widget headers pull in ui/text/text_entity.h, whose
@@ -246,6 +247,7 @@ private:
         std::vector<ConversationSessionEntry> entries);
     void handle_conversation_verbose_changed(ConversationVerboseLevel level);
     friend class ShellHost;
+    friend struct ReadingPositionTestAccess;
     static void apply_process_palette();
 
     // Standalone-shell fallback. ShellHost owns the process transaction in the
@@ -412,6 +414,9 @@ private:
     // and is never also cached, so a sent or cleared draft cannot resurrect.
     using ComposerDraftKey =
         std::pair<std::filesystem::path, std::filesystem::path>;
+    std::optional<ComposerDraftKey> reading_target_;
+    std::map<ComposerDraftKey, ConversationReadingState> reading_states_;
+    bool reading_document_ready_ = false;
     std::optional<ComposerDraftKey> composer_draft_key_;
     std::map<ComposerDraftKey, ComposerDraft> composer_drafts_;
     // One serial worker for Desktop-owned preset discovery and the bounded
