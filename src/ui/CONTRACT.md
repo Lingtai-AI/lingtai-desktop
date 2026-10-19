@@ -106,8 +106,21 @@ below is grounded in the widget source.
   queued delayed pin, including a zero/tiny delta that leaves the integer
   scrollbar value unchanged. `ScrollEnd` releases gesture ownership without
   jumping, and the event then continues through native `QTextEdit` handling.
-  The focused surface test has been retired; queued-pin cancellation, gesture
-  ownership, bottom-follow, manual-position preservation, and native wheel
-  delegation no longer have that automated proof.
+  The former focused surface test remains retired. The real-shell
+  `reading_position` test now covers reading-position and bottom-follow
+  behavior; native gesture delegation remains manual acceptance.
   An unchanged roster
   refresh preserves scroll by not rebuilding the row tree.
+
+## Per-target reading state
+
+The shell supplies actual canonical project/directory identity through
+`set_reading_target`; presentation names are never route identity. Restore
+materializes the saved oldest row and anchor before positioning the same
+message-relative text offset at the saved viewport Y. Follow-bottom belongs to
+each target. Missing anchors deterministically use the oldest retained row;
+new targets default to bottom. Deferred restore must reject later targets,
+newer restores, wheel/keyboard/scrollbar ownership, and intervening movement.
+The real-shell `reading_position` regression covers route switching, retained
+history, inactive append, duplicate display names and cross-project isolation.
+Trackpad/visible macOS acceptance remains manual.

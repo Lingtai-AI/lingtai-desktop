@@ -553,6 +553,16 @@ target_link_libraries(lingtai_composer_draft_test PRIVATE
     lingtai_desktop_native_shell
     desktop-app::lib_ui)
 
+add_executable(lingtai_reading_position_test
+    tests/reading_position_test.cpp src/crl_integration.cpp)
+init_target(lingtai_reading_position_test)
+target_compile_options(lingtai_reading_position_test PRIVATE
+    -Wall -Wextra -Werror -pedantic
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-unused-parameter>
+    $<$<COMPILE_LANG_AND_ID:CXX,AppleClang>:-Wno-deprecated-this-capture>)
+target_link_libraries(lingtai_reading_position_test PRIVATE
+    lingtai_desktop_native_shell desktop-app::lib_ui)
+
 enable_testing()
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 add_test(NAME direct_conversation_history
@@ -579,3 +589,8 @@ add_test(NAME composer_draft
 set_tests_properties(native_shell dock_badge composer_draft PROPERTIES LABELS "ui")
 set_tests_properties(dock_badge composer_draft PROPERTIES ENVIRONMENT
     "QT_QPA_PLATFORM=$<IF:$<PLATFORM_ID:Darwin>,cocoa,offscreen>")
+
+add_test(NAME reading_position COMMAND lingtai_reading_position_test
+    "${CMAKE_CURRENT_BINARY_DIR}/reading-position-fixture")
+set_tests_properties(reading_position PROPERTIES LABELS "ui" TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=$<IF:$<PLATFORM_ID:Darwin>,cocoa,offscreen>")

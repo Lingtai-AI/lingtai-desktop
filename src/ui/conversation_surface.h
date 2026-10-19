@@ -10,6 +10,7 @@
 #include <QtWidgets/QTextEdit>
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -31,6 +32,14 @@ namespace lingtai::desktop {
 // wash; hovering a message paints a Slack-like full-width row tint without an
 // action toolbar. Human hover vertical span matches the
 // painted bubble, not the taller frame margins.
+struct ConversationReadingState final {
+    QString message_id;
+    QString oldest_message_id;
+    int text_offset = 0;
+    int viewport_y = 0;
+    bool follow_bottom = true;
+};
+
 class ConversationSurface final : public QTextEdit {
     Q_OBJECT
 public:
@@ -89,6 +98,11 @@ public:
     // as a new-day separator is included instead of a stale scrollbar maximum.
     void scroll_to_bottom();
 
+    [[nodiscard]] std::optional<ConversationReadingState> reading_state() const;
+    // A new route invalidates document identity, even for equal display names.
+    void set_reading_target(const QString &target);
+    void restore_reading_state(const ConversationReadingState &state);
+
 signals:
     void verbose_level_changed(ConversationVerboseLevel level);
     // `reveal` false means Open, true means Reveal in Finder. The request
@@ -143,6 +157,10 @@ private:
     static constexpr int kHistoryPageSize = 100;
     static constexpr int kVerboseHistoryPageSize = 40;
 
+    std::optional<ConversationReadingState> pending_reading_state_;
+    std::uint64_t pending_reading_generation_ = 0;
+    int pending_reading_value_ = 0;
+    QString reading_target_;
     QString them_;
     std::vector<DirectConversationMessage> last_messages_;
     std::unordered_map<std::string, MessageReactions> last_reactions_;

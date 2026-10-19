@@ -6,6 +6,7 @@
 #include "styles/palette.h"
 
 #include <QtCore/QEvent>
+#include <QtCore/QCryptographicHash>
 #include <QtCore/QDate>
 #include <QtCore/QDateTime>
 #include <QtCore/QLocale>
@@ -132,6 +133,12 @@ constexpr auto kMessageReactionsProperty = QTextFormat::UserProperty + 9;
 // Marks LLM-detail frames so paintEvent never draws a Human/Agent bubble
 // around them (they share the root sibling list with message frames).
 constexpr auto kVerboseFrameProperty = QTextFormat::UserProperty + 10;
+constexpr auto kDetailAnchorProperty = QTextFormat::UserProperty + 30;
+QString reading_frame_id(QTextFrame *frame) {
+    const auto format = frame->frameFormat();
+    const auto message = format.property(kMessageIdProperty).toString();
+    return message.isEmpty() ? format.property(kDetailAnchorProperty).toString() : message;
+}
 constexpr auto kAttachmentBlockProperty = QTextFormat::UserProperty + 11;
 constexpr auto kAttachmentMessageIdProperty = QTextFormat::UserProperty + 12;
 constexpr auto kAttachmentIndexProperty = QTextFormat::UserProperty + 13;
@@ -693,6 +700,7 @@ void append_verbose_event_line(
         }
     }
 
+    const auto before = cursor.document()->rootFrame()->lastPosition();
     if (entry.type == "tool_call" && !entry.reasoning.empty()) {
         insert_verbose_text(
             cursor,
@@ -706,6 +714,25 @@ void append_verbose_event_line(
         viewport_width,
         is_tool ? verbose_tool_format() : verbose_thinking_format(),
         QStringLiteral("• %1").arg(line));
+
+    // Anchor only this event body/reasoning. Group separators and pending
+    // token footers depend on preceding events and must not shift line IDs.
+    // Length prefixes make field boundaries exact.
+    auto identity = QByteArray();
+    for (const auto *field : {&entry.timestamp, &entry.type, &entry.api_call_id,
+            &entry.body, &entry.reasoning}) {
+        identity += QByteArray::number(field->size()) + ':';
+        identity += QByteArray::fromStdString(*field);
+    }
+    const auto key = QStringLiteral("detail:") + QString::fromLatin1(
+        QCryptographicHash::hash(identity, QCryptographicHash::Sha256).toHex());
+    auto line_index = 0;
+    for (auto *frame : cursor.document()->rootFrame()->childFrames()) {
+        if (frame->firstPosition() < before) continue;
+        auto format = frame->frameFormat();
+        format.setProperty(kDetailAnchorProperty, key + ':' + QString::number(line_index++));
+        frame->setFrameFormat(format);
+    }
 
     ++state.rendered_lines;
     state.prev_visible = &entry;
@@ -1596,6 +1623,10 @@ ConversationSurface::ConversationSurface(QWidget *parent)
     viewport()->setAttribute(Qt::WA_OpaquePaintEvent, false);
     viewport()->setMouseTracking(true);
     viewport()->installEventFilter(this);
+    verticalScrollBar()->installEventFilter(this);
+    connect(verticalScrollBar(), &QScrollBar::sliderPressed, this, [this] {
+        ++scroll_pin_generation_;
+    });
     setMouseTracking(true);
     document()->setDocumentMargin(kDocumentMargin);
 }
@@ -1757,6 +1788,112 @@ bool ConversationSurface::same_session_events(
         }
     }
     return true;
+}
+
+std::optional<ConversationReadingState> ConversationSurface::reading_state() const {
+    if (last_messages_.empty() || !last_plain_state_.isEmpty()) return std::nullopt;
+    if (pending_reading_state_ && pending_reading_generation_ == std::uint64_t(scroll_pin_generation_)
+            && pending_reading_value_ == verticalScrollBar()->value()) return pending_reading_state_;
+    auto state = ConversationReadingState();
+    state.follow_bottom = !wheel_gesture_active_
+        && verticalScrollBar()->value() >= verticalScrollBar()->maximum();
+    if (history_offset_ < int(last_messages_.size())) {
+        state.oldest_message_id = QString::fromStdString(last_messages_[history_offset_].id);
+    }
+    auto cursor = cursorForPosition(QPoint(viewport()->width() / 2, 0));
+    auto *frame = cursor.currentFrame();
+    while (frame && frame != document()->rootFrame()
+            && reading_frame_id(frame).isEmpty()) {
+        frame = frame->parentFrame();
+    }
+    if (!frame || frame == document()->rootFrame()) {
+        for (auto *candidate : document()->rootFrame()->childFrames()) {
+            if (!reading_frame_id(candidate).isEmpty()
+                    && cursorRect(candidate->lastCursorPosition()).bottom() >= 0) {
+                frame = candidate;
+                cursor = frame->firstCursorPosition();
+                break;
+            }
+        }
+    }
+    if (frame && frame != document()->rootFrame()) {
+        state.message_id = reading_frame_id(frame);
+        state.text_offset = cursor.position() - frame->firstPosition();
+        state.viewport_y = cursorRect(cursor).y();
+    }
+    return state;
+}
+
+void ConversationSurface::set_reading_target(const QString &target) {
+    if (reading_target_ == target) return;
+    pending_reading_state_.reset();
+    reading_target_ = target;
+    ++scroll_pin_generation_;
+    wheel_gesture_active_ = false;
+    presentation_revision_valid_ = false;
+    // Clear the old model before equality/append checks for the new route.
+    last_messages_.clear();
+    last_session_events_.clear();
+    them_.clear();
+}
+
+void ConversationSurface::restore_reading_state(const ConversationReadingState &state) {
+    if (last_messages_.empty()) return;
+    const auto boundary = std::find_if(last_messages_.begin(), last_messages_.end(),
+        [&](const auto &message) {
+            return QString::fromStdString(message.id) == state.oldest_message_id;
+        });
+    const auto anchor = std::find_if(last_messages_.begin(), last_messages_.end(),
+        [&](const auto &message) {
+            return QString::fromStdString(message.id) == state.message_id;
+        });
+    auto offset = history_offset_;
+    if (boundary != last_messages_.end()) offset = std::min(offset, int(boundary - last_messages_.begin()));
+    if (anchor != last_messages_.end()) offset = std::min(offset, int(anchor - last_messages_.begin()));
+    if (offset != history_offset_) {
+        history_offset_ = offset;
+        rebuild_document();
+    }
+    pending_reading_state_.reset();
+    const auto apply = [this, state] {
+        if (state.follow_bottom) {
+            scroll_to_bottom_now();
+            return;
+        }
+        auto frames = document()->rootFrame()->childFrames();
+        for (auto *frame : frames) {
+            if (state.message_id.isEmpty() || reading_frame_id(frame) != state.message_id) continue;
+            auto cursor = frame->firstCursorPosition();
+            cursor.setPosition(std::clamp(frame->firstPosition() + state.text_offset,
+                frame->firstPosition(), frame->lastPosition()));
+            verticalScrollBar()->setValue(verticalScrollBar()->value()
+                + cursorRect(cursor).y() - state.viewport_y);
+            return;
+        }
+        // Deleted anchors fall back deterministically to the oldest retained row.
+        verticalScrollBar()->setValue(verticalScrollBar()->minimum());
+    };
+    apply();
+    const auto generation = ++scroll_pin_generation_;
+    const auto target = reading_target_;
+    const auto value = verticalScrollBar()->value();
+    if (!state.follow_bottom && state.message_id.startsWith(QStringLiteral("detail:"))) {
+        const auto frames = document()->rootFrame()->childFrames();
+        if (std::none_of(frames.begin(), frames.end(), [&](auto *frame) {
+                return reading_frame_id(frame) == state.message_id;
+            })) {
+            // Details may arrive after mailbox restoration. Keep this anchor
+            // only while the route, input generation and scroll value agree.
+            pending_reading_state_ = state;
+            pending_reading_generation_ = generation;
+            pending_reading_value_ = value;
+        }
+    }
+    QTimer::singleShot(0, this, [this, generation, target, value, apply] {
+        if (generation != scroll_pin_generation_ || target != reading_target_
+                || wheel_gesture_active_ || value != verticalScrollBar()->value()) return;
+        apply();
+    });
 }
 
 void ConversationSurface::set_conversation(
@@ -1983,26 +2120,19 @@ void ConversationSurface::apply_session_events(
             && verbose_level_ == last_rendered_verbose_level_) {
         return;
     }
+    const auto reading = reading_state();
     disarm_attachment_action();
     last_session_events_ = session_events;
     if (last_messages_.empty()) {
         last_rendered_verbose_level_ = verbose_level_;
         return;
     }
-    if (verbose_level_ != ConversationVerboseLevel::off) {
-        const auto page = history_page_size();
-        const auto min_offset = int(
-            last_messages_.size() > std::size_t(page)
-                ? last_messages_.size() - std::size_t(page)
-                : std::size_t{0});
-        if (history_offset_ < min_offset) {
-            history_offset_ = min_offset;
-        }
-    }
+    // A session-only completion keeps the history already revealed by the user.
     // Coalesce only when a rebuild is already running (activity timer + async
     // session load). Otherwise rebuild immediately so the UI and widget tests
     // see frames without waiting on a debounce timer.
     schedule_rebuild_document();
+    if (reading) restore_reading_state(*reading);
     last_rendered_verbose_level_ = verbose_level_;
     last_layout_width_ = int(viewport()->width() / 8) * 8;
 }
@@ -3132,6 +3262,7 @@ void ConversationSurface::showEvent(QShowEvent *event) {
 }
 
 void ConversationSurface::keyPressEvent(QKeyEvent *event) {
+    ++scroll_pin_generation_;
     // Ctrl+O / Cmd+O cycles verbose LLM detail (TUI ctrl+o parity).
     if ((event->modifiers() & Qt::ControlModifier) != 0
             && event->key() == Qt::Key_O) {
@@ -3160,6 +3291,10 @@ void ConversationSurface::keyPressEvent(QKeyEvent *event) {
 }
 
 bool ConversationSurface::eventFilter(QObject *watched, QEvent *event) {
+    if (watched == verticalScrollBar()
+            && (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::Wheel)) {
+        ++scroll_pin_generation_;
+    }
     if (watched == viewport()) {
         switch (event->type()) {
         case QEvent::Wheel: {
@@ -3185,6 +3320,7 @@ bool ConversationSurface::eventFilter(QObject *watched, QEvent *event) {
             break;
         }
         case QEvent::MouseButtonPress: {
+            ++scroll_pin_generation_;
             const auto *mouse = static_cast<QMouseEvent *>(event);
             disarm_attachment_action();
             if (mouse->button() == Qt::LeftButton) {

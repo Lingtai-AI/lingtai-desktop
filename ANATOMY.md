@@ -174,8 +174,9 @@ details.
 
 The deliberately small automated surface is `native_shell` (real App-process
 startup marker order and persistence), `direct_conversation_history` (real-file
-mailbox wire/read isolation), and `direct_mail_publisher` (real-file outbox
-publication and attachment copies). CMake keeps the wire tests labeled `unit`
+mailbox wire/read isolation), `direct_mail_publisher` (real-file outbox
+publication and attachment copies), plus real-shell `dock_badge`,
+`composer_draft`, and `reading_position` fixture regressions. CMake keeps the wire tests labeled `unit`
 and the subprocess test labeled `ui` for the existing runner entry points.
 `tests/test_repository_contract.py` remains the manual/CI provenance gate.
 `lingtai_agent_lifecycle_real_smoke` remains a manually invoked, real-kernel

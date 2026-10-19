@@ -389,3 +389,11 @@ behavior anchors in `BEHAVIORS.md` are not the current target inventory.
 - The contract is normative: if implementation and this contract disagree,
   treat the implementation as defective unless an authorized change updates
   both together.
+
+## Session reading position
+
+`NativeShell` alone owns per-canonical-project/Agent-directory reading state.
+Selection may change before rendering; saving must use the old presented key.
+A loading/empty transient must not overwrite saved content state. Ordinary
+refresh captures the current anchor, explicit send retains its bottom-pin
+policy, and first visits follow bottom. Names never identify a reading target.

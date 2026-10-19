@@ -147,3 +147,14 @@ the scrolling, kinetic-motion, selection, copy, and accessibility owner.
 
 Build ownership: `CMakeLists.txt:180` compiles `src/ui/conversation_surface.cpp`
 into `lingtai_desktop_native_shell`.
+
+## Reading-state transfer
+
+`reading_state`, `set_reading_target`, and `restore_reading_state` transfer only
+view state to/from the shell. The anchor uses the message frame id and a text
+offset relative to that frame, plus the text cursor's viewport Y. The saved
+oldest message id retains revealed pages even after inactive appends. Route
+changes invalidate equality/append shortcuts and old delayed work. Restoration
+is immediate plus one queued layout pass guarded by target, generation, wheel
+intent, and unchanged scrollbar value. Keyboard, wheel, and scrollbar press
+cancel delayed work. A missing anchor falls back to the oldest materialized row.
